@@ -27,24 +27,30 @@ function quotable(text: string): string {
   return text.replace(/\\(["\\/])/g, "$1").replace(/\\[nrt]/g, "").replace(/^[ \t]*\d+[ \t]*\|[ \t]?/gm, "").replace(/\s+/g, "");
 }
 
-function leafStrings(value: unknown, into: string[] = []): string[] {
-  if (typeof value === "string") into.push(value);
-  else if (Array.isArray(value)) for (const item of value) leafStrings(item, into);
-  else if (isRecord(value)) for (const item of Object.values(value)) leafStrings(item, into);
+function leaves(value: unknown, into: { strings: string[]; keys: string[] } = { strings: [], keys: [] }): { strings: string[]; keys: string[] } {
+  if (typeof value === "string") into.strings.push(value);
+  else if (Array.isArray(value)) for (const item of value) leaves(item, into);
+  else if (isRecord(value)) for (const [key, item] of Object.entries(value)) { into.keys.push(key); leaves(item, into); }
   return into;
 }
 
+/** Below this many characters of string values, a match in a tool result says nothing ("ls", ".", a short path). */
+const MIN_ECHO_VALUE_CHARS = 24;
+
 /**
  * Whether the request already held this JSON, so the model is quoting what it read rather than asking for a call: the
- * same JSON in any non-assistant turn, or, for a tool result, every string value of it (key order and layout vary).
+ * same JSON in any non-assistant turn, or, for a tool result, every key and string value of it when together they are
+ * long enough to be distinctive (key order and layout vary).
  */
 function echoedFromRequest(body: string, value: unknown, requestMessages: readonly ChatMessage[]): boolean {
   const needle = quotable(body);
-  const strings = leafStrings(value).map(quotable).filter(Boolean);
+  const { strings, keys } = leaves(value);
+  const parts = [...strings, ...keys].map(quotable).filter(Boolean);
+  const distinctive = strings.map(quotable).join("").length >= MIN_ECHO_VALUE_CHARS;
   return requestMessages.some((message) => {
     if (message.role === "assistant" || typeof message.content !== "string") return false;
     const held = quotable(message.content);
-    return held.includes(needle) || (message.role === "tool" && strings.length > 0 && strings.every((text) => held.includes(text)));
+    return held.includes(needle) || (message.role === "tool" && distinctive && parts.every((text) => held.includes(text)));
   });
 }
 

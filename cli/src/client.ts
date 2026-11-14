@@ -1732,15 +1732,15 @@ export class LocalLlmClient {
     const ask = async (toolChoice: "auto" | "required"): Promise<ChatMessage | undefined> => {
       const requestId = randomUUID();
       try {
-        return await this.withReceipt(requestId, "tool-call-retry", () =>
+        const answer = await this.withReceipt(requestId, "tool-call-retry", () =>
           this.withOAuthRetry(this.endpoint, requestId, () => this.withParameterRetry(() => this.chatCompletionOnce(corrected, tools, requestId, signal, toolChoice))),
         );
+        usages.push(this.lastUsageReport);
+        return answer;
       } catch (err) {
         if (signal?.aborted || (err instanceof InferenceError && err.kind === "aborted")) throw err;
         this.emitDiagnostic("error", pc.dim(`[nexus] Asking ${this.conn.label} again for a native tool call failed (${err instanceof Error ? err.message : String(err)}); keeping its first reply.`));
         return undefined;
-      } finally {
-        usages.push(this.lastUsageReport);
       }
     };
     const finish = (message: ChatMessage): ChatMessage => {
@@ -2035,7 +2035,7 @@ export class LocalLlmClient {
 
       if (res.status === 401 && this.reloadAuthToken(url)) {
         watchdog.done();
-        return this.chatCompletionStream(messages, tools, onToken, requestId, signal);
+        return this.chatCompletionStreamOnce(messages, tools, onToken, requestId, signal);
       }
 
       if (!res.ok || !res.body) {

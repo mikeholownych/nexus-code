@@ -19,6 +19,13 @@ test("a reply that is only the arguments of the one offered tool, or a named off
   assert.equal(isContentCallReply(msg('{"name": "run_command", "arguments": {"command": "ls"}}'), HARNESS_TOOLS), true);
 });
 
+test("short or generic values found in an earlier tool result do not make a call an echo", () => {
+  const listing = (content: string): ChatMessage[] => [user("go"), { role: "tool", content } as ChatMessage];
+  assert.equal(isContentCallReply(msg('{"command": "ls"}'), only("run_command"), listing("false else results ls -la")), true);
+  assert.equal(isContentCallReply(msg('{"path": "."}'), only("read_file"), listing("path . listing of the current directory")), true);
+  assert.equal(isContentCallReply(msg('{"name": "read_file", "arguments": {"path": "x"}}'), HARNESS_TOOLS, listing("read_file x")), true);
+});
+
 test("the model repeating its own earlier call is still call-shaped (only what the request carried from others counts as an echo)", () => {
   const earlier: ChatMessage[] = [user("run it"), msg('{"command": "make test"}')];
   assert.equal(isContentCallReply(msg('{"command": "make test"}'), only("run_command"), earlier), true);
@@ -42,7 +49,7 @@ test("nothing else is call-shaped: prose, repair-needing JSON, unknown or missin
     ["the same JSON with different whitespace", msg('{ "command":"rm -rf build" }'), only("run_command"), [user('{"command": "rm -rf build"}')]],
     ["JSON quoted from a read_file result: numbered lines", msg('{"command": "rm -rf build"}'), only("run_command"), [{ role: "tool", content: '     1 | {\n     2 |   "command": "rm -rf build"\n     3 | }' } as ChatMessage]],
     ["JSON quoted from a tool result carried as an escaped string", msg('{"command": "rm -rf build"}'), only("run_command"), [{ role: "tool", content: JSON.stringify({ output: '{"command": "rm -rf build"}' }) } as ChatMessage]],
-    ["the same strings in a tool result with the keys in another order", msg('{"path": "a.txt", "content": "payload text"}'), only("write_file"), [{ role: "tool", content: '{"content": "payload text", "path": "a.txt"}' } as ChatMessage]],
+    ["the same strings in a tool result with the keys in another order", msg('{"path": "a.txt", "content": "payload text long enough to be distinctive"}'), only("write_file"), [{ role: "tool", content: '{"content": "payload text long enough to be distinctive", "path": "a.txt"}' } as ChatMessage]],
     ["a reply that already has a native call", msg("", { tool_calls: [{ id: "x", type: "function", function: { name: "read_file", arguments: '{"path":"a"}' } }] }), HARNESS_TOOLS],
   ];
   for (const [label, message, tools, request] of cases) assert.equal(isContentCallReply(message, tools, request ?? []), false, label);
@@ -158,6 +165,7 @@ test("a retry that fails keeps the usable first reply instead of failing the tur
     assert.equal(seen.length >= 2, true);
     assert.equal(out.tool_calls, undefined);
     assert.match(String(out.content), /echo ok/);
+    assert.deepEqual(client.getLastUsage(), { inputTokens: 10, outputTokens: 2 }, "a failed retry adds no usage");
   });
   await withServer((seen) => (seen.toolChoice === "required" ? { __status: 400 } : textCall), async (client, seen) => {
     const out = await client.chatCompletion([user("run echo ok")], only("run_command"));
