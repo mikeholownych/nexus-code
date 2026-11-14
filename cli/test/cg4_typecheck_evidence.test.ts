@@ -106,7 +106,7 @@ const run = (files: Record<string, string>, opts: Opts = {}) =>
   withAgent(files, { path: "tsc", ...opts }, async (agent, root) => {
     const turn = await agent.runTurn("npm test fails; fix math.js.");
     const dirty = execSync("git status --porcelain --untracked-files=all", { cwd: root }).toString().split("\n").filter(Boolean).map((l) => l.slice(3));
-    return { turn, dirty, ledger: (agent as any).objective?.verification as Array<{ command: string; status: string }> | undefined };
+    return { turn, dirty, ledger: (agent as any).objective?.verification as Array<{ command: string; status: string; classification?: string; exitCode?: number; failingTests?: string[]; excerpt?: string }> | undefined };
   });
 
 const unitCheck: DiscoveredTypecheck = { tool: "tsc", probe: "tsc --version", command: "tsc --noEmit", configPath: "tsconfig.json", configSha256: "" };
@@ -194,9 +194,10 @@ describe("type-check as verifier evidence: agent level", () => {
   });
 
   test("tsc not installed is ENVIRONMENT, recorded, not a candidate failure (PATH without tsc)", { timeout: 120_000 }, async () => {
-    const { turn } = await run({ "tsconfig.json": TSCONFIG, "types.ts": TYPES_OK }, { path: "none", steps: [fix, write("types.ts", TYPES_BAD), done], config: { authoritativeVerifierCommand: NODE_VERIFIER }, env: { NEXUS_TYPECHECK: "enforce" } });
+    const { turn, ledger } = await run({ "tsconfig.json": TSCONFIG, "types.ts": TYPES_OK }, { path: "none", steps: [fix, write("types.ts", TYPES_BAD), done], config: { authoritativeVerifierCommand: NODE_VERIFIER }, env: { NEXUS_TYPECHECK: "enforce" } });
     assert.equal(turn.verification?.typecheck?.status, "ENVIRONMENT");
     assert.equal(turn.verification?.status, "PASSED");
+    assert.ok(!ledger?.some((a) => /tsc/.test(a.command)), "an ENVIRONMENT type-check is not recorded as an attempt");
     assert.equal(turn.verification?.status, "PASSED");
     assert.equal(turn.outcome, "REGRESSION_FREE");
   });
@@ -208,6 +209,11 @@ describe("type-check as verifier evidence: agent level", () => {
     assert.equal(skipped.length, 1);
     assert.match(skipped[0].command, /tsc --noEmit/);
     assert.equal(ledger?.filter((a) => /tsc --noEmit/.test(a.command) && a.status === "FAILED").length, 1);
+    const failed = ledger?.find((a) => /tsc --noEmit/.test(a.command) && a.status === "FAILED");
+    assert.equal(failed?.classification, "CANDIDATE_FAILED");
+    assert.notEqual(failed?.exitCode, 0);
+    assert.match(failed?.failingTests?.[0] ?? "", /types\.ts.*TS2322/);
+    assert.match(failed?.excerpt ?? "", /TS2322/);
     assert.equal(turn.verification?.typecheck?.status, "FAILED");
     assert.notEqual(turn.outcome, "VERIFIED");
   });

@@ -10,6 +10,10 @@ export interface TestRunResult {
   success: boolean;
   /** The verifier hit its deadline (runner `timed_out`, or the bridge got no answer). Never combined with success. */
   timedOut?: boolean;
+  /** The verifier process's exit code, when the runner reported one. */
+  exitCode?: number;
+  /** The executor itself failed (it returned failure, threw, or gave no exit status): the command may never have run. */
+  executorFailed?: boolean;
   rawOutput: string;
   failures: string[];
   diagnostics: Diagnostic[];
@@ -292,11 +296,6 @@ export interface TypecheckRun {
   firstDiagnostics?: string[];
 }
 
-/** Exit 126/127 means the toolchain is not runnable here: an environment condition, not a candidate failure. */
-export function isToolMissingExit(exitCode: number | null | undefined): boolean {
-  return exitCode === 126 || exitCode === 127;
-}
-
 export type TimedExecutor = (command: string, timeoutSecs: number) => Promise<{ success: boolean; output: string; error?: string; timedOut?: boolean }>;
 
 /**
@@ -360,7 +359,7 @@ export async function runTypecheck(
   const base = { exitCode: run.exitCode ?? null, version, output: run.rawOutput };
   if (run.timedOut) return { ...base, status: "TIMED_OUT" };
   if (run.succeeded) return { ...base, status: "PASSED" };
-  if (run.exitCode === undefined || run.exitCode === null || isToolMissingExit(run.exitCode)) return { ...base, status: "ENVIRONMENT" };
+  if (run.exitCode === undefined || run.exitCode === null || run.exitCode === 126 || run.exitCode === 127) return { ...base, status: "ENVIRONMENT" };
   const { status, diagnostics } = classifyTypecheck(check, run.rawOutput, workspace, modified);
   return {
     ...base,
@@ -535,11 +534,18 @@ export async function runTestSuiteWithExecutor(
   const command = commandOverride?.trim() || discoverVerifier(workspace)?.command || "none";
   if (command === "none") return summarizeTestRun("none", false, "no verifier: no verification command is configured or discovered in this workspace.");
   try {
-    const { succeeded: commandSucceeded, timedOut, rawOutput } = parseExecution(await execute(command));
+    const result = await execute(command);
+    const { succeeded: commandSucceeded, timedOut, exitCode: parsedExit, rawOutput } = parseExecution(result);
+    const exitCode = typeof parsedExit === "number" ? parsedExit : undefined;
     const summary = summarizeTestRun(command, commandSucceeded, rawOutput);
-    return timedOut ? { ...summary, success: false, timedOut: true } : summary;
+    const withExit = {
+      ...summary,
+      ...(exitCode === undefined ? {} : { exitCode }),
+      ...(!result.success ? { executorFailed: true } : {}),
+    };
+    return timedOut ? { ...withExit, success: false, timedOut: true } : withExit;
   } catch (error: any) {
-    return summarizeTestRun(command, false, error?.message || "Verification command execution failed.");
+    return { ...summarizeTestRun(command, false, error?.message || "Verification command execution failed."), executorFailed: true };
   }
 }
 
