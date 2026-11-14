@@ -672,7 +672,9 @@ fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: th
     };
     let mut buttons = Vec::new();
     buttons.extend(button("Approve", Verdict::Approved, "y"));
-    buttons.extend(button(if narrow { "All later" } else { "Approve all later actions" }, Verdict::ApprovedForSession, "a"));
+    if approval.tool != "steering_conflict" {
+        buttons.extend(button(if narrow { "All later" } else { "Approve all later actions" }, Verdict::ApprovedForSession, "a"));
+    }
     buttons.extend(button("Deny", Verdict::Denied, "n"));
     let mut footer = markdown::wrap(buttons, width, Vec::new(), Vec::new());
     // The line under the buttons: what answers the panel, or the question being asked (confirming), or why a key did

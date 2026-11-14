@@ -24,6 +24,8 @@ import {
   invalidateVerified,
   priorAttempt,
   recordAttempt,
+  recordSteeringConflict,
+  resolveSteeringConflict,
   seedRequirements,
   type ObjectiveLedger,
   type VerificationAttempt,
@@ -238,6 +240,32 @@ describe("a verifier the model declared is advisory (M1)", () => {
     assert.equal(l.requirements[0].verifierSource, "operator");
     assert.equal(verify(l, "R1", undefined, pass("test -f marker.txt")).ok, true);
     assert.doesNotMatch(renderPinnedLedger(l, false), /unreviewed/);
+  });
+});
+
+describe("steering and attempt evidence after SI-3 / DV-1", () => {
+  test("a steering requirement is operator-authored: the model cannot retype it or give it a verifier", () => {
+    const l = createLedger(OBJECTIVE);
+    l.requirements.push({ id: "S1", text: "Keep logs", status: "open", source: "steering", kind: "invariant", verifier: "grep -q log a", verifierSource: "operator", evidence: [], updatedAt: "t" });
+    const r = applyRequirementUpdates(l, [{ id: "S1", kind: "feature" }, { id: "S1", verifier: "grep -q x a" }]);
+    assert.equal(r.errors.length, 2, r.errors.join());
+    assert.equal(l.requirements.at(-1)!.kind, "invariant");
+    assert.equal(l.requirements.at(-1)!.verifier, "grep -q log a");
+  });
+
+  test("an operator-approved steering conflict resolves an invariant it negates", () => {
+    const l = createLedger(OBJECTIVE);
+    const c = recordSteeringConflict(l, "st1", "drop the marker rule", ["R1"])!;
+    assert.equal(requirementDone(l.requirements[0]), false);
+    assert.equal(resolveSteeringConflict(l, c, true, "drop the marker rule"), true);
+    assert.equal(l.requirements[0].status, "descoped");
+    assert.equal(requirementDone(l.requirements[0]), true);
+  });
+
+  test("the pinned ledger tags attempts that were a requirement's own verifier run", () => {
+    const l = createLedger(OBJECTIVE);
+    recordAttempt(l, { command: "test -f marker.txt", inputs: "i", status: "FAILED", requirementId: "R1", classification: "CANDIDATE_FAILED", exitCode: 1 });
+    assert.match(renderPinnedLedger(l, false), /#1 test -f marker\.txt \(verifier of R1\) -> FAILED on i.*CANDIDATE_FAILED/);
   });
 });
 

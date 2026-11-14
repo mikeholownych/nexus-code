@@ -15,6 +15,7 @@ import { htmlToReadableText } from "./core/html_text.js";
 import { CapabilityRegistry, HARNESS_TOOLS, defaultRegistry } from "./core/capabilities.js";
 import { isSafeReadOnlyCommand } from "./core/authority.js";
 import { getBuildIdentity } from "./build_identity.js";
+import { isWorkspaceTrusted } from "./workspace_trust.js";
 export { HARNESS_TOOLS, defaultRegistry };
 
 /** JSON-RPC protocol version spoken between the CLI and harness-core (REQ-REL-103). */
@@ -878,7 +879,16 @@ export class RustCoreBridge {
   private async lspManager(): Promise<import("./lsp.js").LspBridgeManager> {
     if (!this.lsp) {
       const { LspBridgeManager } = await import("./lsp.js");
-      this.lsp = new LspBridgeManager(this.workspace);
+      this.lsp = new LspBridgeManager(this.workspace, {
+        gate: () => {
+          if (this.readOnly) return "read-only mode; language server not started";
+          if (!isWorkspaceTrusted(this.workspace)) return "workspace not trusted; language server not started";
+          if (this.requireSandbox || (this.sandbox && this.sandbox !== "none")) {
+            return "a sandbox is required and language servers cannot run inside it; language server not started";
+          }
+          return null;
+        },
+      });
     }
     return this.lsp;
   }
@@ -1349,6 +1359,9 @@ export class RustCoreBridge {
         output: JSON.stringify({
           command: res.command,
           passed: res.success,
+          ...(res.exitCode !== undefined ? { exitCode: res.exitCode } : {}),
+          ...(res.executorFailed ? { executorFailed: true } : {}),
+          ...(res.timedOut ? { timedOut: true } : {}),
           failures: res.failures,
           diagnostics: res.diagnostics,
           // The end of the run's output (where runners report counts): bounded, and what coverage is judged from.

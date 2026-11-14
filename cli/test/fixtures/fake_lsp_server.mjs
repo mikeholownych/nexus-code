@@ -7,7 +7,23 @@ function send(msg) {
 }
 if (process.env.FAKE_PIDFILE) require_fs().appendFileSync(process.env.FAKE_PIDFILE, process.pid + "\n");
 function require_fs() { return globalThis.__fs ??= process.getBuiltinModule("node:fs"); }
+if (process.env.FAKE_ENVFILE) require_fs().writeFileSync(process.env.FAKE_ENVFILE, JSON.stringify(process.env));
 function publish(uri, text, version) {
+  if (uri.endsWith(".noisy.ts")) for (let i = 0; i < 64; i++) require_fs().writeSync(2, "x".repeat(65536));
+  if (uri.endsWith(".utf.ts")) {
+    const body = Buffer.from(JSON.stringify({ jsonrpc: "2.0", method: "textDocument/publishDiagnostics", params: { uri, diagnostics: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, severity: 1, message: "h\u00e9llo \u20ac \ud83d\ude00 \u00fc\u00f1", source: "fake" }] } }));
+    const all = Buffer.concat([Buffer.from(`Content-Length: ${body.length}\r\n\r\n`), body]);
+    for (let i = 0; i * 3 < all.length; i++) setTimeout(() => process.stdout.write(all.subarray(i * 3, i * 3 + 3)), i);
+    return;
+  }
+  if (uri.endsWith(".near.ts") || uri.endsWith(".over.ts")) {
+    const filler = "a".repeat(uri.endsWith(".near.ts") ? 16 * 1024 * 1024 - 1024 : 17 * 1024 * 1024);
+    if (uri.endsWith(".over.ts")) { process.stdout.write(filler); return; }
+    const body = JSON.stringify({ jsonrpc: "2.0", method: "textDocument/publishDiagnostics", params: { uri, diagnostics: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, severity: 1, message: filler, source: "fake" }] } });
+    process.stdout.write(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
+    return;
+  }
+  if (uri.endsWith(".huge.ts")) { process.stdout.write("Content-Length: 99999999\r\n\r\n" + "x".repeat(1024)); return; }
   if (uri.endsWith(".silent.ts")) return;
   if (uri.endsWith(".die.ts")) process.exit(1);
   if (text.includes("STALE")) {

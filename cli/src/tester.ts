@@ -9,6 +9,10 @@ export interface TestRunResult {
   success: boolean;
   /** The verifier hit its deadline (runner `timed_out`, or the bridge got no answer). Never combined with success. */
   timedOut?: boolean;
+  /** The verifier process's exit code, when the runner reported one. */
+  exitCode?: number;
+  /** The executor itself failed (it returned failure, threw, or gave no exit status): the command may never have run. */
+  executorFailed?: boolean;
   rawOutput: string;
   failures: string[];
   diagnostics: Diagnostic[];
@@ -281,6 +285,7 @@ export async function runTestSuiteWithExecutor(
     const result = await execute(command);
     let commandSucceeded = false;
     let timedOut = result.timedOut === true;
+    let exitCode: number | undefined;
     let rawOutput = [result.output, result.error].filter(Boolean).join("\n");
     if (result.success) {
       try {
@@ -289,6 +294,7 @@ export async function runTestSuiteWithExecutor(
         if (execution && typeof execution === "object" && "exit_code" in execution) {
           timedOut = execution.timed_out === true;
           commandSucceeded = execution.exit_code === 0 && !timedOut;
+          if (typeof execution.exit_code === "number") exitCode = execution.exit_code;
           rawOutput = [execution.stdout, execution.stderr, result.error].filter(Boolean).join("\n");
         }
       } catch {
@@ -296,9 +302,14 @@ export async function runTestSuiteWithExecutor(
       }
     }
     const summary = summarizeTestRun(command, commandSucceeded, rawOutput);
-    return timedOut ? { ...summary, success: false, timedOut: true } : summary;
+    const withExit = {
+      ...summary,
+      ...(exitCode === undefined ? {} : { exitCode }),
+      ...(!result.success ? { executorFailed: true } : {}),
+    };
+    return timedOut ? { ...withExit, success: false, timedOut: true } : withExit;
   } catch (error: any) {
-    return summarizeTestRun(command, false, error?.message || "Verification command execution failed.");
+    return { ...summarizeTestRun(command, false, error?.message || "Verification command execution failed."), executorFailed: true };
   }
 }
 
