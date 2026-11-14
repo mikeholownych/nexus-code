@@ -1,9 +1,9 @@
 import * as fs from "node:fs";
-import { recoverContentToolCall } from "./core/content_tool_call.js";
 import * as path from "node:path";
 import * as os from "node:os";
 import { randomUUID } from "node:crypto";
 import { parse as parseDotenv } from "dotenv";
+import { CONTENT_CALL_NOTE, isContentCallReply } from "./core/content_tool_call.js";
 import { parseAdmissionHeaders, parseAdvertisement, parseOllamaVersion, parseServerContext, parseTokenizeResponse, parseVllmVersion, serverKindOf, type AdmissionReport, type Advertisement, type RequestCount, type ServerKind } from "./core/provider_capabilities.js";
 import { adaptToolDefinitionsForServer, constrainTextModeToolCall, isGrammarRejection, toolGrammarEnabled } from "./core/tool_grammar_provider.js";
 import { ChatMessage, ToolDefinition, HarnessConfig, ToolCall } from "./types.js";
@@ -1697,10 +1697,37 @@ export class LocalLlmClient {
     const response = await this.withReceipt(requestId, purpose, () =>
       this.withOAuthRetry(this.endpoint, requestId, () => this.withParameterRetry(() => this.chatCompletionOnce(messages, tools, requestId, signal))),
     );
-    return recoverContentToolCall(response, tools);
+    return this.askAgainForNativeCall(response, messages, tools, signal);
   }
 
-  private async chatCompletionOnce(messages: ChatMessage[], tools: ToolDefinition[], requestId: string, signal?: AbortSignal): Promise<ChatMessage> {
+  /**
+   * A server that answered a tool request with the call as reply text (never executed, REQ-AGT-112) is asked again, at
+   * most twice, and only a native call from an answer is used:
+   * 1. with the reply and a note that text is not a call, `tool_choice` unchanged: a model that was only quoting JSON
+   *    just answers, one that meant a call makes it natively;
+   * 2. only if it wrote the call as text again after that note, with `tool_choice: required`.
+   * The retry turns exist only in these requests, never in the returned history. A failed retry propagates like any
+   * other request failure; with no native call the original reply stands.
+   */
+  private async askAgainForNativeCall(response: ChatMessage, messages: ChatMessage[], tools: ToolDefinition[], signal?: AbortSignal): Promise<ChatMessage> {
+    if (this.conn.protocol !== "openai-chat" || this.conn.streamOnly || !isContentCallReply(response, tools, messages)) return response;
+    const corrected: ChatMessage[] = [...messages, { role: "assistant", content: response.content }, { role: "user", content: CONTENT_CALL_NOTE }];
+    const ask = (toolChoice: "auto" | "required"): Promise<ChatMessage> => {
+      const requestId = randomUUID();
+      return this.withReceipt(requestId, "tool-call-retry", () =>
+        this.withOAuthRetry(this.endpoint, requestId, () => this.withParameterRetry(() => this.chatCompletionOnce(corrected, tools, requestId, signal, toolChoice))),
+      );
+    };
+    this.emitDiagnostic("error", pc.dim(`[nexus] ${this.conn.label} answered a tool request with the call as text; telling it so and asking again.`));
+    const noted = await ask("auto");
+    if (noted.tool_calls?.length) return { ...noted, toolCallSource: "feedback" };
+    if (!isContentCallReply(noted, tools, messages)) return typeof noted.content === "string" && noted.content.trim() ? noted : response;
+    this.emitDiagnostic("error", pc.dim(`[nexus] ${this.conn.label} wrote the call as text again; asking once more with tool_choice=required.`));
+    const forced = await ask("required");
+    return forced.tool_calls?.length ? { ...forced, toolCallSource: "required" } : response;
+  }
+
+  private async chatCompletionOnce(messages: ChatMessage[], tools: ToolDefinition[], requestId: string, signal?: AbortSignal, toolChoice: "auto" | "required" = "auto"): Promise<ChatMessage> {
     if (this.conn.protocol !== "openai-chat") return this.nativeCompletion(messages, tools, undefined, requestId, signal, this.conn.streamOnly);
     if (this.conn.streamOnly) return this.chatCompletionStreamOnce(messages, tools, undefined, requestId, signal);
     return this.executeWithFailover("chatCompletion", async (currentEp) => {
@@ -1764,7 +1791,7 @@ export class LocalLlmClient {
 
       if (outboundTools.length > 0) {
         payload.tools = outboundTools;
-        payload.tool_choice = "auto";
+        payload.tool_choice = toolChoice;
       }
       if (this.conn.usage === "openrouter") payload.usage = { include: true };
       this.omitUnsupported(payload);
@@ -1857,7 +1884,7 @@ export class LocalLlmClient {
         this.withParameterRetry(() => this.chatCompletionStreamOnce(messages, tools, onToken, requestId, signal)),
       ),
     );
-    return recoverContentToolCall(response, tools);
+    return this.askAgainForNativeCall(response, messages, tools, signal);
   }
 
   /**

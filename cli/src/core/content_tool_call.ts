@@ -1,25 +1,30 @@
-import type { ChatMessage, ToolCall, ToolDefinition } from "../types.js";
+import type { ChatMessage, ToolDefinition } from "../types.js";
+
+/** Sent with the model's own text reply when it wrote a call as text, before asking again. */
+export const CONTENT_CALL_NOTE = "Your last reply wrote a tool call as plain text, and plain text is never executed. If you meant to call the tool, call it now with the native tool-call mechanism. If you were only showing or quoting that JSON, answer in prose instead.";
 
 /**
- * Some servers answer a tool request with the call's arguments as JSON text in `content` (plain, or in one fenced block,
- * sometimes with leftover closing tags) and no `tool_calls`, so the turn would end as a text reply and the call would be
- * lost. This recovers such a reply into one native call, and only when the reply is nothing but that call:
- * - strictly parseable JSON, no repair, no prose around it;
- * - either {"name": <offered tool>, "arguments": {...}} or an arguments object that exactly one offered tool accepts
- *   (every required key present, no key outside its properties, declared primitive types respected).
- * Anything else is left untouched, so an ordinary answer that happens to be JSON is not turned into a call.
+ * Some servers answer a tool request with the call as JSON text in `content` and no `tool_calls`. That text is never
+ * executed (REQ-AGT-112: prose JSON is not a call). This only recognises such a reply so the client can ask the server
+ * again and use whatever native call comes back. A reply qualifies only when it is nothing
+ * but strictly parseable JSON (plain or in one fence, closing tags and think blocks tolerated) that is either
+ * {"name": <offered tool>, "arguments": {...}}, or an arguments object accepted by the one tool the request offered; and
+ * the JSON is not text the request already contained (a model quoting what it read is not asking for a call).
  */
-export function recoverContentToolCall(message: ChatMessage, tools: readonly ToolDefinition[]): ChatMessage {
-  if (tools.length === 0 || (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) || typeof message.content !== "string") return message;
+export function isContentCallReply(message: ChatMessage, tools: readonly ToolDefinition[], requestMessages: readonly ChatMessage[] = []): boolean {
+  if (tools.length === 0 || (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) || typeof message.content !== "string") return false;
   const body = soleJsonBody(message.content);
-  if (body === undefined) return message;
+  if (body === undefined || echoedFromRequest(body, requestMessages)) return false;
   let value: unknown;
-  try { value = JSON.parse(body); } catch { return message; }
-  if (!isRecord(value)) return message;
-  const call = namedCall(value, tools) ?? uniqueMatch(value, tools);
-  if (!call) return message;
-  const recovered: ToolCall = { id: `call_content_${Math.random().toString(36).slice(2, 9)}`, type: "function", function: { name: call.name, arguments: JSON.stringify(call.args) } };
-  return { ...message, content: "", tool_calls: [recovered], toolCallSource: "content" };
+  try { value = JSON.parse(body); } catch { return false; }
+  if (!isRecord(value)) return false;
+  return (namedCall(value, tools) ?? (tools.length === 1 ? acceptedBy(tools[0]!, value) : undefined)) !== undefined;
+}
+
+function echoedFromRequest(body: string, requestMessages: readonly ChatMessage[]): boolean {
+  const compact = (text: string): string => text.replace(/\s+/g, "");
+  const needle = compact(body);
+  return requestMessages.some((message) => typeof message.content === "string" && compact(message.content).includes(needle));
 }
 
 function soleJsonBody(content: string): string | undefined {
@@ -60,13 +65,11 @@ function typeAccepts(schema: unknown, value: unknown): boolean {
   return types.some((type) => type === actual || (type === "number" && actual === "integer"));
 }
 
-function uniqueMatch(value: Record<string, unknown>, tools: readonly ToolDefinition[]): { name: string; args: Record<string, unknown> } | undefined {
+function acceptedBy(tool: ToolDefinition, value: Record<string, unknown>): { name: string; args: Record<string, unknown> } | undefined {
+  const { properties, required } = parameters(tool);
   const keys = Object.keys(value);
-  const matches = tools.filter((tool) => {
-    const { properties, required } = parameters(tool);
-    return keys.length > 0
-      && required.every((key) => key in value)
-      && keys.every((key) => key in properties && typeAccepts(properties[key], value[key]));
-  });
-  return matches.length === 1 ? { name: matches[0]!.function.name, args: value } : undefined;
+  const accepted = keys.length > 0 && required.length > 0
+    && required.every((key) => key in value)
+    && keys.every((key) => key in properties && typeAccepts(properties[key], value[key]));
+  return accepted ? { name: tool.function.name, args: value } : undefined;
 }
