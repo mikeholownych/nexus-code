@@ -64,3 +64,30 @@ A requirements DSL, a semantic geometry engine, a second evidence store, archite
 ## 7. Checkpoint
 
 Done: audits, this plan, SI-1 (commit `336a6f3c`, local, reviews pending). Next: local Code/Security/Slop reviews on SI-1, open the PR after the v1.1.4 rc.2 work lands, then SI-2. Blocker: none for the plan; v1.1.4 release verification (per-file CLI run, PR #487) is in progress and has priority.
+
+## 8. Compiler-grounded semantic intelligence (third audit, 2026-11-14)
+
+Audit: code trace on `origin/main`, nothing executed. This section extends sections 2 and 4; it adds no framework. The existing LSP bridge (`cli/src/lsp.ts`), diagnostics parser (`cli/src/diagnostics.ts`), `EvidenceRecord`/`ValidationReceipt` and the verifier discovery in `tester.ts` are extended in place.
+
+| ID | Gap | Evidence | Priority |
+|---|---|---|---|
+| G-CG-1 | `lsp_diagnostics` always returns `[]` with `success:true`: each `lsp_*` tool call builds a new `LspBridgeManager`, so the diagnostics cache is always empty. "No data" reads as "no errors". Verified by reading `tools.ts` (`lsp_hover`, `lsp_definition`, `lsp_diagnostics`) | `tools.ts:1435-1475`, `lsp.ts` | P0 |
+| G-CG-2 | Every hover/definition call spawns a language server that nothing shuts down (`LspBridgeManager.shutdownAll` has no production caller); `notifyFileOpen` has no callers, so no `didOpen` is sent | `lsp.ts:193,344` | P0 |
+| G-CG-3 | LSP servers spawn outside the sandbox with the full environment; workspace trust covers only MCP and plugins | `lsp.ts:49`, `workspace_trust.ts:6-13` | P1 |
+| G-CG-4 | Diagnostics are regex-parsed, drop tool/version/config, are not persisted and reach the model as an unfenced top-10 hint string | `diagnostics.ts:19-143` | P1 |
+| G-CG-5 | `EvidenceRecord` cannot say whether a fact came from a tool or from the model; `materialDependencies` is hardcoded `[]`, so toolchain-change invalidation never fires; the worktree-completion receipt hashes a constant with exit code 0 | `evidence.ts:19`, `agent.ts:4742`, `evaluator.ts:87` | P1 (verify the receipt claim before fixing) |
+| G-CG-6 | Verifier discovery finds test commands only, never `tsc --noEmit`, `cargo check`, clippy or `go vet`; `runTestSuite` is dead code | `tester.ts:72-135,245` | P2 |
+| G-CG-7 | No references, call-hierarchy or type information anywhere; `cst.rs` is a regex scanner; `.mjs`/`.cjs` (eval and scripts, Nexus's weakest-covered code) are in neither LSP nor scanner maps | `lsp.ts:272`, `cst.rs:198` | P2 |
+| G-CG-8 | No impact analysis: nothing maps a changed symbol to the verification that should run | `specialist_profiles.ts:59` | P2 |
+
+Units (each failing test first, smallest change, single-PR rollback):
+
+| Unit | Closes | Change | Acceptance |
+|---|---|---|---|
+| CG-1 | G-CG-1, G-CG-2 | One `LspBridgeManager` per workspace owned by the tool executor, shut down with it; `lsp_diagnostics` reports `unavailable` (not success with `[]`) when no server has published for that file; `didOpen` sent before queries | Test: diagnostics for a file with a type error is non-empty; for an unopened file the result says unavailable; no server process remains after the session |
+| CG-2 | G-CG-3 | LSP launch behind workspace trust, scrubbed environment, same limits as other tool execution | Untrusted workspace: server not started and the tool says why |
+| CG-3 | G-CG-4, G-CG-5 | Structured diagnostic record (tool, code, severity, location, config) and a `source: tool | model` tag on evidence; diagnostics text fenced as untrusted data; real `materialDependencies` (toolchain version, config hashes) | Toolchain version change invalidates the receipt; model claim and tool fact are distinguishable in export |
+| CG-4 | G-CG-6 | Discover and run type-check commands (`tsc --noEmit`, `cargo check`) as verifier evidence, recording the configuration verified | Type error fails acceptance; evidence names the config; "compiled under one config" is never reported as universal |
+| CG-5 | G-CG-7, G-CG-8 | Only if SI-5 needs it: LSP references for impact discovery with disclosed coverage limits | Deferred until CG-1..4 land |
+
+Scope discipline: compiler success is recorded as a scoped fact (tool, version, config, revision, content hash), never as functional correctness. CERI gets a `compiler_grounded_semantics` category only with frozen scenarios (symbol ambiguity, type incompatibility, stale evidence, tool unavailable, hidden build configuration) after CG-1..4. Priority among all units: SI-1 (done), CG-1 (an existing tool that returns false success), SI-2, CG-3, SI-3.. SI-7, CG-2, CG-4.
