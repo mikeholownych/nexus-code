@@ -47,6 +47,7 @@ import {
 import { fileSignature, readCoverage, readRequests } from "./core/observation_identity.js";
 import { parseModelResponse, repairJsonWithClass, isWriteOrExecTool, type ToolCallSyntaxCounts } from "./parser.js";
 import { TerminalUI, redactSecrets, safeTerminal } from "./ui.js";
+import { safeOperatorText } from "./protocol.js";
 import { getGitInfo } from "./git.js";
 import { trustedProjectRules } from "./startup_trust.js";
 import { isHarnessNote, withHarnessProvenance } from "./harness_notes.js";
@@ -125,6 +126,7 @@ import {
 import { LocalTraceRecorder, type SpanHandle, type TraceAttributes, type TraceStatus } from "./core/trace.js";
 import {
   ObjectiveLedger,
+  SteeringConflict,
   RequirementUpdate,
   READ_OBJECTIVE_CAPABILITY,
   REQUIREMENTS_CAPABILITY,
@@ -148,6 +150,11 @@ import {
   convergenceSignal,
   convergenceHistory,
   queueSteering,
+  steeringNegations,
+  recordSteeringConflict,
+  resolveSteeringConflict,
+  settleSteeringConflicts,
+  supersededBy,
   recordAttempt,
   recoveryInput,
   renderPinnedLedger,
@@ -183,7 +190,8 @@ const MAY_OUTLIVE_COMMAND = /(?<![&>])&(?![&>])|\b(?:nohup|setsid|disown|systemd
 /** Default deadline for the completion verifier (seconds); override with HarnessConfig.verifierTimeoutSecs / NEXUS_VERIFIER_TIMEOUT_SECS. */
 export const DEFAULT_VERIFIER_TIMEOUT_SECS = 300;
 
-export type ConfirmHandler = (toolName: string, args: Record<string, any>) => Promise<boolean>;
+/** `signal` aborts when the question no longer applies (a decision about steering whose turn has ended). */
+export type ConfirmHandler = (toolName: string, args: Record<string, any>, signal?: AbortSignal) => Promise<boolean>;
 
 /** Structured projection of turn activity for non-terminal surfaces such as the TUI sidecar. Observers must not throw. */
 /** Outcome of in-turn delegation (spawn_subagent). `summary` is whatever report exists, even when not completed. */
@@ -1036,6 +1044,8 @@ export class AutonomousAgent {
   private activeProviderRecovery: ProviderRecoveryRecord | null = null;
   /** Set by the operation scheduler: resource condition observations and the yield decision. */
   private providerRecoveryHooks?: Pick<RecoveryHooks<unknown>, "onFailure" | "shouldYield">;
+  private steeringDecisions: Promise<void> = Promise.resolve();
+  private conflictAborts = new Map<string, AbortController>();
   private activeTurn?: {
     controller: AbortController;
     phase: "idle" | "inference" | "provider_wait" | "tool" | "confirmation";
@@ -2820,10 +2830,77 @@ export class AutonomousAgent {
    * reported through `onSteering`. Returns why it was not queued: no turn running, cancellation already requested,
    * or an id seen before (a resend is not applied twice).
    */
-  public queueSteering(id: string, text: string): { status: "queued" | "duplicate" | "no_active_turn" } {
+  public queueSteering(id: string, text: string): { status: "queued" | "duplicate" | "no_active_turn" | "conflict"; requirements?: string[]; held?: boolean } {
     const turn = this.activeTurn;
-    if (!turn || turn.cancelRequestedAt || turn.closing || !this.objective) return { status: "no_active_turn" };
-    return queueSteering(this.objective, id, text) ? { status: "queued" } : { status: "duplicate" };
+    const ledger = this.objective;
+    if (!turn || turn.cancelRequestedAt || turn.closing || !ledger) return { status: "no_active_turn" };
+    const negated = steeringNegations(ledger, text);
+    if (!negated.length) return queueSteering(ledger, id, text) ? { status: "queued" } : { status: "duplicate" };
+    const conflict = recordSteeringConflict(ledger, id, text, negated);
+    if (!conflict) return { status: "duplicate" };
+    const onConfirm = turn.onConfirm;
+    if (onConfirm) {
+      const abort = new AbortController();
+      this.conflictAborts.set(conflict.id, abort);
+      this.steeringDecisions = this.steeringDecisions.then(() => this.decideSteeringConflict(ledger, conflict, onConfirm, abort));
+    } else conflict.status = "unresolved";
+    this.persistProgress({ messages: true });
+    return { status: "conflict", requirements: negated, held: Boolean(onConfirm) };
+  }
+
+  /**
+   * Steering that negates a requirement waits for an explicit operator decision (one at a time, in order); the
+   * ledger changes only on approval, and only if it is still this ledger and this turn still runs.
+   */
+  private async decideSteeringConflict(ledger: ObjectiveLedger, conflict: SteeringConflict, onConfirm: ConfirmHandler, abort: AbortController): Promise<void> {
+    if (conflict.status !== "pending" || abort.signal.aborted) return;
+    let approved = false;
+    let answered = false;
+    const withdrawn = new Promise<boolean>((resolve) => abort.signal.addEventListener("abort", () => resolve(false), { once: true }));
+    try {
+      approved = await Promise.race([onConfirm(
+        "steering_conflict",
+        {
+          steering: conflict.id,
+          text: safeOperatorText(conflict.text),
+          negates: conflict.requirements.map((id) => ({ id, text: safeOperatorText(ledger.requirements.find((r) => r.id === id)?.text ?? "", 160) })),
+        },
+        abort.signal,
+      ), withdrawn]);
+      answered = true;
+    } catch {}
+    this.conflictAborts.delete(conflict.id);
+    if (conflict.status !== "pending") return;
+    const turn = this.activeTurn;
+    if (!answered || abort.signal.aborted || this.objective !== ledger || !turn || turn.closing || turn.cancelRequestedAt || turn.controller.signal.aborted) {
+      conflict.status = "unresolved";
+      conflict.decidedAt = new Date().toISOString();
+      this.reportUndecided(conflict);
+      return;
+    }
+    resolveSteeringConflict(ledger, conflict, approved, safeOperatorText(conflict.text));
+    if (!approved) {
+      try {
+        this.observer?.onSteering?.({ id: conflict.id, status: "cancelled", text: conflict.text, reason: `you declined it: it negates ${conflict.requirements.join(", ")}` });
+      } catch {}
+    }
+    this.persistProgress({ messages: true });
+  }
+
+  private reportUndecided(conflict: SteeringConflict): void {
+    try {
+      this.observer?.onSteering?.({ id: conflict.id, status: "cancelled", text: conflict.text, reason: "the turn ended before you decided" });
+    } catch {}
+  }
+
+  /** The turn is closing: held conflicts are settled unresolved, their questions withdrawn, and the operator told. */
+  private closeSteeringConflicts(): void {
+    if (!this.objective) return;
+    for (const conflict of settleSteeringConflicts(this.objective)) {
+      this.conflictAborts.get(conflict.id)?.abort();
+      this.conflictAborts.delete(conflict.id);
+      this.reportUndecided(conflict);
+    }
   }
 
   private hasQueuedSteering(): boolean {
@@ -6225,8 +6302,11 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       continuingObjective = Boolean(ledger && (isResume || isStep || !isNewObjective(ledger, taskPrompt)));
       if (!ledger || (!isResume && !isStep && isNewObjective(ledger, taskPrompt))) {
         const carried = ledger?.steering.filter((s) => s.status === "queued") ?? [];
+        const orphaned = ledger ? supersededBy(ledger) : undefined;
         ledger = createLedger(taskPrompt, undefined, this.unitId);
         ledger.steering.push(...carried);
+        const prior = this.objective?.superseded ?? [];
+        if (prior.length || orphaned) ledger.superseded = [...prior, ...(orphaned ? [orphaned] : [])];
       } else {
         if (this.unitId && !ledger.unitId) {
           ledger.unitId = this.unitId;
@@ -7059,6 +7139,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         endStep();
       }
       turn.closing = true;
+      this.closeSteeringConflicts();
       // Queued /compact: run now that the last step has settled, or cancelled with the turn.
       if (this.compactionQueue.length) {
         try {
@@ -7139,6 +7220,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       return result;
     } catch (err: any) {
       turn.closing = true;
+      this.closeSteeringConflicts();
       if (this.compactionQueue.length) {
         try {
           await this.drainCompactionQueue(currentStep, undefined, "the turn failed unexpectedly");
