@@ -108,7 +108,7 @@ export type IntegrateResult =
 export interface IntegrationEvidence {
   sequence?: number;
   candidate?: { digest: string; scope: "tree" | "commit" };
-  tests?: { command: string; status: string; hasExecutedTests: boolean };
+  tests?: { command: string; status: string; hasExecutedTests: boolean; definitionBound?: false };
 }
 
 function evidenceFields(evidence: IntegrationEvidence): Pick<IntegrationReceipt, "sequence" | "candidate" | "tests"> {
@@ -372,7 +372,7 @@ export class OperationGit {
           files: [],
           outcome: result.outcome,
           summary: result.summary,
-          verification: posthoc ? "PASSED_POSTHOC" : "ALREADY_MERGED",
+          verification: posthoc ? (result.verification?.definitionBound === false ? "PASSED_POSTHOC_UNBOUND" : "PASSED_POSTHOC") : "ALREADY_MERGED",
           ...evidenceFields(evidence),
         },
       };
@@ -421,7 +421,7 @@ export class OperationGit {
       files,
       outcome: result.outcome,
       summary: result.summary,
-      verification: verification ? "PASSED" : "NOT_RUN",
+      verification: verification ? (result.verification?.definitionBound === false ? "PASSED_UNBOUND" : "PASSED") : "NOT_RUN",
       ...evidenceFields(evidence),
     };
     this.state.units[unit.id] = { ...entry, integratedCommit };

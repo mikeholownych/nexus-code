@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { execSync } from "node:child_process";
 import { AutonomousAgent } from "../src/agent.js";
-import { isShellProgramVerifier, snapshotVerifierDefinition } from "../src/core/independent_check.js";
+import { isInlineProgramVerifier, snapshotVerifierDefinition, snapshotVerifierDefinitionWithReason } from "../src/core/independent_check.js";
 import { applyRequirementUpdates } from "../src/core/objective.js";
 import { DEFAULT_CONTINUATION, HarnessConfig } from "../src/types.js";
 import { startGateway, Reply } from "./helpers/fixtures.js";
@@ -195,10 +195,10 @@ describe("verifier whose definition cannot be bound", () => {
   });
 
   test("shell -c program verifiers in every flag shape are detected", () => {
-    for (const command of ["bash -c 'npm test'", "bash -x -c 'npm test'", "bash --norc -c 'npm test'", "bash -ce 'npm test'", "sh -c ./verify", "zsh -c ./verify", "env FOO=1 bash -c ./verify"]) {
-      assert.equal(isShellProgramVerifier(command), true, command);
+    for (const command of ["bash -c 'npm test'", "bash -x -c 'npm test'", "bash --norc -c 'npm test'", "bash -ce 'npm test'", "sh -c ./verify", "zsh -c ./verify", "env FOO=1 bash -c ./verify", "python -c 'import verify'", "python3 -c 'x'", "node -e 'require(\"./verify\")'", "node --eval 'x'", "node -p 1", "perl -e 'x'", "ruby -e 'x'"]) {
+      assert.equal(isInlineProgramVerifier(command), true, command);
     }
-    for (const command of ["npm test", "make test", "node --test", "bash verify.sh"]) assert.equal(isShellProgramVerifier(command), false, command);
+    for (const command of ["npm test", "make test", "node --test", "bash verify.sh", "python -m pytest", "node --import tsx --test test/a.test.js", "env -u NODE_TEST_CONTEXT node --test"]) assert.equal(isInlineProgramVerifier(command), false, command);
   });
 
   test("an unbound shell -c configured verifier still hard-fails", { timeout: 60_000 }, async () => {
@@ -225,5 +225,69 @@ describe("verifier whose definition cannot be bound", () => {
     assert.equal(attemptIndependent, false);
     assert.equal(rejected.length, 1);
     assert.match(rejected[0], /verified requires/);
+  });
+
+  test("an unbound pass keeps the pending obligation and the baseline", { timeout: 60_000 }, async () => {
+    let pending: boolean | undefined;
+    let baseline: any;
+    let modified = 0;
+    const { turn } = await run({ ...withModules, "math.js": ADD_BUGGY }, [write("math.js", ADD_FIXED), done], undefined, {}, (agent) => {
+      pending = agent.hasUnverifiedChanges();
+      baseline = (agent as any).changeBaseline;
+      modified = (agent as any).modifiedFiles.size;
+    });
+    assert.equal(turn.outcome, "REGRESSION_FREE");
+    assert.equal(turn.unverifiedChangesPending, true);
+    assert.equal(pending, true);
+    assert.ok(baseline?.verifierUnbindableReason);
+    assert.ok(modified > 0);
+  });
+
+  test("a bound verifier clears the obligation and the baseline as before", { timeout: 60_000 }, async () => {
+    let pending: boolean | undefined;
+    let baseline: unknown = "unset";
+    const { turn } = await run({ ...withoutModules, "math.js": ADD_BUGGY }, [write("math.js", ADD_FIXED), done], undefined, { authoritativeVerifierCommand: "npm test", trustedDeliverableFiles: ["math.js"] }, (agent) => {
+      pending = agent.hasUnverifiedChanges();
+      baseline = (agent as any).changeBaseline;
+    });
+    assert.equal(turn.verification?.status, "PASSED");
+    assert.equal(turn.verification?.definitionBound, undefined);
+    assert.equal(pending, false);
+    assert.equal(baseline, undefined);
+  });
+
+  test("a resumed task with a recovered baseline and an unbindable definition is still a hard error", { timeout: 60_000 }, async () => {
+    const { turn } = await run({ ...withModules, "math.js": ADD_BUGGY }, [write("math.js", ADD_FIXED), done], (agent) => {
+      (agent as any).untrustedRecoveredBaseline = { command: "npm test", failed: true, tests: {}, verifier: null, trustedDeliverables: [], at: "x" };
+      (agent as any).hasPendingModifications = true;
+      (agent as any).verificationBaselineInvalidated = true;
+      (agent as any).changeBaseline = null;
+    });
+    assert.equal(turn.outcome, "NOT_ESTABLISHED");
+    assert.match(turn.verification?.independenceDetail ?? "", /no matching pre-change baseline/);
+    assert.equal(turn.verification?.definitionBound, undefined);
+  });
+
+  test("each unbindable shape names its own reason, never the generic one", () => {
+    const cases: Array<[Record<string, string>, string, RegExp]> = [
+      [{ "package.json": JSON.stringify({ name: "x" }) }, "npm test", /no test script/],
+      [{ "package.json": PKG, ".npmrc": "//r/:_authToken=abc\n" }, "npm test", /credentials/],
+      [{ "package.json": "{" }, "npm test", /not valid JSON/],
+      [{ "a.txt": "x" }, "go test ./...", /go\.mod/],
+      [{ "a.txt": "x" }, "cargo test", /Cargo\.toml/],
+      [{ "a.txt": "x" }, "pytest", /pytest configuration/],
+      [{ "a.txt": "x" }, "node --test", /no existing test files/],
+      [{ "Makefile": "all:\n" }, "make test", /no test target/],
+    ];
+    for (const [files, command, expected] of cases) {
+      const ws = repo(files);
+      try {
+        const result = snapshotVerifierDefinitionWithReason(ws, command, []);
+        assert.equal(result.verifier, null, command);
+        assert.match((result as { reason: string }).reason, expected, command);
+      } finally {
+        fs.rmSync(ws, { recursive: true, force: true });
+      }
+    }
   });
 });

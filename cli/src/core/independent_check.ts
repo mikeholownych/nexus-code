@@ -98,9 +98,12 @@ export function snapshotVerifierDefinitionWithReason(
   return verifier ? { verifier } : { verifier: null, reason: why.reason ?? "it has too many or unsupported references" };
 }
 
-/** A shell program (`bash -c`, `bash -x -c`, `sh -ce`) can run any script the candidate rewrote, so it is never accepted unbound. */
-export function isShellProgramVerifier(command: string): boolean {
-  return /\b(?:ba|z|da|k)?sh\b[^;|&]*\s(?:-[A-Za-z]*c[A-Za-z]*|--command)\b/.test(command);
+/** An inline program (`bash -x -c`, `sh -ce`, `python -c`, `node -e`, `perl -e`, `ruby -e`) can run any script the candidate rewrote, so it is never accepted unbound. */
+export function isInlineProgramVerifier(command: string): boolean {
+  return (
+    /\b(?:ba|z|da|k)?sh\b[^;|&]*\s(?:-[A-Za-z]*c[A-Za-z]*|--command)\b/.test(command) ||
+    /\b(?:python\d?(?:\.\d+)?|node|perl|ruby)\b[^;|&]*\s(?:-[A-Za-z]*[ceEp][A-Za-z]*|--eval|--print)\b/.test(command)
+  );
 }
 
 /** Test files of the workspace by relative path, or null when one exceeds the size kept for restoring. */
@@ -160,18 +163,18 @@ export function snapshotVerifierDefinition(
   const absentPaths = new Set<string>();
   const add = (relative: string) => {
     const absolute = path.resolve(root, relative);
-    if (!absolute.startsWith(`${root}${path.sep}`)) return false;
+    if (!absolute.startsWith(`${root}${path.sep}`)) return note("it references a path outside the workspace");
     try {
       const linkStat = fs.lstatSync(absolute);
       const real = fs.realpathSync(absolute);
       if (linkStat.isSymbolicLink() || !real.startsWith(`${root}${path.sep}`))
-        return false;
+        return note(`${relative} is a symlink or leaves the workspace`);
       const stat = fs.statSync(absolute);
-      if (!stat.isFile() || stat.size > MAX_TEST_BYTES) return false;
+      if (!stat.isFile() || stat.size > MAX_TEST_BYTES) return note(`${relative} is not a regular file or is too large`);
       files.add(path.relative(root, absolute));
       return true;
     } catch {
-      return false;
+      return note(`${relative} is missing or unreadable`);
     }
   };
   const scanReferences = (text: string, base: string, pending: string[]) => {
@@ -225,7 +228,7 @@ export function snapshotVerifierDefinition(
         continue;
       }
       if (visited.size > 128) return note("it references more than 128 files");
-      if (!add(path.relative(root, file))) return note(`a referenced file (${path.relative(root, file)}) is missing, a symlink, or too large`);
+      if (!add(path.relative(root, file))) return false;
       const contents = fs.readFileSync(file, "utf8");
       if (!scanReferences(contents, path.dirname(file), pending)) return false;
     }
@@ -261,12 +264,12 @@ export function snapshotVerifierDefinition(
       const current = pending.pop()!;
       if (visited.has(current)) continue;
       visited.add(current);
-      if (visited.size > 256) return false;
+      if (visited.size > 256) return note("a test imports more than 256 local files");
       let text: string;
       try {
         text = fs.readFileSync(current, "utf8");
       } catch {
-        return false;
+        return note(`${path.relative(root, current)} is unreadable`);
       }
       const specifiers = new Set<string>();
       const importPattern =
@@ -277,7 +280,7 @@ export function snapshotVerifierDefinition(
       }
       for (const specifier of specifiers) {
         const base = path.resolve(path.dirname(current), specifier);
-        if (!base.startsWith(`${root}${path.sep}`)) return false;
+        if (!base.startsWith(`${root}${path.sep}`)) return note("a test imports a path outside the workspace");
         const candidates = new Set<string>();
         if (/\.(?:c|m)?js$/.test(base)) {
           candidates.add(base.replace(/\.(?:c|m)?js$/, ".ts"));
@@ -309,7 +312,7 @@ export function snapshotVerifierDefinition(
           }
           continue;
         }
-        if (existing.length > 1) return false;
+        if (existing.length > 1) return note(`a test import (${normalizedSupport}) is ambiguous`);
         const dependency = existing[0];
         const relative = path.relative(root, dependency);
         const normalizedDependency = relative.replace(/\\/g, "/");
@@ -333,7 +336,7 @@ export function snapshotVerifierDefinition(
     const npmrc = path.join(path.dirname(packageFile), ".npmrc");
     if (fs.existsSync(path.join(root, npmrc))) {
       const npmrcPath = path.resolve(root, npmrc);
-      if (!npmrcPath.startsWith(`${root}${path.sep}`)) return false;
+      if (!npmrcPath.startsWith(`${root}${path.sep}`)) return note(".npmrc is outside the workspace");
       let npmrcContents: string;
       try {
         const stat = fs.lstatSync(npmrcPath);
@@ -343,17 +346,17 @@ export function snapshotVerifierDefinition(
           !real.startsWith(`${root}${path.sep}`) ||
           !stat.isFile() ||
           stat.size > MAX_TEST_BYTES
-        ) return false;
+        ) return note(".npmrc is a symlink, not a regular file, or too large");
         npmrcContents = fs.readFileSync(npmrcPath, "utf8");
       } catch {
-        return false;
+        return note(".npmrc is unreadable");
       }
       // npm auth values may be short, unquoted, and therefore invisible to the
       // generic entropy and assignment redactors. Never copy a credential-bearing
       // npmrc into durable verifier state; the caller will fail closed because
       // this verifier definition cannot be safely bound.
       if (/\b(?:_auth(?:token)?|_password|password|username)\s*(?:=|:)/i.test(npmrcContents)) {
-        return false;
+        return note(".npmrc holds credentials");
       }
       if (!add(npmrc)) return false;
     } else {
@@ -365,9 +368,9 @@ export function snapshotVerifierDefinition(
         fs.readFileSync(path.join(root, packageFile), "utf8"),
       )?.scripts?.test;
     } catch {
-      return false;
+      return note("package.json is not valid JSON");
     }
-    if (typeof testScript !== "string" || !testScript.trim()) return false;
+    if (typeof testScript !== "string" || !testScript.trim()) return note("package.json has no test script");
     if (
       !addScriptReferences(
         testScript,
@@ -417,7 +420,7 @@ export function snapshotVerifierDefinition(
       if (seen.has(rel)) continue;
       seen.add(rel);
       if (seen.size > 64) { note("the Makefile includes more than 64 files"); return null; }
-      if (!add(rel)) { note(`${rel} is missing, a symlink, or too large`); return null; }
+      if (!add(rel)) return null;
       const makefile = fs.readFileSync(path.join(root, rel), "utf8");
       if (/^test:/m.test(makefile)) targetFound = true;
       for (const line of makefile.split(/\r?\n/)) {
@@ -464,7 +467,7 @@ export function snapshotVerifierDefinition(
     const present = configs.filter((rel) =>
       fs.existsSync(path.join(root, rel)),
     );
-    if (!present.length) return null;
+    if (!present.length) { note("no pytest configuration file was found"); return null; }
     for (const rel of present) if (!add(rel)) return null;
     if (
       !addScriptReferences(
@@ -487,7 +490,7 @@ export function snapshotVerifierDefinition(
     // The accepted nested Node test runner used by the harness. Bind every
     // discovered test file; other wrappers remain unprovable and fail closed.
     const tests = snapshotTests(root);
-    if (!tests || tests.size === 0) return null;
+    if (!tests || tests.size === 0) { note("there are no existing test files to bind, or one is too large"); return null; }
     // Test source is separately snapshotted in ChangeBaseline so changed tests
     // can be set aside and the original suite rerun against the code. The
     // verifier-definition boundary binds test membership, not mutable bodies.

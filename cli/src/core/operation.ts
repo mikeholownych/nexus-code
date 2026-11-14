@@ -338,11 +338,11 @@ export interface IntegrationReceipt {
   files: string[];
   outcome: string;
   summary: string;
-  verification: "PASSED" | "PASSED_POSTHOC" | "NOT_RUN" | "ALREADY_INTEGRATED" | "ALREADY_MERGED" | "NO_CHANGES";
+  verification: "PASSED" | "PASSED_POSTHOC" | "PASSED_UNBOUND" | "PASSED_POSTHOC_UNBOUND" | "NOT_RUN" | "ALREADY_INTEGRATED" | "ALREADY_MERGED" | "NO_CHANGES";
   /** Content-addressed view of the merged unit's tree; absent when the worktree was already gone. */
   candidate?: { digest: string; scope: "tree" | "commit" };
   /** The unit's executed verifier, copied verbatim from its result; absent when the unit produced none. */
-  tests?: { command: string; status: string; hasExecutedTests: boolean };
+  tests?: { command: string; status: string; hasExecutedTests: boolean; definitionBound?: false };
   /** 1-based merge order within the operation, assigned by the runner. */
   sequence?: number;
 }

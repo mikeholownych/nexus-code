@@ -67,7 +67,7 @@ import { WORKTREE_BINDING_VERSION } from "./core/state.js";
 import { isSandboxAvailable } from "./sandbox.js";
 import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand, verifierTimeoutSecs } from "./tester.js";
 import { ENABLE_TOOLS_CAPABILITY, TOOL_GROUPS, groupsTriggeredBy, toolGroupOf } from "./core/tool_groups.js";
-import { isShellProgramVerifier, snapshotVerifierDefinitionWithReason, judgeWithoutCopy, prepareBaselineTestsCopy, requiresWorkspaceVerifierDefinitionBinding, trustedDeliverablesFromBaseline, testsChangedSince, snapshotTests, snapshotVerifierDefinition, verifierDefinitionChangedSince, verifierDefinitionMatchesSnapshot, tddRedTestsMatchSnapshot, type ChangeBaseline, type Independence } from "./core/independent_check.js";
+import { isInlineProgramVerifier, snapshotVerifierDefinitionWithReason, judgeWithoutCopy, prepareBaselineTestsCopy, requiresWorkspaceVerifierDefinitionBinding, trustedDeliverablesFromBaseline, testsChangedSince, snapshotTests, snapshotVerifierDefinition, verifierDefinitionChangedSince, verifierDefinitionMatchesSnapshot, tddRedTestsMatchSnapshot, type ChangeBaseline, type Independence } from "./core/independent_check.js";
 import { ensurePrivateDir, appendPrivateFile } from "./core/durable_file.js";
 
 import { credentialOriginOf, InferenceError, type TruncatedCall, TokenCountError } from "./client.js";
@@ -2279,7 +2279,7 @@ export class AutonomousAgent {
   /** Whether a passing, covering run of the discovered `command` is independent evidence of the change. */
   private verifierDefinitionAtCapture(command: string, trustedDeliverables: readonly string[]): Pick<ChangeBaseline, "verifier" | "verifierUnbindableReason"> {
     const definition = snapshotVerifierDefinitionWithReason(this.config.workspace, command, trustedDeliverables);
-    return definition.verifier || isShellProgramVerifier(command) ? { verifier: definition.verifier } : { verifier: null, verifierUnbindableReason: definition.reason };
+    return definition.verifier || isInlineProgramVerifier(command) ? { verifier: definition.verifier } : { verifier: null, verifierUnbindableReason: definition.reason };
   }
 
   private async judgeIndependence(command: string, deadlineSecs: number, confirmHandler?: ConfirmHandler): Promise<Independence> {
@@ -4510,7 +4510,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
               (hasTddRedVerifier
                 ? !tddRedVerifierMatches
                 : verifierDefinitionChangedSince(this.config.workspace, this.changeBaseline!));
-            const unboundReason = bindsWorkspaceDefinition && matchingBaseline && !this.changeBaseline?.verifier?.size ? this.changeBaseline?.verifierUnbindableReason : undefined;
+            const unboundReason = bindsWorkspaceDefinition && matchingBaseline && !hasTddRedVerifier && !this.changeBaseline?.verifier?.size ? this.changeBaseline?.verifierUnbindableReason : undefined;
             const unboundDetail = unboundReason
               ? `the verifier's definition could not be bound (${unboundReason}), so the pass cannot be independent evidence`
               : undefined;
@@ -4704,7 +4704,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
 
       // The obligation is discharged only by a passing run of the selected verifier (never by command text).
       // Zero executed tests does not discharge the obligation.
-      if (!noApplicableVerifier && hasExecuted && verifierSucceeded && isDeliverableBound) {
+      if (!noApplicableVerifier && hasExecuted && verifierSucceeded && isDeliverableBound && this.verificationEvidence?.definitionBound !== false) {
         // With the latch set, no generic verifier can authenticate the recovered workspace or its oracle.
         // A trusted pre-change baseline must be established by a fresh task or a future authenticated verifier.
         if (this.verificationBaselineInvalidated) this.verificationBaselineInvalidated = false;
@@ -4727,7 +4727,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         before: verificationStateBefore,
       });
       // Files a passing run covered are verified; ones it did not cover stay for a later run to cover.
-      if (verifierSucceeded && hasExecuted && this.verificationEvidence?.isDeliverableBound) {
+      if (verifierSucceeded && hasExecuted && this.verificationEvidence?.isDeliverableBound && this.verificationEvidence.definitionBound !== false) {
         this.modifiedFiles.clear();
         this.changeBaseline = undefined;
       }
@@ -7313,7 +7313,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         !this.verificationBaselineInvalidated &&
         evidence?.status === "PASSED" &&
         evidence.hasExecutedTests === true &&
-        evidence.isDeliverableBound === false
+        (evidence.isDeliverableBound === false || evidence.definitionBound === false)
       ) {
         return deepFreezeTurn(assertTurnResultInvariants({
           ...base,

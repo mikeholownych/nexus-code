@@ -1215,3 +1215,20 @@ test("an advisory failure_debugger blocked on two failed units is offered only d
   assert.equal(debug.dropped, true);
   assert.equal(debug.blocked, undefined);
 });
+
+test("an unbound verifier pass is carried into the integration receipt and not recorded as a plain PASSED", async () => {
+  const root = repo();
+  const p = plan(root);
+  const state = newOperationGitState(p);
+  ensureIntegrationWorktree(p, state);
+  const ops = new OperationGit(p, state, { verifyTimeoutSecs: 30 });
+  ops.prepareUnit(unit("u1"));
+  fs.writeFileSync(path.join(state.units.u1.worktree, "u1.txt"), "one\n");
+  const verification = { command: "test -f u1.txt", status: "PASSED", hasExecutedTests: true, definitionBound: false as const };
+  const integrated = await ops.integrate(unit("u1"), completed({ verification }), { tests: verification });
+  assert.equal(integrated.kind, "integrated");
+  if (integrated.kind === "integrated") {
+    assert.equal(integrated.receipt.verification, "PASSED_UNBOUND");
+    assert.equal(integrated.receipt.tests?.definitionBound, false);
+  }
+});

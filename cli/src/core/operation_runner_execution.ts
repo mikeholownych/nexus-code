@@ -739,8 +739,8 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     }
     // The worst result across every dependency that ran a verifier decides; order must not matter.
     const verifications = ctx.dependencies.flatMap((d) => (d.verification ? [d.verification] : []));
-    const passing = (v: { status: string; hasExecutedTests: boolean; definitionBound?: false }) => v.status === "PASSED" && v.hasExecutedTests;
-    const verified = verifications.find((v) => !passing(v)) ?? verifications[0];
+    const passing = (v: { status: string; hasExecutedTests: boolean }) => v.status === "PASSED" && v.hasExecutedTests;
+    const verified = verifications.find((v) => !passing(v)) ?? verifications.find((v) => v.definitionBound === false) ?? verifications[0];
     const emptyDiff = "diff" in candidate && candidate.diff.trim() === "";
     // No operation or unit declares a file scope, so the package carries none (rather than an empty placeholder that
     // would read as "unrestricted"): the scope gate runs only for callers that supply one.
