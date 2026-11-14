@@ -120,7 +120,7 @@ fn parse_cst_content(content: &str, rel_path: &str, query_filter: Option<&str>, 
             let mut end_line = start_line;
 
             // Multiline signature accumulation until '{', ';', or ':' (python)
-            if !trimmed.contains('{') && !trimmed.contains(';') && !(ext == "py" && trimmed.ends_with(':')) {
+            if !(trimmed.contains('{') || trimmed.contains(';') || ext == "py" && trimmed.ends_with(':')) {
                 while lookahead.len() < 9 {
                     let Some(next_line) = source_lines.next() else { break };
                     lookahead.push_back(next_line);

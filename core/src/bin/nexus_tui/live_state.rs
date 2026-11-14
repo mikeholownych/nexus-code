@@ -2054,7 +2054,7 @@ impl LiveState {
             KeyCode::Esc => Some("cancel"),
             _ => return None,
         };
-        let Some(choice) = choice else { return None; };
+        let choice = choice?;
         let id = id.clone();
         self.overlay = None;
         Some(Action::Send(Command::CheckpointChoice { id, choice: choice.into() }))

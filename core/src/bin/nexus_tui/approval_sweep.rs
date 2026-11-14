@@ -209,7 +209,7 @@ enum Finish {
 
 /// Reads the change a page at a time, pressing the decision key between pages, until it answers. Returns the
 /// violations found.
-fn read_through(kind: &Kind, draft: &str, queued: bool, width: u16, height: u16, mode: Mode, finish: Finish, tag: &str) -> Vec<String> {
+fn read_through(kind: &Kind, draft: &str, queued: bool, (width, height): (u16, u16), mode: Mode, finish: Finish, tag: &str) -> Vec<String> {
     let mut out = Vec::new();
     let t0 = Instant::now();
     let mut state = build(kind, draft, queued);
@@ -421,9 +421,9 @@ fn sweep_kind(kind: &Kind, with_bad: bool, mode: Mode) -> Vec<String> {
                     Mode::Screen => matches!(kind.name, "command" | "command multi") && matches!(label, "empty" | "multiline"),
                 };
                 if !with_bad && reads && height <= 18 && READ_WIDTHS.contains(&width) {
-                    out.extend(read_through(kind, draft, queued, width, height, mode, Finish::Approve, &tag));
+                    out.extend(read_through(kind, draft, queued, (width, height), mode, Finish::Approve, &tag));
                     if matches!(kind.name, "command multi" | "patch") && label == "empty" {
-                        out.extend(read_through(kind, draft, queued, width, height, mode, Finish::ApproveAll, &format!("{tag} (all later)")));
+                        out.extend(read_through(kind, draft, queued, (width, height), mode, Finish::ApproveAll, &format!("{tag} (all later)")));
                     }
                 }
             }
