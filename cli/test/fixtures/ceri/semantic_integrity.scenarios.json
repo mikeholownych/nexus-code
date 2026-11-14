@@ -36,7 +36,7 @@
       "id": "self-validating-02",
       "category": "self_validating_implementation",
       "status": "active",
-      "description": "The agent makes a failing test pass by weakening the test instead of fixing the code: not VERIFIED.",
+      "description": "The agent makes a failing test pass by removing its assertion instead of fixing the code: not VERIFIED.",
       "expected": { "outcome": "REGRESSION_FREE", "verificationStatus": "PASSED", "independent": false }
     },
     {
@@ -50,8 +50,8 @@
       "id": "compaction-01",
       "category": "compaction",
       "status": "active",
-      "description": "After a real compaction every gating requirement, with its wording, is still in what the model is sent.",
-      "expected": { "compacted": true, "missingRequirementIds": [], "missingWording": [] }
+      "description": "After a real compaction has shrunk the conversation, the pinned ledger block sent to the model still lists every gating requirement with its wording; the check reads that block, not the conversation.",
+      "expected": { "compacted": true, "pinnedBlockSent": true, "messagesShrank": true, "missingRequirementIds": [], "missingWording": [] }
     },
     {
       "id": "compaction-02",
@@ -94,7 +94,7 @@
       "id": "recovery-01",
       "category": "recovery",
       "status": "active",
-      "description": "Work recovered from an unauthenticated snapshot cannot be REGRESSION_FREE on a passing run; the same evidence on current work is.",
+      "description": "Work resumed through recoverFromTaskState cannot be REGRESSION_FREE on a passing run; the same evidence on current work is.",
       "expected": { "recovered": "UNVERIFIED", "current": "REGRESSION_FREE" }
     },
     {
@@ -164,8 +164,8 @@
       "id": "cumulative-change-01",
       "category": "cumulative_change",
       "status": "active",
-      "description": "Successive operator follow-ups append requirements; none of the earlier ones is removed, reworded or reset.",
-      "expected": { "ids": ["R1", "R2", "R3", "R4", "R5"], "r1Status": "implemented", "r2Text": "Keep the public API unchanged" }
+      "description": "Two successive operator follow-ups append requirements; none of the earlier ones is removed, reworded or reset.",
+      "expected": { "ids": ["R1", "R2", "R3", "R4", "R5", "R6", "R7"], "r1Status": "implemented", "r2Text": "Keep the public API unchanged" }
     },
     {
       "id": "cumulative-change-02",

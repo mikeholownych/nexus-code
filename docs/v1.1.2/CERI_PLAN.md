@@ -44,7 +44,8 @@ export type CapabilityDomain =
   | "specialist_delegation"
   | "independent_review"
   | "authorization_enforcement"
-  | "workspace_isolation";
+  | "workspace_isolation"
+  | "semantic_integrity";
 
 export interface EvaluationDefinition {
   id: string;

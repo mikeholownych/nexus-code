@@ -22,6 +22,7 @@ import {
   gatingRequirements,
   hasOpenRequirements,
   invalidateVerified,
+  PINNED_LEDGER_PREFIX,
   priorAttempt,
   recordAttempt,
   renderPinnedLedger,
@@ -30,6 +31,7 @@ import {
   type VerificationAttempt,
 } from "../src/core/objective.js";
 import { buildReviewEvidencePackage, parseIndependentReviewVerdict } from "../src/core/independent_review.js";
+import { DurableStateManager } from "../src/core/state.js";
 import { SecurityManager } from "../src/security.js";
 import { DEFAULT_CONTINUATION, type HarnessConfig } from "../src/types.js";
 import { makeRepo, startGateway, type Reply } from "./helpers/fixtures.js";
@@ -57,7 +59,8 @@ before(() => {
   process.env.HOME = home;
 });
 after(() => {
-  process.env.HOME = previousHome;
+  if (previousHome === undefined) delete process.env.HOME;
+  else process.env.HOME = previousHome;
   fs.rmSync(home, { recursive: true, force: true });
 });
 
@@ -181,7 +184,7 @@ const drivers: Record<string, () => unknown | Promise<unknown>> = {
   "self-validating-02": async () =>
     turnFacts(await scriptedTurn(
       { "package.json": pkg("./math.js"), "math.js": ADD_BUGGY, "test/math.test.js": ADD_TEST },
-      [writeFile("test/math.test.js", ADD_TEST.replace("add(2, 3), 5", "add(2, 3), -1")), done],
+      [writeFile("test/math.test.js", ADD_TEST.replace("assert.equal(add(2, 3), 5)", "assert.ok(true)")), done],
       "npm test fails; fix it.",
     )),
   "self-validating-03": async () =>
@@ -193,16 +196,20 @@ const drivers: Record<string, () => unknown | Promise<unknown>> = {
     )),
   "compaction-01": async () => {
     const root = makeRepo();
-    const gw = await startGateway(() => text("noted"));
+    const gw = await startGateway((n) => (n <= 6 ? writeFile(`w${n}.txt`, `${n}\n`) : text("paused")));
     const agent = quiet(new AutonomousAgent(cfg(gw.url, root)));
     try {
-      const objective = "1. Add the maxLength option\n2. Keep every file under 10 bytes\n3. Update the README";
+      const objective = "1. Add the maxLength option\n2. Keep every file under 10 bytes\n3. Write w1..w6";
       await agent.runTurn(objective);
+      const messagesBefore = agent.getMessages().length;
       const compacted = await agent.compactNow(false);
-      const sent = (agent as any).requestMessages(agent.getMessages()).map((m: any) => String(m.content)).join("\n");
+      const pinnedBlocks = (agent as any).requestMessages(agent.getMessages()).map((m: any) => String(m.content)).filter((c: string) => c.startsWith(PINNED_LEDGER_PREFIX));
+      const sent = pinnedBlocks.join("\n");
       const gating = gatingRequirements(agent.getObjective()!);
       return {
         compacted: compacted.ok,
+        pinnedBlockSent: pinnedBlocks.length === 1,
+        messagesShrank: agent.getMessages().length < messagesBefore,
         missingRequirementIds: gating.filter((r) => !sent.includes(`- ${r.id} [`)).map((r) => r.id),
         missingWording: gating.filter((r) => !sent.includes(r.text)).map((r) => r.id),
       };
@@ -246,9 +253,30 @@ const drivers: Record<string, () => unknown | Promise<unknown>> = {
     acceptDescoping(ledger, ["R2"]);
     return { doneAfterAgentDescope: afterAgent, completionBlocked: blocked, doneAfterOperatorAccept: requirementDone(r2) };
   },
-  "recovery-01": () => {
+  "recovery-01": async () => {
     const evidence = passing({ hasExecutedTests: true, isDeliverableBound: false });
-    return { recovered: turnFromState({ invalidated: true, evidence }).outcome, current: turnFromState({ invalidated: false, evidence }).outcome };
+    const root = makeRepo();
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-ceri-si-state-"));
+    const make = () => {
+      const a = quiet(new AutonomousAgent(cfg("http://127.0.0.1:9/v1", root))) as any;
+      a.stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [a.primaryWorkspacePathIdentity] });
+      return a;
+    };
+    const first = make();
+    const second = make();
+    try {
+      const taskId = first.getTaskId();
+      first.checkpointDurableState("checkpoint");
+      await second.recoverFromTaskState(taskId);
+      second.verificationEvidence = evidence;
+      const recovered = second.buildTurnResult({ modelStop: "NONE", finalOutputComplete: true, inferenceFailure: null, interruption: null, limitReached: false, stepsUsed: 1 }).outcome;
+      return { recovered, current: turnFromState({ invalidated: false, evidence }).outcome };
+    } finally {
+      first.shutdown();
+      second.shutdown();
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
   },
   "stale-evidence-01": () => {
     const ledger = createLedger("fix it");
@@ -286,6 +314,7 @@ const drivers: Record<string, () => unknown | Promise<unknown>> = {
   "cumulative-change-01": () => {
     const ledger = ledgerWith(NUMBERED, "R1", "implemented", "src/a.ts");
     amendObjective(ledger, "1. Add a --json flag\n2. Document the flag");
+    amendObjective(ledger, "1. Add a --quiet flag\n2. Document that flag");
     return { ids: ledger.requirements.map((r) => r.id), r1Status: ledger.requirements[0].status, r2Text: ledger.requirements[1].text };
   },
   "cumulative-change-02": () => {
@@ -305,6 +334,20 @@ test("the frozen scenario file is the one the manifest pins, in a registered CER
   assert.ok((CAPABILITY_DOMAINS as readonly string[]).includes(frozen.domain));
   const ids = frozen.scenarios.map((s) => s.id);
   assert.equal(new Set(ids).size, ids.length, "scenario ids are unique");
+});
+
+const PENDING_FROZEN: Record<string, string> = {
+  "hidden-invariant-03": "SI-4",
+  "compaction-03": "unassigned (Codex row 'SI-6 / compaction': post-compaction check)",
+  "conflicting-specs-01": "SI-3",
+  "cumulative-change-03": "SI-5",
+};
+const ACTIVE_FROZEN = 21;
+
+test("the scenario set cannot shrink or be reclassified without changing this file too", () => {
+  const pending = Object.fromEntries(frozen.scenarios.filter((s) => s.status === "pending").map((s) => [s.id, s.pendingUnit]));
+  assert.deepEqual(pending, PENDING_FROZEN);
+  assert.equal(frozen.scenarios.filter((s) => s.status === "active").length, ACTIVE_FROZEN);
 });
 
 test("every active scenario has a driver, and no driver lacks a scenario", () => {
