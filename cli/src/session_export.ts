@@ -81,6 +81,7 @@ export function buildSessionExport(manager: SessionManager, session: SessionData
         steering: objective?.steering ?? [],
         verificationAttempts: objective?.verification ?? [],
         verificationEvidence: lastTurn?.verification ?? null,
+        verificationConfigAttempts: session.verificationConfigAttempts ?? [],
         unverifiedChangesPending: session.unverifiedChangesPending ?? null,
       },
       tokenAccounting:
@@ -141,6 +142,11 @@ function markdownExport(session: SessionData, history: HistoryCompleteness, arch
       for (const a of objective.verification) out.push(`- #${a.n} \`${a.command}\` → ${a.status} on ${a.inputs.slice(0, 12)}${a.failedCheck ? ` (${a.failedCheck})` : ""}`);
       out.push("");
     }
+  }
+  if (session.verificationConfigAttempts?.length) {
+    out.push("**Verification configuration edits (tests, CI, build):**", "");
+    for (const a of session.verificationConfigAttempts) out.push(`- ${a.timestamp} ${a.decision} \`${a.tool}\` ${a.path} (${a.class}${a.role ? `, ${a.role}` : ""})`);
+    out.push("");
   }
   if (session.activePlan?.length) {
     out.push("**Plan (the agent's roadmap; requirement states above are authoritative):**", "");

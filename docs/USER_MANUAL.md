@@ -169,7 +169,19 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   before the change and pass after it. Tests Nexus wrote in the same change cannot catch its own misreading of what you
   asked, so a change checked only by them — or by tests that already passed before it, as for a new feature or a
   refactor — ends `Done · tests pass (own tests only)` (`REGRESSION_FREE`); the receipt's `independenceDetail` says
-  which. A verifier you configure is your own check and is not held to this. Python projects without configuration
+  which. A verifier you configure is your own check and is not held to this.
+  **Verifiers that cannot be bound.** Nexus also snapshots the verifier's own definition (package.json test script, Makefile
+  and the scripts it names) before the first edit, so the model cannot rewrite the check it is judged by. When that
+  definition cannot be bound — a local `node_modules` directory under `npm test`, a Makefile referencing more than 128
+  files or files outside the workspace, directories nested deeper than 5 levels, and similar — the task still completes, but
+  as `REGRESSION_FREE`: `Tests pass, but the verifier's definition could not be bound (<reason>), so it was not verified
+  unchanged ... and the pass is regression evidence only`. The receipt carries `definitionBound: false`, no worktree merge
+  receipt is issued, and requirements cannot be marked `verified` on it. Inline programs (`bash -c`, `python -c`, `node -e`)
+  are not accepted this way at all. To get `VERIFIED`, use a verifier whose definition is bindable (for example a plain
+  `node --test` or `make test` with a small Makefile, or run in a clean checkout without `node_modules`). Limitation: the
+  baseline is kept in memory only, so after a restart or `--resume` following an unbound pass the "no matching pre-change
+  baseline" error returns for that resumed task (a fresh task recovers); within one session every later completion
+  reruns the verifier because the obligation stays pending. Python projects without configuration
   (`test_*.py` in `tests/`, `test/` or the root) are run with `python3 -m unittest`. A verifier checks what it
   checks — for a review or analysis it may check structure only — so when the work may rest on tool output that left
   the context during the turn and was not read again, the outcome says so (`Done · verified (some context lost)`, and
@@ -484,6 +496,7 @@ policy when resumed.
 
 - **Workspace Symlink Boundary Confinement**: Native Rust canonicalization verifies that neither relative paths nor symlinks can escape the workspace jail directory.
 - **Configurable Security Policy (`.nexus-security.json`)**: Declare repository-specific blocked shell commands, protected files (`.git`, `.env*`, keys), and allowed outbound network domains. Protected-path checks cover case-insensitive variants, `.env*` prefixes, and canonical targets across all file read/write/edit tools; for `run_command` path protection is advisory because shell commands execute in the host shell environment.
+- **Verification-configuration guard (`verificationPaths` in `.nexus-security.json`)**: File-tool edits by the agent to tests, CI, build and verifier files (`Makefile`, `.github/workflows/**`, `conftest.py`, `.coveragerc`, `pyproject.toml`/`setup.cfg` (only when pytest, coverage, tox or script sections change), `.husky/**`, `.pre-commit-config.yaml`, `jest|vitest.config.*`, `scripts/**/test*`, `package.json` when `scripts`/`jest`/`vitest`/`mocha`/`ava`/`nyc`/`c8`/`workspaces` change, existing runnable test files, and the policy file itself) need an operator decision, at any depth. `mode` is `approve` (default; denied with `VERIFICATION_CONFIG_PROTECTED` when no operator is present; `--yes` passes and records), `record`, `block` or `off`; `extra` and `allow` are glob lists. Creating a new test file is free; creating a new config or CI file is gated, so a headless greenfield project that must create such files needs `--yes` (fullAccess) or `verificationPaths.mode` `record`. Edits arriving over MCP have no operator and are denied. The tester role may append cases to an existing test through `write_file` or `edit_file` (text that skips tests or exits early is refused); `patch_file` on an existing test always asks, and nothing may weaken or delete one. Every attempt is recorded in the session export (`verificationConfigAttempts`). **Limit: `run_command` writes (`sed -i`, `tee`, redirects, `mv`...) are detected best-effort and recorded only, never blocked, so this guard does not stop a shell-capable agent from changing how work is verified.**
 - **Dry-Run & Read-Only Modes (REQ-SEC-104)**:
   - `--dry-run`: Intercepts file writes and mutating commands to simulate changes without touching disk.
   - `--read-only`: Rejects all file modifications and non-read shell commands with an immediate error. Under container sandboxing (`bwrap`), `--tmpfs $HOME` is mounted to completely mask SSH keys (`~/.ssh`), credentials, and dotfiles from `run_command`. Without `bwrap`, strict path confinement rejects paths referencing `~`, `$HOME`, environment variables (`$`), absolute paths outside the workspace, or escaping `..` sequences.

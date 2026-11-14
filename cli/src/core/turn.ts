@@ -198,6 +198,11 @@ export interface VerificationEvidence {
    */
   independent?: boolean;
   independenceDetail?: string;
+  /**
+   * False when the workspace-resolved verifier definition could not be bound before the work (for example a
+   * node_modules tree under `npm test`), so no pass can be independent evidence. The turn is then at most REGRESSION_FREE.
+   */
+  definitionBound?: false;
   /** Deadline the verifier was given, recorded when it timed out. */
   deadlineSecs?: number;
   outputSha256?: string;

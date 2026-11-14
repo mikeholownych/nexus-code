@@ -36,7 +36,7 @@ export interface UnitRunContext {
   /** The durable operation this unit belongs to. */
   operationId?: string;
   /** Each dependency's result; `failed` marks one that is BLOCKED on a failed verifier run (failure_debugger units of isolated operations only). */
-  dependencies: Array<{ id: string; title: string; summary: string; verification?: { command: string; status: string; hasExecutedTests: boolean }; failed?: true }>;
+  dependencies: Array<{ id: string; title: string; summary: string; verification?: { command: string; status: string; hasExecutedTests: boolean; definitionBound?: false }; failed?: true }>;
   /** Isolated operations: the commit the operation started from, which a review unit diffs against. */
   baseCommit?: string;
   /** Non-isolated operations: HEAD when the operation first ran (absent outside Git, or for older operations). */
@@ -505,7 +505,7 @@ export class OperationRunner {
   private async integrateUnit(unit: WorkUnit, result: Extract<UnitRunResult, { kind: "completed" }>): Promise<UnitRunResult> {
     const candidate = this.candidateFor(unit);
     const tests = result.verification
-      ? { command: result.verification.command, status: result.verification.status, hasExecutedTests: result.verification.hasExecutedTests }
+      ? { command: result.verification.command, status: result.verification.status, hasExecutedTests: result.verification.hasExecutedTests, ...(result.verification.definitionBound === false ? { definitionBound: false as const } : {}) }
       : undefined;
     const integration = await this.git!.integrate(unit, result, {
       sequence: (this.state.integrations?.length ?? 0) + 1,
@@ -545,6 +545,8 @@ export class OperationRunner {
       "WORK_INTEGRATED",
       integration.receipt.verification === "NOT_RUN"
         ? `${unit.id} integrated on ${integration.receipt.integratedCommit.slice(0, 12)} (not re-verified).`
+        : integration.receipt.tests?.definitionBound === false
+        ? `${unit.id} integrated on ${integration.receipt.integratedCommit.slice(0, 12)} (verifier passed, but its definition could not be bound or verified unchanged: regression evidence only).`
         : `${unit.id} integrated on ${integration.receipt.integratedCommit.slice(0, 12)}.`,
       { unitId: unit.id, detail: { integration: integration.receipt } },
     );

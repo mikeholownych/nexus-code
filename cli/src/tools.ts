@@ -8,7 +8,8 @@ import * as tls from "node:tls";
 import * as dns from "node:dns";
 import { URL, fileURLToPath } from "node:url";
 import { ToolDefinition, ExecutionResult } from "./types.js";
-import { SecurityManager } from "./security.js";
+import { SecurityManager, VERIFICATION_CONFIG_PROTECTED, type VerificationEditContext } from "./security.js";
+import { FILE_EDIT_TOOLS } from "./file_diff.js";
 import { InformationFlowBoundary, matchesLocalOrigins, parseLocalOrigins } from "./core/egress.js";
 import { htmlToReadableText } from "./core/html_text.js";
 import { CapabilityRegistry, HARNESS_TOOLS, defaultRegistry } from "./core/capabilities.js";
@@ -871,7 +872,20 @@ export class RustCoreBridge {
     }
   }
 
+  private lsp?: import("./lsp.js").LspBridgeManager;
+
+  /** One language-server manager per bridge, so diagnostics and open documents persist across tool calls. */
+  private async lspManager(): Promise<import("./lsp.js").LspBridgeManager> {
+    if (!this.lsp) {
+      const { LspBridgeManager } = await import("./lsp.js");
+      this.lsp = new LspBridgeManager(this.workspace);
+    }
+    return this.lsp;
+  }
+
   public shutdown(): void {
+    this.lsp?.shutdownAll();
+    this.lsp = undefined;
     this.cleanupRpc();
     this.handshakePromise = null;
     this.handshakeError = null;
@@ -1126,8 +1140,14 @@ export class RustCoreBridge {
   /**
    * Execute tool using high-performance persistent JSON-RPC daemon, with automatic spawnSync fallback
    */
-  async executeTool(toolName: string, args: Record<string, any>): Promise<ExecutionResult> {
+  async executeTool(toolName: string, args: Record<string, any>, authority?: VerificationEditContext): Promise<ExecutionResult> {
     // 1. Security policy verification
+    if (FILE_EDIT_TOOLS.has(toolName)) {
+      // `authority` is this call's own: a caller that passes none (MCP, slash commands) is headless and unapproved,
+      // so an edit to verification configuration is refused rather than silently allowed.
+      const gate = this.securityManager.authorizeVerificationEdit(toolName, args, authority);
+      if (!gate.allowed) return { success: false, output: "", error: gate.error, denialReason: VERIFICATION_CONFIG_PROTECTED };
+    }
     if (toolName === "run_command") {
       const cmd = (args.command || "").trim();
       const check = this.securityManager.isCommandBlocked(cmd);
@@ -1167,6 +1187,8 @@ export class RustCoreBridge {
         };
       }
     }
+
+    if (toolName === "run_command") this.securityManager.recordVerificationCommand(String(args.command || ""), authority?.role);
 
     if (toolName === "batch_read" && Array.isArray(args.paths)) {
       for (const p of args.paths) {
@@ -1434,8 +1456,7 @@ export class RustCoreBridge {
 
     if (toolName === "lsp_hover") {
       try {
-        const { LspBridgeManager } = await import("./lsp.js");
-        const lsp = new LspBridgeManager(this.workspace);
+        const lsp = await this.lspManager();
         const res = await lsp.hover(args.path, Number(args.line), Number(args.character));
         return {
           success: res.found,
@@ -1449,8 +1470,7 @@ export class RustCoreBridge {
 
     if (toolName === "lsp_definition") {
       try {
-        const { LspBridgeManager } = await import("./lsp.js");
-        const lsp = new LspBridgeManager(this.workspace);
+        const lsp = await this.lspManager();
         const res = await lsp.definition(args.path, Number(args.line), Number(args.character));
         return {
           success: res.found,
@@ -1464,12 +1484,14 @@ export class RustCoreBridge {
 
     if (toolName === "lsp_diagnostics") {
       try {
-        const { LspBridgeManager } = await import("./lsp.js");
-        const lsp = new LspBridgeManager(this.workspace);
-        const diags = lsp.getDiagnostics(args.path);
+        const lsp = await this.lspManager();
+        const res = await lsp.diagnostics(String(args.path || ""));
+        if (res.status === "unavailable") {
+          return { success: false, output: "", error: `lsp_diagnostics unavailable: ${res.reason} This is not evidence the file is free of errors.` };
+        }
         return {
           success: true,
-          output: JSON.stringify(diags, null, 2),
+          output: JSON.stringify(res.diagnostics, null, 2),
         };
       } catch (err: any) {
         return { success: false, output: "", error: `LSP error: ${err.message}` };
@@ -1639,8 +1661,8 @@ export function registerBridgeCapabilities(
         "run_tests",
       ].includes(cap.modelToolName)
     ) {
-      registry.setHandler(cap.modelToolName, async (args) =>
-        bridge.executeTool(cap.modelToolName, args)
+      registry.setHandler(cap.modelToolName, async (args, context) =>
+        bridge.executeTool(cap.modelToolName, args, context?.metadata?.verificationAuthority)
       );
     }
   }
