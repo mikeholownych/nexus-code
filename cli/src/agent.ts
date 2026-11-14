@@ -2180,7 +2180,7 @@ export class AutonomousAgent {
    * Durable progress within a turn. A failed write is tolerated here: the turn-end checkpoint writes the same state,
    * and an operation whose result never reached the durable conversation is detected on recovery.
    */
-  private async ensureVerifierApproved(command: string, confirmHandler?: ConfirmHandler): Promise<boolean> {
+  private async ensureVerifierApproved(command: string, confirmHandler?: ConfirmHandler, origin?: string): Promise<boolean> {
     const isTrusted = isWorkspaceTrusted(this.config.workspace, this.isReadOnly());
     const mode = this.getApprovalMode();
     const policyContext: PolicyContext = {
@@ -2212,7 +2212,7 @@ export class AutonomousAgent {
     const approved = await onConfirm("verifier", {
       command: verifierCmd,
       script: desc?.script,
-      detail: desc?.evidence,
+      detail: origin ? `${origin}${desc?.evidence ? `\n${desc.evidence}` : ""}` : desc?.evidence,
       digest,
     });
 
@@ -2996,23 +2996,31 @@ export class AutonomousAgent {
    * Runs a constraint's own verifier through the same approval gate and runner as every other verifier, unless an
    * attempt of that command already stands on the current workspace. The run is recorded against the requirement.
    */
-  private async runRequirementVerifier(requirementId: string, command: string): Promise<void> {
+  private async runRequirementVerifier(requirement: { id: string; verifierSource?: string }, command: string): Promise<string | undefined> {
     const ledger = this.objective;
     const state = this.verifierState();
-    if (!ledger || !state || priorAttempt(ledger, command, state)) return;
-    if (!(await this.ensureVerifierApproved(command, this.activeTurn?.onConfirm))) return;
+    if (!ledger || !state || priorAttempt(ledger, command, state, requirement.id)) return undefined;
+    const onConfirm = this.activeTurn?.onConfirm;
+    const origin = `${requirement.verifierSource === "operator" ? "operator-declared" : "model-declared"} verifier for ${requirement.id}: ${command}`;
+    if (!(await this.ensureVerifierApproved(command, onConfirm, origin))) {
+      return `${requirement.id}: verifier execution was not approved${onConfirm ? "" : " (it requires operator approval and no operator is present)"}`;
+    }
     const deadlineSecs = this.config.verifierTimeoutSecs ?? DEFAULT_VERIFIER_TIMEOUT_SECS;
     this.activity("verifying", { tool: command });
     const run = await runTestSuiteWithExecutor(this.config.workspace, (c) => this.bridge.executeTool("run_command", { command: c, timeout_secs: deadlineSecs }), command);
-    recordAttempt(ledger, {
-      command,
-      ...state,
-      mutationSeq: this.mutationSeq,
-      status: run.success ? "PASSED" : run.timedOut ? "TIMED_OUT" : "FAILED",
-      requirementId,
-      ...(run.success ? {} : { failedCheck: failedCheckFrom(run.rawOutput || "") }),
-    });
+    // The state after the run: a verifier that writes build output must still be able to verify what it produced.
+    const after = this.verifierState();
+    if (after) {
+      recordAttempt(ledger, {
+        command,
+        ...after,
+        status: run.success ? "PASSED" : run.timedOut ? "TIMED_OUT" : "FAILED",
+        requirementId: requirement.id,
+        ...(run.success ? {} : { failedCheck: failedCheckFrom(run.rawOutput || "") }),
+      });
+    }
     this.turnVerifierRuns.push({ command, phase: "completion", passed: run.success });
+    return undefined;
   }
 
   private activity(phase: AgentActivity["phase"], extra: { tool?: string; subject?: string } = {}): void {
@@ -4483,7 +4491,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         const open = openRequirements(this.objective);
         const blocked = blockedRequirements(this.objective);
         if (open.length || blocked.length) {
-          const list = (items: typeof open) => items.map((r) => `${r.id} [${r.status}] ${r.text}${r.note ? ` (${r.note})` : ""}${isHardRequirement(r) && r.status === "implemented" ? ` (${r.kind}: done only when ${r.verifier ? `its verifier '${r.verifier}' passes after your last change: mark it verified` : "the operator accepts it"})` : ""}`).join("\n  ");
+          const list = (items: typeof open) => items.map((r) => `${r.id} [${r.status}] ${r.text}${r.note ? ` (${r.note})` : ""}${isHardRequirement(r) && r.status === "implemented" ? ` (${r.kind}: done only when ${r.verifier && r.verifierSource === "operator" ? `its verifier '${r.verifier}' passes after your last change: mark it verified` : "the operator accepts it"})` : ""}`).join("\n  ");
           return {
             success: false,
             output: "",
@@ -5128,9 +5136,13 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       const updates: RequirementUpdate[] = Array.isArray(args?.requirements) ? args.requirements : [];
       const wantsVerified = updates.some((u) => u?.status === "verified");
       const ledger = this.objective;
+      const refused: string[] = [];
       if (wantsVerified) {
         const claimed = updates.flatMap((u) => ledger.requirements.filter((r) => u?.status === "verified" && r.id === u.id && isHardRequirement(r) && r.verifier));
-        for (const r of claimed) await this.runRequirementVerifier(r.id, r.verifier!);
+        for (const r of claimed) {
+          const reason = await this.runRequirementVerifier(r, r.verifier!);
+          if (reason) refused.push(reason);
+        }
       }
       const state = wantsVerified ? this.verifierState() : undefined;
       const result = applyRequirementUpdates(
@@ -5139,8 +5151,10 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         typeof args?.next_action === "string" ? args.next_action : undefined,
         undefined,
         wantsVerified ? this.currentPassingAttempt() : undefined,
-        (command) => (state ? priorAttempt(ledger, command, state) : undefined),
+        (command, id) => (state ? priorAttempt(ledger, command, state, id) : undefined),
       );
+      result.errors.push(...refused);
+      result.ok = result.ok && refused.length === 0;
       if (result.changed) {
         try {
           this.checkpointDurableState("requirements updated");
@@ -7261,7 +7275,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     const open = ledger ? openRequirements(ledger) : [];
     const blocked = ledger ? blockedRequirements(ledger) : [];
     const gating = ledger ? gatingRequirements(ledger) : [];
-    const lastFailure = ledger ? [...ledger.verification].reverse().find((a) => a.status === "FAILED" || a.status === "TIMED_OUT") : undefined;
+    const lastFailure = ledger ? [...ledger.verification].reverse().find((a) => !a.requirementId && (a.status === "FAILED" || a.status === "TIMED_OUT")) : undefined;
     const objective: TurnResult["objective"] | undefined = gating.length
       ? {
           status: open.length ? "incomplete" : blocked.length ? "blocked" : "completed",
@@ -7519,7 +7533,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
   private objectiveOutcome(turn: TurnResult): Omit<import("./core/objective.js").ObjectiveOutcome, "at"> {
     const ledger = this.objective!;
     const remaining = [...openRequirements(ledger), ...blockedRequirements(ledger)].map((r) => `${r.id} [${r.status}] ${r.text}`);
-    const lastFailure = [...ledger.verification].reverse().find((a) => a.status === "FAILED" || a.status === "TIMED_OUT");
+    const lastFailure = [...ledger.verification].reverse().find((a) => !a.requirementId && (a.status === "FAILED" || a.status === "TIMED_OUT"));
     const failedCheck = turn.verification?.status === "FAILED" || turn.verification?.status === "TIMED_OUT" ? lastFailure?.failedCheck : undefined;
     const done = turn.execution === "COMPLETED" && (turn.outcome === "VERIFIED" || turn.outcome === "NOT_REQUIRED") && remaining.length === 0;
     const blocked = blockedRequirements(ledger).length > 0 || turn.execution === "BLOCKED";

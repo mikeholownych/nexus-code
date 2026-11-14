@@ -464,6 +464,25 @@ export interface WorkUnitSpec {
   inputs?: Record<string, string>;
 }
 
+/** A unit's declared scope as repository-relative path prefixes ("*" alone matches everything); anything else is refused. */
+function normalizeScope(unitId: string, scope: unknown): string[] {
+  if (!Array.isArray(scope) || scope.length === 0 || scope.some((p) => typeof p !== "string")) {
+    throw new Error(`Work unit '${unitId}': authorizedScope must be a non-empty array of paths`);
+  }
+  return (scope as string[]).map((raw) => {
+    const p = raw.trim().replace(/^(?:\.\/+)+/, "").replace(/\/+$/, "").replace(/\/{2,}/g, "/");
+    const why =
+      !p || p === "." ? "is empty (use \"*\" for the whole repository)"
+      : p === "*" ? ""
+      : /^(?:\/|[A-Za-z]:)/.test(p) ? "must be relative to the repository"
+      : p.split(/[\\/]/).includes("..") ? "must not contain '..'"
+      : /[*?[]/.test(p) ? "must not contain glob characters (a path prefix, or \"*\" alone)"
+      : "";
+    if (why) throw new Error(`Work unit '${unitId}': authorizedScope entry ${JSON.stringify(raw)} ${why}`);
+    return p;
+  });
+}
+
 export function newOperation(
   id: string,
   objective: string,
@@ -482,9 +501,7 @@ export function newOperation(
     if (u.contextBudget !== undefined && (!Number.isInteger(u.contextBudget) || u.contextBudget <= 0)) {
       throw new Error(`Work unit '${u.id}': contextBudget must be a positive integer number of tokens`);
     }
-    if (u.authorizedScope !== undefined && (!Array.isArray(u.authorizedScope) || u.authorizedScope.length === 0 || u.authorizedScope.some((p) => typeof p !== "string" || !p.trim()))) {
-      throw new Error(`Work unit '${u.id}': authorizedScope must be a non-empty array of paths`);
-    }
+    if (u.authorizedScope !== undefined) normalizeScope(u.id, u.authorizedScope);
     if (u.inputs !== undefined) {
       const problem = specialistInputsProblem(u.inputs);
       if (problem) throw new Error(`Work unit '${u.id}': ${problem}`);
@@ -519,7 +536,7 @@ export function newOperation(
       ...(u.required === false ? { required: false } : {}),
       ...(u.taskClass ? { taskClass: u.taskClass } : {}),
       ...(u.contextBudget !== undefined ? { contextBudget: u.contextBudget } : {}),
-      ...(u.authorizedScope ? { authorizedScope: u.authorizedScope.map((p) => p.trim().replace(/^\.\//, "").replace(/\/+$/, "")) } : {}),
+      ...(u.authorizedScope ? { authorizedScope: normalizeScope(u.id, u.authorizedScope) } : {}),
       // A specialist unit always records its inputs (possibly none): a unit with no `inputs` field predates input
       // enforcement and is grandfathered by the executor.
       ...(u.inputs !== undefined || isSpecialistRole(u.role) ? { inputs: redactForPersistence({ ...(u.inputs ?? {}) }) } : {}),

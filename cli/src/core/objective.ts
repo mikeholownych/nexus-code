@@ -24,7 +24,7 @@ const MAX_PINNED_OPERATOR_CHARS = 12_000;
 const MAX_REQUIREMENT_TEXT = 240;
 const MAX_EVIDENCE_ITEMS = 6;
 const MAX_EVIDENCE_CHARS = 300;
-const MAX_VERIFIER_CHARS = 200;
+const MAX_VERIFIER_CHARS = 400;
 const MAX_TEST_LINKS = 6;
 const MAX_TEST_LINK_CHARS = 120;
 
@@ -32,7 +32,15 @@ export type RequirementKind = "feature" | "constraint" | "invariant";
 const REQUIREMENT_KINDS: readonly string[] = ["feature", "constraint", "invariant"];
 
 /** Verifier and test-link text comes from the operator or the model: one line, no control characters, capped. */
-const cleanLine = (text: string, max: number) => clip(text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").trim(), max);
+const oneLine = (text: string) => text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").trim();
+const cleanLine = (text: string, max: number) => clip(oneLine(text), max);
+/** Text shown in the pinned ledger as a code span: nothing inside it can read as ledger structure. */
+const span = (text: string, max: number) => `\`${cleanLine(text, max).replace(/`/g, "'")}\``;
+
+/** A command that exits 0 whatever the workspace holds checks nothing. */
+export function isConstantVerifier(command: string): boolean {
+  return /^(?:true|:|exit\s+0|\/(?:usr\/)?bin\/true)$/.test(command.trim().replace(/\s*;+\s*$/, ""));
+}
 
 /** Constraints and invariants hold for the whole task; unlike a feature they are not done on the model's word. */
 export function isHardRequirement(r: Pick<Requirement, "kind">): boolean {
@@ -70,6 +78,8 @@ export interface Requirement {
   kind?: RequirementKind;
   /** Command that checks a constraint or invariant; `verified` needs a passing run of it after the last change. */
   verifier?: string;
+  /** Who set the verifier. One the model declared is advisory: its run is evidence, never `verified`. */
+  verifierSource?: "operator" | "model";
   /** Tests (names or paths) that exercise this requirement. */
   tests?: string[];
   /** Where it came from: the operator's objective, operator steering, or the model (added sub-requirement). */
@@ -188,7 +198,7 @@ const clip = (text: string, max: number) => (text.length <= max ? text : `${text
  * heading line; the full wording stays in the verbatim objective. Fewer than two items means the objective is a
  * single request and is tracked as one requirement.
  */
-export function seedRequirements(objective: string): Array<{ id: string; text: string; detail: string; kind?: RequirementKind; verifier?: string }> {
+export function seedRequirements(objective: string): Array<{ id: string; text: string; detail: string; kind?: RequirementKind; verifier?: string; verifierSource?: "operator"; note?: string }> {
   const lines = objective.replace(/\r\n?/g, "\n").split("\n");
   const items: Array<{ indent: number; text: string; line: number }> = [];
   lines.forEach((line, index) => {
@@ -211,12 +221,20 @@ export function seedRequirements(objective: string): Array<{ id: string; text: s
 }
 
 /** An item the operator wrote as `Invariant: ...` or `Constraint: ...`, optionally ending `[verify: <command>]`. */
-function typedItem(text: string): { kind?: RequirementKind; verifier?: string } {
-  const kind = /^(constraint|invariant)\b\s*[:\-–—]/i.exec(text)?.[1].toLowerCase() as RequirementKind | undefined;
+function typedItem(text: string): { kind?: RequirementKind; verifier?: string; verifierSource?: "operator"; note?: string } {
+  const kind = /^(constraint|invariant)s?\b\s*[:\-–—]/i.exec(text)?.[1].toLowerCase() as RequirementKind | undefined;
   if (!kind) return {};
-  const verifier = /\[verify:\s*([^\]]+)\]\s*$/i.exec(text)?.[1];
-  const clean = verifier ? cleanLine(verifier, MAX_VERIFIER_CHARS) : "";
-  return { kind, ...(clean ? { verifier: clean } : {}) };
+  if (!/\[verify:/i.test(text)) return { kind };
+  const command = /\[verify:\s*(.+)\]\s*$/i.exec(text)?.[1];
+  const clean = command ? oneLine(command) : "";
+  const refusal = !clean
+    ? "its [verify: ...] verifier could not be read, so it has none"
+    : clean.length > MAX_VERIFIER_CHARS
+      ? `its verifier is over ${MAX_VERIFIER_CHARS} characters, so it has none`
+      : isConstantVerifier(clean)
+        ? "its verifier checks nothing (it always passes), so it has none"
+        : undefined;
+  return refusal ? { kind, note: refusal } : { kind, verifier: clean, verifierSource: "operator" };
 }
 
 function firstLine(text: string): string {
@@ -260,11 +278,11 @@ export function amendObjective(ledger: ObjectiveLedger, prompt: string, at = now
     text: seed.text,
     detail: seed.detail,
     ...(seed.kind ? { kind: seed.kind } : {}),
-    ...(seed.verifier ? { verifier: seed.verifier } : {}),
+    ...(seed.verifier ? { verifier: seed.verifier, verifierSource: seed.verifierSource } : {}),
     status: "open" as const,
     source: "objective" as const,
     evidence: [],
-    note: `added by the operator's follow-up of ${at}`,
+    note: `added by the operator's follow-up of ${at}${seed.note ? `; ${seed.note}` : ""}`,
     updatedAt: at,
   }));
   ledger.requirements.push(...added);
@@ -375,7 +393,7 @@ export function applyRequirementUpdates(
   /** The passing verifier attempt on the current workspace, if one is recorded (required for `verified` of a feature). */
   generalPass?: VerificationAttempt,
   /** The recorded attempt of exactly this command on the current workspace, if any (a constraint's own verifier). */
-  freshAttempt?: (command: string) => VerificationAttempt | undefined,
+  freshAttempt?: (command: string, requirementId: string) => VerificationAttempt | undefined,
 ): UpdateResult {
   const errors: string[] = [];
   let changed = false;
@@ -417,12 +435,15 @@ export function applyRequirementUpdates(
         changed = true;
       }
     }
-    const verifier = typeof update.verifier === "string" ? cleanLine(update.verifier, MAX_VERIFIER_CHARS) : "";
+    const verifier = typeof update.verifier === "string" ? oneLine(update.verifier) : "";
     if (verifier && verifier !== requirement.verifier) {
-      if (!isHardRequirement(requirement)) errors.push(`${requirement.id}: a verifier applies to a constraint or invariant`);
+      if (verifier.length > MAX_VERIFIER_CHARS) errors.push(`${requirement.id}: the verifier is over ${MAX_VERIFIER_CHARS} characters; give a shorter command`);
+      else if (isConstantVerifier(verifier)) errors.push(`${requirement.id}: '${clip(verifier, 40)}' checks nothing (it always passes); give a command that can fail`);
+      else if (!isHardRequirement(requirement)) errors.push(`${requirement.id}: a verifier applies to a constraint or invariant`);
       else if (requirement.source !== "model" || requirement.verifier) errors.push(`${requirement.id}: its verifier is fixed and cannot be changed`);
       else {
         requirement.verifier = verifier;
+        requirement.verifierSource = "model";
         changed = true;
       }
     }
@@ -449,7 +470,20 @@ export function applyRequirementUpdates(
           errors.push(`${requirement.id}: a ${requirement.kind} with no verifier cannot be verified on your word. Mark it implemented; the operator accepts it (/requirements accept).`);
           continue;
         }
-        const currentPass = hard ? freshAttempt?.(requirement.verifier!) : generalPass;
+        if (hard && requirement.verifierSource !== "operator") {
+          const run = freshAttempt?.(requirement.verifier!, requirement.id);
+          if (run) {
+            const line = `advisory verifier #${run.n}: ${clip(run.command, 80)} ${run.status} (model-declared, unreviewed)`;
+            if (!requirement.evidence.includes(line)) requirement.evidence = [...requirement.evidence, line].slice(-MAX_EVIDENCE_ITEMS);
+            changed = true;
+          }
+          errors.push(
+            `${requirement.id}: its verifier was declared by you, not the operator, so its run is evidence only and cannot verify it. ` +
+              `Mark it implemented; it stays open until the operator accepts it (/requirements accept ${requirement.id}).`,
+          );
+          continue;
+        }
+        const currentPass = hard ? freshAttempt?.(requirement.verifier!, requirement.id) : generalPass;
         if (!currentPass || currentPass.status !== "PASSED") {
           errors.push(
             hard
@@ -553,10 +587,12 @@ export function priorAttempt(
   ledger: ObjectiveLedger,
   command: string,
   current: { inputs: string; epoch: string; mutationSeq: number; external: string },
+  /** Look at that requirement's own verifier runs; without it, only general runs count. */
+  requirementId?: string,
 ): VerificationAttempt | undefined {
   for (let i = ledger.verification.length - 1; i >= 0; i--) {
     const attempt = ledger.verification[i];
-    if (attempt.command !== command || attempt.status === "SKIPPED_UNCHANGED_INPUTS") continue;
+    if (attempt.command !== command || attempt.status === "SKIPPED_UNCHANGED_INPUTS" || attempt.requirementId !== requirementId) continue;
     const same =
       attempt.inputs === current.inputs &&
       attempt.epoch === current.epoch &&
@@ -645,9 +681,9 @@ export function renderPinnedLedger(
       const evidence = r.evidence.length ? ` evidence: ${r.evidence.join("; ")}` : "";
       const note = r.note ? ` note: ${r.note}` : "";
       const pending = r.status === "descoped" && !requirementDone(r) ? " (descoped by you; still unresolved until the operator accepts it)" : "";
-      const links = r.tests?.length ? ` tests: ${r.tests.slice(0, MAX_TEST_LINKS).map((t) => cleanLine(t, MAX_TEST_LINK_CHARS)).join(", ")}` : "";
+      const links = r.tests?.length ? ` tests: ${r.tests.slice(0, MAX_TEST_LINKS).map((t) => span(t, MAX_TEST_LINK_CHARS)).join(", ")}` : "";
       const hard = isHardRequirement(r)
-        ? ` {${r.kind}; ${r.verifier ? `verifier: ${cleanLine(r.verifier, MAX_VERIFIER_CHARS)}` : "no verifier"}${unverifiedHard(r) ? "; not verified: needs its verifier to pass" + (r.verifier ? "" : " or operator acceptance") : ""}}`
+        ? ` {${r.kind}; ${r.verifier ? `${r.verifierSource === "operator" ? "verifier" : "model-declared verifier (unreviewed)"}: ${span(r.verifier, MAX_VERIFIER_CHARS)}` : "no verifier"}${unverifiedHard(r) ? (r.verifier && r.verifierSource === "operator" ? "; not verified: needs its verifier to pass" : "; not verified: needs operator acceptance") : ""}}`
         : "";
       out.push(`- ${r.id} [${r.status}${pending}]${hard} ${r.text}${links}${evidence}${note}`);
     }
@@ -790,7 +826,7 @@ export function requirementRows(ledger: ObjectiveLedger): Array<[string, string]
       r.status === "descoped"
         ? requirementDone(r) ? "DESCOPED (accepted)" : "DESCOPED (needs operator acceptance)"
         : unverifiedHard(r)
-          ? `UNVERIFIED (${r.kind}: ${r.verifier ? "its verifier has not passed" : "no verifier; needs operator acceptance"})`
+          ? `UNVERIFIED (${r.kind}: ${r.verifier ? (r.verifierSource === "operator" ? "its verifier has not passed" : "model-declared verifier (unreviewed); needs operator acceptance") : "no verifier; needs operator acceptance"})`
           : r.status === "implemented"
           ? "IMPLEMENTED (model-reported)"
           : r.status === "verified" && r.verifiedBy
