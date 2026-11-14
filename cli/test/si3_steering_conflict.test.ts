@@ -12,6 +12,7 @@ import { ApplicationCore } from "../src/core/app.js";
 import { SidecarServer } from "../src/sidecar.js";
 import { startGateway, makeRepo, makeHome, waitForEvent, Reply } from "./helpers/fixtures.js";
 import { createLedger, steeringNegations } from "../src/core/objective.js";
+import { toolSubject } from "../src/protocol.js";
 import { buildSessionExport } from "../src/session_export.js";
 
 const OBJECTIVE = ["Ship the importer:", "1. Parse the CSV input", "2. Add retry logic to the uploader", "3. Write the migration guide"].join("\n");
@@ -370,5 +371,121 @@ describe("steering conflicts through the sidecar", () => {
       assert.equal(agent.getObjective()!.steering.filter((s: any) => s.id === "g1").length, 1);
       assert.equal(ackStatuses(events, "g1").filter((s: string) => s === "applied").length, 1);
     });
+  });
+});
+
+describe("a conflict prompt never outlives its turn", () => {
+  const readFirst = (n: number, body?: any): Reply => {
+    if (n === 1) return { kind: "tools", calls: [{ name: "read_file", args: { path: "base.txt" } }], delayMs: 400 };
+    const messages = (body?.messages ?? []) as any[];
+    const last = messages[messages.length - 1];
+    const wantsWrite = messages.some((m) => m.role === "user" && String(m.content).startsWith("write x"));
+    return wantsWrite && last?.role === "user" && String(last.content).startsWith("write x") ? { kind: "tools", calls: [{ name: "write_file", args: { path: "x.txt", content: "hi" } }] } : { kind: "text", content: "done" };
+  };
+  const statuses = (events: any[], id: string) => events.filter((e) => e.type === "steer.ack" && e.id === id).map((e) => e.status);
+  async function sidecarRig(fn: (r: { server: SidecarServer; events: any[]; repo: string; send: (m: Record<string, unknown>) => Promise<void> }) => Promise<void>) {
+    const gw = await startGateway((n, body) => readFirst(n, body));
+    const repo = makeRepo();
+    const home = makeHome();
+    const previousHome = process.env.HOME;
+    process.env.HOME = home;
+    const app = new ApplicationCore({ endpoint: gw.url, model: "m", maxSteps: 10, temperature: 0, workspace: repo, shell: "bash", approvalMode: "review", fullAccess: false } as any);
+    const events: any[] = [];
+    const server = new SidecarServer({ app, mode: "review", write: (line) => events.push(JSON.parse(line)), historyFile: path.join(home, "history") });
+    server.start();
+    try {
+      await fn({ server, events, repo, send: (m) => server.handleLine(JSON.stringify({ v: 1, ...m })) });
+    } finally {
+      await server.handleLine(JSON.stringify({ v: 1, type: "cancel" }));
+      await server.idle();
+      app.shutdown();
+      await gw.close();
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      fs.rmSync(repo, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }
+
+  test("the turn ends with a held conflict: the steer comes back, and the next turn's tool approval is not blocked", async () => {
+    await sidecarRig(async ({ server, events, repo, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: OBJECTIVE });
+      await waitForEvent(events, (e) => e.type === "activity" && e.phase === "inference");
+      await send({ type: "steer", id: "g1", text: "Drop requirement 3." });
+      await waitForEvent(events, (e) => e.type === "approval.request" && e.tool === "steering_conflict");
+      await server.idle();
+      assert.deepEqual(statuses(events, "g1"), ["held", "cancelled"]);
+      const cancelled = events.find((e) => e.type === "steer.ack" && e.status === "cancelled");
+      assert.match(cancelled.message, /the turn ended before you decided/);
+      assert.equal(cancelled.text, "Drop requirement 3.");
+      await send({ type: "prompt.submit", id: "t2", text: "write x" });
+      const tool = await waitForEvent(events, (e) => e.type === "approval.request" && e.tool === "write_file");
+      await send({ type: "approve", id: tool.id, always: false });
+      await server.idle();
+      assert.ok(fs.existsSync(path.join(repo, "x.txt")));
+    });
+  });
+
+  test("two held conflicts when the turn ends: both come back, the second prompt is never opened", async () => {
+    await sidecarRig(async ({ server, events, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: OBJECTIVE });
+      await waitForEvent(events, (e) => e.type === "activity" && e.phase === "inference");
+      await send({ type: "steer", id: "g1", text: "Drop requirement 2." });
+      await send({ type: "steer", id: "g2", text: "Drop requirement 3." });
+      await server.idle();
+      assert.deepEqual(statuses(events, "g1"), ["held", "cancelled"]);
+      assert.deepEqual(statuses(events, "g2"), ["held", "cancelled"]);
+      assert.equal(events.filter((e) => e.type === "approval.request" && e.tool === "steering_conflict").length, 1);
+    });
+  });
+
+  test("a denied tool approval keeps its own denial while a steering prompt waits behind it", async () => {
+    await sidecarRig(async ({ server, events, send }) => {
+      await send({ type: "prompt.submit", id: "t1", text: OBJECTIVE });
+      await waitForEvent(events, (e) => e.type === "activity" && e.phase === "inference");
+      await send({ type: "prompt.submit", id: "t1b", text: "x" }).catch(() => {});
+      await server.idle();
+      await send({ type: "prompt.submit", id: "t2", text: "write x" });
+      const tool = await waitForEvent(events, (e) => e.type === "approval.request" && e.tool === "write_file");
+      await send({ type: "steer", id: "g2", text: "Drop requirement 3." });
+      await send({ type: "deny", id: tool.id });
+      const end = await waitForEvent(events, (e) => e.type === "tool.end" && e.tool === "write_file");
+      assert.equal(end.summary, "Denied by you");
+      const steering = await waitForEvent(events, (e) => e.type === "approval.request" && e.tool === "steering_conflict");
+      await send({ type: "deny", id: steering.id });
+      await server.idle();
+    });
+  });
+
+  test("a model tool call with a negates field cannot spoof the approval subject", () => {
+    const args = { command: "rm -rf build", steering: "s9", text: "harmless", negates: [{ id: "R1" }] };
+    assert.equal(toolSubject(args, "run_command"), "rm -rf build");
+    assert.match(toolSubject({ steering: "s9", text: "harmless", negates: [{ id: "R1" }] }, "steering_conflict"), /^steering s9 negates R1: harmless/);
+  });
+});
+
+describe("REPL steering decision", () => {
+  test("the question is bound to the conflict's signal, and a withdrawn question answers no", async () => {
+    const { InteractiveRepl } = await import("../src/repl.js");
+    const abort = new AbortController();
+    let seen: AbortSignal | undefined;
+    const fake = {
+      rl: {},
+      askDuringTurn: async (_q: string, o: { signal?: AbortSignal }) => {
+        seen = o.signal;
+        abort.abort();
+        return o.signal?.aborted ? null : "y";
+      },
+    };
+    const confirm = (InteractiveRepl.prototype as any).confirmSteeringConflict;
+    const quiet = console.log;
+    console.log = () => {};
+    try {
+      assert.equal(await confirm.call(fake, { steering: "s1", text: "Drop requirement 3.", negates: [{ id: "R3", text: "x" }] }, abort.signal), false);
+    } finally {
+      console.log = quiet;
+    }
+    assert.equal(seen, abort.signal);
+    assert.equal(await confirm.call({ rl: undefined }, { steering: "s1", text: "t", negates: [] }), false);
   });
 });

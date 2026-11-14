@@ -561,7 +561,7 @@ export class SidecarServer {
       onAssistantDelta: (delta) => this.emit({ type: "assistant.delta", turn_id: turnId, text: delta }),
       onToolStart: ({ dispatch, callId, tool: rawTool, args }) => {
         const tool = rawTool;
-        const subject = toolSubject(args);
+        const subject = toolSubject(args, rawTool);
         const evidence = this.evidence.start(turnId, redactThenCap(rawTool, 200), subject, args);
         open.set(dispatch, evidence);
         this.emit({ type: "tool.start", turn_id: turnId, call_id: callId, tool, subject, evidence });
@@ -651,9 +651,9 @@ export class SidecarServer {
   }
 
   private confirmFor(turnId: string, signal: AbortSignal) {
-    return (tool: string, args: Record<string, any>) => {
+    return (tool: string, args: Record<string, any>, question?: AbortSignal) => {
       if (this.alwaysApprove && tool !== DELIBERATE_APPROVAL) return Promise.resolve(true);
-      return this.requestApproval(turnId, signal, tool, args);
+      return this.requestApproval(turnId, question ? AbortSignal.any([signal, question]) : signal, tool, args);
     };
   }
 
@@ -779,7 +779,7 @@ export class SidecarServer {
   }
 
   private openApproval(turnId: string, signal: AbortSignal, tool: string, args: Record<string, any>): Promise<boolean> {
-    this.operatorDeclined = false;
+    if (tool !== DELIBERATE_APPROVAL) this.operatorDeclined = false;
     if (this.alwaysApprove && tool !== DELIBERATE_APPROVAL) return Promise.resolve(true);
     if (signal.aborted) return Promise.resolve(false);
     const id = `approval-${++this.approvalSeq}`;
@@ -797,7 +797,7 @@ export class SidecarServer {
         id,
         turn_id: turnId,
         tool,
-        subject: toolSubject(args),
+        subject: toolSubject(args, tool),
         preview: redactedJson(args),
         review: approvalReview(tool, args, this.app.getConfig().workspace),
       });
@@ -817,7 +817,7 @@ export class SidecarServer {
       this.emitSessionState();
     }
     // Only the operator's own Deny says "denied by you"; a cancelled turn or a shutdown settles the approval as false too.
-    this.operatorDeclined = !approved;
+    if (pending.tool !== DELIBERATE_APPROVAL) this.operatorDeclined = !approved;
     pending.settle(approved);
   }
 
@@ -1127,7 +1127,7 @@ export class SidecarServer {
           try {
             args = JSON.parse(call.function.arguments || "{}");
           } catch {}
-          entries.push({ role: "tool", tool: call.function.name, text: toolSubject(args) });
+          entries.push({ role: "tool", tool: call.function.name, text: toolSubject(args, call.function.name) });
         }
       }
     }

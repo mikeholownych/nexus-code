@@ -329,8 +329,8 @@ export function safeOperatorText(text: string, max = 300): string {
   return redactSecrets(stripEscapes(String(text)).replace(/[\x00-\x1f\x7f-\x9f]+/g, " ")).replace(/\s+/g, " ").trim().slice(0, max);
 }
 
-export function toolSubject(args: Record<string, any>): string {
-  if (Array.isArray(args.negates)) {
+export function toolSubject(args: Record<string, any>, tool?: string): string {
+  if (tool === "steering_conflict" && Array.isArray(args.negates)) {
     const ids = args.negates.map((n: any) => safeOperatorText(String(n?.id ?? ""), 12)).join(", ");
     return safeOperatorText(`steering ${args.steering} negates ${ids}: ${args.text}`, 200);
   }

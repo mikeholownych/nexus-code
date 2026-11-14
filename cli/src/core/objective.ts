@@ -532,12 +532,15 @@ export function resolveSteeringConflict(ledger: ObjectiveLedger, conflict: Steer
 }
 
 /** Conflicts still waiting when the turn closes can no longer be applied coherently: they stay unresolved, nothing changes. */
-export function settleSteeringConflicts(ledger: ObjectiveLedger, at = now()): void {
+export function settleSteeringConflicts(ledger: ObjectiveLedger, at = now()): SteeringConflict[] {
+  const settled: SteeringConflict[] = [];
   for (const c of ledger.steeringConflicts ?? []) {
     if (c.status !== "pending") continue;
     c.status = "unresolved";
     c.decidedAt = at;
+    settled.push(c);
   }
+  return settled;
 }
 
 /** What a new objective would orphan: the earlier objective and its requirements that are not done. */

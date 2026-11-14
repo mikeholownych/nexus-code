@@ -201,7 +201,7 @@ export class InteractiveRepl {
     // Work done so far, and changes still awaiting verification, survive the process ending mid-turn.
     this.agent.setProgressListener(() => this.saveCurrentSession(label));
     try {
-      result = await this.agent.runTurn(prompt, (tool, args) => this.confirmAction(tool, args), options);
+      result = await this.agent.runTurn(prompt, (tool, args, question) => this.confirmAction(tool, args, question), options);
     } finally {
       this.agent.setProgressListener(undefined);
       // Persist even if the turn threw, so the transcript of work done so far is not lost (synced: the turn ended).
@@ -428,8 +428,9 @@ export class InteractiveRepl {
   }
 
   /** Asks the operator during a turn; returns null if the turn is cancelled while waiting (treated as denial). */
-  private async askDuringTurn(question: string, options?: { graceMs?: number }): Promise<string | null> {
-    const signal = this.agent.getActiveTurnSignal();
+  private async askDuringTurn(question: string, options?: { graceMs?: number; signal?: AbortSignal }): Promise<string | null> {
+    const turnSignal = this.agent.getActiveTurnSignal();
+    const signal = options?.signal && turnSignal ? AbortSignal.any([turnSignal, options.signal]) : (options?.signal ?? turnSignal);
     if (signal?.aborted) return null;
     if (!this.rl) return null;
 
@@ -500,17 +501,17 @@ export class InteractiveRepl {
   }
 
   /** Dropping a requirement is the operator's own decision: asked even in auto mode, never covered by "always", refused without a terminal. */
-  private async confirmSteeringConflict(args: Record<string, any>): Promise<boolean> {
+  private async confirmSteeringConflict(args: Record<string, any>, signal?: AbortSignal): Promise<boolean> {
     if (!this.rl) return false;
     console.log(pc.bold(pc.yellow(`\n⚠️  Steering ${safeOperatorText(String(args.steering), 40)} would drop requirements:`)));
     for (const n of Array.isArray(args.negates) ? args.negates : []) console.log(`  ${safeOperatorText(String(n?.id ?? ""), 12)}: ${safeOperatorText(String(n?.text ?? ""), 160)}`);
     console.log(`  Steering: ${safeOperatorText(String(args.text ?? ""))}`);
-    const answer = await this.askDuringTurn(pc.bold(pc.white("  Drop these requirements? [y/N]: ")), { graceMs: REPL_APPROVAL_GRACE_MS });
+    const answer = await this.askDuringTurn(pc.bold(pc.white("  Drop these requirements? [y/N]: ")), { graceMs: REPL_APPROVAL_GRACE_MS, signal });
     return answer !== null && ["y", "yes"].includes(answer.trim().toLowerCase());
   }
 
-  private async confirmAction(toolName: string, args: Record<string, any>): Promise<boolean> {
-    if (toolName === "steering_conflict") return this.confirmSteeringConflict(args);
+  private async confirmAction(toolName: string, args: Record<string, any>, question?: AbortSignal): Promise<boolean> {
+    if (toolName === "steering_conflict") return this.confirmSteeringConflict(args, question);
     if (this.approvalMode === "auto") return true;
     if (!this.rl) return true;
 
