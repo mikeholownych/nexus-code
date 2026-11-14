@@ -871,7 +871,20 @@ export class RustCoreBridge {
     }
   }
 
+  private lsp?: import("./lsp.js").LspBridgeManager;
+
+  /** One language-server manager per bridge, so diagnostics and open documents persist across tool calls. */
+  private async lspManager(): Promise<import("./lsp.js").LspBridgeManager> {
+    if (!this.lsp) {
+      const { LspBridgeManager } = await import("./lsp.js");
+      this.lsp = new LspBridgeManager(this.workspace);
+    }
+    return this.lsp;
+  }
+
   public shutdown(): void {
+    this.lsp?.shutdownAll();
+    this.lsp = undefined;
     this.cleanupRpc();
     this.handshakePromise = null;
     this.handshakeError = null;
@@ -1431,8 +1444,7 @@ export class RustCoreBridge {
 
     if (toolName === "lsp_hover") {
       try {
-        const { LspBridgeManager } = await import("./lsp.js");
-        const lsp = new LspBridgeManager(this.workspace);
+        const lsp = await this.lspManager();
         const res = await lsp.hover(args.path, Number(args.line), Number(args.character));
         return {
           success: res.found,
@@ -1446,8 +1458,7 @@ export class RustCoreBridge {
 
     if (toolName === "lsp_definition") {
       try {
-        const { LspBridgeManager } = await import("./lsp.js");
-        const lsp = new LspBridgeManager(this.workspace);
+        const lsp = await this.lspManager();
         const res = await lsp.definition(args.path, Number(args.line), Number(args.character));
         return {
           success: res.found,
@@ -1461,12 +1472,14 @@ export class RustCoreBridge {
 
     if (toolName === "lsp_diagnostics") {
       try {
-        const { LspBridgeManager } = await import("./lsp.js");
-        const lsp = new LspBridgeManager(this.workspace);
-        const diags = lsp.getDiagnostics(args.path);
+        const lsp = await this.lspManager();
+        const res = await lsp.diagnostics(String(args.path || ""));
+        if (res.status === "unavailable") {
+          return { success: false, output: "", error: `lsp_diagnostics unavailable: ${res.reason} This is not evidence the file is free of errors.` };
+        }
         return {
           success: true,
-          output: JSON.stringify(diags, null, 2),
+          output: JSON.stringify(res.diagnostics, null, 2),
         };
       } catch (err: any) {
         return { success: false, output: "", error: `LSP error: ${err.message}` };
