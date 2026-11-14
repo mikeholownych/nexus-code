@@ -546,7 +546,7 @@ export class OperationRunner {
       integration.receipt.verification === "NOT_RUN"
         ? `${unit.id} integrated on ${integration.receipt.integratedCommit.slice(0, 12)} (not re-verified).`
         : integration.receipt.tests?.definitionBound === false
-        ? `${unit.id} integrated on ${integration.receipt.integratedCommit.slice(0, 12)} (verifier passed, but its definition could not be bound: not independent evidence).`
+        ? `${unit.id} integrated on ${integration.receipt.integratedCommit.slice(0, 12)} (verifier passed, but its definition could not be bound or verified unchanged: regression evidence only).`
         : `${unit.id} integrated on ${integration.receipt.integratedCommit.slice(0, 12)}.`,
       { unitId: unit.id, detail: { integration: integration.receipt } },
     );

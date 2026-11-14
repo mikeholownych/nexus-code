@@ -169,7 +169,19 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   before the change and pass after it. Tests Nexus wrote in the same change cannot catch its own misreading of what you
   asked, so a change checked only by them — or by tests that already passed before it, as for a new feature or a
   refactor — ends `Done · tests pass (own tests only)` (`REGRESSION_FREE`); the receipt's `independenceDetail` says
-  which. A verifier you configure is your own check and is not held to this. Python projects without configuration
+  which. A verifier you configure is your own check and is not held to this.
+  **Verifiers that cannot be bound.** Nexus also snapshots the verifier's own definition (package.json test script, Makefile
+  and the scripts it names) before the first edit, so the model cannot rewrite the check it is judged by. When that
+  definition cannot be bound — a local `node_modules` directory under `npm test`, a Makefile referencing more than 128
+  files or files outside the workspace, directories nested deeper than 5 levels, and similar — the task still completes, but
+  as `REGRESSION_FREE`: `Tests pass, but the verifier's definition could not be bound (<reason>), so it was not verified
+  unchanged ... and the pass is regression evidence only`. The receipt carries `definitionBound: false`, no worktree merge
+  receipt is issued, and requirements cannot be marked `verified` on it. Inline programs (`bash -c`, `python -c`, `node -e`)
+  are not accepted this way at all. To get `VERIFIED`, use a verifier whose definition is bindable (for example a plain
+  `node --test` or `make test` with a small Makefile, or run in a clean checkout without `node_modules`). Limitation: the
+  baseline is kept in memory only, so after a restart or `--resume` following an unbound pass the "no matching pre-change
+  baseline" error returns for that resumed task (a fresh task recovers); within one session every later completion
+  reruns the verifier because the obligation stays pending. Python projects without configuration
   (`test_*.py` in `tests/`, `test/` or the root) are run with `python3 -m unittest`. A verifier checks what it
   checks — for a review or analysis it may check structure only — so when the work may rest on tool output that left
   the context during the turn and was not read again, the outcome says so (`Done · verified (some context lost)`, and

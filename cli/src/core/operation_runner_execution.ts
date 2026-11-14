@@ -759,7 +759,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       ...(verified
         ? {
             verifierCommand: verified.command,
-            verifierOutput: `status ${verified.status}${verified.hasExecutedTests ? "" : " (no tests executed)"}${verified.definitionBound === false ? " (the verifier's definition could not be bound, so the pass is not independent evidence)" : ""}`,
+            verifierOutput: `status ${verified.status}${verified.hasExecutedTests ? "" : " (no tests executed)"}${verified.definitionBound === false ? " (the verifier's definition could not be bound and was not verified unchanged, so the pass is regression evidence only)" : ""}`,
             // Anything but a passing run that executed tests is a failure to the deterministic gate.
             verifierExitCode: verified.status === "PASSED" && verified.hasExecutedTests ? 0 : 1,
           }

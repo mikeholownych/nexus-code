@@ -98,12 +98,46 @@ export function snapshotVerifierDefinitionWithReason(
   return verifier ? { verifier } : { verifier: null, reason: why.reason ?? "it has too many or unsupported references" };
 }
 
-/** An inline program (`bash -x -c`, `sh -ce`, `python -c`, `node -e`, `perl -e`, `ruby -e`) can run any script the candidate rewrote, so it is never accepted unbound. */
+/**
+ * An inline program (`bash -c`, `python -c`, `node -e`, `perl -e`, `ruby -e`) can run any script the candidate rewrote, so
+ * it is never accepted unbound. Only the interpreter's own options count: scanning stops at the first script, module or
+ * `--test` argument, so `pytest -c ini`, `python -m pytest -p x` and `./t.sh -c ci` are ordinary verifiers.
+ */
 export function isInlineProgramVerifier(command: string): boolean {
-  return (
-    /\b(?:ba|z|da|k)?sh\b[^;|&]*\s(?:-[A-Za-z]*c[A-Za-z]*|--command)\b/.test(command) ||
-    /\b(?:python\d?(?:\.\d+)?|node|perl|ruby)\b[^;|&]*\s(?:-[A-Za-z]*[ceEp][A-Za-z]*|--eval|--print)\b/.test(command)
-  );
+  return command.slice(0, 512).split(/&&|\|\||[;|]/).some((segment) => {
+    const tokens = segment.trim().split(/\s+/);
+    let index = 0;
+    if (tokens[0] === "env" || tokens[0].endsWith("/env")) {
+      index = 1;
+      while (index < tokens.length && (tokens[index].includes("=") || tokens[index].startsWith("-"))) {
+        index += tokens[index] === "-u" || tokens[index] === "-C" || tokens[index] === "-S" ? 2 : 1;
+      }
+    }
+    const program = (tokens[index] ?? "").slice((tokens[index] ?? "").lastIndexOf("/") + 1);
+    const options = tokens.slice(index + 1);
+    const cluster = (option: string) => option.length > 1 && option.startsWith("-") && !option.startsWith("--") && /^-[A-Za-z]+$/.test(option);
+    const scan = (inline: (option: string, rest: number) => boolean, withArgument: readonly string[], stop: (option: string) => boolean = () => false): boolean => {
+      for (let n = 0; n < options.length; n++) {
+        const option = options[n];
+        if (!option.startsWith("-") && !option.startsWith("+")) return false;
+        if (stop(option)) return false;
+        if (inline(option, options.length - n - 1)) return true;
+        if (withArgument.includes(option)) n++;
+      }
+      return false;
+    };
+    if (program === "sh" || program === "bash" || program === "zsh" || program === "dash" || program === "ksh") {
+      return scan((o) => o === "--command" || (cluster(o) && o.includes("c")), ["-o", "+o", "--rcfile", "--init-file"]);
+    }
+    if (program.startsWith("python")) {
+      return scan((o, rest) => cluster(o) && o.endsWith("c") && rest > 0, ["-W", "-X"], (o) => o === "-m");
+    }
+    if (program === "node") {
+      return scan((o) => o === "--eval" || o === "--print" || o.startsWith("--eval=") || o.startsWith("--print=") || o === "-e" || o === "-p" || o === "-pe" || o === "-ep", ["-r", "--require", "--import", "--loader", "--experimental-loader"], (o) => o === "--test" || o.startsWith("--test-"));
+    }
+    if (program === "perl" || program === "ruby") return scan((o) => cluster(o) && o.endsWith("e"), ["-I", "-r"]);
+    return false;
+  });
 }
 
 /** Test files of the workspace by relative path, or null when one exceeds the size kept for restoring. */

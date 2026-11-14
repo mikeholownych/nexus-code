@@ -4512,7 +4512,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
                 : verifierDefinitionChangedSince(this.config.workspace, this.changeBaseline!));
             const unboundReason = bindsWorkspaceDefinition && matchingBaseline && !hasTddRedVerifier && !this.changeBaseline?.verifier?.size ? this.changeBaseline?.verifierUnbindableReason : undefined;
             const unboundDetail = unboundReason
-              ? `the verifier's definition could not be bound (${unboundReason}), so the pass cannot be independent evidence`
+              ? `the verifier's definition could not be bound (${unboundReason}), so it was not verified unchanged (the candidate could have edited it) and the pass is regression evidence only`
               : undefined;
             if (
               bindsWorkspaceDefinition &&
@@ -7321,7 +7321,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           outcome: "REGRESSION_FREE",
           reason: "REGRESSION_FREE",
           detail: evidence.definitionBound === false
-            ? `Tests pass, but ${evidence.independenceDetail ?? "the verifier's definition could not be bound, so the pass cannot be independent evidence"}.`
+            ? `Tests pass, but ${evidence.independenceDetail ?? "the verifier's definition could not be bound, so it was not verified unchanged (the candidate could have edited it) and the pass is regression evidence only"}.`
             : "Passing test run did not cover the modified deliverables.",
         }));
       }
@@ -7366,7 +7366,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             execution: "COMPLETED",
             outcome: "REGRESSION_FREE",
             reason: "REGRESSION_FREE",
-            detail: `Tests pass, but ${evidence.independenceDetail ?? "the verifier's definition could not be bound, so the pass cannot be independent evidence"}.`,
+            detail: `Tests pass, but ${evidence.independenceDetail ?? "the verifier's definition could not be bound, so it was not verified unchanged (the candidate could have edited it) and the pass is regression evidence only"}.`,
           }));
         }
         if (evidence.isDeliverableBound === false) {

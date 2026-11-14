@@ -122,7 +122,7 @@ describe("verifier whose definition cannot be bound", () => {
     assert.equal(turn.verification?.status, "PASSED");
     assert.equal(turn.verification?.definitionBound, false);
     assert.equal(turn.verification?.independent, false);
-    assert.match(turn.detail ?? "", /^Tests pass, but the verifier's definition could not be bound \(.*node_modules.*\), so the pass cannot be independent evidence\.$/);
+    assert.match(turn.detail ?? "", /^Tests pass, but the verifier's definition could not be bound \(.*node_modules.*\), so it was not verified unchanged \(the candidate could have edited it\) and the pass is regression evidence only\.$/);
     assert.doesNotMatch(turn.detail ?? "", /fresh task/);
   });
 
@@ -194,11 +194,15 @@ describe("verifier whose definition cannot be bound", () => {
     assert.equal(turn.verification?.definitionBound, undefined);
   });
 
-  test("shell -c program verifiers in every flag shape are detected", () => {
-    for (const command of ["bash -c 'npm test'", "bash -x -c 'npm test'", "bash --norc -c 'npm test'", "bash -ce 'npm test'", "sh -c ./verify", "zsh -c ./verify", "env FOO=1 bash -c ./verify", "python -c 'import verify'", "python3 -c 'x'", "node -e 'require(\"./verify\")'", "node --eval 'x'", "node -p 1", "perl -e 'x'", "ruby -e 'x'"]) {
-      assert.equal(isInlineProgramVerifier(command), true, command);
-    }
-    for (const command of ["npm test", "make test", "node --test", "bash verify.sh", "python -m pytest", "node --import tsx --test test/a.test.js", "env -u NODE_TEST_CONTEXT node --test"]) assert.equal(isInlineProgramVerifier(command), false, command);
+  test("inline program verifiers are detected, ordinary verifiers with -c/-p/-r flags are not", () => {
+    const inline = ["bash -c 'npm test'", "bash -x -c 'npm test'", "bash --norc -c 'npm test'", "sh -ce 'npm test'", "bash -lc ./verify", "zsh -c ./verify",
+      "env bash -c ./verify", "env FOO=1 bash -c ./verify", "env -u NODE_TEST_CONTEXT sh -c ./verify", "/bin/bash -c ./verify", "cd x && bash -c ./verify",
+      "python -c 'import verify'", "python3 -Ic 'x'", "python3 -W error -c 'x'", "node -e 'require(\"./verify\")'", "node --eval 'x'", "node -p 1", "node -r ts-node/register -e 'x'", "perl -e 'x'", "ruby -e 'x'"];
+    for (const command of inline) assert.equal(isInlineProgramVerifier(command), true, command);
+    const ordinary = ["npm test", "make test", "node --test", "env -u NODE_TEST_CONTEXT node --test test/*.test.js", "node --import tsx --test test/a.test.js",
+      "python -m pytest -p no:cacheprovider", "python -m pytest -rfE", "python -m unittest discover -s tests -p \"test_*.py\"", "pytest -c pytest.ini", "pytest -rfE",
+      "node --test -c x", "./scripts/test.sh -c ci", "bash tests/x.sh -ci", "bash verify.sh -c", "python tests/run.py -c cfg", "perl t/run.pl -e x", "go test ./... -c", "cargo test -- -p x"];
+    for (const command of ordinary) assert.equal(isInlineProgramVerifier(command), false, command);
   });
 
   test("an unbound shell -c configured verifier still hard-fails", { timeout: 60_000 }, async () => {
