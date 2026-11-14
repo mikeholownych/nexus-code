@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01NfigCbo8dnpv8sj6cTUXa4",
+  "agent_id": "afd55eb1731285f45",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement CG-2 LSP trust and env scrub",
+  "token_usage": {
+    "input_tokens": 50,
+    "cache_creation_tokens": 85052,
+    "cache_read_tokens": 1946105,
+    "output_tokens": 28548,
+    "api_call_count": 24
+  },
+  "started_at": "2026-11-14T21:15:27.566218663Z",
+  "completed_at": "2026-11-14T21:22:38.134195667Z"
+}
