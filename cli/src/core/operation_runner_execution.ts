@@ -642,6 +642,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         command: turn.verification.command,
         status: turn.verification.status,
         hasExecutedTests: turn.verification.hasExecutedTests === true,
+        ...(turn.verification.definitionBound === false ? { definitionBound: false as const } : {}),
       };
       if (outcome.kind === "completed") return { ...outcome, verification };
       // A failed attempt whose verifier did not pass is evidence too: a dependent failure_debugger works from it while
@@ -738,7 +739,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     }
     // The worst result across every dependency that ran a verifier decides; order must not matter.
     const verifications = ctx.dependencies.flatMap((d) => (d.verification ? [d.verification] : []));
-    const passing = (v: { status: string; hasExecutedTests: boolean }) => v.status === "PASSED" && v.hasExecutedTests;
+    const passing = (v: { status: string; hasExecutedTests: boolean; definitionBound?: false }) => v.status === "PASSED" && v.hasExecutedTests;
     const verified = verifications.find((v) => !passing(v)) ?? verifications[0];
     const emptyDiff = "diff" in candidate && candidate.diff.trim() === "";
     // No operation or unit declares a file scope, so the package carries none (rather than an empty placeholder that
@@ -758,7 +759,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       ...(verified
         ? {
             verifierCommand: verified.command,
-            verifierOutput: `status ${verified.status}${verified.hasExecutedTests ? "" : " (no tests executed)"}`,
+            verifierOutput: `status ${verified.status}${verified.hasExecutedTests ? "" : " (no tests executed)"}${verified.definitionBound === false ? " (the verifier's definition could not be bound, so the pass is not independent evidence)" : ""}`,
             // Anything but a passing run that executed tests is a failure to the deterministic gate.
             verifierExitCode: verified.status === "PASSED" && verified.hasExecutedTests ? 0 : 1,
           }

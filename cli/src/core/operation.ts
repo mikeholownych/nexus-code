@@ -164,13 +164,13 @@ export interface WorkUnit {
     outcome: string;
     overriding?: string[];
     /** The verifier run behind the outcome, kept so dependent review units see it where nothing was integrated. */
-    verification?: { command: string; status: string; hasExecutedTests: boolean };
+    verification?: { command: string; status: string; hasExecutedTests: boolean; definitionBound?: false };
   };
   /**
    * The verifier run behind the unit's latest failure, present only while that failure is its last outcome: a
    * dependent failure_debugger of an isolated operation is given it as evidence while the unit waits on the operator.
    */
-  failedRun?: { at: string; reason: string; summary: string; verification: { command: string; status: string; hasExecutedTests: boolean } };
+  failedRun?: { at: string; reason: string; summary: string; verification: { command: string; status: string; hasExecutedTests: boolean; definitionBound?: false } };
   reroutes: Array<{ at: string; from: string; to: string; reason: string }>;
   runs: number;
   /** `runs` when the operator last authorized more attempts (the run budget counts from here). */
@@ -418,7 +418,7 @@ export type UnitRunResult =
       summary: string;
       outcome: string;
       /** The verifier that produced the unit's outcome, for the integration check on the merged tree. */
-      verification?: { command: string; status: string; hasExecutedTests: boolean };
+      verification?: { command: string; status: string; hasExecutedTests: boolean; definitionBound?: false };
     }
   /** The resource could not take the work and nothing executed (or the condition is recorded at resource scope). */
   | { kind: "resource_unavailable"; failure: InferenceFailure; condition: ResourceConditionRecord }
@@ -427,7 +427,7 @@ export type UnitRunResult =
   | ({ kind: "failed" } & BlockSpec & {
       rejectedOutput?: RejectedOutput;
       /** The attempt ran a verifier that did not pass: kept on the unit for a dependent failure_debugger. */
-      failedRun?: { summary: string; verification: { command: string; status: string; hasExecutedTests: boolean } };
+      failedRun?: { summary: string; verification: { command: string; status: string; hasExecutedTests: boolean; definitionBound?: false } };
     })
   | { kind: "cancelled" };
 

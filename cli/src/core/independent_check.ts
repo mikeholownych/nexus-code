@@ -26,6 +26,11 @@ export interface ChangeBaseline {
   tests: Map<string, string> | null;
   /** Verifier configuration and local runner scripts before the change; null means independence is unprovable. */
   verifier: Map<string, string> | null;
+  /**
+   * Set only when a trusted baseline was captured and its verifier definition could not be bound then (e.g. a local
+   * node_modules tree). Memory-only: a recovered baseline is never trusted. Its pass is regression evidence at most.
+   */
+  verifierUnbindableReason?: string;
   /** Operator-declared product scope captured before candidate edits; absent scope cannot establish VERIFIED. */
   trustedDeliverables: string[];
   /** Exact verifier definition accepted after TDD RED; it is an allowlist for GREEN, never independent evidence. */
@@ -82,11 +87,20 @@ export function requiresWorkspaceVerifierDefinitionBinding(
   );
 }
 
-/** Why a verifier definition cannot be bound, in plain language; generic when the exact cause is not tracked. */
-export function describeUnbindableVerifier(workspace: string, command: string): string {
+/** The verifier definition and, when it cannot be bound, why in plain language. */
+export function snapshotVerifierDefinitionWithReason(
+  workspace: string,
+  command: string,
+  trustedDeliverables: readonly string[] = [],
+): { verifier: Map<string, string> } | { verifier: null; reason: string } {
   const why: { reason?: string } = {};
-  snapshotVerifierDefinition(workspace, command, [], why);
-  return why.reason ?? "it has too many or unsupported references";
+  const verifier = snapshotVerifierDefinition(workspace, command, trustedDeliverables, why);
+  return verifier ? { verifier } : { verifier: null, reason: why.reason ?? "it has too many or unsupported references" };
+}
+
+/** A shell program (`bash -c`, `bash -x -c`, `sh -ce`) can run any script the candidate rewrote, so it is never accepted unbound. */
+export function isShellProgramVerifier(command: string): boolean {
+  return /\b(?:ba|z|da|k)?sh\b[^;|&]*\s(?:-[A-Za-z]*c[A-Za-z]*|--command)\b/.test(command);
 }
 
 /** Test files of the workspace by relative path, or null when one exceeds the size kept for restoring. */

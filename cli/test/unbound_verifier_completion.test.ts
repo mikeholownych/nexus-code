@@ -11,7 +11,8 @@ import os from "node:os";
 import path from "node:path";
 import { execSync } from "node:child_process";
 import { AutonomousAgent } from "../src/agent.js";
-import { snapshotVerifierDefinition } from "../src/core/independent_check.js";
+import { isShellProgramVerifier, snapshotVerifierDefinition } from "../src/core/independent_check.js";
+import { applyRequirementUpdates } from "../src/core/objective.js";
 import { DEFAULT_CONTINUATION, HarnessConfig } from "../src/types.js";
 import { startGateway, Reply } from "./helpers/fixtures.js";
 
@@ -19,7 +20,7 @@ const quiet = (agent: AutonomousAgent): AutonomousAgent => {
   (agent as any).ui = new Proxy({}, { get: () => () => {} });
   return agent;
 };
-const cfg = (endpoint: string, workspace: string): HarnessConfig => ({
+const cfg = (endpoint: string, workspace: string, extra: Partial<HarnessConfig> = {}): HarnessConfig => ({
   endpoint,
   model: "m",
   maxSteps: 30,
@@ -29,6 +30,7 @@ const cfg = (endpoint: string, workspace: string): HarnessConfig => ({
   approvalMode: "auto",
   fullAccess: true,
   continuation: { ...DEFAULT_CONTINUATION, maxCompletionNudges: 0 },
+  ...extra,
 });
 const write = (name: string, content: string): Reply => ({
   kind: "tools",
@@ -77,15 +79,19 @@ async function run(
   files: Record<string, string>,
   steps: Reply[],
   beforeTurn?: (agent: AutonomousAgent) => void,
+  extra: Partial<HarnessConfig> = {},
+  afterTurn?: (agent: AutonomousAgent) => void,
 ) {
   const root = repo(files);
   const gw = await startGateway((n) => steps[n - 1] ?? { kind: "text", content: "done" });
-  const agent = quiet(new AutonomousAgent(cfg(gw.url, root)));
+  const agent = quiet(new AutonomousAgent(cfg(gw.url, root, extra)));
   const savedHome = process.env.HOME;
   process.env.HOME = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-unbound-home-"));
   try {
     beforeTurn?.(agent);
-    return { turn: await agent.runTurn("Fix math.js."), root };
+    const turn = extra.worktree ? await agent.run("Fix math.js.") : await agent.runTurn("Fix math.js.");
+    afterTurn?.(agent);
+    return { turn, root };
   } finally {
     agent.shutdown();
     await gw.close();
@@ -158,5 +164,66 @@ describe("verifier whose definition cannot be bound", () => {
     assert.equal(turn.outcome, "NOT_ESTABLISHED");
     assert.equal(turn.verification?.status, "FAILED");
     assert.match(turn.verification?.independenceDetail ?? "", /verifier definition changed/);
+  });
+  test("an unbound configured verifier earns no receipt and no worktree merge", { timeout: 90_000 }, async () => {
+    let receipt: unknown = "unset";
+    let retained: unknown;
+    const { turn } = await run(
+      { ...withModules, "math.js": ADD_BUGGY },
+      [write("math.js", ADD_FIXED), done],
+      undefined,
+      { worktree: true, authoritativeVerifierCommand: "npm test" },
+      (agent) => {
+        receipt = (agent as any).activeValidationReceipt;
+        retained = agent.getActiveWorktree();
+        if (retained) agent.discardActiveWorktree();
+      },
+    );
+    assert.equal(turn.outcome, "REGRESSION_FREE");
+    assert.equal(turn.verification?.definitionBound, false);
+    assert.equal(receipt, undefined);
+    assert.ok(retained, "the worktree is retained, not merged");
+  });
+
+  test("no baseline plus an unbindable definition now is still a hard error", { timeout: 60_000 }, async () => {
+    const { turn } = await run({ ...withModules, "math.js": ADD_BUGGY }, [write("math.js", ADD_FIXED), done], (agent) => {
+      (agent as any).changeBaseline = null;
+    });
+    assert.equal(turn.outcome, "NOT_ESTABLISHED");
+    assert.match(turn.verification?.independenceDetail ?? "", /no matching pre-change baseline/);
+    assert.equal(turn.verification?.definitionBound, undefined);
+  });
+
+  test("shell -c program verifiers in every flag shape are detected", () => {
+    for (const command of ["bash -c 'npm test'", "bash -x -c 'npm test'", "bash --norc -c 'npm test'", "bash -ce 'npm test'", "sh -c ./verify", "zsh -c ./verify", "env FOO=1 bash -c ./verify"]) {
+      assert.equal(isShellProgramVerifier(command), true, command);
+    }
+    for (const command of ["npm test", "make test", "node --test", "bash verify.sh"]) assert.equal(isShellProgramVerifier(command), false, command);
+  });
+
+  test("an unbound shell -c configured verifier still hard-fails", { timeout: 60_000 }, async () => {
+    const { turn } = await run(
+      { ...withModules, "math.js": ADD_BUGGY },
+      [write("math.js", ADD_FIXED), done],
+      undefined,
+      { authoritativeVerifierCommand: "bash -x -c 'env -u NODE_TEST_CONTEXT npm test'" },
+    );
+    assert.equal(turn.outcome, "NOT_ESTABLISHED");
+    assert.equal(turn.verification?.status, "FAILED");
+    assert.equal(turn.verification?.definitionBound, undefined);
+  });
+
+  test("a verified requirement is rejected for the unbound attempt", { timeout: 60_000 }, async () => {
+    let rejected: string[] = [];
+    let attemptIndependent: boolean | undefined;
+    await run({ ...withModules, "math.js": ADD_BUGGY }, [write("math.js", ADD_FIXED), done], undefined, {}, (agent) => {
+      const ledger = agent.getObjective()!;
+      const attempt = ledger.verification.at(-1)!;
+      attemptIndependent = attempt.independent;
+      rejected = applyRequirementUpdates(ledger, [{ id: ledger.requirements[0].id, status: "verified", evidence: ["tests ran"] }], undefined, undefined, attempt).errors;
+    });
+    assert.equal(attemptIndependent, false);
+    assert.equal(rejected.length, 1);
+    assert.match(rejected[0], /verified requires/);
   });
 });

@@ -36,7 +36,7 @@ export interface UnitRunContext {
   /** The durable operation this unit belongs to. */
   operationId?: string;
   /** Each dependency's result; `failed` marks one that is BLOCKED on a failed verifier run (failure_debugger units of isolated operations only). */
-  dependencies: Array<{ id: string; title: string; summary: string; verification?: { command: string; status: string; hasExecutedTests: boolean }; failed?: true }>;
+  dependencies: Array<{ id: string; title: string; summary: string; verification?: { command: string; status: string; hasExecutedTests: boolean; definitionBound?: false }; failed?: true }>;
   /** Isolated operations: the commit the operation started from, which a review unit diffs against. */
   baseCommit?: string;
   /** Non-isolated operations: HEAD when the operation first ran (absent outside Git, or for older operations). */
