@@ -1,0 +1,7 @@
+{
+  "tool_use_id": "toolu_01H21YzqLBYCusdEWBNaJ8eR",
+  "agent_id": "abfff915f195d64be",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement SI-7 kill-mid-tool-call test",
+  "started_at": "2026-11-14T21:34:05.794001613Z"
+}
