@@ -108,3 +108,69 @@ test("lsp_diagnostics through the tool executor says unavailable, not success wi
     bridge.shutdown();
   }
 });
+
+test("a stale-version publish is not taken as the answer for the current content", async () => {
+  const { mgr } = setup({ "s.ts": "STALE" });
+  try {
+    assert.deepEqual(await mgr.diagnostics("s.ts", 3000), { status: "ok", diagnostics: [] });
+  } finally {
+    mgr.shutdownAll();
+  }
+});
+
+test("a server that dies while we wait yields unavailable promptly, not after the full timeout", async () => {
+  const { mgr } = setup({ "k.die.ts": "x" });
+  try {
+    const t0 = Date.now();
+    const res = await mgr.diagnostics("k.die.ts", 6000);
+    assert.equal(res.status, "unavailable");
+    assert.ok(Date.now() - t0 < 3000, `took ${Date.now() - t0}ms`);
+  } finally {
+    mgr.shutdownAll();
+  }
+});
+
+test("a symlink inside the workspace to a file outside it is refused", async () => {
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-lsp-out-"));
+  fs.writeFileSync(path.join(outside, "secret.ts"), "BAD");
+  const { dir, mgr } = setup({ "a.ts": "fine" });
+  fs.symlinkSync(path.join(outside, "secret.ts"), path.join(dir, "link.ts"));
+  try {
+    assert.equal((await mgr.diagnostics("link.ts", 400)).status, "unavailable");
+  } finally {
+    mgr.shutdownAll();
+  }
+});
+
+test("concurrent first queries start exactly one server", async () => {
+  const pidfile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "nexus-lsp-pid-")), "pids");
+  process.env.FAKE_PIDFILE = pidfile;
+  const { mgr } = setup({ "a.ts": "fine", "b.ts": "BAD" });
+  try {
+    const [a, b] = await Promise.all([mgr.diagnostics("a.ts", 3000), mgr.diagnostics("b.ts", 3000)]);
+    assert.equal(a.status, "ok");
+    assert.equal(b.status, "ok");
+    assert.equal(fs.readFileSync(pidfile, "utf-8").trim().split("\n").length, 1);
+  } finally {
+    mgr.shutdownAll();
+    delete process.env.FAKE_PIDFILE;
+  }
+});
+
+test("shutdownAll during a server start leaves no server running", async () => {
+  const pidfile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "nexus-lsp-pid-")), "pids");
+  process.env.FAKE_PIDFILE = pidfile;
+  const { mgr } = setup({ "a.ts": "fine" });
+  try {
+    const pending = mgr.diagnostics("a.ts", 2000);
+    mgr.shutdownAll();
+    const res = await pending;
+    assert.equal(res.status, "unavailable");
+    await new Promise((r) => setTimeout(r, 400));
+    for (const line of (fs.existsSync(pidfile) ? fs.readFileSync(pidfile, "utf-8") : "").trim().split("\n").filter(Boolean)) {
+      assert.throws(() => process.kill(Number(line), 0), /ESRCH/);
+    }
+  } finally {
+    delete process.env.FAKE_PIDFILE;
+  }
+});

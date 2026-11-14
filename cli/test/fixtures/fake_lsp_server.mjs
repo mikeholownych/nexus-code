@@ -5,8 +5,16 @@ function send(msg) {
   const body = JSON.stringify({ jsonrpc: "2.0", ...msg });
   process.stdout.write(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
 }
-function publish(uri, text) {
+if (process.env.FAKE_PIDFILE) require_fs().appendFileSync(process.env.FAKE_PIDFILE, process.pid + "\n");
+function require_fs() { return globalThis.__fs ??= process.getBuiltinModule("node:fs"); }
+function publish(uri, text, version) {
   if (uri.endsWith(".silent.ts")) return;
+  if (uri.endsWith(".die.ts")) process.exit(1);
+  if (text.includes("STALE")) {
+    send({ method: "textDocument/publishDiagnostics", params: { uri, version: version - 1, diagnostics: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, severity: 1, message: "stale", source: "fake" }] } });
+    setTimeout(() => send({ method: "textDocument/publishDiagnostics", params: { uri, version, diagnostics: [] } }), 150);
+    return;
+  }
   const diagnostics = text.includes("BAD")
     ? [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } }, severity: 1, message: "type error", source: "fake" }]
     : [];
@@ -16,8 +24,8 @@ function handle(m) {
   if (m.method === "initialize") send({ id: m.id, result: { capabilities: {} } });
   else if (m.method === "shutdown") send({ id: m.id, result: null });
   else if (m.method === "exit") process.exit(0);
-  else if (m.method === "textDocument/didOpen") publish(m.params.textDocument.uri, m.params.textDocument.text);
-  else if (m.method === "textDocument/didChange") publish(m.params.textDocument.uri, m.params.contentChanges[0].text);
+  else if (m.method === "textDocument/didOpen") publish(m.params.textDocument.uri, m.params.textDocument.text, m.params.textDocument.version);
+  else if (m.method === "textDocument/didChange") publish(m.params.textDocument.uri, m.params.contentChanges[0].text, m.params.textDocument.version);
   else if (m.method === "textDocument/hover") send({ id: m.id, result: { contents: "hover ok" } });
   else if (m.id !== undefined) send({ id: m.id, result: null });
 }

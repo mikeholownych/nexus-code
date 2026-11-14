@@ -67,6 +67,10 @@ export class LspClient {
 
       this.child.on("exit", () => {
         this.initialized = false;
+        this.failInFlight(new Error(`LSP server '${this.serverCmd}' exited`));
+      });
+      this.child.stdin?.on("error", () => {
+        this.initialized = false;
       });
 
       this.child.stdout?.on("data", (data: Buffer) => {
@@ -98,6 +102,15 @@ export class LspClient {
       this.initialized = false;
       return false;
     }
+  }
+
+  /** Rejects every request still waiting and wakes every diagnostics waiter: the server is gone, so no answer is coming. */
+  private failInFlight(err: Error): void {
+    for (const { reject } of this.pending.values()) reject(err);
+    this.pending.clear();
+    const waiters = [...this.diagnosticWaiters.values()].flat();
+    this.diagnosticWaiters.clear();
+    for (const w of waiters) w();
   }
 
   private handleData(chunk: string): void {
@@ -144,6 +157,10 @@ export class LspClient {
               message: d.message,
               source: d.source,
             }));
+            const current = this.opened.get(params.uri);
+            if (typeof params.version === "number" && current && params.version !== current.version) {
+              continue; // published for an older version of the file than the server was last told about
+            }
             this.diagnosticsMap.set(params.uri, diags);
             const waiters = this.diagnosticWaiters.get(params.uri);
             if (waiters) {
@@ -157,7 +174,7 @@ export class LspClient {
   }
 
   public async sendRequest(method: string, params: any, timeoutMs: number = 8000): Promise<any> {
-    if (!this.child || !this.child.stdin || this.child.killed) {
+    if (!this.child || !this.child.stdin || this.child.killed || this.child.exitCode !== null) {
       throw new Error(`LSP server '${this.serverCmd}' is not running`);
     }
 
@@ -195,7 +212,7 @@ export class LspClient {
   }
 
   public sendNotification(method: string, params: any): void {
-    if (!this.child || !this.child.stdin || this.child.killed) return;
+    if (!this.child || !this.child.stdin || this.child.killed || this.child.exitCode !== null) return;
     const payload = JSON.stringify({
       jsonrpc: "2.0",
       method,
@@ -223,16 +240,19 @@ export class LspClient {
    * Returns false when the file cannot be read or lies outside the workspace.
    */
   public syncFile(filePath: string, languageId: string): boolean {
-    const abs = path.resolve(this.rootPath, filePath);
-    const rel = path.relative(this.rootPath, abs);
-    if (rel.startsWith("..") || path.isAbsolute(rel)) return false;
+    let abs: string;
     let text: string;
     try {
+      // Resolve symlinks before the containment check: a link inside the workspace must not read a file outside it.
+      abs = fs.realpathSync(path.resolve(this.rootPath, filePath));
+      const root = fs.realpathSync(this.rootPath);
+      const rel = path.relative(root, abs);
+      if (rel.startsWith("..") || path.isAbsolute(rel)) return false;
       text = fs.readFileSync(abs, "utf-8");
     } catch {
       return false;
     }
-    const uri = pathToFileURL(abs).href;
+    const uri = pathToFileURL(path.resolve(this.rootPath, filePath)).href;
     const prev = this.opened.get(uri);
     if (!prev) {
       this.opened.set(uri, { version: 1, text });
@@ -333,6 +353,7 @@ export class LspBridgeManager {
   private workspace: string;
   private clients: Map<string, LspClient> = new Map();
   private starting: Map<string, Promise<LspClient | null>> = new Map();
+  private closed = false;
   private servers: Record<string, LspServerSpec>;
 
   constructor(workspace: string, opts: { servers?: Record<string, LspServerSpec> } = {}) {
@@ -372,6 +393,7 @@ export class LspBridgeManager {
   public async getClientForFile(filePath: string): Promise<LspClient | null> {
     const serverInfo = this.getServerForFile(filePath);
     if (!serverInfo) return null;
+    this.closed = false;
     LspBridgeManager.live.add(this);
     const key = `${serverInfo.cmd}\0${(serverInfo.args ?? []).join("\0")}`;
 
@@ -383,6 +405,10 @@ export class LspBridgeManager {
     const startup = (async () => {
       const client = new LspClient(serverInfo.cmd, this.workspace, serverInfo.args ?? []);
       const ok = await client.start();
+      if (ok && this.closed) {
+        client.shutdown();
+        return null;
+      }
       if (ok) {
         this.clients.set(key, client);
         return client;
@@ -463,6 +489,7 @@ export class LspBridgeManager {
   }
 
   public shutdownAll(): void {
+    this.closed = true;
     for (const client of this.clients.values()) {
       client.shutdown();
     }
