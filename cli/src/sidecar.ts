@@ -377,6 +377,10 @@ export class SidecarServer {
       this.steerAck(id, "queued", "Steering queued; the agent applies it at its next step.");
       return;
     }
+    if (queued.status === "conflict") {
+      this.steerAck(id, "rejected", `Your message negates ${queued.requirements?.join(", ")}; the requirements are unchanged and the conflict is recorded. Approve the decision prompt to apply it. Your message is back in the composer.`, text);
+      return;
+    }
     if (queued.status === "duplicate") {
       this.steerAck(id, "duplicate", "Already received; it is not applied again.");
       return;

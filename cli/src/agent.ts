@@ -125,6 +125,7 @@ import {
 import { LocalTraceRecorder, type SpanHandle, type TraceAttributes, type TraceStatus } from "./core/trace.js";
 import {
   ObjectiveLedger,
+  SteeringConflict,
   RequirementUpdate,
   READ_OBJECTIVE_CAPABILITY,
   REQUIREMENTS_CAPABILITY,
@@ -144,6 +145,10 @@ import {
   openRequirements,
   priorAttempt,
   queueSteering,
+  steeringNegations,
+  recordSteeringConflict,
+  resolveSteeringConflict,
+  supersededBy,
   recordAttempt,
   recoveryInput,
   renderPinnedLedger,
@@ -2786,10 +2791,29 @@ export class AutonomousAgent {
    * reported through `onSteering`. Returns why it was not queued: no turn running, cancellation already requested,
    * or an id seen before (a resend is not applied twice).
    */
-  public queueSteering(id: string, text: string): { status: "queued" | "duplicate" | "no_active_turn" } {
+  public queueSteering(id: string, text: string): { status: "queued" | "duplicate" | "no_active_turn" | "conflict"; requirements?: string[] } {
     const turn = this.activeTurn;
     if (!turn || turn.cancelRequestedAt || turn.closing || !this.objective) return { status: "no_active_turn" };
-    return queueSteering(this.objective, id, text) ? { status: "queued" } : { status: "duplicate" };
+    const negated = steeringNegations(this.objective, text);
+    if (!negated.length) return queueSteering(this.objective, id, text) ? { status: "queued" } : { status: "duplicate" };
+    const conflict = recordSteeringConflict(this.objective, id, text, negated);
+    if (!conflict) return { status: "duplicate" };
+    if (turn.onConfirm) void this.decideSteeringConflict(conflict, turn.onConfirm);
+    else conflict.status = "unresolved";
+    this.persistProgress({ messages: true });
+    return { status: "conflict", requirements: negated };
+  }
+
+  /** Steering that negates a requirement waits for the operator; the ledger changes only on approval. */
+  private async decideSteeringConflict(conflict: SteeringConflict, onConfirm: ConfirmHandler): Promise<void> {
+    let approved = false;
+    try {
+      approved = await onConfirm("steering_conflict", { steering: conflict.id, text: conflict.text, negates: conflict.requirements });
+    } catch {}
+    if (!this.objective) return;
+    resolveSteeringConflict(this.objective, conflict, approved);
+    if (approved && (!this.activeTurn || this.activeTurn.closing)) this.cancelQueuedSteering("the turn ended before the decision was made");
+    this.persistProgress({ messages: true });
   }
 
   private hasQueuedSteering(): boolean {
@@ -6120,8 +6144,10 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       continuingObjective = Boolean(ledger && (isResume || isStep || !isNewObjective(ledger, taskPrompt)));
       if (!ledger || (!isResume && !isStep && isNewObjective(ledger, taskPrompt))) {
         const carried = ledger?.steering.filter((s) => s.status === "queued") ?? [];
+        const orphaned = ledger ? supersededBy(ledger) : undefined;
         ledger = createLedger(taskPrompt, undefined, this.unitId);
         ledger.steering.push(...carried);
+        if (orphaned) ledger.superseded = [...(this.objective?.superseded ?? []), orphaned];
       } else {
         if (this.unitId && !ledger.unitId) {
           ledger.unitId = this.unitId;
