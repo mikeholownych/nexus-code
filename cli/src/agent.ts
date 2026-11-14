@@ -47,6 +47,7 @@ import {
 import { fileSignature, readCoverage, readRequests } from "./core/observation_identity.js";
 import { parseModelResponse, repairJsonWithClass, isWriteOrExecTool, type ToolCallSyntaxCounts } from "./parser.js";
 import { TerminalUI, redactSecrets, safeTerminal } from "./ui.js";
+import { safeOperatorText } from "./protocol.js";
 import { getGitInfo } from "./git.js";
 import { trustedProjectRules } from "./startup_trust.js";
 import { isHarnessNote, withHarnessProvenance } from "./harness_notes.js";
@@ -148,6 +149,7 @@ import {
   steeringNegations,
   recordSteeringConflict,
   resolveSteeringConflict,
+  settleSteeringConflicts,
   supersededBy,
   recordAttempt,
   recoveryInput,
@@ -1033,6 +1035,7 @@ export class AutonomousAgent {
   private activeProviderRecovery: ProviderRecoveryRecord | null = null;
   /** Set by the operation scheduler: resource condition observations and the yield decision. */
   private providerRecoveryHooks?: Pick<RecoveryHooks<unknown>, "onFailure" | "shouldYield">;
+  private steeringDecisions: Promise<void> = Promise.resolve();
   private activeTurn?: {
     controller: AbortController;
     phase: "idle" | "inference" | "provider_wait" | "tool" | "confirmation";
@@ -2791,28 +2794,48 @@ export class AutonomousAgent {
    * reported through `onSteering`. Returns why it was not queued: no turn running, cancellation already requested,
    * or an id seen before (a resend is not applied twice).
    */
-  public queueSteering(id: string, text: string): { status: "queued" | "duplicate" | "no_active_turn" | "conflict"; requirements?: string[] } {
+  public queueSteering(id: string, text: string): { status: "queued" | "duplicate" | "no_active_turn" | "conflict"; requirements?: string[]; held?: boolean } {
     const turn = this.activeTurn;
-    if (!turn || turn.cancelRequestedAt || turn.closing || !this.objective) return { status: "no_active_turn" };
-    const negated = steeringNegations(this.objective, text);
-    if (!negated.length) return queueSteering(this.objective, id, text) ? { status: "queued" } : { status: "duplicate" };
-    const conflict = recordSteeringConflict(this.objective, id, text, negated);
+    const ledger = this.objective;
+    if (!turn || turn.cancelRequestedAt || turn.closing || !ledger) return { status: "no_active_turn" };
+    const negated = steeringNegations(ledger, text);
+    if (!negated.length) return queueSteering(ledger, id, text) ? { status: "queued" } : { status: "duplicate" };
+    const conflict = recordSteeringConflict(ledger, id, text, negated);
     if (!conflict) return { status: "duplicate" };
-    if (turn.onConfirm) void this.decideSteeringConflict(conflict, turn.onConfirm);
+    const onConfirm = turn.onConfirm;
+    if (onConfirm) this.steeringDecisions = this.steeringDecisions.then(() => this.decideSteeringConflict(ledger, conflict, onConfirm));
     else conflict.status = "unresolved";
     this.persistProgress({ messages: true });
-    return { status: "conflict", requirements: negated };
+    return { status: "conflict", requirements: negated, held: Boolean(onConfirm) };
   }
 
-  /** Steering that negates a requirement waits for the operator; the ledger changes only on approval. */
-  private async decideSteeringConflict(conflict: SteeringConflict, onConfirm: ConfirmHandler): Promise<void> {
+  /**
+   * Steering that negates a requirement waits for an explicit operator decision (one at a time, in order); the
+   * ledger changes only on approval, and only if it is still this ledger and this turn still runs.
+   */
+  private async decideSteeringConflict(ledger: ObjectiveLedger, conflict: SteeringConflict, onConfirm: ConfirmHandler): Promise<void> {
+    if (conflict.status !== "pending") return;
     let approved = false;
     try {
-      approved = await onConfirm("steering_conflict", { steering: conflict.id, text: conflict.text, negates: conflict.requirements });
+      approved = await onConfirm("steering_conflict", {
+        steering: conflict.id,
+        text: safeOperatorText(conflict.text),
+        negates: conflict.requirements.map((id) => ({ id, text: safeOperatorText(ledger.requirements.find((r) => r.id === id)?.text ?? "", 160) })),
+      });
     } catch {}
-    if (!this.objective) return;
-    resolveSteeringConflict(this.objective, conflict, approved);
-    if (approved && (!this.activeTurn || this.activeTurn.closing)) this.cancelQueuedSteering("the turn ended before the decision was made");
+    const live = this.objective === ledger && this.activeTurn && !this.activeTurn.closing;
+    if (conflict.status !== "pending") return;
+    if (!live) {
+      conflict.status = "unresolved";
+      conflict.decidedAt = new Date().toISOString();
+      return;
+    }
+    resolveSteeringConflict(ledger, conflict, approved, safeOperatorText(conflict.text));
+    if (!approved) {
+      try {
+        this.observer?.onSteering?.({ id: conflict.id, status: "cancelled", text: conflict.text, reason: `you declined it: it negates ${conflict.requirements.join(", ")}` });
+      } catch {}
+    }
     this.persistProgress({ messages: true });
   }
 
@@ -6974,6 +6997,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         endStep();
       }
       turn.closing = true;
+      if (this.objective) settleSteeringConflicts(this.objective);
       // Queued /compact: run now that the last step has settled, or cancelled with the turn.
       if (this.compactionQueue.length) {
         try {
@@ -7054,6 +7078,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       return result;
     } catch (err: any) {
       turn.closing = true;
+      if (this.objective) settleSteeringConflicts(this.objective);
       if (this.compactionQueue.length) {
         try {
           await this.drainCompactionQueue(currentStep, undefined, "the turn failed unexpectedly");

@@ -18,6 +18,7 @@ import { surfaceFacts } from "./surface_facts.js";
 import { getGitInfo, scaffoldProjectRules, generateConventionalCommit, commitChanges, trustedGitArgs, workspaceStatus } from "./git.js";
 import { SessionManager, SessionData } from "./session.js";
 import { formatDiagnosticForOutput } from "./ui.js";
+import { safeOperatorText } from "./protocol.js";
 import {
   appendProtectedHistoryLine,
   redactForPersistence,
@@ -498,7 +499,18 @@ export class InteractiveRepl {
     }
   }
 
+  /** Dropping a requirement is the operator's own decision: asked even in auto mode, never covered by "always", refused without a terminal. */
+  private async confirmSteeringConflict(args: Record<string, any>): Promise<boolean> {
+    if (!this.rl) return false;
+    console.log(pc.bold(pc.yellow(`\n⚠️  Steering ${safeOperatorText(String(args.steering), 40)} would drop requirements:`)));
+    for (const n of Array.isArray(args.negates) ? args.negates : []) console.log(`  ${safeOperatorText(String(n?.id ?? ""), 12)}: ${safeOperatorText(String(n?.text ?? ""), 160)}`);
+    console.log(`  Steering: ${safeOperatorText(String(args.text ?? ""))}`);
+    const answer = await this.askDuringTurn(pc.bold(pc.white("  Drop these requirements? [y/N]: ")), { graceMs: REPL_APPROVAL_GRACE_MS });
+    return answer !== null && ["y", "yes"].includes(answer.trim().toLowerCase());
+  }
+
   private async confirmAction(toolName: string, args: Record<string, any>): Promise<boolean> {
+    if (toolName === "steering_conflict") return this.confirmSteeringConflict(args);
     if (this.approvalMode === "auto") return true;
     if (!this.rl) return true;
 

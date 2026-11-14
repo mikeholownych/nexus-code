@@ -173,7 +173,7 @@ pub enum SteerState {
 impl SteerState {
     fn from_ack(status: &str) -> SteerState {
         match status {
-            "queued" => SteerState::Queued,
+            "queued" | "held" => SteerState::Queued,
             "applied" => SteerState::Applied,
             "deferred" => SteerState::Deferred,
             "cancelled" => SteerState::Cancelled,

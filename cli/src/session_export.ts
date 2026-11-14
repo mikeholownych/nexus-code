@@ -5,6 +5,7 @@
  * replaced by summaries (the replaced originals are included from the session's archive when it exists).
  */
 import type { SessionData, SessionManager } from "./session.js";
+import { safeOperatorText } from "./protocol.js";
 import type { ChatMessage } from "./types.js";
 import { gatingRequirements, requirementDone } from "./core/objective.js";
 
@@ -140,7 +141,7 @@ function markdownExport(session: SessionData, history: HistoryCompleteness, arch
     }
     if (objective.steeringConflicts?.length) {
       out.push("**Steering conflicts (negated requirements):**", "");
-      for (const c of objective.steeringConflicts) out.push(`- ${c.id} [${c.status}] negates ${c.requirements.join(", ")}: ${c.text}`);
+      for (const c of objective.steeringConflicts) out.push(`- ${c.id} [${c.status}] negates ${c.requirements.join(", ")}: ${safeOperatorText(c.text)}`);
       out.push("");
     }
     if (objective.superseded?.length) {
