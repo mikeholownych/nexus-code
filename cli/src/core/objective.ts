@@ -10,6 +10,7 @@
  */
 import { createHash } from "node:crypto";
 import type { VerificationStatus } from "./turn.js";
+import { DEFAULT_CONVERGENCE_ATTEMPTS } from "../types.js";
 import type { CanonicalCapability } from "./capabilities.js";
 import { isFilteredVerifierCommand } from "../tester.js";
 import { redactSecrets } from "../ui.js";
@@ -145,6 +146,8 @@ export interface ObjectiveLedger {
   continuation: ContinuationState;
   /** The model's own statement of what comes next (update_requirements next_action). */
   nextAction?: string;
+  /** Attempts numbered up to this were already judged non-converging and stopped the work; the next judgement starts after it. */
+  convergenceResetAfter?: number;
   outcome?: ObjectiveOutcome;
   /** Short follow-up messages the operator sent as new turns while this objective was unresolved. */
   amendments: Array<{ at: string; text: string }>;
@@ -604,6 +607,71 @@ export function recordAttempt(ledger: ObjectiveLedger, attempt: Omit<Verificatio
   for (const old of ledger.verification.slice(0, -EXCERPT_RETAINED_ATTEMPTS)) delete old.excerpt;
   if (ledger.verification.length > 50) ledger.verification = ledger.verification.slice(-50);
   return record;
+}
+
+export type ConvergenceState = "converging" | "stalled" | "oscillating" | "diverging";
+
+export interface ConvergenceSignal {
+  state: ConvergenceState;
+  /** Plain statement of what repeated; empty when converging. */
+  evidence: string;
+  /** The attempts the judgement rests on, oldest first (empty when converging). */
+  attempts: VerificationAttempt[];
+}
+
+const failureKey = (a: VerificationAttempt): string | undefined =>
+  a.failingTests?.length ? `tests:${[...a.failingTests].sort().join("\n")}` : a.failedCheck ? `check:${a.failedCheck}` : undefined;
+
+/**
+ * Whether repeated verifier failures show the work is not getting anywhere: the same failure across `attempts`
+ * candidates that each changed the inputs (stalled), A/B/A/B alternation of two failure sets (oscillating), or a
+ * strictly rising failing-test count (diverging). Only real candidate failures count: ENVIRONMENT, timed-out,
+ * skipped-on-unchanged-inputs and pre-DV-1 unclassified attempts are neither progress nor failure, and a pass
+ * ends the history. This is a stop signal only; it never establishes success.
+ */
+export function convergenceSignal(ledger: Pick<ObjectiveLedger, "verification" | "convergenceResetAfter">, attempts = DEFAULT_CONVERGENCE_ATTEMPTS): ConvergenceSignal {
+  const converging: ConvergenceSignal = { state: "converging", evidence: "", attempts: [] };
+  const n = Math.max(2, Math.floor(attempts));
+  const history: VerificationAttempt[] = [];
+  for (const a of ledger.verification) {
+    if (a.n <= (ledger.convergenceResetAfter ?? 0)) continue;
+    if (a.status === "PASSED") history.length = 0;
+    else if (a.status === "FAILED" && a.classification === "CANDIDATE_FAILED") history.push(a);
+  }
+  const tail = (k: number) => (history.length >= k ? history.slice(-k) : undefined);
+  const stalledTail = tail(n);
+  if (stalledTail) {
+    const key = failureKey(stalledTail[0]);
+    if (key !== undefined && stalledTail.every((a, i) => failureKey(a) === key && (i === 0 || a.inputs !== stalledTail[i - 1].inputs))) {
+      const what = stalledTail[0].failingTests?.length ? `the same failing tests (${stalledTail[0].failingTests.slice(0, 3).join(", ")})` : `the same failed check (${stalledTail[0].failedCheck})`;
+      return { state: "stalled", evidence: `${what} in ${n} consecutive attempts, each on changed workspace inputs`, attempts: stalledTail };
+    }
+  }
+  const alternating = tail(Math.max(4, n + 1));
+  if (alternating) {
+    const [a, b] = [failureKey(alternating[0]), failureKey(alternating[1])];
+    if (a !== undefined && b !== undefined && a !== b && alternating.every((x, i) => failureKey(x) === (i % 2 === 0 ? a : b))) {
+      return { state: "oscillating", evidence: `the failure alternated between two sets across the last ${alternating.length} attempts`, attempts: alternating };
+    }
+  }
+  const risingTail = tail(n);
+  if (risingTail && risingTail.every((a) => a.failingTests?.length) && risingTail.every((a, i) => i === 0 || a.failingTests!.length > risingTail[i - 1].failingTests!.length)) {
+    return { state: "diverging", evidence: `the failing-test count rose in each of the last ${n} attempts (${risingTail.map((a) => a.failingTests!.length).join(" -> ")})`, attempts: risingTail };
+  }
+  return converging;
+}
+
+/** The attempt history a non-converging stop carries: command, status, classification, failing tests and candidate ids; capped. */
+export function convergenceHistory(attempts: VerificationAttempt[], max = 10): Array<Pick<VerificationAttempt, "n" | "command" | "status" | "classification" | "failingTests" | "failedCheck"> & { candidate: string }> {
+  return attempts.slice(-max).map((a) => ({
+    n: a.n,
+    command: clip(a.command, 200),
+    status: a.status,
+    ...(a.classification ? { classification: a.classification } : {}),
+    ...(a.failingTests ? { failingTests: a.failingTests.slice(0, 10) } : {}),
+    ...(a.failedCheck ? { failedCheck: clip(redactSecrets(a.failedCheck), 200) } : {}),
+    candidate: a.inputs.slice(0, 12),
+  }));
 }
 
 /**

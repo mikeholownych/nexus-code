@@ -35,6 +35,8 @@ export type TurnReason =
   | "CONTEXT_EVIDENCE_NOT_RETAINED"
   | "VERIFIER_FAILED"
   | "VERIFIER_TIMED_OUT"
+  /** The same failure repeated, alternated or grew across fresh candidates: the turn stopped for the operator to decide. */
+  | "VERIFIER_NOT_CONVERGING"
   | "INFERENCE_FAILED"
   | "STEP_LIMIT_REACHED"
   | "STEP_PAUSED"
@@ -328,6 +330,12 @@ export interface TurnResult {
    * turn's (TUI-AUDIT D-04). Absent on results built outside a turn.
    */
   turnEvidence?: TurnEvidence;
+  /** Present when the turn stopped because verifier attempts were not converging: the signal and the attempts behind it. */
+  convergence?: {
+    state: "stalled" | "oscillating" | "diverging";
+    evidence: string;
+    attempts: Array<{ n: number; command: string; status: string; classification?: string; failingTests?: string[]; failedCheck?: string; candidate: string }>;
+  };
   /** Where the operator's objective stands: open requirements, the failed check and the next action. */
   objective?: {
     status: "completed" | "incomplete" | "blocked";
@@ -383,6 +391,9 @@ export function assertTurnResultInvariants(t: TurnResult): TurnResult {
   }
   if (t.execution === "BLOCKED" && t.outcome !== "NOT_ESTABLISHED") {
     throw new TurnResultInvariantError("BLOCKED must not claim an engineering outcome");
+  }
+  if (t.reason === "VERIFIER_NOT_CONVERGING" && (t.execution !== "BLOCKED" || t.outcome !== "NOT_ESTABLISHED" || !t.convergence)) {
+    throw new TurnResultInvariantError("VERIFIER_NOT_CONVERGING requires a BLOCKED, NOT_ESTABLISHED turn carrying its attempt history");
   }
   if (t.execution === "FAILED" && t.outcome !== "NOT_ESTABLISHED") {
     throw new TurnResultInvariantError("FAILED must not claim an engineering outcome");
@@ -471,6 +482,12 @@ export function summarizeTurn(t: TurnResult): { heading: string; line: string } 
       line: `execution=BLOCKED outcome=NOT_ESTABLISHED (CONTEXT_CAPACITY_EXCEEDED: ${c.estimatedPromptTokens} prompt${c.promptCountSource ? ` (${c.promptCountSource})` : ""} + ${c.completionReserveTokens} completion + ${c.toolResponseReserveTokens} tool reserve > ${c.contextLimit} limit). ` +
         `${c.modelCalled ? "No further request was sent" : "No request was sent"}; ${fate}. ` +
         `Raise --context-limit, run /clear, or ask for something narrower; /compact may not help if one retained result is itself too large.`,
+    };
+  }
+  if (exec === "BLOCKED" && t.reason === "VERIFIER_NOT_CONVERGING") {
+    return {
+      heading: "TURN BLOCKED - VERIFIER NOT CONVERGING",
+      line: `execution=BLOCKED outcome=NOT_ESTABLISHED (VERIFIER_NOT_CONVERGING: ${t.convergence?.evidence ?? t.detail ?? "repeated verifier failures"}). Nothing is verified; the operator decides how to proceed.`,
     };
   }
   if (exec === "BLOCKED") return { heading: "TURN BLOCKED", line: `execution=BLOCKED outcome=NOT_ESTABLISHED${tail}` };

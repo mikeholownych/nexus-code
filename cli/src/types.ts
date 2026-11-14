@@ -166,7 +166,15 @@ export interface ContinuationBudget {
   maxRecoveries: number;
   /** Times the agent may be asked to continue when it stops with acceptance requirements still open. */
   maxCompletionNudges: number;
+  /**
+   * Consecutive failed verifier attempts on changing candidates that stop the turn as VERIFIER_NOT_CONVERGING when they
+   * show the same failure, an A/B alternation or a rising failing-test count (default 3, NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS).
+   */
+  verifierConvergenceAttempts?: number;
 }
+
+/** Failed verifier attempts on changing candidates that show no convergence before the turn stops (see ContinuationBudget). */
+export const DEFAULT_CONVERGENCE_ATTEMPTS = 3;
 
 export const DEFAULT_CONTINUATION: ContinuationBudget = {
   maxTotalSteps: Number.POSITIVE_INFINITY,
