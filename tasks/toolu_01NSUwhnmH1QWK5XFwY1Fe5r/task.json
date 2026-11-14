@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01NSUwhnmH1QWK5XFwY1Fe5r",
+  "agent_id": "ad34f9e48e4fd339b",
+  "subagent_type": "general-purpose",
+  "task_description": "Compiler-grounded semantic tooling audit",
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 107283,
+    "cache_read_tokens": 1718788,
+    "output_tokens": 13704,
+    "api_call_count": 22
+  },
+  "started_at": "2026-11-14T05:15:47.063148096Z",
+  "completed_at": "2026-11-14T05:18:27.790704239Z"
+}
