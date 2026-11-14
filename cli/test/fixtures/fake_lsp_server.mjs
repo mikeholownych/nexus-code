@@ -7,7 +7,10 @@ function send(msg) {
 }
 if (process.env.FAKE_PIDFILE) require_fs().appendFileSync(process.env.FAKE_PIDFILE, process.pid + "\n");
 function require_fs() { return globalThis.__fs ??= process.getBuiltinModule("node:fs"); }
+if (process.env.FAKE_ENVFILE) require_fs().writeFileSync(process.env.FAKE_ENVFILE, JSON.stringify(process.env));
 function publish(uri, text, version) {
+  if (uri.endsWith(".noisy.ts")) for (let i = 0; i < 64; i++) require_fs().writeSync(2, "x".repeat(65536));
+  if (uri.endsWith(".huge.ts")) { process.stdout.write("Content-Length: 99999999\r\n\r\n" + "x".repeat(1024)); return; }
   if (uri.endsWith(".silent.ts")) return;
   if (uri.endsWith(".die.ts")) process.exit(1);
   if (text.includes("STALE")) {

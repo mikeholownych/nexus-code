@@ -2,6 +2,28 @@ import { spawn, ChildProcess } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import { pathToFileURL, fileURLToPath } from "node:url";
+import { buildMcpEnvironment } from "./mcp.js";
+
+const LSP_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+const LSP_TOOLCHAIN_VARS = ["RUSTUP_HOME", "CARGO_HOME", "RUSTUP_TOOLCHAIN", "GOPATH", "GOROOT", "GOCACHE", "GOMODCACHE"];
+
+/**
+ * The environment a language server starts with: the MCP allowlist (no credentials) plus the toolchain locations the
+ * servers need. PATH keeps only absolute entries outside the workspace, so project content cannot supply the binary.
+ */
+export function buildLspEnvironment(workspace: string, source: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const env = buildMcpEnvironment();
+  for (const k of LSP_TOOLCHAIN_VARS) if (source[k] !== undefined) env[k] = source[k]!;
+  for (const [k, v] of Object.entries(env)) {
+    if (/^(https?|all)_proxy$/i.test(k) && /\/\/[^/]*@/.test(v)) delete env[k];
+  }
+  const root = path.resolve(workspace);
+  env.PATH = (env.PATH ?? "")
+    .split(path.delimiter)
+    .filter((d) => path.isAbsolute(d) && path.relative(root, path.resolve(d)).startsWith(".."))
+    .join(path.delimiter);
+  return env;
+}
 
 export interface LspPosition {
   line: number;
@@ -22,6 +44,8 @@ export interface LspServerSpec {
   cmd: string;
   args?: string[];
   languageId: string;
+  /** Extra variables for this server only; the built-in table never sets it. */
+  env?: Record<string, string>;
 }
 
 export interface LspDiagnostic {
@@ -48,7 +72,7 @@ export class LspClient {
   private buffer: string = "";
   public initialized: boolean = false;
 
-  constructor(serverCmd: string, rootPath: string, serverArgs: string[] = []) {
+  constructor(serverCmd: string, rootPath: string, serverArgs: string[] = [], private extraEnv: Record<string, string> = {}) {
     this.serverCmd = serverCmd;
     this.serverArgs = serverArgs;
     this.rootPath = path.resolve(rootPath);
@@ -58,8 +82,10 @@ export class LspClient {
     try {
       this.child = spawn(this.serverCmd, this.serverArgs, {
         cwd: this.rootPath,
+        env: { ...buildLspEnvironment(this.rootPath), ...this.extraEnv },
         stdio: ["pipe", "pipe", "pipe"],
       });
+      this.child.stderr?.resume();
 
       this.child.on("error", () => {
         this.initialized = false;
@@ -113,7 +139,18 @@ export class LspClient {
     for (const w of waiters) w();
   }
 
+  /** A server that sends more than the cap in one message, or buffers past it, is dropped rather than trusted with memory. */
+  private dropOversized(): void {
+    this.buffer = "";
+    this.initialized = false;
+    this.failInFlight(new Error(`LSP server '${this.serverCmd}' exceeded the ${LSP_MAX_BUFFER_BYTES}-byte message limit`));
+    try {
+      this.child?.kill("SIGKILL");
+    } catch {}
+  }
+
   private handleData(chunk: string): void {
+    if (this.buffer.length + chunk.length > LSP_MAX_BUFFER_BYTES) return this.dropOversized();
     this.buffer += chunk;
 
     while (true) {
@@ -128,6 +165,7 @@ export class LspClient {
       }
 
       const contentLength = parseInt(match[1], 10);
+      if (contentLength > LSP_MAX_BUFFER_BYTES) return this.dropOversized();
       const bodyStart = headerEnd + 4;
 
       if (this.buffer.length < bodyStart + contentLength) {
@@ -355,9 +393,12 @@ export class LspBridgeManager {
   private starting: Map<string, Promise<LspClient | null>> = new Map();
   private closed = false;
   private servers: Record<string, LspServerSpec>;
+  private gate?: () => string | null;
 
-  constructor(workspace: string, opts: { servers?: Record<string, LspServerSpec> } = {}) {
+  /** `gate` returns the reason a server must not start right now (untrusted workspace, sandbox), or null to allow it. */
+  constructor(workspace: string, opts: { servers?: Record<string, LspServerSpec>; gate?: () => string | null } = {}) {
     this.workspace = path.resolve(workspace);
+    this.gate = opts.gate;
     this.servers = opts.servers ?? {};
     LspBridgeManager.live.add(this);
     if (!LspBridgeManager.exitHookInstalled) {
@@ -392,7 +433,7 @@ export class LspBridgeManager {
 
   public async getClientForFile(filePath: string): Promise<LspClient | null> {
     const serverInfo = this.getServerForFile(filePath);
-    if (!serverInfo) return null;
+    if (!serverInfo || this.gate?.()) return null;
     this.closed = false;
     LspBridgeManager.live.add(this);
     const key = `${serverInfo.cmd}\0${(serverInfo.args ?? []).join("\0")}`;
@@ -403,7 +444,7 @@ export class LspBridgeManager {
     if (inFlight) return inFlight;
 
     const startup = (async () => {
-      const client = new LspClient(serverInfo.cmd, this.workspace, serverInfo.args ?? []);
+      const client = new LspClient(serverInfo.cmd, this.workspace, serverInfo.args ?? [], serverInfo.env);
       const ok = await client.start();
       if (ok && this.closed) {
         client.shutdown();
@@ -430,6 +471,8 @@ export class LspBridgeManager {
   ): Promise<{ status: "ok"; diagnostics: LspDiagnostic[] } | { status: "unavailable"; reason: string }> {
     const info = this.getServerForFile(filePath);
     if (!info) return { status: "unavailable", reason: `No LSP server configured for ${filePath}.` };
+    const refused = this.gate?.();
+    if (refused) return { status: "unavailable", reason: refused };
     const client = await this.getClientForFile(filePath);
     if (!client) return { status: "unavailable", reason: `Language server '${info.cmd}' is not installed or failed to start.` };
     if (!client.syncFile(filePath, info.languageId)) {
@@ -447,6 +490,8 @@ export class LspBridgeManager {
   }
 
   public async hover(filePath: string, line: number, character: number): Promise<{ found: boolean; hoverText?: string; error?: string }> {
+    const refused = this.getServerForFile(filePath) ? this.gate?.() : null;
+    if (refused) return { found: false, error: refused };
     const client = await this.getClientForFile(filePath);
     if (!client) {
       const info = this.getServerForFile(filePath);
@@ -468,6 +513,8 @@ export class LspBridgeManager {
   }
 
   public async definition(filePath: string, line: number, character: number): Promise<{ found: boolean; locations?: LspLocation[]; error?: string }> {
+    const refused = this.getServerForFile(filePath) ? this.gate?.() : null;
+    if (refused) return { found: false, error: refused };
     const client = await this.getClientForFile(filePath);
     if (!client) {
       const info = this.getServerForFile(filePath);

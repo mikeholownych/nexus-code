@@ -8,11 +8,17 @@ import { LspBridgeManager } from "../src/lsp.js";
 
 const FAKE = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "fake_lsp_server.mjs");
 
+function fakeEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const k of ["FAKE_PIDFILE", "FAKE_ENVFILE"]) if (process.env[k]) env[k] = process.env[k]!;
+  return env;
+}
+
 function setup(files: Record<string, string>) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-lsp-"));
   for (const [name, text] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), text);
   const mgr = new LspBridgeManager(dir, {
-    servers: { ".ts": { cmd: process.execPath, args: [FAKE], languageId: "typescript" } },
+    servers: { ".ts": { cmd: process.execPath, args: [FAKE], languageId: "typescript", env: fakeEnv() } },
   });
   return { dir, mgr };
 }
