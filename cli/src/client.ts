@@ -1851,6 +1851,7 @@ export class LocalLlmClient {
 
         if (res.status === 401 && this.reloadAuthToken(url)) {
           watchdog.done();
+          await this.reverifyExpiredKind(signal);
           return this.chatCompletionOnce(messages, tools, requestId, signal, toolChoice);
         }
 
@@ -2035,6 +2036,7 @@ export class LocalLlmClient {
 
       if (res.status === 401 && this.reloadAuthToken(url)) {
         watchdog.done();
+        await this.reverifyExpiredKind(signal);
         return this.chatCompletionStreamOnce(messages, tools, onToken, requestId, signal);
       }
 
