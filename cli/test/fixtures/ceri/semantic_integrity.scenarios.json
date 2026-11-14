@@ -71,10 +71,9 @@
     {
       "id": "conflicting-specs-01",
       "category": "conflicting_specs",
-      "status": "pending",
-      "pendingUnit": "SI-3",
-      "description": "Steering that negates a numbered requirement keeps the ledger and raises an operator decision instead of replacing the requirement.",
-      "expected": { "ledgerKept": true, "decisionRaised": true }
+      "status": "active",
+      "description": "Steering that negates a numbered requirement keeps the ledger and raises an operator decision instead of replacing the requirement; steering that negates nothing is queued as before.",
+      "expected": { "ledgerKept": true, "decisionRaised": true, "nonConflictingSteerUnchanged": true }
     },
     {
       "id": "unauthorised-edit-01",

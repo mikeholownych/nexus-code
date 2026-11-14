@@ -24,6 +24,9 @@ import {
   invalidateVerified,
   PINNED_LEDGER_PREFIX,
   priorAttempt,
+  queueSteering,
+  recordSteeringConflict,
+  steeringNegations,
   recordAttempt,
   renderPinnedLedger,
   requirementDone,
@@ -234,6 +237,22 @@ const drivers: Record<string, () => unknown | Promise<unknown>> = {
       missingFromRequirementList: gating.filter((r) => !out.includes(`- ${r.id} [`)).map((r) => r.id),
     };
   },
+  "conflicting-specs-01": () => {
+    const ledger = createLedger(NUMBERED);
+    const snapshot = () => JSON.stringify(ledger.requirements);
+    const before = snapshot();
+    const negated = steeringNegations(ledger, "Drop requirement 2.");
+    const conflict = negated.length ? recordSteeringConflict(ledger, "S1", "Drop requirement 2.", negated) : undefined;
+    const ledgerKept = snapshot() === before && ledger.steering.length === 0 && ledger.scopeChanges.length === 0;
+    const benign = "Also mention the flag in the README. Don't forget requirement 3.";
+    const benignNegations = steeringNegations(ledger, benign);
+    const queued = queueSteering(ledger, "S2", benign);
+    return {
+      ledgerKept,
+      decisionRaised: conflict?.status === "pending" && conflict.requirements.join() === "R2",
+      nonConflictingSteerUnchanged: benignNegations.length === 0 && queued?.status === "queued" && snapshot() === before,
+    };
+  },
   "unauthorised-edit-01": () => {
     const root = makeRepo({ Makefile: "test:\n\tnpm test\n", "src/app.ts": "x\n" });
     try {
@@ -339,10 +358,9 @@ test("the frozen scenario file is the one the manifest pins, in a registered CER
 const PENDING_FROZEN: Record<string, string> = {
   "hidden-invariant-03": "SI-4",
   "compaction-03": "unassigned (Codex row 'SI-6 / compaction': post-compaction check)",
-  "conflicting-specs-01": "SI-3",
   "cumulative-change-03": "SI-5",
 };
-const ACTIVE_FROZEN = 21;
+const ACTIVE_FROZEN = 22;
 
 test("the scenario set cannot shrink or be reclassified without changing this file too", () => {
   const pending = Object.fromEntries(frozen.scenarios.filter((s) => s.status === "pending").map((s) => [s.id, s.pendingUnit]));
