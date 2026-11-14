@@ -54,7 +54,7 @@ import { SkillManager, skillCatalogBudget, skillNoteBudget, formatSkillNote, fin
 import { McpClientManager } from "./mcp.js";
 import { PluginManager } from "./plugins.js";
 import { extractCompilerDiagnostics, formatDiagnosticHints } from "./diagnostics.js";
-import { SecurityManager } from "./security.js";
+import { SecurityManager, VERIFICATION_CONFIG_PROTECTED, type VerificationEditContext } from "./security.js";
 import { calculateContextBudget, countTokens, isContextAdmissible, isContextPressureHigh, estimateNextRequestTokens, TokenBudget } from "./tokens.js";
 import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
@@ -1656,6 +1656,7 @@ export class AutonomousAgent {
       validationReceipts: this.activeValidationReceipt ? [this.activeValidationReceipt] : [],
       messages: this.messages,
       unverifiedChangesPending: this.hasPendingModifications,
+      verificationConfigAttempts: this.bridge.getSecurityManager().getVerificationAttempts(),
       durableNotes: notes ? [notes] : undefined,
       ...(this.compactionProvenance ? { compactionProvenance: this.compactionProvenance } : {}),
       ...(this.recoveredOperation !== undefined ? { operation: this.recoveredOperation } : {}),
@@ -2297,7 +2298,23 @@ export class AutonomousAgent {
     }
   }
 
-  private persistProgress(progress: { messages?: boolean; unverifiedChangesPending?: boolean; changeBaseline?: ChangeBaseline | null }): void {
+  private persistedVerificationAttempts = 0;
+
+  /** A rebuilt bridge brings a fresh security manager; the attempts recorded so far move to it so the saved history is never cut back. */
+  private carryVerificationAttempts(next: RustCoreBridge): RustCoreBridge {
+    next.getSecurityManager().restoreVerificationAttempts(this.bridge.getSecurityManager().getVerificationAttempts());
+    return next;
+  }
+
+  /** Saves the verification-config attempts recorded since the last save, so a resumed session and its export still show them. */
+  private syncVerificationAttempts(): void {
+    const count = this.bridge.getSecurityManager().getVerificationAttempts().length;
+    if (count === this.persistedVerificationAttempts) return;
+    this.persistedVerificationAttempts = count;
+    this.persistProgress({ verificationConfigAttempts: true });
+  }
+
+  private persistProgress(progress: { verificationConfigAttempts?: boolean; messages?: boolean; unverifiedChangesPending?: boolean; changeBaseline?: ChangeBaseline | null }): void {
     if (!this.durable || this.restoringConversation) return;
     try {
       if (this.stateManager && !this.stateManager.hasTaskState(this.currentTaskId)) this.checkpointDurableState();
@@ -2324,6 +2341,7 @@ export class AutonomousAgent {
               : this.untrustedRecoveredBaseline ?? undefined),
         } : {}),
         ...(progress.unverifiedChangesPending !== undefined ? { unverifiedChangesPending: progress.unverifiedChangesPending } : {}),
+        ...(progress.verificationConfigAttempts ? { verificationConfigAttempts: this.bridge.getSecurityManager().getVerificationAttempts() } : {}),
         ...(progress.changeBaseline !== undefined ? {
           changeBaseline: progress.changeBaseline
             ? {
@@ -2574,7 +2592,7 @@ export class AutonomousAgent {
         : [this.primaryWorkspacePathIdentity, this.workspacePathIdentity]
     );
     this.config.workspace = newWorkspace;
-    this.bridge = new RustCoreBridge(
+    this.bridge = this.carryVerificationAttempts(new RustCoreBridge(
       this.config.workspace,
       this.config.shell,
       this.config.coreBinaryPath,
@@ -2582,7 +2600,7 @@ export class AutonomousAgent {
       readOnly,
       this.bridgeSandboxSetting(),
       Boolean(this.activeWorktree) || Boolean(this.inheritedWorktreeScope?.requireSandbox),
-    );
+    ));
     this.applyReadOnlyAuthority(readOnly);
     // During an internally managed isolation switch, retain the manager bound
     // to the selected original workspace; the active checkout is only a
@@ -2603,7 +2621,7 @@ export class AutonomousAgent {
     const readOnly = this.isReadOnly();
     this.bridge.shutdown();
     this.config.shell = newShell;
-    this.bridge = new RustCoreBridge(
+    this.bridge = this.carryVerificationAttempts(new RustCoreBridge(
       this.config.workspace,
       this.config.shell,
       this.config.coreBinaryPath,
@@ -2611,7 +2629,7 @@ export class AutonomousAgent {
       readOnly,
       this.bridgeSandboxSetting(),
       Boolean(this.activeWorktree) || Boolean(this.inheritedWorktreeScope?.requireSandbox),
-    );
+    ));
     this.applyReadOnlyAuthority(readOnly);
     this.setupSpineHandlers();
     this.resetConversation();
@@ -2625,7 +2643,7 @@ export class AutonomousAgent {
   private rebuildBridgeForIsolation(): void {
     const readOnly = this.isReadOnly();
     this.bridge.shutdown();
-    this.bridge = new RustCoreBridge(
+    this.bridge = this.carryVerificationAttempts(new RustCoreBridge(
       this.config.workspace,
       this.config.shell,
       this.config.coreBinaryPath,
@@ -2633,7 +2651,7 @@ export class AutonomousAgent {
       readOnly,
       this.bridgeSandboxSetting(),
       Boolean(this.activeWorktree) || Boolean(this.inheritedWorktreeScope?.requireSandbox),
-    );
+    ));
     this.bridge.setVerifierTimeoutSecs(this.config.verifierTimeoutSecs);
     this.applyReadOnlyAuthority(readOnly);
     this.setupSpineHandlers();
@@ -2747,6 +2765,7 @@ export class AutonomousAgent {
       operation?: DurableTaskState["operation"];
       changeBaseline?: DurableTaskState["changeBaseline"];
       lastTurn?: TurnResult | null;
+      verificationConfigAttempts?: DurableTaskState["verificationConfigAttempts"];
       model?: string;
       endpoint?: string;
     },
@@ -2760,6 +2779,8 @@ export class AutonomousAgent {
       this.adoptRecordedModel(session.model, session.endpoint);
       this.restoreSession(session.messages, session.unverifiedChangesPending, session.objective, session.findings, session);
       this.restoreHistory(session.history);
+      this.bridge.getSecurityManager().restoreVerificationAttempts(session.verificationConfigAttempts);
+      this.persistedVerificationAttempts = session.verificationConfigAttempts?.length ?? 0;
       const committed = Array.isArray(session.history?.committedCompactions) ? new Set<string>(session.history.committedCompactions) : undefined;
       const read = readArchive(committed);
       this.restoreArchive(read.messages);
@@ -5317,7 +5338,39 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       egressOrigin,
       fullAccess: Boolean(this.config.fullAccess) && !this.isReadOnly(),
     };
-    const askOperator = this.approvalPolicy.requiresDecision(effect, policyContext);
+    const verificationSecurity = this.bridge.getSecurityManager();
+    const verificationAuthority: VerificationEditContext = { role: this.role, fullAccess: policyContext.fullAccess, operator: Boolean(onConfirm) };
+    const verificationEdit = verificationSecurity.verificationEditDecision(toolName, args, verificationAuthority);
+    if (verificationEdit?.action === "deny") {
+      const cancelMsg = verificationSecurity.refuseVerificationEdit(verificationEdit, toolName, this.role).error;
+      this.syncVerificationAttempts();
+      if (this.flightRecorder) {
+        this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, cancelMsg, 0, VERIFICATION_CONFIG_PROTECTED);
+      }
+      this.observer?.onToolEnd?.({ dispatch, callId: call.id, tool: toolName, success: false, output: "", error: cancelMsg });
+      return {
+        receipt: {
+          invocationId: call.id,
+          taskId: this.activeWorktree?.taskId || this.currentTaskId,
+          actor,
+          executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+          capabilityId: this.capabilityRegistry.getByToolName(toolName)?.id || "unknown",
+          toolName,
+          targetResources: extractTargetResources(toolName, args),
+          success: false,
+          output: "",
+          error: cancelMsg,
+          durationMs: 0,
+          candidateMutated: false,
+          status: "DENIED",
+          denialReason: VERIFICATION_CONFIG_PROTECTED,
+          timestamp: new Date().toISOString(),
+          simulated: Boolean(this.config.dryRun),
+        },
+        shouldExit: false,
+      };
+    }
+    const askOperator = this.approvalPolicy.requiresDecision(effect, policyContext) || verificationEdit?.action === "ask";
 
     if (toolName === "activate_skill") {
       const skillName = args?.name;
@@ -5387,7 +5440,15 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       }
 
       this.activity("approval", { tool: toolName, ...(subject ? { subject } : {}) });
+      if (verificationEdit?.action === "ask") console.log(`⚠️ ${toolName} changes verification configuration: ${verificationEdit.path} (${verificationEdit.class}).`);
       const approved = await onConfirm(toolName, args);
+      if (verificationEdit?.action === "ask") {
+        if (approved) verificationAuthority.approved = { path: verificationEdit.path };
+        else {
+          verificationSecurity.refuseVerificationEdit(verificationEdit, toolName, this.role);
+          this.syncVerificationAttempts();
+        }
+      }
       if (approved && egressOrigin) this.approvedEgressOrigins.add(egressOrigin);
       if (approved) this.activity("tool", { tool: toolName, ...(subject ? { subject } : {}) });
       if (!approved) {
@@ -5437,7 +5498,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       dryRun: this.config.dryRun,
       readOnly: this.isReadOnly(),
       bridge: this.bridge,
-      metadata: { actor, stepIndex: currentStep },
+      metadata: { actor, stepIndex: currentStep, verificationAuthority },
       defaultHandler: async (tName, tArgs) => {
         if (this.mcpManager.isMcpTool(tName)) {
           return await this.mcpManager.executeMcpTool(tName, tArgs);
@@ -5448,7 +5509,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         return await this.pluginManager.executeToolPipeline(
           tName,
           tArgs,
-          async (pipeArgs) => this.bridge.executeTool(tName, pipeArgs)
+          async (pipeArgs) => this.bridge.executeTool(tName, pipeArgs, verificationAuthority)
         );
       },
     };
@@ -5501,18 +5562,23 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     const workspaceAvailableBeforeBytes = toolName === "run_command" && process.env.NEXUS_EVAL_TOOL_RECEIPTS === "1"
       ? this.workspaceAvailableBytes()
       : null;
-    const receipt = await this.spine.execute(
-      {
-        invocationId: call.id,
-        taskId: effectiveTaskId,
-        actor,
-        executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
-        toolName,
-        args,
-        stepIndex: currentStep,
-      },
-      context
-    );
+    let receipt: ExecutionReceipt;
+    try {
+      receipt = await this.spine.execute(
+        {
+          invocationId: call.id,
+          taskId: effectiveTaskId,
+          actor,
+          executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+          toolName,
+          args,
+          stepIndex: currentStep,
+        },
+        context
+      );
+    } finally {
+      this.syncVerificationAttempts();
+    }
 
     if (toolName === "run_command" && actor === "agent" && process.env.NEXUS_EVAL_TOOL_RECEIPTS === "1") {
       try {
