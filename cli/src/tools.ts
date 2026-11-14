@@ -16,6 +16,7 @@ import { CapabilityRegistry, HARNESS_TOOLS, defaultRegistry } from "./core/capab
 import { isSafeReadOnlyCommand } from "./core/authority.js";
 import { getBuildIdentity } from "./build_identity.js";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
+import { fenceUntrusted, lspDiagnosticRecords } from "./diagnostics.js";
 export { HARNESS_TOOLS, defaultRegistry };
 
 /** JSON-RPC protocol version spoken between the CLI and harness-core (REQ-REL-103). */
@@ -1499,9 +1500,10 @@ export class RustCoreBridge {
         if (res.status === "unavailable") {
           return { success: false, output: "", error: `lsp_diagnostics unavailable: ${res.reason} This is not evidence the file is free of errors.` };
         }
+        const file = String(args.path || "");
         return {
           success: true,
-          output: JSON.stringify(res.diagnostics, null, 2),
+          output: fenceUntrusted(`lsp diagnostics for ${file}`, JSON.stringify(lspDiagnosticRecords(this.workspace, file, res.diagnostics), null, 2)),
         };
       } catch (err: any) {
         return { success: false, output: "", error: `LSP error: ${err.message}` };

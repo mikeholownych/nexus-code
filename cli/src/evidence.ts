@@ -14,6 +14,7 @@ export const MAX_DETAIL = 64_000;
 export const MAX_DIFF_DETAIL = 256_000;
 export const MAX_EVIDENCE = 200;
 
+export type EvidenceSource = "tool" | "model";
 export type EvidenceStatus = "running" | "succeeded" | "failed";
 
 export interface EvidenceRecord {
@@ -21,6 +22,8 @@ export interface EvidenceRecord {
   turnId: string;
   tool: string;
   subject: string;
+  /** Who produced this: a tool that ran (always, for ledger records) or the model's own assertion. Absent on older records. */
+  source?: EvidenceSource;
   /** Arguments as pretty-printed JSON. */
   args: string;
   status: EvidenceStatus;
@@ -81,6 +84,7 @@ export class EvidenceLedger {
       turnId,
       tool,
       subject,
+      source: "tool",
       args: clean(redactedJson(args)),
       status: "running",
       output: "",
@@ -226,6 +230,8 @@ function validationSection(receipt: ValidationReceipt | null): ReceiptSection {
   row(rows, "stdout sha256", receipt.stdoutHash);
   row(rows, "candidate", receipt.candidateId);
   row(rows, "recorded", receipt.timestamp);
+  const deps = receipt.materialDependencies ?? [];
+  row(rows, "dependencies", deps.length ? deps.map((d) => `${d.name}=${d.path ? d.versionOrHash.slice(0, 12) : d.versionOrHash}`).join(", ") : "legacy (none recorded)");
   if (receipt.invalidationReason) {
     row(rows, "invalidated", `${receipt.invalidationReason}${receipt.invalidatedAt ? ` (${receipt.invalidatedAt})` : ""}`);
   }

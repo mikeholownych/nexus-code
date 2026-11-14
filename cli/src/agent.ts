@@ -177,6 +177,7 @@ import type { TurnEvidence, TurnReason } from "./core/turn.js";
 import { isReadOnlyRole, isSpecialistRole, ROLE_PROFILES, roleToolAllowList, type AgentRole } from "./core/roles.js";
 import pc from "picocolors";
 import { untrustedWorkspaceExtensions } from "./workspace_trust.js";
+import { collectMaterialDependencies } from "./material_deps.js";
 
 /**
  * A shell command that may leave a process running after it returns: a lone `&` (not `&&`, `&>` or `2>&1`), nohup,
@@ -4856,7 +4857,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
                 evaluatorType: "runTestSuiteWithExecutor",
                 testSuite: this.config.authoritativeVerifierCommand?.trim(),
               },
-              materialDependencies: [],
+              materialDependencies: collectMaterialDependencies(candidateWorkspace),
             });
             this.verifiedWorktreeCompletion = true;
             if (this.durable && this.stateManager && this.currentTaskId) {

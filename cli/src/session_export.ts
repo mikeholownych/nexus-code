@@ -60,6 +60,11 @@ export interface SessionExport {
   markdown: string;
 }
 
+/** Each requirement evidence item with who produced it; an item nothing records as tool output is the model's claim. */
+export function evidenceProvenance(objective: SessionData["objective"] | null | undefined): { requirement: string; evidence: string; source: "tool" | "model" }[] {
+  return (objective?.requirements ?? []).flatMap((r) => r.evidence.map((evidence) => ({ requirement: r.id, evidence, source: r.evidenceSources?.[evidence] ?? ("model" as const) })));
+}
+
 export function buildSessionExport(manager: SessionManager, session: SessionData): SessionExport {
   let archived: { messages: ChatMessage[]; unreadableLines: number } = { messages: [], unreadableLines: 0 };
   try {
@@ -82,6 +87,7 @@ export function buildSessionExport(manager: SessionManager, session: SessionData
         steering: objective?.steering ?? [],
         steeringConflicts: objective?.steeringConflicts ?? [],
         supersededObjectives: objective?.superseded ?? [],
+        evidenceProvenance: evidenceProvenance(objective),
         verificationAttempts: objective?.verification ?? [],
         verificationEvidence: lastTurn?.verification ?? null,
         verificationConfigAttempts: session.verificationConfigAttempts ?? [],
@@ -128,7 +134,7 @@ function markdownExport(session: SessionData, history: HistoryCompleteness, arch
     const gating = gatingRequirements(objective);
     if (gating.length) {
       out.push("| Requirement | Status | Evidence / note |", "|---|---|---|");
-      for (const r of gating) out.push(`| ${escapeTableCell(r.id)} ${escapeTableCell(r.text)} | ${escapeTableCell(r.status)} | ${escapeTableCell([...r.evidence, r.note ?? ""].filter(Boolean).join("; "))} |`);
+      for (const r of gating) out.push(`| ${escapeTableCell(r.id)} ${escapeTableCell(r.text)} | ${escapeTableCell(r.status)} | ${escapeTableCell([...r.evidence.map((e) => `[${r.evidenceSources?.[e] ?? "model"}] ${e}`), r.note ?? ""].filter(Boolean).join("; "))} |`);
       out.push("");
     }
     if (objective.outcome) {
