@@ -82,6 +82,13 @@ export function requiresWorkspaceVerifierDefinitionBinding(
   );
 }
 
+/** Why a verifier definition cannot be bound, in plain language; generic when the exact cause is not tracked. */
+export function describeUnbindableVerifier(workspace: string, command: string): string {
+  const why: { reason?: string } = {};
+  snapshotVerifierDefinition(workspace, command, [], why);
+  return why.reason ?? "it has too many or unsupported references";
+}
+
 /** Test files of the workspace by relative path, or null when one exceeds the size kept for restoring. */
 export function snapshotTests(workspace: string): Map<string, string> | null {
   const root = path.resolve(workspace);
@@ -126,8 +133,13 @@ export function snapshotVerifierDefinition(
   workspace: string,
   command: string,
   trustedDeliverables: readonly string[] = [],
+  why?: { reason?: string },
 ): Map<string, string> | null {
   const root = path.resolve(workspace);
+  const note = (reason: string): false => {
+    if (why && !why.reason) why.reason = reason;
+    return false;
+  };
   const baselineProductFiles = workspaceRuntimeFiles(root);
   const trustedSet = new Set(trustedDeliverables);
   const files = new Set<string>();
@@ -154,7 +166,7 @@ export function snapshotVerifierDefinition(
     for (const match of text.matchAll(pattern)) {
       const candidate = match[1].replace(/^\.\//, "");
       const resolved = path.resolve(base, candidate);
-      if (!resolved.startsWith(`${root}${path.sep}`)) return false;
+      if (!resolved.startsWith(`${root}${path.sep}`)) return note("it references a path outside the workspace");
       if (fs.existsSync(resolved)) pending.push(resolved);
       else absentPaths.add(path.relative(root, resolved));
     }
@@ -178,7 +190,7 @@ export function snapshotVerifierDefinition(
       const script = match[1].replace(/^["']|["']$/g, "");
       if (script.startsWith("-")) continue;
       const resolved = path.resolve(base, script);
-      if (!resolved.startsWith(`${root}${path.sep}`)) return false;
+      if (!resolved.startsWith(`${root}${path.sep}`)) return note("it references a path outside the workspace");
       if (fs.existsSync(resolved)) pending.push(resolved);
       else absentPaths.add(path.relative(root, resolved));
     }
@@ -198,7 +210,8 @@ export function snapshotVerifierDefinition(
         );
         continue;
       }
-      if (visited.size > 128 || !add(path.relative(root, file))) return false;
+      if (visited.size > 128) return note("it references more than 128 files");
+      if (!add(path.relative(root, file))) return note(`a referenced file (${path.relative(root, file)}) is missing, a symlink, or too large`);
       const contents = fs.readFileSync(file, "utf8");
       if (!scanReferences(contents, path.dirname(file), pending)) return false;
     }
@@ -211,7 +224,7 @@ export function snapshotVerifierDefinition(
       current = path.dirname(current)
     ) {
       const dependencies = path.join(current, "node_modules");
-      if (fs.existsSync(dependencies)) return false;
+      if (fs.existsSync(dependencies)) return note("the workspace has a local node_modules directory");
       absentPaths.add(path.relative(root, dependencies));
       if (current === root) break;
     }
@@ -374,7 +387,7 @@ export function snapshotVerifierDefinition(
     const prefix = command.match(/--(?:prefix|dir)(?:=|\s+)([^\s]+)/)?.[1];
     if (!addNpmDefinition(prefix)) return null;
     const runtimeDefinitions = runtimeDefinitionFiles(root);
-    if (!runtimeDefinitions) return null;
+    if (!runtimeDefinitions) { note("the workspace has directories nested deeper than 5 levels, an unreadable directory, or more than 128 package.json/tsconfig files"); return null; }
     for (const relative of runtimeDefinitions) if (!add(relative)) return null;
     files.add("\0runtime-definition-set:" + JSON.stringify(runtimeDefinitions));
     files.add(
@@ -389,7 +402,8 @@ export function snapshotVerifierDefinition(
       const rel = pending.pop()!;
       if (seen.has(rel)) continue;
       seen.add(rel);
-      if (seen.size > 64 || !add(rel)) return null;
+      if (seen.size > 64) { note("the Makefile includes more than 64 files"); return null; }
+      if (!add(rel)) { note(`${rel} is missing, a symlink, or too large`); return null; }
       const makefile = fs.readFileSync(path.join(root, rel), "utf8");
       if (/^test:/m.test(makefile)) targetFound = true;
       for (const line of makefile.split(/\r?\n/)) {
@@ -397,12 +411,16 @@ export function snapshotVerifierDefinition(
         if (!include) continue;
         const names = include[1].trim().split(/\s+/);
         // Variable expansion and globs have make semantics this bounded resolver does not emulate.
-        if (!names.length || names.some((name) => /[$*?%]/.test(name)))
+        if (!names.length || names.some((name) => /[$*?%]/.test(name))) {
+          note("a Makefile include uses variables or globs");
           return null;
+        }
         for (const name of names) {
           const resolved = path.resolve(root, path.dirname(rel), name);
-          if (!resolved.startsWith(root + path.sep) || !fs.existsSync(resolved))
+          if (!resolved.startsWith(root + path.sep) || !fs.existsSync(resolved)) {
+            note(`a Makefile include (${name}) cannot be resolved inside the workspace`);
             return null;
+          }
           pending.push(path.relative(root, resolved));
         }
       }
@@ -412,7 +430,7 @@ export function snapshotVerifierDefinition(
       )
         return null;
     }
-    if (!targetFound) return null;
+    if (!targetFound) { note("the Makefile has no test target"); return null; }
   } else if (/^cargo\s+test(?:\s|$)/.test(command)) {
     const manifest =
       command.match(/--manifest-path\s+([^\s]+)/)?.[1] ?? "Cargo.toml";
@@ -464,7 +482,7 @@ export function snapshotVerifierDefinition(
     const script = command.match(
       /^(?:node|python\d?(?:\.\d+)?|bash|sh)\s+([^\s]+)(?:\s|$)/,
     )?.[1];
-    if (!script || script.startsWith("-")) return null;
+    if (!script || script.startsWith("-")) { note("the command shape is not one Nexus can snapshot"); return null; }
     const relative = path.isAbsolute(script)
       ? path.relative(root, script)
       : script;
@@ -488,7 +506,7 @@ export function snapshotVerifierDefinition(
   // need the same pre-change source boundary for import-based deliverable proof.
   if (![...files].some((file) => file.startsWith("\0runtime-definition-set:"))) {
     const runtimeDefinitions = runtimeDefinitionFiles(root);
-    if (!runtimeDefinitions) return null;
+    if (!runtimeDefinitions) { note("the workspace has directories nested deeper than 5 levels, an unreadable directory, or more than 128 package.json/tsconfig files"); return null; }
     for (const relative of runtimeDefinitions) if (!add(relative)) return null;
     files.add("\0runtime-definition-set:" + JSON.stringify(runtimeDefinitions));
   }

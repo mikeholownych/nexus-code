@@ -67,7 +67,7 @@ import { WORKTREE_BINDING_VERSION } from "./core/state.js";
 import { isSandboxAvailable } from "./sandbox.js";
 import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand, verifierTimeoutSecs } from "./tester.js";
 import { ENABLE_TOOLS_CAPABILITY, TOOL_GROUPS, groupsTriggeredBy, toolGroupOf } from "./core/tool_groups.js";
-import { judgeWithoutCopy, prepareBaselineTestsCopy, requiresWorkspaceVerifierDefinitionBinding, trustedDeliverablesFromBaseline, testsChangedSince, snapshotTests, snapshotVerifierDefinition, verifierDefinitionChangedSince, verifierDefinitionMatchesSnapshot, tddRedTestsMatchSnapshot, type ChangeBaseline, type Independence } from "./core/independent_check.js";
+import { describeUnbindableVerifier, judgeWithoutCopy, prepareBaselineTestsCopy, requiresWorkspaceVerifierDefinitionBinding, trustedDeliverablesFromBaseline, testsChangedSince, snapshotTests, snapshotVerifierDefinition, verifierDefinitionChangedSince, verifierDefinitionMatchesSnapshot, tddRedTestsMatchSnapshot, type ChangeBaseline, type Independence } from "./core/independent_check.js";
 import { ensurePrivateDir, appendPrivateFile } from "./core/durable_file.js";
 
 import { credentialOriginOf, InferenceError, type TruncatedCall, TokenCountError } from "./client.js";
@@ -917,6 +917,9 @@ function logAudit(entry: {
     // Ignore audit log write errors
   }
 }
+
+/** A shell `-c` program can run any workspace script the candidate rewrote; an unbound one is never accepted. */
+const SHELL_PROGRAM_VERIFIER = /\b(?:bash|sh|zsh|dash|ksh)\s+(?:-[A-Za-z]*c|--command)\b/;
 
 export class AutonomousAgent {
   private client: LocalLlmClient;
@@ -4505,10 +4508,22 @@ ${NEXUS_RUNTIME_IDENTITY}`;
               (hasTddRedVerifier
                 ? !tddRedVerifierMatches
                 : verifierDefinitionChangedSince(this.config.workspace, this.changeBaseline!));
+            let unboundDetail: string | undefined;
             if (
               bindsWorkspaceDefinition &&
               (!matchingBaseline || verifierDefinitionChanged) &&
               !this.activeTurn?.tddRed
+            ) {
+              const baselineHadDefinition = Boolean(matchingBaseline && this.changeBaseline?.verifier?.size);
+              if (!baselineHadDefinition && !SHELL_PROGRAM_VERIFIER.test(verifierCommand) && snapshotVerifierDefinition(this.config.workspace, verifierCommand, this.config.trustedDeliverableFiles ?? []) === null) {
+                unboundDetail = `the verifier's definition could not be bound (${describeUnbindableVerifier(this.config.workspace, verifierCommand)}), so the pass cannot be independent evidence`;
+              }
+            }
+            if (
+              bindsWorkspaceDefinition &&
+              (!matchingBaseline || verifierDefinitionChanged) &&
+              !this.activeTurn?.tddRed &&
+              !unboundDetail
             ) {
               const detail = !matchingBaseline
               ? "The workspace-resolved verifier has no matching pre-change baseline. Its current output cannot establish verification; start a fresh task from an operator-reviewed trusted workspace baseline."
@@ -4604,7 +4619,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             ));
             // A discovered verifier's pass makes the change VERIFIED only on independent evidence (fail-before /
             // pass-after on tests the change did not write); the operator's configured verifier is their own check.
-            const independence = source === "discovered" && testRes.success && isDeliverableBound ? await this.judgeIndependence(verifierCommand, deadlineSecs, onConfirm) : undefined;
+            const independence: Independence | undefined = unboundDetail
+              ? { independent: false, detail: unboundDetail }
+              : source === "discovered" && testRes.success && isDeliverableBound ? await this.judgeIndependence(verifierCommand, deadlineSecs, onConfirm) : undefined;
             const evidence: VerificationEvidence = {
               status: testRes.success ? "PASSED" : testRes.timedOut ? "TIMED_OUT" : "FAILED",
               command: verifierCommand,
@@ -4612,6 +4629,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
               exitSuccess: testRes.success,
               hasExecutedTests: hasExecuted,
               isDeliverableBound,
+              ...(unboundDetail ? { definitionBound: false } : {}),
               ...(independence ? { independent: independence.independent, independenceDetail: independence.detail } : {}),
               ...(testRes.timedOut ? { deadlineSecs } : {}),
               outputSha256: createHash("sha256").update(testRes.rawOutput || "").digest("hex"),
@@ -4701,7 +4719,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       // needs a verification for the exact state it merges. Recording never affects the task outcome. Recording runs
       // host-side Git in the worktree, so its `.git` pointer is verified first (the agent could have rewritten it).
       const recordableWorktree = this.isRecordableWorktree();
-      const isVerified = this.verificationEvidence?.source === "configured" || this.verificationEvidence?.independent === true;
+      const isVerified = this.verificationEvidence?.definitionBound !== false &&
+        (this.verificationEvidence?.source === "configured" || this.verificationEvidence?.independent === true);
       recordVerificationIfEligible(this.config.workspace, {
         unrecordableWorktree: !recordableWorktree || this.receiptBaselineUntrusted,
         dryRun: Boolean(this.config.dryRun),
@@ -7305,7 +7324,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           execution: "COMPLETED",
           outcome: "REGRESSION_FREE",
           reason: "REGRESSION_FREE",
-          detail: "Passing test run did not cover the modified deliverables.",
+          detail: evidence.definitionBound === false
+            ? `Tests pass, but ${evidence.independenceDetail ?? "the verifier's definition could not be bound, so the pass cannot be independent evidence"}.`
+            : "Passing test run did not cover the modified deliverables.",
         }));
       }
       const noVerifier = evidence?.status === "NO_APPLICABLE_VERIFIER" ||
@@ -7342,6 +7363,16 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         // The verifier passed on the change; it does not show the change's content rests on what the model saw. Output
         // that left context during the turn and was not read again is counted on the result (CTX-03).
         const contextQualifier = this.turnRemovedObservations.size ? { contextNotRetained: this.turnRemovedObservations.size } : {};
+        if (evidence.definitionBound === false) {
+          return deepFreezeTurn(assertTurnResultInvariants({
+            ...base,
+            ...contextQualifier,
+            execution: "COMPLETED",
+            outcome: "REGRESSION_FREE",
+            reason: "REGRESSION_FREE",
+            detail: `Tests pass, but ${evidence.independenceDetail ?? "the verifier's definition could not be bound, so the pass cannot be independent evidence"}.`,
+          }));
+        }
         if (evidence.isDeliverableBound === false) {
           return deepFreezeTurn(assertTurnResultInvariants({
             ...base,
