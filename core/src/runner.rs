@@ -191,10 +191,8 @@ mod registry {
     pub fn finish(key: &str) {
         let mut st = state().lock().unwrap();
         if let Some(run) = st.running.remove(key) {
-            if alive(run.pgid) {
-                if !st.services.values().any(|s| s.pgid == run.pgid) {
-                    st.lingering.insert(run.pgid);
-                }
+            if alive(run.pgid) && !st.services.values().any(|s| s.pgid == run.pgid) {
+                st.lingering.insert(run.pgid);
             }
         }
     }
@@ -216,7 +214,7 @@ mod registry {
     /// Forgets a service only when the recorded process group is still the one being removed.
     pub fn unregister_service(name: &str, pgid: libc::pid_t) {
         let mut st = state().lock().unwrap();
-        if st.services.get(name).map_or(false, |s| s.pgid == pgid) {
+        if st.services.get(name).is_some_and(|s| s.pgid == pgid) {
             st.services.remove(name);
         }
     }
@@ -948,7 +946,7 @@ pub fn run_command_pty(
     Ok(RunCommandResult {
         command: command_str.to_string(),
         shell: shell_name.to_string(),
-        exit_code: exit_status.and_then(|s| if s.success() { Some(0) } else { Some(1) }),
+        exit_code: exit_status.map(|s| if s.success() { 0 } else { 1 }),
         stdout: text,
         stderr: String::new(),
         duration_ms: start.elapsed().as_millis(),
@@ -1308,7 +1306,7 @@ mod tests {
         let cwd = std::env::current_dir().unwrap();
         let marker = "sleep 33.777";
         let res = run_command_tracked(RunCommandArgs {
-            command: format!("{marker}"),
+            command: marker.to_string(),
             cwd: None,
             background: true,
             service_name: Some("my_service".into()),
