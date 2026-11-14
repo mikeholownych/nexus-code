@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01HdQZ8b7uRKgV8bAB1c1nrB",
+  "agent_id": "a779dff3858cd7db7",
+  "subagent_type": "general-purpose",
+  "task_description": "Architectural integrity baseline audit",
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 82940,
+    "cache_read_tokens": 900001,
+    "output_tokens": 9589,
+    "api_call_count": 15
+  },
+  "started_at": "2026-11-14T05:03:14.764841337Z",
+  "completed_at": "2026-11-14T05:04:43.115335616Z"
+}
