@@ -4637,7 +4637,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
                 isDeliverableBound,
                 ...(independence ? { independent: independence.independent } : {}),
                 filtered: isFilteredVerifierCommand(verifierCommand),
-                ...(evidence.status === "PASSED" ? {} : { failedCheck: failedCheckFrom(testRes.rawOutput || ""), ...attemptEvidence(testRes.rawOutput || "", testRes.exitCode) }),
+                ...(evidence.status === "PASSED" ? {} : { failedCheck: failedCheckFrom(testRes.rawOutput || ""), ...attemptEvidence(testRes.rawOutput || "", testRes.exitCode, { timedOut: testRes.timedOut, executorFailed: testRes.executorFailed }) }),
               });
             }
             if (testRes.timedOut) {
@@ -4667,7 +4667,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             }
             if (!testRes.success) {
               const hints = formatDiagnosticHints(testRes.diagnostics);
-              const evidenceLine = describeAttemptEvidence(attemptEvidence(testRes.rawOutput || "", testRes.exitCode));
+              const evidenceLine = describeAttemptEvidence(attemptEvidence(testRes.rawOutput || "", testRes.exitCode, { timedOut: testRes.timedOut, executorFailed: testRes.executorFailed }));
               const oracleFailContent = `Verification Oracle: The selected verifier did not pass.\nCommand: ${testRes.command}\n${evidenceLine ? `Evidence: ${evidenceLine}\n` : ""}${foldVoluminousOutput(testRes.rawOutput || "")}${hints}\nResolve the verification failure before calling task_completed.`;
               return {
                 success: false,
@@ -5585,7 +5585,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             ...(judged ? { independent: judged !== "needs-copy" && judged.independent } : {}),
             filtered,
             status: parsed.passed === true && receipt.success && hasExecuted ? "PASSED" : "FAILED",
-            ...(parsed.passed === true ? {} : { failedCheck: failedCheckFrom(`${rawOutput}\n${receipt.error ?? ""}`), ...attemptEvidence(`${rawOutput}\n${receipt.error ?? ""}`, typeof parsed.exitCode === "number" ? parsed.exitCode : undefined) }),
+            ...(parsed.passed === true ? {} : { failedCheck: failedCheckFrom(`${rawOutput}\n${receipt.error ?? ""}`), ...attemptEvidence(`${rawOutput}\n${receipt.error ?? ""}`, typeof parsed.exitCode === "number" ? parsed.exitCode : undefined, { timedOut: parsed.timedOut === true, executorFailed: parsed.executorFailed === true }) }),
           });
         }
       } catch {}

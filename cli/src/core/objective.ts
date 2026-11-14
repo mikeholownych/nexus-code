@@ -13,6 +13,7 @@ import type { VerificationStatus } from "./turn.js";
 import type { CanonicalCapability } from "./capabilities.js";
 import { isFilteredVerifierCommand } from "../tester.js";
 import { redactSecrets } from "../ui.js";
+import { visibleControls } from "../file_diff.js";
 import { createTracking, ExecutionTracker, normalizeTracking, type ExecutionTracking } from "./execution_tracking.js";
 
 export const LEDGER_VERSION = 1;
@@ -477,7 +478,12 @@ export function failedCheckFrom(output: string): string | undefined {
 }
 
 export const MAX_ATTEMPT_EXCERPT_BYTES = 2048;
+/** Only the newest attempts keep their excerpt, so the persisted ledger stays small. */
+const EXCERPT_RETAINED_ATTEMPTS = 5;
 const MAX_FAILING_TESTS = 10;
+const MAX_STORED_NAME_CHARS = 120;
+const MAX_SHOWN_TESTS = 3;
+const MAX_SHOWN_NAME_CHARS = 80;
 
 const ENVIRONMENT_OUTPUT = [
   /\bcommand not found\b/i,
@@ -487,52 +493,83 @@ const ENVIRONMENT_OUTPUT = [
   /\bmake: \*\*\* .*\bError 12[67]\b/,
   /\bsandbox (?:error|denied|violation|unavailable|failed)\b|\bbwrap:|\blandlock\b/i,
 ];
+/** A runner that started prints a count or summary; its absence is what makes output-only evidence of a start failure. */
+const RUNNER_SUMMARY =
+  /^\s*(?:Tests?:\s+\d|Test Suites?:\s+\d|Test Files\s+\d|Ran \d+ tests?|ℹ tests \d+|# tests \d+|test result:|\d+ (?:passing|failing|passed|failed)\b|=+ .*\b(?:passed|failed)\b)/im;
+const NAME_PATTERNS = [
+  /^(?:✖|×|✕|not ok \d+(?: -)?)\s+(.+?)(?:\s+\(\d[\d.]*m?s\))?$/,
+  /^● (?!Console\b|Test suite failed to run)(.+)$/,
+  /^(?:FAILED|FAIL|ERROR|--- FAIL)[:\s]+(\S.*?)(?:\s+-\s.*|\s+\(\d.*\))?$/,
+  /^\d+\) (.+)$/,
+  /^test (\S+) \.\.\. FAILED$/,
+];
 
-/** Names of failing tests in TAP, node:test, pytest, go and cargo output. */
+const ANSI = /\u001b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b\\))/g;
+const stripAnsi = (text: string): string => text.replace(ANSI, "");
+/** Verifier-controlled text made safe to carry: secrets redacted, then controls and bidi overrides made visible, then clipped. */
+const safeVerifierText = (text: string, max: number): string => clip(visibleControls(redactSecrets(text)), max);
+
+/** Names of failing tests in TAP, node:test, jest, vitest, mocha, unittest, pytest, go and cargo output. */
 export function failingTestNames(output: string): string[] {
   const names = new Set<string>();
-  for (const raw of output.split(/\r?\n/)) {
+  for (const raw of stripAnsi(output).split(/\r?\n/)) {
     const line = raw.trim();
-    const m =
-      /^(?:✖|×|not ok \d+(?: -)?)\s+(.+?)(?:\s+\(\d[\d.]*ms\))?$/.exec(line) ??
-      /^(?:FAILED|--- FAIL:)\s+(\S.*?)(?:\s+-\s.*|\s+\(\d.*\))?$/.exec(line) ??
-      /^test (\S+) \.\.\. FAILED$/.exec(line);
-    if (m?.[1] && !/^\d+ (?:tests?|failed)\b/i.test(m[1])) names.add(redactSecrets(clip(m[1], 200)));
+    for (const re of NAME_PATTERNS) {
+      const name = re.exec(line)?.[1];
+      if (name && !/^\d+ (?:tests?|failed)\b/i.test(name)) {
+        names.add(safeVerifierText(name, MAX_STORED_NAME_CHARS));
+        break;
+      }
+    }
     if (names.size >= MAX_FAILING_TESTS) break;
   }
   return [...names];
 }
 
 /**
- * Structured evidence of a failed verifier run. Exit 126/127 (not executable / not found) is always environmental;
- * environment-shaped output counts only when no test reported a failure.
+ * Structured evidence of a failed verifier run. A timed-out run is never classified. With failing tests named, the
+ * run reached the candidate, so exit 126/127 and environment-shaped text prove nothing. Otherwise ENVIRONMENT needs
+ * exit 126/127, an executor failure with no exit code, or environment-shaped output from a run that printed no
+ * runner summary.
  */
 export function attemptEvidence(
   output: string,
   exitCode?: number | null,
+  opts: { timedOut?: boolean; executorFailed?: boolean } = {},
 ): Pick<VerificationAttempt, "classification" | "exitCode" | "failingTests" | "excerpt"> {
-  const failingTests = failingTestNames(output);
+  const text = stripAnsi(output);
+  const failingTests = failingTestNames(text);
+  const none = failingTests.length === 0;
   const environment =
-    exitCode === 126 || exitCode === 127 || (failingTests.length === 0 && ENVIRONMENT_OUTPUT.some((re) => re.test(output)));
-  let excerpt = redactSecrets(output.trim());
+    !opts.timedOut &&
+    none &&
+    (exitCode === 126 ||
+      exitCode === 127 ||
+      (opts.executorFailed === true && typeof exitCode !== "number") ||
+      (!RUNNER_SUMMARY.test(text) && ENVIRONMENT_OUTPUT.some((re) => re.test(text))));
+  let excerpt = redactSecrets(text.trim());
   if (Buffer.byteLength(excerpt) > MAX_ATTEMPT_EXCERPT_BYTES) {
     excerpt = Buffer.from(excerpt).subarray(-MAX_ATTEMPT_EXCERPT_BYTES).toString("utf8").replace(/^\uFFFD+/, "");
   }
   return {
-    classification: environment ? "ENVIRONMENT" : "CANDIDATE_FAILED",
+    ...(opts.timedOut ? {} : { classification: environment ? "ENVIRONMENT" : "CANDIDATE_FAILED" }),
     ...(typeof exitCode === "number" ? { exitCode } : {}),
     ...(failingTests.length ? { failingTests } : {}),
     ...(excerpt ? { excerpt } : {}),
-  };
+  } as Pick<VerificationAttempt, "classification" | "exitCode" | "failingTests" | "excerpt">;
 }
 
-/** One line for the model: classification, exit code and failing test names (never the excerpt). */
+/** One line for the model: classification, exit code and a few quoted failing test names (never the excerpt). */
 export function describeAttemptEvidence(a: Pick<VerificationAttempt, "classification" | "exitCode" | "failingTests">): string {
   const parts: string[] = [];
   if (a.classification === "ENVIRONMENT") parts.push("ENVIRONMENT (the verifier could not run; this is not a candidate failure)");
   else if (a.classification) parts.push(a.classification);
   if (a.exitCode !== undefined) parts.push(`exit ${a.exitCode}`);
-  if (a.failingTests?.length) parts.push(`failing tests: ${a.failingTests.join("; ")}`);
+  if (a.failingTests?.length) {
+    const shown = a.failingTests.slice(0, MAX_SHOWN_TESTS).map((n) => JSON.stringify(safeVerifierText(String(n), MAX_SHOWN_NAME_CHARS)));
+    const more = a.failingTests.length - shown.length;
+    parts.push(`failing tests (untrusted verifier output): ${shown.join(", ")}${more > 0 ? ` +${more} more` : ""}`);
+  }
   return parts.join(", ");
 }
 
@@ -549,7 +586,7 @@ export function priorAttempt(
   for (let i = ledger.verification.length - 1; i >= 0; i--) {
     const attempt = ledger.verification[i];
     if (attempt.command !== command || attempt.status === "SKIPPED_UNCHANGED_INPUTS") continue;
-    if (attempt.classification === "ENVIRONMENT") return undefined;
+    if (attempt.classification === "ENVIRONMENT" && attempt.status !== "TIMED_OUT") return undefined;
     const same =
       attempt.inputs === current.inputs &&
       attempt.epoch === current.epoch &&
@@ -564,6 +601,7 @@ export function recordAttempt(ledger: ObjectiveLedger, attempt: Omit<Verificatio
   const lastN = ledger.verification.length > 0 ? (ledger.verification[ledger.verification.length - 1]?.n ?? 0) : 0;
   const record: VerificationAttempt = { n: lastN + 1, at, ...attempt };
   ledger.verification.push(record);
+  for (const old of ledger.verification.slice(0, -EXCERPT_RETAINED_ATTEMPTS)) delete old.excerpt;
   if (ledger.verification.length > 50) ledger.verification = ledger.verification.slice(-50);
   return record;
 }

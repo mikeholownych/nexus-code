@@ -11,6 +11,8 @@ export interface TestRunResult {
   timedOut?: boolean;
   /** The verifier process's exit code, when the runner reported one. */
   exitCode?: number;
+  /** The executor itself failed (it returned failure, threw, or gave no exit status): the command may never have run. */
+  executorFailed?: boolean;
   rawOutput: string;
   failures: string[];
   diagnostics: Diagnostic[];
@@ -300,10 +302,14 @@ export async function runTestSuiteWithExecutor(
       }
     }
     const summary = summarizeTestRun(command, commandSucceeded, rawOutput);
-    const withExit = exitCode === undefined ? summary : { ...summary, exitCode };
+    const withExit = {
+      ...summary,
+      ...(exitCode === undefined ? {} : { exitCode }),
+      ...(!result.success ? { executorFailed: true } : {}),
+    };
     return timedOut ? { ...withExit, success: false, timedOut: true } : withExit;
   } catch (error: any) {
-    return summarizeTestRun(command, false, error?.message || "Verification command execution failed.");
+    return { ...summarizeTestRun(command, false, error?.message || "Verification command execution failed."), executorFailed: true };
   }
 }
 
