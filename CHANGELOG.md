@@ -12,6 +12,7 @@ Release notes: [`docs/releases/v1.1.4.md`](docs/releases/v1.1.4.md). Candidate n
 
 ### Fixed
 
+- `nexus operation run` now rejects `policy.maxConcurrentUnits` above 1 unless the spec sets `git.isolate: true`, because concurrent units otherwise write the same worktree. Fix: add `"git": { "isolate": true }` or set the limit to 1.
 - A turn suspended while waiting out a provider's Retry-After (429/503) now resumes inside that window correctly: `nexus run --resume`, the TUI (`--resume`) and `nexus operation resume` wait until the recorded eligible time before the first request, shown as the usual provider-wait status, instead of sending it at once. The wait is skipped when you resume against a different endpoint, and bounded by the recovery deadline (`LOCAL_LLM_RECOVERY_DEADLINE_MS`, default 20 min); Ctrl-C during it suspends again with the same eligible time (#471).
 
 
