@@ -83,12 +83,12 @@ test("a review unit completes only on a valid ACCEPT; prose, malformed or defect
   const dir = repo();
   fs.writeFileSync(path.join(dir, "math.js"), "export const add = (a, b) => a + b;\n");
   const executor = new AgentWorkUnitExecutor({ baseConfig: {} as HarnessConfig });
-  const ctx = { objective: "Fix add", workspace: dir, dependencies: [], observeSuccess() {} };
+  const ctx = { objective: "Fix add", workspace: dir, startCommit: head(dir), dependencies: [{ id: "i", title: "I", summary: "s", verification: { command: "make test", status: "PASSED", hasExecutedTests: true } }], observeSuccess() {} };
   const pkg = internals(executor).reviewEvidence(unit, ctx, dir);
   const classify = (summary: string) => internals(executor).classify(unit, resource, done, summary, null, ctx, false, pkg);
 
   const accepted = classify(verdict());
-  assert.equal(accepted.kind, "completed");
+  assert.equal(accepted.kind, "completed", JSON.stringify(accepted));
   assert.match(accepted.summary, /^ACCEPT: add returns the sum/);
 
   for (const summary of [
@@ -241,7 +241,16 @@ import { DurableStateManager } from "../src/core/state.js";
 import { TeamOrchestrator } from "../src/team.js";
 import { fakeClock, startGateway } from "./helpers/provider_fixture.js";
 
-async function reviewTeam(summary: string, setup?: (dir: string) => void) {
+// A lone reviewer team has no verifier dependency, so its package carries no deterministic evidence and is rejected.
+// Tests that exercise something else stamp a passing receipt on the package; the no-evidence block has its own test.
+function withPassingVerifier(executor: AgentWorkUnitExecutor): AgentWorkUnitExecutor {
+  const target = executor as any;
+  const original = target.reviewEvidence.bind(target);
+  target.reviewEvidence = (...args: unknown[]) => ({ ...original(...args), verifierCommand: "make test", verifierOutput: "status PASSED", verifierExitCode: 0 });
+  return executor;
+}
+
+async function reviewTeam(summary: string, setup?: (dir: string) => void, stampVerifier = true) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-review-e2e-home-"));
   const saved = process.env.HOME;
   process.env.HOME = home;
@@ -257,7 +266,7 @@ async function reviewTeam(summary: string, setup?: (dir: string) => void) {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-review-e2e-state-"));
     const clock = fakeClock();
     const config: HarnessConfig = { endpoint: gw.url, model: "m", maxSteps: 4, temperature: 0, workspace: dir, shell: "bash" } as HarnessConfig;
-    const executor = new AgentWorkUnitExecutor({
+    const built = new AgentWorkUnitExecutor({
       baseConfig: config,
       createAgent: (c) => {
         const agent = new AutonomousAgent(c, 1);
@@ -266,6 +275,7 @@ async function reviewTeam(summary: string, setup?: (dir: string) => void) {
         return agent;
       },
     });
+    const executor = stampVerifier ? withPassingVerifier(built) : built;
     const resources = [{ id: "r1", provider: new URL(gw.url).origin, endpoint: gw.url, model: "r1", capabilities: ["tools"], rank: 0 }];
     const out = await new TeamOrchestrator(config, { store: new OperationStore(dir, stateDir), executor, clock, resources } as any).run("reviewer", "Fix add so it returns the sum.");
     return { out, prompts };
@@ -282,6 +292,14 @@ test("end to end: a reviewer unit sees the real diff and completes on a valid AC
   assert.equal(review.status, "COMPLETE", out.report);
   assert.match(review.result?.summary ?? "", /^ACCEPT: /);
   assert.ok(prompts.some((p) => /\+export const add = \(a, b\) => a \+ b;/.test(p)), "the reviewer was sent the candidate diff");
+});
+
+test("end to end: a lone reviewer with no verifier evidence is blocked even on a valid ACCEPT", async () => {
+  const { out } = await reviewTeam(verdict(), undefined, false);
+  const review = out.operation.units.find((u: any) => u.role === "reviewer")!;
+  assert.equal(review.status, "BLOCKED", out.report);
+  assert.match(review.blocked?.reason ?? "", /No deterministic verifier evidence/);
+  assert.equal(out.success, false);
 });
 
 test("end to end: a prose or defect-bearing review blocks the operation", async () => {
@@ -315,7 +333,7 @@ test("end to end: retrying a rejected review resumes read-only without inheritin
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-review-retry-state-"));
     const clock = fakeClock();
     const config: HarnessConfig = { endpoint: gw.url, model: "m", maxSteps: 4, temperature: 0, workspace: dir, shell: "bash" } as HarnessConfig;
-    const executor = new AgentWorkUnitExecutor({
+    const executor = withPassingVerifier(new AgentWorkUnitExecutor({
       baseConfig: config,
       createAgent: (c) => {
         const agent = new AutonomousAgent(c, 1);
@@ -323,7 +341,7 @@ test("end to end: retrying a rejected review resumes read-only without inheritin
         (agent as any).stateManager = new DurableStateManager({ baseDir: stateDir, workspacePaths: [(agent as any).primaryWorkspacePathIdentity] });
         return agent;
       },
-    });
+    }));
     const resources = [{ id: "r1", provider: new URL(gw.url).origin, endpoint: gw.url, model: "r1", capabilities: ["tools"], rank: 0 }];
     const store = new OperationStore(dir, stateDir);
     const team = new TeamOrchestrator(config, { store, executor, clock, resources } as any);
@@ -373,7 +391,7 @@ test("end to end: a change the implementer COMMITTED in a non-isolated operation
         if (u.id !== "implement") return real.run(u, r, ctx);
         fs.writeFileSync(path.join(dir, "math.js"), "export const add = (a, b) => a + b;\n");
         execFileSync("git", ["commit", "-qam", "fix add"], { cwd: dir, stdio: "pipe" });
-        return { kind: "completed", summary: "committed the fix", outcome: "NOT_REQUIRED" };
+        return { kind: "completed", summary: "committed the fix", outcome: "VERIFIED", verification: { command: "make test", status: "PASSED", hasExecutedTests: true } };
       },
     };
     const resources = [{ id: "r1", provider: new URL(gw.url).origin, endpoint: gw.url, model: "r1", capabilities: ["tools"], rank: 0 }];
