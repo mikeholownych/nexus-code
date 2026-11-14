@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01K9LiPbSJmawtyuDv26BP8e",
+  "agent_id": "ac6c313307e029fa6",
+  "subagent_type": "security-auditor",
+  "task_description": "Local Security Review 3",
+  "token_usage": {
+    "input_tokens": 36,
+    "cache_creation_tokens": 40544,
+    "cache_read_tokens": 537034,
+    "output_tokens": 6274,
+    "api_call_count": 18
+  },
+  "started_at": "2026-11-13T22:26:23.529843043Z",
+  "completed_at": "2026-11-13T22:29:25.667802013Z"
+}

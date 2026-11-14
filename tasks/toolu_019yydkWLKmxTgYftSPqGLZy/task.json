@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_019yydkWLKmxTgYftSPqGLZy",
+  "agent_id": "a6852dfb6004bc2a9",
+  "subagent_type": "general-purpose",
+  "task_description": "Fix core clippy debt",
+  "token_usage": {
+    "input_tokens": 42,
+    "cache_creation_tokens": 63750,
+    "cache_read_tokens": 1116250,
+    "output_tokens": 7975,
+    "api_call_count": 21
+  },
+  "started_at": "2026-11-13T22:21:32.034192026Z",
+  "completed_at": "2026-11-13T22:27:20.319805321Z"
+}
