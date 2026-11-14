@@ -109,6 +109,10 @@ export interface VerificationAttempt {
   exitCode?: number;
   /** Names of the failing tests (redacted, capped). */
   failingTests?: string[];
+  /** How many distinct failing tests the run named, uncapped (up to MAX_COUNTED_FAILING_TESTS); absent on older attempts. */
+  failingTotal?: number;
+  /** True when `failingTests` holds fewer names than the run reported. */
+  failingTruncated?: boolean;
   /** Redacted tail of the verifier's output, capped at MAX_ATTEMPT_EXCERPT_BYTES. */
   excerpt?: string;
 }
@@ -485,6 +489,7 @@ export const MAX_ATTEMPT_EXCERPT_BYTES = 2048;
 const EXCERPT_RETAINED_ATTEMPTS = 5;
 const MAX_FAILING_TESTS = 10;
 const MAX_STORED_NAME_CHARS = 120;
+const MAX_COUNTED_FAILING_TESTS = 10_000;
 const MAX_SHOWN_TESTS = 3;
 const MAX_SHOWN_NAME_CHARS = 80;
 
@@ -514,6 +519,10 @@ const safeVerifierText = (text: string, max: number): string => clip(visibleCont
 
 /** Names of failing tests in TAP, node:test, jest, vitest, mocha, unittest, pytest, go and cargo output. */
 export function failingTestNames(output: string): string[] {
+  return failingTestScan(output).names;
+}
+
+function failingTestScan(output: string): { names: string[]; total: number } {
   const names = new Set<string>();
   for (const raw of stripAnsi(output).split(/\r?\n/)) {
     const line = raw.trim();
@@ -524,9 +533,9 @@ export function failingTestNames(output: string): string[] {
         break;
       }
     }
-    if (names.size >= MAX_FAILING_TESTS) break;
+    if (names.size >= MAX_COUNTED_FAILING_TESTS) break;
   }
-  return [...names];
+  return { names: [...names].slice(0, MAX_FAILING_TESTS), total: names.size };
 }
 
 /**
@@ -539,9 +548,9 @@ export function attemptEvidence(
   output: string,
   exitCode?: number | null,
   opts: { timedOut?: boolean; executorFailed?: boolean } = {},
-): Pick<VerificationAttempt, "classification" | "exitCode" | "failingTests" | "excerpt"> {
+): Pick<VerificationAttempt, "classification" | "exitCode" | "failingTests" | "failingTotal" | "failingTruncated" | "excerpt"> {
   const text = stripAnsi(output);
-  const failingTests = failingTestNames(text);
+  const { names: failingTests, total } = failingTestScan(text);
   const none = failingTests.length === 0;
   const environment =
     !opts.timedOut &&
@@ -557,9 +566,9 @@ export function attemptEvidence(
   return {
     ...(opts.timedOut ? {} : { classification: environment ? "ENVIRONMENT" : "CANDIDATE_FAILED" }),
     ...(typeof exitCode === "number" ? { exitCode } : {}),
-    ...(failingTests.length ? { failingTests } : {}),
+    ...(failingTests.length ? { failingTests, failingTotal: total, ...(total > failingTests.length ? { failingTruncated: true } : {}) } : {}),
     ...(excerpt ? { excerpt } : {}),
-  } as Pick<VerificationAttempt, "classification" | "exitCode" | "failingTests" | "excerpt">;
+  } as Pick<VerificationAttempt, "classification" | "exitCode" | "failingTests" | "failingTotal" | "failingTruncated" | "excerpt">;
 }
 
 /** One line for the model: classification, exit code and a few quoted failing test names (never the excerpt). */
@@ -619,57 +628,86 @@ export interface ConvergenceSignal {
   attempts: VerificationAttempt[];
 }
 
-const failureKey = (a: VerificationAttempt): string | undefined =>
-  a.failingTests?.length ? `tests:${[...a.failingTests].sort().join("\n")}` : a.failedCheck ? `check:${a.failedCheck}` : undefined;
+/**
+ * What makes two failures "the same". Names compare, not assertion messages: the same tests failing for a different
+ * reason are the same failure here. A list cut at the cap compares with its total, and an unknown total abstains.
+ * Without names the first failing line and exit code compare, which says much less (see `checkOnly`).
+ */
+const failureKey = (a: VerificationAttempt): string | undefined => {
+  if (a.failingTests?.length) {
+    if (a.failingTruncated && a.failingTotal === undefined) return undefined;
+    return `tests:${[...a.failingTests].sort().join("\n")}|total:${a.failingTotal ?? ""}`;
+  }
+  return a.failedCheck ? `check:${a.failedCheck}|exit:${a.exitCode ?? ""}` : undefined;
+};
+const checkOnly = (key: string | undefined): boolean => key?.startsWith("check:") === true;
+const failureCount = (a: VerificationAttempt): number | undefined =>
+  a.failingTests?.length && !(a.failingTruncated && a.failingTotal === undefined) ? (a.failingTotal ?? a.failingTests.length) : undefined;
+const safeText = (text: string, max = 160): string => clip(visibleControls(redactSecrets(text)), max);
 
 /**
  * Whether repeated verifier failures show the work is not getting anywhere: the same failure across `attempts`
  * candidates that each changed the inputs (stalled), A/B/A/B alternation of two failure sets (oscillating), or a
- * strictly rising failing-test count (diverging). Only real candidate failures count: ENVIRONMENT, timed-out,
- * skipped-on-unchanged-inputs and pre-DV-1 unclassified attempts are neither progress nor failure, and a pass
- * ends the history. This is a stop signal only; it never establishes success.
+ * strictly rising failing-test count (diverging). A check-only failure (no test names) needs one more attempt.
+ *
+ * "Consecutive" is over comparable attempts of one command: ENVIRONMENT, timed-out, skipped-on-unchanged-inputs and
+ * unclassified (pre-DV-1) attempts are dropped, not counted as a break, and a pass ends the history. Another
+ * command's attempts do not mix in, and filtered runs take no part in alternation. An attempt on unchanged inputs (for
+ * example after a rewrite with identical contents) is not a new candidate, so it ends a stalled run.
+ * `command` defaults to the latest comparable attempt's. This is a stop signal only; it never establishes success.
  */
-export function convergenceSignal(ledger: Pick<ObjectiveLedger, "verification" | "convergenceResetAfter">, attempts = DEFAULT_CONVERGENCE_ATTEMPTS): ConvergenceSignal {
+export function convergenceSignal(
+  ledger: Pick<ObjectiveLedger, "verification" | "convergenceResetAfter">,
+  attempts = DEFAULT_CONVERGENCE_ATTEMPTS,
+  command?: string,
+): ConvergenceSignal {
   const converging: ConvergenceSignal = { state: "converging", evidence: "", attempts: [] };
   const n = Math.max(2, Math.floor(attempts));
+  const comparable = ledger.verification.filter((a) => a.n > (ledger.convergenceResetAfter ?? 0));
+  const target = command ?? comparable.filter((a) => a.status === "FAILED" && a.classification === "CANDIDATE_FAILED").at(-1)?.command;
   const history: VerificationAttempt[] = [];
-  for (const a of ledger.verification) {
-    if (a.n <= (ledger.convergenceResetAfter ?? 0)) continue;
+  for (const a of comparable) {
+    if (a.command !== target) continue;
     if (a.status === "PASSED") history.length = 0;
     else if (a.status === "FAILED" && a.classification === "CANDIDATE_FAILED") history.push(a);
   }
-  const tail = (k: number) => (history.length >= k ? history.slice(-k) : undefined);
-  const stalledTail = tail(n);
-  if (stalledTail) {
-    const key = failureKey(stalledTail[0]);
-    if (key !== undefined && stalledTail.every((a, i) => failureKey(a) === key && (i === 0 || a.inputs !== stalledTail[i - 1].inputs))) {
-      const what = stalledTail[0].failingTests?.length ? `the same failing tests (${stalledTail[0].failingTests.slice(0, 3).join(", ")})` : `the same failed check (${stalledTail[0].failedCheck})`;
-      return { state: "stalled", evidence: `${what} in ${n} consecutive attempts, each on changed workspace inputs`, attempts: stalledTail };
-    }
+  const tail = (list: VerificationAttempt[], k: number) => (list.length >= k ? list.slice(-k) : undefined);
+
+  const lastKey = history.length ? failureKey(history[history.length - 1]) : undefined;
+  const stalledTail = lastKey === undefined ? undefined : tail(history, checkOnly(lastKey) ? n + 1 : n);
+  if (stalledTail && stalledTail.every((a, i) => failureKey(a) === lastKey && (i === 0 || a.inputs !== stalledTail[i - 1].inputs))) {
+    const first = stalledTail[0];
+    const what = first.failingTests?.length
+      ? `the same failing tests (untrusted verifier output: ${first.failingTests.slice(0, 3).map((t) => JSON.stringify(safeText(t, 80))).join(", ")}${first.failingTests.length > 3 ? ", ..." : ""})`
+      : `the same failed check (untrusted verifier output: ${JSON.stringify(safeText(first.failedCheck ?? ""))})`;
+    return { state: "stalled", evidence: `${what} in ${stalledTail.length} consecutive attempts, each on changed workspace inputs`, attempts: stalledTail };
   }
-  const alternating = tail(Math.max(4, n + 1));
+
+  const alternating = tail(history.filter((a) => a.filtered !== true), Math.max(4, n + 1));
   if (alternating) {
     const [a, b] = [failureKey(alternating[0]), failureKey(alternating[1])];
     if (a !== undefined && b !== undefined && a !== b && alternating.every((x, i) => failureKey(x) === (i % 2 === 0 ? a : b))) {
       return { state: "oscillating", evidence: `the failure alternated between two sets across the last ${alternating.length} attempts`, attempts: alternating };
     }
   }
-  const risingTail = tail(n);
-  if (risingTail && risingTail.every((a) => a.failingTests?.length) && risingTail.every((a, i) => i === 0 || a.failingTests!.length > risingTail[i - 1].failingTests!.length)) {
-    return { state: "diverging", evidence: `the failing-test count rose in each of the last ${n} attempts (${risingTail.map((a) => a.failingTests!.length).join(" -> ")})`, attempts: risingTail };
+
+  const risingTail = tail(history, n);
+  const counts = risingTail?.map(failureCount);
+  if (risingTail && counts!.every((c) => c !== undefined) && counts!.every((c, i) => i === 0 || c! > counts![i - 1]!)) {
+    return { state: "diverging", evidence: `the failing-test count rose in each of the last ${n} attempts (${counts!.join(" -> ")})`, attempts: risingTail };
   }
   return converging;
 }
 
-/** The attempt history a non-converging stop carries: command, status, classification, failing tests and candidate ids; capped. */
+/** The attempt history a non-converging stop carries: command, status, classification, failing tests and candidate ids; capped and made safe. */
 export function convergenceHistory(attempts: VerificationAttempt[], max = 10): Array<Pick<VerificationAttempt, "n" | "command" | "status" | "classification" | "failingTests" | "failedCheck"> & { candidate: string }> {
   return attempts.slice(-max).map((a) => ({
     n: a.n,
-    command: clip(a.command, 200),
+    command: safeText(a.command, 200),
     status: a.status,
     ...(a.classification ? { classification: a.classification } : {}),
-    ...(a.failingTests ? { failingTests: a.failingTests.slice(0, 10) } : {}),
-    ...(a.failedCheck ? { failedCheck: clip(redactSecrets(a.failedCheck), 200) } : {}),
+    ...(a.failingTests ? { failingTests: a.failingTests.slice(0, 10).map((t) => safeText(String(t), MAX_STORED_NAME_CHARS)) } : {}),
+    ...(a.failedCheck ? { failedCheck: safeText(a.failedCheck, 200) } : {}),
     candidate: a.inputs.slice(0, 12),
   }));
 }

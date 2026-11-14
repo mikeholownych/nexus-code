@@ -338,6 +338,14 @@ transient failures are spaced with backoff instead of being treated as loops. `-
 single-segment turn. Tracking (cumulative steps, loops, failed approaches, compactions) belongs to the objective and
 survives compaction, follow-ups ("continue") and `/resume`. See `docs/COMPACTION_AND_CONTINUITY.md`.
 
+A second, independent brake watches the verifier itself: when `task_completed` fails the same verifier
+`NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS` times in a row (default 3; a check-only failure with no test names needs one
+more) with the same failing tests across changed workspace states, with the failure alternating between two sets
+(A/B/A/B), or with a rising failing-test count, the turn ends `BLOCKED` / `NOT_ESTABLISHED` with reason
+`VERIFIER_NOT_CONVERGING` and the attempt history attached; you decide how to proceed. Environment failures, timeouts
+and runs skipped on unchanged inputs are ignored, and a changing failure set never trips it. Only `task_completed`
+is covered: a loop of `run_tests` calls alone is bounded by `--stagnation-steps` (`STAGNATION_DETECTED`) instead.
+
 The operator's objective and its
 numbered requirements are pinned for the model on every request (never summarised away); the agent records
 requirement progress with evidence, and a turn that stops with requirements open ends `REQUIREMENTS_INCOMPLETE`

@@ -9,7 +9,9 @@ import { AutonomousAgent } from "../src/agent.js";
 import { DEFAULT_CONTINUATION, HarnessConfig } from "../src/types.js";
 import { startGateway, makeRepo, Reply } from "./helpers/fixtures.js";
 import { assertTurnResultInvariants, summarizeTurn } from "../src/core/turn.js";
-import { convergenceHistory, convergenceSignal, createLedger, recordAttempt, type VerificationAttempt } from "../src/core/objective.js";
+import { projectTurn } from "../src/protocol.js";
+import { AgentWorkUnitExecutor } from "../src/core/operation_runner.js";
+import { attemptEvidence, convergenceHistory, convergenceSignal, createLedger, recordAttempt, type VerificationAttempt } from "../src/core/objective.js";
 
 const quiet = (agent: AutonomousAgent) => {
   (agent as any).ui = new Proxy({}, { get: () => () => {} });
@@ -32,6 +34,7 @@ const failed = (names: string[], extra: Partial<VerificationAttempt> = {}): Omit
   command: "make test",
   inputs: `cand${++seq}`,
   status: "FAILED",
+  filtered: false,
   failedCheck: names.length ? `not ok 1 - ${names[0]}` : "boom",
   classification: "CANDIDATE_FAILED",
   ...(names.length ? { failingTests: names } : {}),
@@ -48,10 +51,10 @@ describe("DV-2 convergenceSignal", () => {
     const s = convergenceSignal(ledgerOf(failed(["a"]), failed(["a"]), failed(["a"])));
     assert.equal(s.state, "stalled");
     assert.equal(s.attempts.length, 3);
-    assert.match(s.evidence, /same failing tests \(a\) in 3 consecutive attempts/);
-    const bare = convergenceSignal(ledgerOf(failed([]), failed([]), failed([])));
+    assert.match(s.evidence, /same failing tests \(untrusted verifier output: "a"\) in 3 consecutive attempts/);
+    const bare = convergenceSignal(ledgerOf(failed([]), failed([]), failed([]), failed([])));
     assert.equal(bare.state, "stalled");
-    assert.match(bare.evidence, /same failed check \(boom\)/);
+    assert.match(bare.evidence, /same failed check \(untrusted verifier output: "boom"\)/);
   });
 
   test("the same set in another order is the same failure", () => {
@@ -142,6 +145,107 @@ describe("DV-2 convergenceSignal", () => {
   });
 });
 
+const many = (total: number, extra: Partial<VerificationAttempt> = {}) =>
+  failed(Array.from({ length: 10 }, (_, i) => `t${i}`), { failingTotal: total, failingTruncated: true, ...extra });
+
+describe("DV-2 review fixes", () => {
+  test("attemptEvidence keeps the uncapped failing count and says when the list was cut", () => {
+    const out = Array.from({ length: 40 }, (_, i) => `not ok ${i + 1} - t${i}`).join("\n") + "\nℹ tests 40\n";
+    const ev = attemptEvidence(out, 1);
+    assert.equal(ev.failingTests!.length, 10);
+    assert.equal(ev.failingTotal, 40);
+    assert.equal(ev.failingTruncated, true);
+    const small = attemptEvidence("not ok 1 - a\nℹ tests 1\n", 1);
+    assert.equal(small.failingTotal, 1);
+    assert.equal(small.failingTruncated, undefined);
+  });
+
+  test("a shrinking truncated failure set does not stall; the same truncated list with the same total does", () => {
+    assert.equal(convergenceSignal(ledgerOf(many(40), many(25), many(12))).state, "converging");
+    assert.equal(convergenceSignal(ledgerOf(many(40), many(40), many(40))).state, "stalled");
+    assert.equal(convergenceSignal(ledgerOf(many(40), many(40), failed(Array.from({ length: 10 }, (_, i) => `t${i}`), { failingTruncated: true }))).state, "converging", "an unknown total abstains");
+  });
+
+  test("diverging is detected through totals above the cap, and abstains when a truncated total is unknown", () => {
+    const s = convergenceSignal(ledgerOf(many(12), many(20), many(30)));
+    assert.equal(s.state, "diverging");
+    assert.match(s.evidence, /12 -> 20 -> 30/);
+    const unknown = (k: number) => failed(Array.from({ length: 10 }, (_, i) => `u${i}`), { failingTruncated: true, failingTotal: k });
+    assert.equal(convergenceSignal(ledgerOf(unknown(12), failed(Array.from({ length: 10 }, (_, i) => `v${i}`), { failingTruncated: true }), unknown(30))).state, "converging");
+  });
+
+  test("history is partitioned by command", () => {
+    const other = (names: string[]) => failed(names, { command: "npm test" });
+    assert.equal(convergenceSignal(ledgerOf(failed(["a"]), other(["a"]), failed(["a"]), other(["a"]))).state, "converging", "two per command is below the threshold");
+    assert.equal(convergenceSignal(ledgerOf(failed(["a"]), failed(["a"]), other(["a"]))).state, "converging", "the judged command is the latest one");
+    assert.equal(convergenceSignal(ledgerOf(other(["a"]), failed(["a"]), other(["a"]), failed(["a"]), other(["a"]))).state, "stalled", "npm test alone reaches three");
+  });
+
+  test("filtered runs do not take part in alternation", () => {
+    const filtered = failed(["a"], { filtered: true });
+    assert.equal(convergenceSignal(ledgerOf(failed(["a"]), failed(["b"]), filtered, failed(["b"]))).state, "converging");
+    assert.equal(convergenceSignal(ledgerOf(failed(["a"]), failed(["b"]), failed(["a"]), failed(["b"]))).state, "oscillating");
+  });
+
+  test("a check-only failure needs one more attempt, and the exit code is part of the key", () => {
+    assert.equal(convergenceSignal(ledgerOf(failed([], { exitCode: 1 }), failed([], { exitCode: 1 }), failed([], { exitCode: 1 }))).state, "converging");
+    assert.equal(convergenceSignal(ledgerOf(failed([], { exitCode: 1 }), failed([], { exitCode: 1 }), failed([], { exitCode: 1 }), failed([], { exitCode: 1 }))).state, "stalled");
+    assert.equal(convergenceSignal(ledgerOf(failed([], { exitCode: 1 }), failed([], { exitCode: 2 }), failed([], { exitCode: 1 }), failed([], { exitCode: 2 }))).state, "oscillating");
+  });
+
+  test("evidence and history redact secrets, neutralise controls and label names as untrusted", () => {
+    const s = convergenceSignal(ledgerOf(...[1, 2, 3, 4].map(() => failed([], { failedCheck: "FAIL token=hunter2hunter2 \u202e\u001b[31mx" }))));
+    assert.equal(s.state, "stalled");
+    assert.doesNotMatch(s.evidence, /hunter2hunter2|\u202e|\u001b/);
+    const named = convergenceSignal(ledgerOf(failed(["a"]), failed(["a"]), failed(["a"])));
+    assert.match(named.evidence, /untrusted verifier output/);
+    const h = convergenceHistory([{ n: 1, at: "t", ...failed(["a"], { command: "make test TOKEN=hunter2hunter2 \u202e" }) }]);
+    assert.doesNotMatch(JSON.stringify(h), /hunter2hunter2|\u202e/);
+  });
+
+  test("projectTurn redacts the convergence evidence and the attempt commands", () => {
+    const turn: any = {
+      execution: "BLOCKED", outcome: "NOT_ESTABLISHED", acceptance: "NOT_REQUESTED", reason: "VERIFIER_NOT_CONVERGING", modelStop: "NONE",
+      finalOutputComplete: false, verification: null, interruption: null, inferenceFailure: null, steps: { used: 1, max: 1, limitReached: false },
+      unverifiedChangesPending: true, finishedAt: "t",
+      convergence: { state: "stalled", evidence: "same check token=hunter2hunter2", attempts: [{ n: 1, command: "make test TOKEN=hunter2hunter2", status: "FAILED", candidate: "abc", failedCheck: "FAIL token=hunter2hunter2", failingTests: ["x token=hunter2hunter2"] }] },
+    };
+    assert.doesNotMatch(JSON.stringify(projectTurn(turn)), /hunter2hunter2/);
+    assert.equal(projectTurn(turn).convergence?.state, "stalled");
+  });
+
+  test("the operation runner names the reason and state in the retry/revise question", () => {
+    const executor = new AgentWorkUnitExecutor({ baseConfig: {} as HarnessConfig });
+    const turn = {
+      execution: "BLOCKED", outcome: "NOT_ESTABLISHED", reason: "VERIFIER_NOT_CONVERGING", detail: "e", steps: { used: 1, max: 5 }, modelStop: "NONE",
+      convergence: { state: "oscillating", evidence: "the failure alternated between two sets across the last 4 attempts", attempts: [] },
+    };
+    const r = (executor as any).classify({ id: "u", title: "Unit", role: "implementer" }, { id: "r1", model: "m" }, turn, undefined, null, { observeSuccess() {} }, false);
+    assert.equal(r.kind, "failed");
+    assert.match(r.reason, /VERIFIER_NOT_CONVERGING \(oscillating\)/);
+    assert.match(r.question, /VERIFIER_NOT_CONVERGING.*oscillating/);
+    assert.deepEqual(r.options.map((o: any) => o.action.kind), ["retry", "revise"]);
+  });
+
+  test("a restored ledger keeps the reset marker", async () => {
+    const ledger = ledgerOf(failed(["a"]), failed(["a"]), failed(["a"]));
+    ledger.convergenceResetAfter = 3;
+    const repo = makeRepo();
+    const gw = await startGateway(() => ({ kind: "text", content: "ok" }));
+    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo)));
+    try {
+      agent.restoreSession([{ role: "system", content: "s" }], false, JSON.parse(JSON.stringify(ledger)));
+      const restored = agent.getObjective()!;
+      assert.equal(restored.convergenceResetAfter, 3);
+      assert.equal(convergenceSignal(restored).state, "converging");
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});
+
 const write = (name: string): Reply => ({ kind: "tools", calls: [{ name: "write_file", args: { path: name, content: `${name}\n` } }] });
 const done: Reply = { kind: "tools", calls: [{ name: "task_completed", args: { summary: "done" } }] };
 const script = (...replies: Reply[]) => (n: number): Reply => replies[n - 1] ?? { kind: "text", content: "stopping" };
@@ -213,7 +317,11 @@ describe("DV-2 at the agent layer", () => {
     try {
       const turn = await agent.runTurn("Make the build pass.");
       assert.notEqual(turn.reason, "VERIFIER_NOT_CONVERGING");
-      assert.ok(agent.getObjective()!.verification.every((a) => a.classification === "ENVIRONMENT"));
+      const ledger = agent.getObjective()!;
+      assert.ok(ledger.verification.length >= 3);
+      assert.ok(ledger.verification.every((a) => a.classification === "ENVIRONMENT"));
+      assert.equal(convergenceSignal(ledger).state, "converging");
+      assert.equal(convergenceSignal({ verification: ledger.verification.map((a) => ({ ...a, classification: "CANDIDATE_FAILED" as const })) }).state, "stalled", "were these candidate failures the signal would trip");
     } finally {
       agent.shutdown();
       await gw.close();

@@ -38,7 +38,7 @@ import { redactSecrets } from "./ui.js";
 import { SafePathError, ancestryProblem, chmodVerified, identityOf, mkdirVerified, readVerified, unlinkVerified, writeExclusiveVerified, type Identity } from "./safe_fs.js";
 import { isNexusDirPermissive } from "./core/durable_file.js";
 export { isNexusDirPermissive };
-import type { HarnessConfig } from "./types.js";
+import { DEFAULT_CONVERGENCE_ATTEMPTS, type HarnessConfig } from "./types.js";
 
 export const DOCTOR_SCHEMA_VERSION = 2;
 export type DoctorStatus = "pass" | "warn" | "fail" | "skip";
@@ -282,6 +282,7 @@ const CONFIG_KEYS: Array<{ key: string; flag?: string; field: keyof HarnessConfi
   { key: "NEXUS_MAX_TOTAL_STEPS", flag: "maxTotalSteps", field: (c) => (c.continuation ? (Number.isFinite(c.continuation.maxTotalSteps) ? String(c.continuation.maxTotalSteps) : "none") : "continuation off"), fallback: "none" },
   { key: "NEXUS_MAX_TURN_MINUTES", flag: "maxTurnMinutes", field: (c) => (c.continuation ? (Number.isFinite(c.continuation.maxTurnMinutes) ? String(c.continuation.maxTurnMinutes) : "none") : "continuation off"), fallback: "none" },
   { key: "NEXUS_STAGNATION_STEPS", flag: "stagnationSteps", field: (c) => (c.continuation ? String(c.continuation.stagnationSteps) : "continuation off"), fallback: "12" },
+  { key: "NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS", field: (c) => String(c.continuation?.verifierConvergenceAttempts ?? DEFAULT_CONVERGENCE_ATTEMPTS), fallback: "3" },
   { key: "NEXUS_VERIFIER_TIMEOUT_SECS", field: (c) => String(c.verifierTimeoutSecs ?? 300), fallback: "300" },
   { key: "PLANNER_LLM_MODEL", flag: "plannerModel", field: (c) => c.plannerModel },
   { key: "CODER_LLM_MODEL", flag: "coderModel", field: (c) => c.coderModel },

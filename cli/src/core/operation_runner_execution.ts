@@ -959,6 +959,20 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         ],
       };
     }
+    if (turn.reason === "VERIFIER_NOT_CONVERGING") {
+      const state = turn.convergence?.state ?? "stalled";
+      const evidence = (turn.convergence?.evidence ?? turn.detail ?? "").slice(0, 200);
+      return {
+        kind: "failed",
+        cause: "EXECUTION_FAILED",
+        reason: `VERIFIER_NOT_CONVERGING (${state}): ${evidence}`.slice(0, 300),
+        question: `${unit.title} stopped because its verifier is not converging (VERIFIER_NOT_CONVERGING, ${state}): ${evidence}. Nothing is verified. Retry it, or revise it?`,
+        options: [
+          { label: "retry", action: { kind: "retry" } },
+          { label: "revise the unit (note required)", action: { kind: "revise" } },
+        ],
+      };
+    }
     return {
       kind: "failed",
       cause: "EXECUTION_FAILED",

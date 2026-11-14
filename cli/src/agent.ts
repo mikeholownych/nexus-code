@@ -981,6 +981,8 @@ export class AutonomousAgent {
   private turnConfiguredVerifier: "NOT_RUN" | "PASSED" | "FAILED" = "NOT_RUN";
   /** Set when this turn's verifier attempts stopped converging; the loop ends the turn BLOCKED with it. */
   private turnConvergence?: NonNullable<TurnResult["convergence"]>;
+  /** The newest attempt the non-converging judgement covered; consumed (convergenceResetAfter) only when the turn actually stops on it. */
+  private turnConvergenceUpTo?: number;
   /** Key for the durable operation record of each tool call (provider call ids may be redacted on disk). */
   private operationSeq = 0;
   /** Told after each durable progress write, so a host can keep its own session record in step. */
@@ -4704,9 +4706,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
               };
             }
             if (!testRes.success) {
-              const signal = this.objective ? convergenceSignal(this.objective, this.config.continuation?.verifierConvergenceAttempts) : undefined;
+              const signal = this.objective ? convergenceSignal(this.objective, this.config.continuation?.verifierConvergenceAttempts, verifierCommand) : undefined;
               if (this.objective && signal && signal.state !== "converging") {
-                this.objective.convergenceResetAfter = this.objective.verification.at(-1)?.n;
+                this.turnConvergenceUpTo = this.objective.verification.at(-1)?.n;
                 this.turnConvergence = { state: signal.state, evidence: signal.evidence, attempts: convergenceHistory(signal.attempts) };
                 return {
                   success: false,
@@ -6195,6 +6197,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     this.turnToolCallSyntax = { native: 0, trailing: 0, structural: 0, invalid: 0 };
     this.turnConfiguredVerifier = "NOT_RUN";
     this.turnConvergence = undefined;
+    this.turnConvergenceUpTo = undefined;
     this.turnCarriedChanges = this.hasPendingModifications;
     this.turnDenials = 0;
     this.turnFileWrites = 0;
@@ -6356,6 +6359,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         if (convergence && !stopReason) {
           stopReason = "VERIFIER_NOT_CONVERGING";
           stopDetail = convergence.evidence;
+          if (this.objective && this.turnConvergenceUpTo !== undefined) this.objective.convergenceResetAfter = this.turnConvergenceUpTo;
         }
         if (stopReason) break;
         if (currentStep > maxTotalSteps) {
@@ -7521,7 +7525,10 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     let nextAction = ledger.nextAction;
     if (!done && !nextAction) {
       if (failedCheck && turn.verification?.command) nextAction = `Fix the failing check (${failedCheck}) and rerun ${turn.verification.command}.`;
-      else if (turn.reason === "VERIFIER_NOT_CONVERGING") nextAction = "The verifier keeps failing the same way across different attempts; decide whether to change the approach, fix the verifier or accept the state.";
+      else if (turn.reason === "VERIFIER_NOT_CONVERGING") {
+        const why = { stalled: "keeps failing the same way across different attempts", oscillating: "alternates between two sets of failures across attempts", diverging: "fails more tests with each attempt" }[turn.convergence?.state ?? "stalled"];
+        nextAction = `The verifier ${why}; decide whether to change the approach, fix the verifier or accept the state.`;
+      }
       else if (turn.reason === "STAGNATION_DETECTED") nextAction = "Review the repeated action and give the agent new direction (steer or a narrower request).";
       else if (turn.reason === "STEP_BUDGET_EXHAUSTED" || turn.reason === "TIME_BUDGET_EXHAUSTED" || turn.reason === "STEP_PAUSED") nextAction = "Send a follow-up to continue from the saved state, or raise the budget.";
       else if (remaining.length) nextAction = `Continue with ${remaining[0]}.`;
