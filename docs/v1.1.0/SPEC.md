@@ -361,12 +361,17 @@ export interface IntegrationReceipt {
   files: string[];
   outcome: string;
   summary: string;
-  verification: "PASSED" | "PASSED_POSTHOC" | "NOT_RUN" | "ALREADY_INTEGRATED" | "ALREADY_MERGED" | "NO_CHANGES";
+  verification: "PASSED" | "PASSED_POSTHOC" | "PASSED_UNBOUND" | "PASSED_POSTHOC_UNBOUND" | "NOT_RUN" | "ALREADY_INTEGRATED" | "ALREADY_MERGED" | "NO_CHANGES";
   candidate?: { digest: string; scope: "tree" | "commit" };                    // NEW
-  tests?: { command: string; status: string; hasExecutedTests: boolean };      // NEW
+  tests?: { command: string; status: string; hasExecutedTests: boolean; definitionBound?: false }; // NEW
   sequence?: number;                                                           // NEW: 1-based merge order
 }
 ```
+
+`definitionBound: false` (also on the turn's `verification` evidence) means the verifier's workspace definition could not be
+bound before the work (a local `node_modules` tree under `npm test`, a Makefile reference graph over the bound, an inline
+program such as `bash -c`...). Its pass is regression evidence only: `PASSED_UNBOUND` / `PASSED_POSTHOC_UNBOUND` replace
+`PASSED` / `PASSED_POSTHOC` on the receipt, the turn is `REGRESSION_FREE`, and no validation receipt or worktree merge is issued.
 
 `candidate.digest` is `computeCandidateIdentitySync(worktree).candidateId` for the unit's worktree at merge time
 (`cli/src/core/candidate.ts`); `scope: "commit"` records the merged commit id, `scope: "tree"` the tree digest. `tests`

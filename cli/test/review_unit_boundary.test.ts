@@ -502,3 +502,16 @@ test("R8: the review instructions name the scope only when one is declared", () 
   assert.doesNotMatch(prompt, /authorized scope/i);
   assert.match(prompt, /against the objective requirements/);
 });
+
+test("an unbound dependency pass is surfaced to the reviewer even when a bound pass comes first", () => {
+  const dir = repo();
+  fs.writeFileSync(path.join(dir, "math.js"), "export const add = (a, b) => a + b;\n");
+  const executor = new AgentWorkUnitExecutor({ baseConfig: {} as HarnessConfig });
+  const bound = { command: "make test", status: "PASSED", hasExecutedTests: true };
+  const unbound = { command: "npm test", status: "PASSED", hasExecutedTests: true, definitionBound: false };
+  const ctx = { objective: "Fix add", workspace: dir, startCommit: head(dir), dependencies: [{ id: "a", title: "A", summary: "s", verification: bound }, { id: "b", title: "B", summary: "s", verification: unbound }], observeSuccess() {} };
+  const pkg = internals(executor).reviewEvidence(unit, ctx, dir);
+  assert.equal(pkg.verifierCommand, "npm test");
+  assert.match(pkg.verifierOutput, /definition could not be bound/);
+  assert.equal(pkg.verifierExitCode, 0);
+});
