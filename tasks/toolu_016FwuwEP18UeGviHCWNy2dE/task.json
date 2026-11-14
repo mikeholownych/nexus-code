@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_016FwuwEP18UeGviHCWNy2dE",
+  "agent_id": "a00fd773837727e79",
+  "subagent_type": "general-purpose",
+  "task_description": "Semantic integrity baseline audit",
+  "token_usage": {
+    "input_tokens": 118,
+    "cache_creation_tokens": 206744,
+    "cache_read_tokens": 7375233,
+    "output_tokens": 36250,
+    "api_call_count": 59
+  },
+  "started_at": "2026-11-14T04:42:25.393244353Z",
+  "completed_at": "2026-11-14T04:48:01.09763492Z"
+}
