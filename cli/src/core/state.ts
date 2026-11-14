@@ -27,6 +27,7 @@ import { writeFileDurably, writePrivateFile, appendLinesDurably, readArchiveLine
 import { protectArchivedMessages } from "./persistence_protection.js";
 import { updateTaskMessages, readTaskMessages, TaskMessageLogError, type TaskMessageCursor } from "./task_message_log.js";
 import { withStateStoreGuard } from "./state_store_guard.js";
+import type { VerificationConfigAttempt } from "../security.js";
 
 import { CURRENT_STATE_SCHEMA_VERSION, WORKTREE_BINDING_VERSION, normalizeWorktreeBinding } from "./state_schema.js";
 export { CURRENT_STATE_SCHEMA_VERSION, WORKTREE_BINDING_VERSION } from "./state_schema.js";
@@ -182,6 +183,9 @@ export interface DurableTaskState {
   // Full text of the findings the model recorded from inspected output (core/findings.ts); the durable record in
   // `messages` may show them only condensed or by id.
   findings?: string[];
+
+  // Agent edits (and shell commands that appear to write) to tests, CI and build configuration, with how each was decided
+  verificationConfigAttempts?: VerificationConfigAttempt[];
 
   // How complete `messages` is as a history: context compaction replaces earlier messages with summaries, and the
   // replaced originals are archived beside the task state (see SessionManager.appendArchivedHistory).
@@ -779,6 +783,7 @@ export class DurableStateManager {
       findings?: string[];
       objective?: ObjectiveLedger | null;
       unverifiedChangesPending?: boolean;
+      verificationConfigAttempts?: VerificationConfigAttempt[];
       changeBaseline?: { command: string; failed: boolean; tests: Record<string, string> | null; verifier?: Record<string, string> | null; trustedDeliverables?: string[]; tddRedVerifier?: Record<string, string>; tddRedTests?: Record<string, string>; at: string } | null;
     }
   ): DurableTaskState {
@@ -791,6 +796,7 @@ export class DurableStateManager {
       if (progress.findings) state.findings = progress.findings;
       if (progress.objective !== undefined) state.objective = progress.objective;
       if (progress.unverifiedChangesPending !== undefined) state.unverifiedChangesPending = progress.unverifiedChangesPending;
+      if (progress.verificationConfigAttempts) state.verificationConfigAttempts = progress.verificationConfigAttempts;
       if (progress.changeBaseline !== undefined) state.changeBaseline = progress.changeBaseline;
       return this.saveTaskStateLocked(state, this.workspacePaths);
     });

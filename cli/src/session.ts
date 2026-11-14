@@ -155,6 +155,7 @@ export class SessionManager {
       ...(session.lastTurn !== undefined ? { lastTurn: session.lastTurn } : {}),
       ...(session.objective !== undefined ? { objective: session.objective } : {}),
       ...(session.findings !== undefined ? { findings: session.findings } : {}),
+      ...(session.verificationConfigAttempts !== undefined ? { verificationConfigAttempts: session.verificationConfigAttempts } : {}),
       ...(session.history !== undefined ? { history: session.history } : {}),
     };
 

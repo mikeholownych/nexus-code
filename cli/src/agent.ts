@@ -54,7 +54,7 @@ import { SkillManager, skillCatalogBudget, skillNoteBudget, formatSkillNote, fin
 import { McpClientManager } from "./mcp.js";
 import { PluginManager } from "./plugins.js";
 import { extractCompilerDiagnostics, formatDiagnosticHints } from "./diagnostics.js";
-import { SecurityManager } from "./security.js";
+import { SecurityManager, VERIFICATION_CONFIG_PROTECTED } from "./security.js";
 import { calculateContextBudget, countTokens, isContextAdmissible, isContextPressureHigh, estimateNextRequestTokens, TokenBudget } from "./tokens.js";
 import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
@@ -1656,6 +1656,7 @@ export class AutonomousAgent {
       validationReceipts: this.activeValidationReceipt ? [this.activeValidationReceipt] : [],
       messages: this.messages,
       unverifiedChangesPending: this.hasPendingModifications,
+      verificationConfigAttempts: this.bridge.getSecurityManager().getVerificationAttempts(),
       durableNotes: notes ? [notes] : undefined,
       ...(this.compactionProvenance ? { compactionProvenance: this.compactionProvenance } : {}),
       ...(this.recoveredOperation !== undefined ? { operation: this.recoveredOperation } : {}),
@@ -2297,7 +2298,17 @@ export class AutonomousAgent {
     }
   }
 
-  private persistProgress(progress: { messages?: boolean; unverifiedChangesPending?: boolean; changeBaseline?: ChangeBaseline | null }): void {
+  private persistedVerificationAttempts = 0;
+
+  /** Saves the verification-config attempts recorded since the last save, so a resumed session and its export still show them. */
+  private syncVerificationAttempts(): void {
+    const count = this.bridge.getSecurityManager().getVerificationAttempts().length;
+    if (count === this.persistedVerificationAttempts) return;
+    this.persistedVerificationAttempts = count;
+    this.persistProgress({ verificationConfigAttempts: true });
+  }
+
+  private persistProgress(progress: { verificationConfigAttempts?: boolean; messages?: boolean; unverifiedChangesPending?: boolean; changeBaseline?: ChangeBaseline | null }): void {
     if (!this.durable || this.restoringConversation) return;
     try {
       if (this.stateManager && !this.stateManager.hasTaskState(this.currentTaskId)) this.checkpointDurableState();
@@ -2324,6 +2335,7 @@ export class AutonomousAgent {
               : this.untrustedRecoveredBaseline ?? undefined),
         } : {}),
         ...(progress.unverifiedChangesPending !== undefined ? { unverifiedChangesPending: progress.unverifiedChangesPending } : {}),
+        ...(progress.verificationConfigAttempts ? { verificationConfigAttempts: this.bridge.getSecurityManager().getVerificationAttempts() } : {}),
         ...(progress.changeBaseline !== undefined ? {
           changeBaseline: progress.changeBaseline
             ? {
@@ -2747,6 +2759,7 @@ export class AutonomousAgent {
       operation?: DurableTaskState["operation"];
       changeBaseline?: DurableTaskState["changeBaseline"];
       lastTurn?: TurnResult | null;
+      verificationConfigAttempts?: DurableTaskState["verificationConfigAttempts"];
       model?: string;
       endpoint?: string;
     },
@@ -2760,6 +2773,8 @@ export class AutonomousAgent {
       this.adoptRecordedModel(session.model, session.endpoint);
       this.restoreSession(session.messages, session.unverifiedChangesPending, session.objective, session.findings, session);
       this.restoreHistory(session.history);
+      this.bridge.getSecurityManager().restoreVerificationAttempts(session.verificationConfigAttempts);
+      this.persistedVerificationAttempts = session.verificationConfigAttempts?.length ?? 0;
       const committed = Array.isArray(session.history?.committedCompactions) ? new Set<string>(session.history.committedCompactions) : undefined;
       const read = readArchive(committed);
       this.restoreArchive(read.messages);
@@ -5317,7 +5332,40 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       egressOrigin,
       fullAccess: Boolean(this.config.fullAccess) && !this.isReadOnly(),
     };
-    const askOperator = this.approvalPolicy.requiresDecision(effect, policyContext);
+    const verificationSecurity = this.bridge.getSecurityManager();
+    verificationSecurity.setVerificationAuthority({ role: this.role, fullAccess: policyContext.fullAccess, operator: Boolean(onConfirm) });
+    const verificationEdit = verificationSecurity.verificationEditDecision(toolName, args);
+    if (verificationEdit?.action === "deny") {
+      verificationSecurity.recordVerificationAttempt(verificationEdit.path, verificationEdit.class, toolName, "blocked");
+      this.syncVerificationAttempts();
+      const cancelMsg = `${VERIFICATION_CONFIG_PROTECTED}: '${verificationEdit.path}' is verification configuration (${verificationEdit.class}, rule '${verificationEdit.rule}'). An edit needs an operator decision; none was given. Report it to the operator instead of changing how the work is verified.`;
+      if (this.flightRecorder) {
+        this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, cancelMsg, 0, VERIFICATION_CONFIG_PROTECTED);
+      }
+      this.observer?.onToolEnd?.({ dispatch, callId: call.id, tool: toolName, success: false, output: "", error: cancelMsg });
+      return {
+        receipt: {
+          invocationId: call.id,
+          taskId: this.activeWorktree?.taskId || this.currentTaskId,
+          actor,
+          executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+          capabilityId: this.capabilityRegistry.getByToolName(toolName)?.id || "unknown",
+          toolName,
+          targetResources: extractTargetResources(toolName, args),
+          success: false,
+          output: "",
+          error: cancelMsg,
+          durationMs: 0,
+          candidateMutated: false,
+          status: "DENIED",
+          denialReason: VERIFICATION_CONFIG_PROTECTED,
+          timestamp: new Date().toISOString(),
+          simulated: Boolean(this.config.dryRun),
+        },
+        shouldExit: false,
+      };
+    }
+    const askOperator = this.approvalPolicy.requiresDecision(effect, policyContext) || verificationEdit?.action === "ask";
 
     if (toolName === "activate_skill") {
       const skillName = args?.name;
@@ -5387,7 +5435,15 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       }
 
       this.activity("approval", { tool: toolName, ...(subject ? { subject } : {}) });
+      if (verificationEdit?.action === "ask") console.log(`⚠️ ${toolName} changes verification configuration: ${verificationEdit.path} (${verificationEdit.class}).`);
       const approved = await onConfirm(toolName, args);
+      if (verificationEdit?.action === "ask") {
+        if (approved) verificationSecurity.grantVerificationEdit(verificationEdit.path);
+        else {
+          verificationSecurity.recordVerificationAttempt(verificationEdit.path, verificationEdit.class, toolName, "blocked");
+          this.syncVerificationAttempts();
+        }
+      }
       if (approved && egressOrigin) this.approvedEgressOrigins.add(egressOrigin);
       if (approved) this.activity("tool", { tool: toolName, ...(subject ? { subject } : {}) });
       if (!approved) {
@@ -5513,6 +5569,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       },
       context
     );
+
+    this.syncVerificationAttempts();
 
     if (toolName === "run_command" && actor === "agent" && process.env.NEXUS_EVAL_TOOL_RECEIPTS === "1") {
       try {
