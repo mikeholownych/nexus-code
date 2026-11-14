@@ -91,3 +91,29 @@ Units (each failing test first, smallest change, single-PR rollback):
 | CG-5 | G-CG-7, G-CG-8 | Only if SI-5 needs it: LSP references for impact discovery with disclosed coverage limits | Deferred until CG-1..4 land |
 
 Scope discipline: compiler success is recorded as a scoped fact (tool, version, config, revision, content hash), never as functional correctness. CERI gets a `compiler_grounded_semantics` category only with frozen scenarios (symbol ambiguity, type incompatibility, stale evidence, tool unavailable, hidden build configuration) after CG-1..4. Priority among all units: SI-1 (done), CG-1 (an existing tool that returns false success), SI-2, CG-3, SI-3.. SI-7, CG-2, CG-4.
+
+## 9. Differential verification, counterexamples and bounded repair (fourth audit, 2026-11-14)
+
+Audit: code trace on `origin/main`, nothing executed. **No defect confirmed**; these are capability gaps, ranked below sections 2 to 8. No XS compiler/decompiler or binary-reconstruction work is in scope, and nothing here adds a candidate database, a second acceptance engine or a separate evidence store.
+
+Already present: a failing verifier is not re-run on identical inputs (`objective.ts:475`, `agent.ts:4530`); a unit that fails is BLOCKED for the operator, not retried silently (`scheduler.ts:421-490`); step, time and stagnation limits end as LIMIT_REACHED / NOT_ESTABLISHED, never success (`agent.ts:7238`); TIMED_OUT, NO_TESTS_EXECUTED and NO_APPLICABLE_VERIFIER are not reported as success; attempts are bound to a candidate id and restored on resume; `judgeIndependence` (`agent.ts:2280`) re-runs pre-change tests against the new code, which is a real (pass/fail-level) differential check; opt-in TDD mode pins RED tests and the verifier definition.
+
+| ID | Gap | Evidence | Priority |
+|---|---|---|---|
+| G-DV-1 | A `VerificationAttempt` keeps one `failedCheck` line; exit code, failing test names and an output excerpt are not stored, so a repair cannot be driven by structured evidence | `core/objective.ts:82-103`; `tester.ts:301-330` builds the list but it only reaches the model as folded text | P1 |
+| G-DV-2 | No failure-level convergence detector: the same `failedCheck` across different candidates, oscillation or a growing failure count are invisible. An edit counts as progress and the default budget has no ceiling | `agent.ts:6262-6451` | P1 |
+| G-DV-3 | No parent/patch link between attempts; failed candidates are not committed per attempt outside isolated operations | `operation_git.ts:310-491` | P2 |
+| G-DV-4 | No counterexample retention outside TDD: an agent-written failing test becomes an ordinary file and later counts as pre-existing; nothing replays a confirmed failure against later candidates or sessions | `operation_runner_execution.ts:113-410` | P2 |
+| G-DV-5 | No behavioural differential, golden, property-based, metamorphic or shrinking support; CERI `compareRuns` is imported by no shipped code; the eval harness compares pass/fail only | `git grep` negative; `ceri/baseline.ts:59` | P3 |
+| G-DV-6 | Tool-missing, exit 127 and sandbox errors are recorded as ordinary FAILED, so infrastructure failure can be taken for a candidate defect | verifier result classification | P2 |
+
+Units (failing test first, single-PR rollback, each extends an existing record):
+
+| Unit | Closes | Change | Acceptance |
+|---|---|---|---|
+| DV-1 | G-DV-1, G-DV-6 | Add exit code, failing test names and a redacted excerpt to `VerificationAttempt`; classify `ENVIRONMENT` (tool missing, exit 127, sandbox error) apart from `CANDIDATE_FAILED`; old ledgers load unchanged | Exit 127 is never counted as a candidate failure or a pass; restored attempt keeps its structured fields |
+| DV-2 | G-DV-2 | Convergence signal over attempts: same `failedCheck` repeated, oscillation between two failure sets, failure count rising. Result is a BLOCKED / escalation state with the attempt history attached, never success | Scenario: three candidates, same failing check, stops with attempt history; a changing failure set does not trip it; thresholds come from existing config |
+| DV-3 | G-DV-4 | Promote a confirmed failing test to a protected regression obligation only on operator authorisation; keep the original failure record when later minimised; historical records stay, separate from currently applicable ones | Authorised obligation is replayed against the next candidate and a weakening edit is recorded; unauthorised promotion does not happen |
+| DV-4 | G-DV-3, G-DV-5 | Attempt lineage (parent attempt, diff hash). Behavioural differential against a declared reference (previous revision or golden cases) only when an authorised requirement names one; every normalisation rule explicit | Baseline-defect correction is not blocked when an authoritative requirement contradicts the baseline; finite-case agreement is never reported as equivalence |
+
+Limits stated up front: differential agreement covers tested inputs and observable behaviour only; the baseline is not authoritative; counterexamples may carry secrets, so they pass the existing redaction path and retention policy. CERI category `differential_verification` is added only with frozen scenarios (behaviour-preserving refactor with an uncovered edge case, misleading baseline, correlated generated tests, counterexample preservation, no-progress loop, unauthorised criteria change, stale evidence, recovery after failure, environmental failure, incomplete equivalence coverage) after DV-1 and DV-2. Order of remaining work: SI-1 (done), CG-1, SI-2, DV-1, CG-3, DV-2, SI-3 to SI-7, CG-2, CG-4, DV-3, DV-4.
