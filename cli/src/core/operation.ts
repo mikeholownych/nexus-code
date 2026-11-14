@@ -183,6 +183,8 @@ export interface WorkUnit {
    * whose start prompt cannot fit this budget is blocked before any inference.
    */
   contextBudget?: number;
+  /** Operator-declared paths a reviewed change may touch; a reviewer's evidence package carries it, and a diff outside it is rejected. */
+  authorizedScope?: string[];
   /** Named inputs the unit's role contract requires (specialists); enforced before the unit starts. */
   inputs?: Record<string, string>;
   /** Hash of the effective inputs last submitted in this unit's conversation; a resume repeats them only on change. */
@@ -456,6 +458,8 @@ export interface WorkUnitSpec {
   taskClass?: string;
   /** Operator cap on this unit's prompt context, in tokens. */
   contextBudget?: number;
+  /** Paths (files or directories) a reviewed change may touch; absent declares no scope. */
+  authorizedScope?: string[];
   /** Named inputs for a specialist role's contract (see SPECIALIST_CONTRACTS[role].inputRequirements). */
   inputs?: Record<string, string>;
 }
@@ -477,6 +481,9 @@ export function newOperation(
   for (const u of units) {
     if (u.contextBudget !== undefined && (!Number.isInteger(u.contextBudget) || u.contextBudget <= 0)) {
       throw new Error(`Work unit '${u.id}': contextBudget must be a positive integer number of tokens`);
+    }
+    if (u.authorizedScope !== undefined && (!Array.isArray(u.authorizedScope) || u.authorizedScope.length === 0 || u.authorizedScope.some((p) => typeof p !== "string" || !p.trim()))) {
+      throw new Error(`Work unit '${u.id}': authorizedScope must be a non-empty array of paths`);
     }
     if (u.inputs !== undefined) {
       const problem = specialistInputsProblem(u.inputs);
@@ -512,6 +519,7 @@ export function newOperation(
       ...(u.required === false ? { required: false } : {}),
       ...(u.taskClass ? { taskClass: u.taskClass } : {}),
       ...(u.contextBudget !== undefined ? { contextBudget: u.contextBudget } : {}),
+      ...(u.authorizedScope ? { authorizedScope: u.authorizedScope.map((p) => p.trim().replace(/^\.\//, "").replace(/\/+$/, "")) } : {}),
       // A specialist unit always records its inputs (possibly none): a unit with no `inputs` field predates input
       // enforcement and is grandfathered by the executor.
       ...(u.inputs !== undefined || isSpecialistRole(u.role) ? { inputs: redactForPersistence({ ...(u.inputs ?? {}) }) } : {}),

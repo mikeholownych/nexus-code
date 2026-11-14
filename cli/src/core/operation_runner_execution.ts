@@ -742,11 +742,12 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     const passing = (v: { status: string; hasExecutedTests: boolean }) => v.status === "PASSED" && v.hasExecutedTests;
     const verified = verifications.find((v) => !passing(v)) ?? verifications.find((v) => v.definitionBound === false) ?? verifications[0];
     const emptyDiff = "diff" in candidate && candidate.diff.trim() === "";
-    // No operation or unit declares a file scope, so the package carries none (rather than an empty placeholder that
-    // would read as "unrestricted"): the scope gate runs only for callers that supply one.
+    // The scope is the operator's declaration on the unit; with none, the package carries none (rather than an empty
+    // placeholder that would read as "unrestricted") and the scope gate does not run.
     return buildReviewEvidencePackage({
       ...(ctx.operationId ? { operationId: ctx.operationId } : {}),
       unitId: unit.id,
+      ...(unit.authorizedScope?.length ? { authorizedScope: unit.authorizedScope } : {}),
       objective: `${ctx.objective}\n\nReview task: ${unit.prompt}`,
       baselineCommit: "base" in candidate ? candidate.base : "unknown",
       unifiedDiff: "diff" in candidate ? redactForPersistence(plainNote + candidateDiffText(candidate)) : "",

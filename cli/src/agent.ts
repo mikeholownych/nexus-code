@@ -132,6 +132,7 @@ import {
   amendObjective,
   applyRequirementUpdates,
   invalidateVerified,
+  isHardRequirement,
   readObjective,
   requirementDone,
   blockedRequirements,
@@ -2984,11 +2985,34 @@ export class AutonomousAgent {
     if (!ledger || !state) return undefined;
     for (let i = ledger.verification.length - 1; i >= 0; i--) {
       const a = ledger.verification[i];
-      if (a.status === "SKIPPED_UNCHANGED_INPUTS") continue;
+      if (a.status === "SKIPPED_UNCHANGED_INPUTS" || a.requirementId) continue;
       const same = a.inputs === state.inputs && a.epoch === state.epoch && a.mutationSeq === state.mutationSeq && a.external === state.external;
       return same && a.status === "PASSED" ? a : undefined;
     }
     return undefined;
+  }
+
+  /**
+   * Runs a constraint's own verifier through the same approval gate and runner as every other verifier, unless an
+   * attempt of that command already stands on the current workspace. The run is recorded against the requirement.
+   */
+  private async runRequirementVerifier(requirementId: string, command: string): Promise<void> {
+    const ledger = this.objective;
+    const state = this.verifierState();
+    if (!ledger || !state || priorAttempt(ledger, command, state)) return;
+    if (!(await this.ensureVerifierApproved(command, this.activeTurn?.onConfirm))) return;
+    const deadlineSecs = this.config.verifierTimeoutSecs ?? DEFAULT_VERIFIER_TIMEOUT_SECS;
+    this.activity("verifying", { tool: command });
+    const run = await runTestSuiteWithExecutor(this.config.workspace, (c) => this.bridge.executeTool("run_command", { command: c, timeout_secs: deadlineSecs }), command);
+    recordAttempt(ledger, {
+      command,
+      ...state,
+      mutationSeq: this.mutationSeq,
+      status: run.success ? "PASSED" : run.timedOut ? "TIMED_OUT" : "FAILED",
+      requirementId,
+      ...(run.success ? {} : { failedCheck: failedCheckFrom(run.rawOutput || "") }),
+    });
+    this.turnVerifierRuns.push({ command, phase: "completion", passed: run.success });
   }
 
   private activity(phase: AgentActivity["phase"], extra: { tool?: string; subject?: string } = {}): void {
@@ -4459,7 +4483,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         const open = openRequirements(this.objective);
         const blocked = blockedRequirements(this.objective);
         if (open.length || blocked.length) {
-          const list = (items: typeof open) => items.map((r) => `${r.id} [${r.status}] ${r.text}${r.note ? ` (${r.note})` : ""}`).join("\n  ");
+          const list = (items: typeof open) => items.map((r) => `${r.id} [${r.status}] ${r.text}${r.note ? ` (${r.note})` : ""}${isHardRequirement(r) && r.status === "implemented" ? ` (${r.kind}: done only when ${r.verifier ? `its verifier '${r.verifier}' passes after your last change: mark it verified` : "the operator accepts it"})` : ""}`).join("\n  ");
           return {
             success: false,
             output: "",
@@ -5103,7 +5127,20 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       }
       const updates: RequirementUpdate[] = Array.isArray(args?.requirements) ? args.requirements : [];
       const wantsVerified = updates.some((u) => u?.status === "verified");
-      const result = applyRequirementUpdates(this.objective, updates, typeof args?.next_action === "string" ? args.next_action : undefined, undefined, wantsVerified ? this.currentPassingAttempt() : undefined);
+      const ledger = this.objective;
+      if (wantsVerified) {
+        const claimed = updates.flatMap((u) => ledger.requirements.filter((r) => u?.status === "verified" && r.id === u.id && isHardRequirement(r) && r.verifier));
+        for (const r of claimed) await this.runRequirementVerifier(r.id, r.verifier!);
+      }
+      const state = wantsVerified ? this.verifierState() : undefined;
+      const result = applyRequirementUpdates(
+        ledger,
+        updates,
+        typeof args?.next_action === "string" ? args.next_action : undefined,
+        undefined,
+        wantsVerified ? this.currentPassingAttempt() : undefined,
+        (command) => (state ? priorAttempt(ledger, command, state) : undefined),
+      );
       if (result.changed) {
         try {
           this.checkpointDurableState("requirements updated");
