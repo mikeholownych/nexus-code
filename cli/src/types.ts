@@ -103,6 +103,7 @@ export interface HarnessConfig {
   authoritativeVerifierCommand?: string; // Explicit trusted verifier: gates every task completion and authorizes automatic worktree merge
   /** Workspace-relative deliverable paths declared by the operator before the task starts. */
   trustedDeliverableFiles?: string[];
+  typecheck?: "off" | "record" | "enforce"; // Type-check beside the verifier (default enforce; record with a configured verifier); env NEXUS_TYPECHECK=off|enforce
   verifierTimeoutSecs?: number; // Deadline for the completion verifier (default 300); env NEXUS_VERIFIER_TIMEOUT_SECS
   recordFlight?: boolean;    // Deterministic .flightlog session recording (default: false)
   plannerModel?: string;     // Deep reasoning / architecture planner (e.g. Claude 3.7 Thinking / o3 / DeepSeek R1)
