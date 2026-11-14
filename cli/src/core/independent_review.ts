@@ -398,6 +398,10 @@ export function parseIndependentReviewVerdict(
         finalVerdict = "REJECT";
         unprovenCriteria.push(`Candidate diff could not be collected (${pkg.diffError}); there is nothing to accept`);
       }
+      if (pkg.verifierExitCode === undefined) {
+        finalVerdict = "REJECT";
+        unprovenCriteria.push("No deterministic verifier evidence reached this review; a model ACCEPT cannot establish acceptance on its own");
+      }
       if (pkg.verifierExitCode !== undefined && pkg.verifierExitCode !== 0) {
         finalVerdict = "REJECT";
         unprovenCriteria.push(`Deterministic verifier failed with exit code ${pkg.verifierExitCode}`);

@@ -168,7 +168,7 @@ Here is my review:
   };
   const res6 = parseIndependentReviewVerdict(validOutput, truncatedPkg);
   assert.equal(res6.verdict, "REJECT");
-  assert.match(res6.unprovenCriteria[0], /Unified diff was truncated/);
+  assert.match(res6.unprovenCriteria.join("\n"), /Unified diff was truncated/);
 });
 
 // Headers exactly as `git diff` writes them (captured from git 2.x): non-ASCII and tab characters are C-quoted
@@ -343,4 +343,27 @@ test("F04: an ACCEPT that lists an unproven criterion is a REJECT that keeps the
   assert.deepEqual(result.verifiedObservations, ["tests pass"], "the structured verdict is kept whole");
   const clean = parseIndependentReviewVerdict(JSON.stringify({ verdict: "ACCEPT", verifiedObservations: [], suspectedDefects: [], unprovenCriteria: [], scopeViolations: [], reviewerConfidenceNote: "n" }));
   assert.equal(clean.verdict, "ACCEPT");
+});
+
+test("a model ACCEPT with no deterministic verifier evidence is REJECT (missing evidence is not success)", () => {
+  const accept = JSON.stringify({
+    verdict: "ACCEPT",
+    verifiedObservations: ["looks right"],
+    suspectedDefects: [],
+    unprovenCriteria: [],
+    scopeViolations: [],
+    reviewerConfidenceNote: "High confidence",
+  });
+  const untested: ReviewEvidencePackage = {
+    operationId: "op-untested",
+    unitId: "rev",
+    objective: "All Good",
+    baselineCommit: "base",
+    unifiedDiff: SAMPLE_DIFF,
+  };
+  const res = parseIndependentReviewVerdict(accept, untested);
+  assert.equal(res.verdict, "REJECT");
+  assert.match(res.unprovenCriteria.join("\n"), /No deterministic verifier evidence/);
+  // Same package with a passing run is still accepted: the gate keys on evidence, not on the reviewer.
+  assert.equal(parseIndependentReviewVerdict(accept, { ...untested, verifierExitCode: 0 }).verdict, "ACCEPT");
 });
