@@ -63,7 +63,26 @@ A requirements DSL, a semantic geometry engine, a second evidence store, archite
 
 ## 7. Checkpoint
 
-Done: audits, this plan, SI-1 (commit `336a6f3c`, local, reviews pending). Next: local Code/Security/Slop reviews on SI-1, open the PR after the v1.1.4 rc.2 work lands, then SI-2. Blocker: none for the plan; v1.1.4 release verification (per-file CLI run, PR #487) is in progress and has priority.
+Updated 2026-11-14 (evening). Status by unit:
+
+| Unit | State |
+|---|---|
+| SI-1 reviewer ACCEPT without verifier evidence is REJECT | merged (#493) |
+| CG-1 LSP honesty and lifecycle | merged (#494) |
+| SI-2 verification-config edit guard | merged (#495) |
+| (found in use) verifier definition unbindable blocked every completion | merged (#496) |
+| DV-1 structured attempts, ENVIRONMENT vs CANDIDATE_FAILED | open (#497) |
+| SI-3 steering conflict record | open (#498) |
+| CG-2 LSP trust, scrubbed environment, bounded buffers | open (#499) |
+| SI-6 CERI `semantic_integrity` domain (21 active, 4 pending) | open (#500) |
+| SI-7 kill-mid-tool-call fault injection (test-only; G-AI-5 holds) | open (#501) |
+| SI-4, SI-5, CG-3, CG-4, DV-2, DV-3, DV-4, TI-1 | not started |
+
+New finding from SI-7: **G-AI-6 is confirmed.** `maxConcurrentUnits > 1` does not require `git.isolate` and there is no write-set check (`operation_schema.ts` validates only the range; `operation_cli.ts` does not require isolation; the MAO-07 test already runs two non-isolated units with `maxConcurrentUnits: 2`). `docs/v1.1.0/SPEC.md` (~line 610) says isolation is newly enforced under concurrency. Unit **SI-8**: enforce isolation (or a declared write-set disjointness check) when concurrency is above 1, or correct the spec; test first; behaviour change for existing operation files that set `maxConcurrentUnits` above 1 without isolation, so it needs a release note.
+
+Also open: `compaction-03` (post-compaction check that every gating requirement is still present) has no owning unit; assign it to SI-4 or a new unit.
+
+Standing limits: the CERI scenarios and every test in this plan are internal validation of this repository's own gating code. They are not independent qualification, and no v1.2.0 text may call the product frontier-grade on their strength.
 
 ## 8. Compiler-grounded semantic intelligence (third audit, 2026-11-14)
 
