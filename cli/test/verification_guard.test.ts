@@ -16,6 +16,14 @@ let stateDir: string;
 let home: string;
 let previousHome: string | undefined;
 let agents: AutonomousAgent[] = [];
+let bridges: RustCoreBridge[] = [];
+
+/** A bridge that starts the Rust core daemon on first use; every one is shut down after its test, or the test process never exits. */
+function makeBridge(): RustCoreBridge {
+  const bridge = new RustCoreBridge(repo);
+  bridges.push(bridge);
+  return bridge;
+}
 
 function write(rel: string, content: string): void {
   fs.mkdirSync(path.dirname(path.join(repo, rel)), { recursive: true });
@@ -61,6 +69,8 @@ beforeEach(() => {
 afterEach(() => {
   for (const a of agents) a.shutdown();
   agents = [];
+  for (const b of bridges) b.shutdown();
+  bridges = [];
   for (const d of [repo, stateDir, home]) fs.rmSync(d, { recursive: true, force: true });
   if (previousHome === undefined) delete process.env.HOME;
   else process.env.HOME = previousHome;
@@ -345,7 +355,7 @@ describe("verification config guard", () => {
   });
 
   test("the tool layer takes its authority from the call, not from shared state", async () => {
-    const bridge = new RustCoreBridge(repo);
+    const bridge = makeBridge();
     const denied = await bridge.executeTool("write_file", { path: "Makefile", content: "t\n" }, { fullAccess: true, operator: false, role: "implementer" });
     assert.notEqual(denied.denialReason, "VERIFICATION_CONFIG_PROTECTED");
     const again = await bridge.executeTool("write_file", { path: "Makefile", content: "t\n" });
@@ -363,7 +373,7 @@ describe("verification config guard", () => {
   });
 
   test("the tool layer refuses on its own when no decision was granted", async () => {
-    const bridge = new RustCoreBridge(repo);
+    const bridge = makeBridge();
     const result = await bridge.executeTool("write_file", { path: "Makefile", content: "t\n" });
     assert.equal(result.success, false);
     assert.equal(result.denialReason, "VERIFICATION_CONFIG_PROTECTED");
