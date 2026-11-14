@@ -16,7 +16,7 @@ import type { Command } from "commander";
 import pc from "picocolors";
 import { buildConfig, mergeOperationPolicy } from "./config.js";
 import { ConvergenceScheduler, DecisionRejected, newOperation, type DurableOperationState, type OperationEvent, type OperationPolicy, type WorkUnitSpec } from "./core/operation.js";
-import { UnsupportedOperationSchemaError, concurrencyIsolationProblem, validateOperationPolicy, validateResourceSlots } from "./core/operation_schema.js";
+import { UnsupportedOperationSchemaError, clampUnisolatedConcurrency, concurrencyIsolationProblem, validateOperationPolicy, validateResourceSlots } from "./core/operation_schema.js";
 import { MessageRejected, publishMessage } from "./core/operation_messages.js";
 import { ROLE_PROFILES, specialistInputsProblem } from "./core/roles.js";
 import { AgentWorkUnitExecutor, applyOperatorDecision, driveOperation, OperationLockedError, OperationStore, resourcesFromConfig } from "./core/operation_runner.js";
@@ -203,6 +203,8 @@ function printStatus(op: DurableOperationState): void {
 }
 
 async function drive(op: DurableOperationState, config: HarnessConfig, store: OperationStore, discoverCatalog: boolean, json: boolean): Promise<void> {
+  const clamped = clampUnisolatedConcurrency(op);
+  if (clamped && !json) console.error(pc.yellow(`warning: ${safeTerminal(clamped)}`));
   const controller = new AbortController();
   const onSignal = () => controller.abort();
   process.once("SIGINT", onSignal);
@@ -265,8 +267,6 @@ export function registerOperationCommands(program: Command): void {
       const createdAt = Date.now();
       const identity = createOperationAccountIdentity(credentialStorageHome());
       const policy = mergeOperationPolicy(config.operationPolicy, spec.policy);
-      const problem = concurrencyIsolationProblem(policy?.maxConcurrentUnits, spec.git?.isolate === true);
-      if (problem) throw new OperationSpecError(problem);
       const state = newOperation(id, spec.objective, spec.units, normalizeResources(spec, config, identity), createdAt, policy);
       if (spec.git?.isolate) {
         try {

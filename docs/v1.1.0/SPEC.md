@@ -628,10 +628,14 @@ sender's unit conversation is not rewritten. This is the same rule as any other 
 `mergeOperationPolicy` (`operation_cli.ts`) already merges config + spec. The new key follows the same precedence:
 spec overrides config overrides default 1. An invalid value is rejected before any worktree is created.
 
-A value above 1 also requires `git.isolate: true` (section 8, worktree isolation): `nexus operation run` rejects the spec,
-or the config-merged policy, with `policy.maxConcurrentUnits is N, but without git.isolate concurrent units would share
-one worktree; set "git": { "isolate": true } or run with maxConcurrentUnits 1`. Migration: add `"git": { "isolate": true }`
-to the spec, or lower the limit to 1. Records already on disk are not re-validated.
+A value above 1 also requires `git.isolate: true` (section 8, worktree isolation). `nexus operation run` rejects a spec whose
+own `policy.maxConcurrentUnits` is above 1 without it, with `policy.maxConcurrentUnits is N, but without git.isolate
+concurrent units would share one worktree; set "git": { "isolate": true } or run with maxConcurrentUnits 1`, before any
+state is created. Migration: add `"git": { "isolate": true }` to the spec, or lower the limit to 1.
+
+Not enforced at validation: records already on disk and the library API (`newOperation`) are not refused. `operation
+resume` and `operation decide` load such a legacy record without refusing it, clamp its limit to 1 for the run, and print a
+warning naming the fix.
 
 ### 9.2 Resource slots
 
