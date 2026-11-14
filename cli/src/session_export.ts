@@ -5,6 +5,7 @@
  * replaced by summaries (the replaced originals are included from the session's archive when it exists).
  */
 import type { SessionData, SessionManager } from "./session.js";
+import { safeOperatorText } from "./protocol.js";
 import type { ChatMessage } from "./types.js";
 import { gatingRequirements, requirementDone } from "./core/objective.js";
 
@@ -79,6 +80,8 @@ export function buildSessionExport(manager: SessionManager, session: SessionData
         objectiveOutcome: objective?.outcome ?? null,
         unresolvedRequirements: objective ? gatingRequirements(objective).filter((r) => !requirementDone(r)) : [],
         steering: objective?.steering ?? [],
+        steeringConflicts: objective?.steeringConflicts ?? [],
+        supersededObjectives: objective?.superseded ?? [],
         verificationAttempts: objective?.verification ?? [],
         verificationEvidence: lastTurn?.verification ?? null,
         verificationConfigAttempts: session.verificationConfigAttempts ?? [],
@@ -135,6 +138,16 @@ function markdownExport(session: SessionData, history: HistoryCompleteness, arch
     if (objective.steering.length) {
       out.push("**Operator steering:**", "");
       for (const s of objective.steering) out.push(`- ${s.id} [${s.status}${s.appliedAtStep ? ` at step ${s.appliedAtStep}` : ""}] ${s.text}`);
+      out.push("");
+    }
+    if (objective.steeringConflicts?.length) {
+      out.push("**Steering conflicts (negated requirements):**", "");
+      for (const c of objective.steeringConflicts) out.push(`- ${c.id} [${c.status}] negates ${c.requirements.join(", ")}: ${safeOperatorText(c.text)}`);
+      out.push("");
+    }
+    if (objective.superseded?.length) {
+      out.push("**Requirements left unmet by a replaced objective:**", "");
+      for (const o of objective.superseded) out.push(`- [${o.status}] ${o.requirements.map((r) => `${r.id} (${r.status}) ${r.text}`).join("; ")}`);
       out.push("");
     }
     if (objective.verification.length) {
