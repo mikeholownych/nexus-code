@@ -119,19 +119,99 @@ test("the server environment carries PATH but none of the process secrets", asyn
   }
 });
 
-test("PATH drops relative and workspace-local entries; toolchain homes pass through", () => {
-  const ws = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-lsp-path-"));
-  const savedPath = process.env.PATH;
+function withPath(entries: string[], fn: () => void) {
+  const saved = process.env.PATH;
+  process.env.PATH = entries.join(path.delimiter);
+  try {
+    fn();
+  } finally {
+    process.env.PATH = saved;
+  }
+}
+
+test("PATH drops relative, empty and workspace-local entries; toolchain homes pass through", () => {
+  const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "nexus-lsp-path-")));
+  fs.mkdirSync(path.join(ws, "node_modules", ".bin"), { recursive: true });
   const savedCargo = process.env.CARGO_HOME;
-  process.env.PATH = ["/usr/bin", ".", "node_modules/.bin", path.join(ws, "node_modules", ".bin"), "/bin"].join(path.delimiter);
   process.env.CARGO_HOME = "/opt/cargo";
   try {
-    const env = buildLspEnvironment(ws);
-    assert.equal(env.PATH, ["/usr/bin", "/bin"].join(path.delimiter));
-    assert.equal(env.CARGO_HOME, "/opt/cargo");
+    withPath(["/usr/bin", ".", "", "node_modules/.bin", path.join(ws, "node_modules", ".bin"), "/bin"], () => {
+      assert.equal(buildLspEnvironment(ws).PATH, ["/usr/bin", "/bin"].join(path.delimiter));
+    });
+    assert.equal(buildLspEnvironment(ws).CARGO_HOME, "/opt/cargo");
   } finally {
-    process.env.PATH = savedPath;
     if (savedCargo === undefined) delete process.env.CARGO_HOME; else process.env.CARGO_HOME = savedCargo;
+  }
+});
+
+test("PATH drops an outside entry that is a symlink into the workspace, and a workspace reached through a symlink", () => {
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "nexus-lsp-sym-")));
+  const ws = path.join(base, "ws");
+  fs.mkdirSync(path.join(ws, "evil"), { recursive: true });
+  fs.mkdirSync(path.join(base, "good"));
+  fs.symlinkSync(path.join(ws, "evil"), path.join(base, "link"));
+  fs.symlinkSync(ws, path.join(base, "wslink"));
+  withPath([path.join(base, "link"), path.join(base, "good")], () => {
+    assert.equal(buildLspEnvironment(ws).PATH, path.join(base, "good"));
+  });
+  withPath([path.join(ws, "evil"), path.join(base, "good")], () => {
+    assert.equal(buildLspEnvironment(path.join(base, "wslink")).PATH, path.join(base, "good"));
+  });
+});
+
+test("PATH keeps toolchain entries when the workspace is a home directory or a system prefix", () => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "nexus-lsp-home-")));
+  fs.mkdirSync(path.join(home, ".cargo", "bin"), { recursive: true });
+  const savedHome = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    withPath([path.join(home, ".cargo", "bin"), "/usr/bin"], () => {
+      assert.equal(buildLspEnvironment(home).PATH, [path.join(home, ".cargo", "bin"), "/usr/bin"].join(path.delimiter));
+    });
+    withPath(["/usr/bin"], () => assert.equal(buildLspEnvironment("/usr").PATH, "/usr/bin"));
+    withPath(["/usr/bin"], () => assert.equal(buildLspEnvironment("/usr/share").PATH, "/usr/bin"));
+  } finally {
+    if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome;
+  }
+});
+
+test("non-ASCII bodies split across chunk boundaries are framed and decoded by bytes", async () => {
+  const { mgr } = setup({ "u.utf.ts": "fine" });
+  try {
+    const res = await mgr.diagnostics("u.utf.ts", 5000);
+    assert.equal(res.status === "ok" && res.diagnostics[0].message, "h\u00e9llo \u20ac \ud83d\ude00 \u00fc\u00f1");
+  } finally {
+    mgr.shutdownAll();
+  }
+});
+
+test("a message just under the 16 MB cap is accepted; a stream past it is dropped", async () => {
+  const { mgr } = setup({ "n.near.ts": "fine", "o.over.ts": "fine" });
+  try {
+    const near = await mgr.diagnostics("n.near.ts", 15000);
+    assert.equal(near.status, "ok");
+    const over = await mgr.diagnostics("o.over.ts", 15000);
+    assert.equal(over.status, "unavailable");
+  } finally {
+    mgr.shutdownAll();
+  }
+});
+
+test("revoking trust after a server started stops it and refuses the next query", async () => {
+  let allowed = true;
+  const { mgr, pidfile } = setup({ "a.ts": "fine" }, () => (allowed ? null : "workspace not trusted; language server not started"));
+  try {
+    assert.equal((await mgr.diagnostics("a.ts", 3000)).status, "ok");
+    const pid = Number(fs.readFileSync(pidfile, "utf-8").trim());
+    allowed = false;
+    const res = await mgr.diagnostics("a.ts", 500);
+    assert.equal(res.status, "unavailable");
+    await new Promise((r) => setTimeout(r, 400));
+    assert.throws(() => process.kill(pid, 0), /ESRCH/);
+    allowed = true;
+    assert.equal((await mgr.diagnostics("a.ts", 3000)).status, "ok");
+  } finally {
+    mgr.shutdownAll();
   }
 });
 
