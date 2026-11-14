@@ -143,6 +143,8 @@ export interface ExecutionResult {
   timedOut?: boolean;
   /** The operator's cancel ended the operation (the runner ended the command's process group). */
   cancelled?: boolean;
+  /** Why the call was refused before it ran (a stable code, e.g. VERIFICATION_CONFIG_PROTECTED). */
+  denialReason?: string;
 }
 
 /**
