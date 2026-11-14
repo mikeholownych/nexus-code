@@ -400,7 +400,7 @@ export function parseIndependentReviewVerdict(
       }
       if (pkg.verifierExitCode === undefined) {
         finalVerdict = "REJECT";
-        unprovenCriteria.push("No deterministic verifier evidence reached this review; a model ACCEPT cannot establish acceptance on its own");
+        unprovenCriteria.push("No deterministic verifier evidence reached this review; a model ACCEPT cannot establish acceptance on its own; make the review unit depend on a unit that runs a verifier command, or accept the operation manually");
       }
       if (pkg.verifierExitCode !== undefined && pkg.verifierExitCode !== 0) {
         finalVerdict = "REJECT";
