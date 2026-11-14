@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01ND9ZJC9GFwGbRiiz1et8qw",
+  "agent_id": "a01cfe6ad3da92fd9",
+  "subagent_type": "Plan",
+  "task_description": "Design SI-2 verification-file protection",
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 40409,
+    "cache_read_tokens": 233336,
+    "output_tokens": 4997,
+    "api_call_count": 8
+  },
+  "started_at": "2026-11-14T18:30:11.148089403Z",
+  "completed_at": "2026-11-14T18:30:57.292228816Z"
+}
