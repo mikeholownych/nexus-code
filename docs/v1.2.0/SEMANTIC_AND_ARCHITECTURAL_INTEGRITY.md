@@ -117,3 +117,26 @@ Units (failing test first, single-PR rollback, each extends an existing record):
 | DV-4 | G-DV-3, G-DV-5 | Attempt lineage (parent attempt, diff hash). Behavioural differential against a declared reference (previous revision or golden cases) only when an authorised requirement names one; every normalisation rule explicit | Baseline-defect correction is not blocked when an authoritative requirement contradicts the baseline; finite-case agreement is never reported as equivalence |
 
 Limits stated up front: differential agreement covers tested inputs and observable behaviour only; the baseline is not authoritative; counterexamples may carry secrets, so they pass the existing redaction path and retention policy. CERI category `differential_verification` is added only with frozen scenarios (behaviour-preserving refactor with an uncovered edge case, misleading baseline, correlated generated tests, counterexample preservation, no-progress loop, unauthorised criteria change, stale evidence, recovery after failure, environmental failure, incomplete equivalence coverage) after DV-1 and DV-2. Order of remaining work: SI-1 (done), CG-1, SI-2, DV-1, CG-3, DV-2, SI-3 to SI-7, CG-2, CG-4, DV-3, DV-4.
+
+## 10. External reference: openai/codex (reviewed 2026-11-14, commit `336b19a`)
+
+Method: two read-only code reads of a shallow clone (nothing built or run); claims are the readers' VERIFIED-IN-CODE findings and have not been independently re-read. Reports: `scratchpad/codex-review-safety.md`, `scratchpad/codex-review-context.md`. Findings refine existing units; one unit is added.
+
+Refinements:
+
+| Unit | Learned from Codex | Change to the unit |
+|---|---|---|
+| SI-2 | Codex protects only `.git`, `.agents`, `.codex`, `.aws` inside writable roots, so tests, CI and verifier scripts are writable and `apply-patch` auto-approves any writable path. Its command policy is data: Starlark `prefix_rule(pattern, decision, justification, match, not_match)` with load-time example checks, an Allow < Prompt < Forbidden lattice, and sandbox bypass only on an explicit Allow for every parsed segment (heuristics never qualify) | Express verification-config protection as operator-owned rules with `match`/`not_match` examples checked at load, and record whether a decision came from a rule or a heuristic. Do not copy Codex's dotfile-only protection |
+| SI-6 / compaction | Codex strips and re-renders instructions and environment after compaction, keeps items flagged `retain_across_windows`, and omits an over-limit objective whole instead of truncating it | Never truncate a requirement partially: omit it whole with a visible marker; add a post-compaction check that every gating requirement is still present |
+| SI-3 / G-SI-6 | Context fragments carry markers and metadata so injected text can be recognised and stripped | Mark every injected block (including `compact --llm` summaries) as untrusted data with its source |
+| CG-2 | Codex's shell environment defaults to inherit-all with secret filtering off | Scrubbed environment for compiler and LSP processes (already the intent) |
+| DV-1 / unknown outcome | A Codex timeout tells the model only "timed out" | Say that side effects are unknown and that a retry must not repeat a non-idempotent action; keep our EXECUTION_UNKNOWN gating |
+| Approvals | Session approval keyed by `{environment, path}` with no content digest; hooks re-hashed at every execution | Re-verify the verifier-script digest at each run, not only at approval |
+
+New unit:
+
+| Unit | Change | Acceptance |
+|---|---|---|
+| TI-1 | Mock-model-server request-shape snapshots for the client and compaction paths (what the model is actually sent: pinned ledger, retry note, `tool_choice`, `toolCallSource` never sent) plus a compact, resume, fork test | Snapshots fail on an unintended request change; snapshots record behaviour that is also asserted, not just generated output |
+
+Where Nexus already leads (keep, do not weaken): prose tool calls are never executed and are re-asked then forced (Codex has no detector and hardcodes `tool_choice` auto); independent acceptance and stale-evidence invalidation (absent in Codex); unknown-outcome gating and idempotent merge (absent); our durable writes (Codex's session log and `write_file` do not fsync or rename). Skip: remote compaction (OpenAI and Azure only), embedded V8 code mode, the memories pipeline, Responses-only wire API.
