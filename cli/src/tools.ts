@@ -8,7 +8,7 @@ import * as tls from "node:tls";
 import * as dns from "node:dns";
 import { URL, fileURLToPath } from "node:url";
 import { ToolDefinition, ExecutionResult } from "./types.js";
-import { SecurityManager } from "./security.js";
+import { SecurityManager, VERIFICATION_CONFIG_PROTECTED } from "./security.js";
 import { InformationFlowBoundary, matchesLocalOrigins, parseLocalOrigins } from "./core/egress.js";
 import { htmlToReadableText } from "./core/html_text.js";
 import { CapabilityRegistry, HARNESS_TOOLS, defaultRegistry } from "./core/capabilities.js";
@@ -1167,6 +1167,15 @@ export class RustCoreBridge {
         };
       }
     }
+
+    if (["write_file", "edit_file", "patch_file", "delete_file"].includes(toolName)) {
+      const gate = this.securityManager.authorizeVerificationEdit(toolName, args);
+      if (!gate.allowed) {
+        return { success: false, output: "", error: gate.error, denialReason: VERIFICATION_CONFIG_PROTECTED };
+      }
+    }
+
+    if (toolName === "run_command") this.securityManager.recordVerificationCommand(String(args.command || ""));
 
     if (toolName === "batch_read" && Array.isArray(args.paths)) {
       for (const p of args.paths) {

@@ -607,7 +607,8 @@ export class ExecutionSpine {
       error: result.error,
       durationMs,
       candidateMutated,
-      status: result.success ? "COMPLETED" : "FAILED",
+      status: result.success ? "COMPLETED" : result.denialReason ? "DENIED" : "FAILED",
+      ...(result.denialReason ? { denialReason: result.denialReason } : {}),
       timestamp: new Date().toISOString(),
       simulated: Boolean(context.dryRun),
     };
