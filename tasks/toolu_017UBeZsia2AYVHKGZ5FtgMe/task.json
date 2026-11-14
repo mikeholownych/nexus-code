@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_017UBeZsia2AYVHKGZ5FtgMe",
+  "agent_id": "a2bf922bd6bb41931",
+  "subagent_type": "general-purpose",
+  "task_description": "Local Code/Security/Slop review of SI-8",
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 64665,
+    "cache_read_tokens": 627174,
+    "output_tokens": 6205,
+    "api_call_count": 10
+  },
+  "started_at": "2026-11-14T22:23:41.645626443Z",
+  "completed_at": "2026-11-14T22:24:44.306620107Z"
+}
