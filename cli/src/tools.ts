@@ -1349,6 +1349,9 @@ export class RustCoreBridge {
         output: JSON.stringify({
           command: res.command,
           passed: res.success,
+          ...(res.exitCode !== undefined ? { exitCode: res.exitCode } : {}),
+          ...(res.executorFailed ? { executorFailed: true } : {}),
+          ...(res.timedOut ? { timedOut: true } : {}),
           failures: res.failures,
           diagnostics: res.diagnostics,
           // The end of the run's output (where runners report counts): bounded, and what coverage is judged from.
