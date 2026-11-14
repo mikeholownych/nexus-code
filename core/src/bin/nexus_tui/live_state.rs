@@ -173,7 +173,7 @@ pub enum SteerState {
 impl SteerState {
     fn from_ack(status: &str) -> SteerState {
         match status {
-            "queued" => SteerState::Queued,
+            "queued" | "held" => SteerState::Queued,
             "applied" => SteerState::Applied,
             "deferred" => SteerState::Deferred,
             "cancelled" => SteerState::Cancelled,
@@ -1717,6 +1717,10 @@ impl LiveState {
         if verdict != Verdict::Denied && !approval.read_all {
             approval.notice = Some(APPROVAL_UNSEEN);
             approval.rearm_guard(now);
+            return None;
+        }
+        // Dropping a requirement is its own decision: there is no "all later" answer for it.
+        if verdict == Verdict::ApprovedForSession && approval.tool == "steering_conflict" {
             return None;
         }
         // Approving every later action is never one key: it asks once, then Enter or `a` confirms, no sooner than
@@ -3798,6 +3802,21 @@ mod tests {
                 id: "approval-1".into(),
                 always: true
             }))
+        );
+    }
+
+    #[test]
+    fn a_steering_conflict_prompt_has_no_approve_all_later_answer() {
+        let mut state = ready();
+        type_text(&mut state, "make x");
+        assert!(state.on_key(key(KeyCode::Enter)).is_some());
+        state.apply(ev(&APPROVAL.replace("write_file", "steering_conflict")));
+        let opened = opened_at(&mut state);
+        assert_eq!(state.on_key_at(key(KeyCode::Char('a')), opened), None);
+        assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if !a.confirming));
+        assert_eq!(
+            state.on_key_at(key(KeyCode::Char('y')), opened + Duration::from_secs(2)),
+            Some(Action::Send(Command::Approve { id: "approval-1".into(), always: false }))
         );
     }
 

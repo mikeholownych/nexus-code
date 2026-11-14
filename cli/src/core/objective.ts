@@ -81,6 +81,26 @@ export interface SteeringRecord {
   appliedAtStep?: number;
 }
 
+/** Steering that negates a requirement: held out of the conversation and the ledger until the operator decides. */
+export interface SteeringConflict {
+  id: string;
+  text: string;
+  requirements: string[];
+  receivedAt: string;
+  /** `unresolved`: no operator was available, so the ledger is unchanged and the negation was not applied. */
+  status: "pending" | "approved" | "declined" | "unresolved";
+  decidedAt?: string;
+}
+
+/** Requirements of an earlier objective still unmet when a new request replaced it; the operator decides what happens to them. */
+export interface SupersededObjective {
+  at: string;
+  objective: string;
+  objectiveSha256: string;
+  requirements: Array<{ id: string; text: string; status: RequirementStatus }>;
+  status: "pending_decision";
+}
+
 export interface VerificationAttempt {
   n: number;
   command: string;
@@ -141,6 +161,8 @@ export interface ObjectiveLedger {
   requirements: Requirement[];
   scopeChanges: ScopeChange[];
   steering: SteeringRecord[];
+  steeringConflicts?: SteeringConflict[];
+  superseded?: SupersededObjective[];
   verification: VerificationAttempt[];
   continuation: ContinuationState;
   /** The model's own statement of what comes next (update_requirements next_action). */
@@ -448,6 +470,101 @@ export function queueSteering(ledger: ObjectiveLedger, id: string, text: string,
   const record: SteeringRecord = { id, text, receivedAt: at, status: "queued" };
   ledger.steering.push(record);
   return record;
+}
+
+const NEGATOR = String.raw`(?:dont|do not|never|not|without|cant|wont)`;
+const NOUN = String.raw`(?:requirements?|reqs?)`;
+const TARGET = String.raw`(?:(?:the\s+)?${NOUN}\s*(?:no\s+|number\s+)?r?\d{1,3}(?:\s+(?:and\s+)?r?\d{1,3})*|r\d{1,3}(?:\s+and\s+r\d{1,3})*)`;
+const DROP = new RegExp(String.raw`\b(?:drop|remove|ignore|skip|disregard|abandon|cancel|scrap|descope)\s+(?:all\s+of\s+)?${TARGET}\b`, "g");
+const NO_NEED = new RegExp(String.raw`\b(?:dont|do not|never|no need to|no need for)\s+(?:(?:do|doing|implement|implementing|work on|working on|address|addressing|handle|handling|bother with|need)\s+)?${TARGET}\b`, "g");
+const NO_LONGER = new RegExp(String.raw`\b${TARGET}\s+(?:no longer\s+(?:applies|apply|matters|needed|required|relevant)|(?:is|are)\s+(?:no longer\s+(?:needed|required|relevant|applicable)|obsolete|cancelled|canceled|void|not needed|unnecessary|dropped)|can be\s+(?:dropped|skipped|ignored|removed)|should be\s+(?:dropped|removed|skipped|ignored))`, "g");
+
+const DEFERRED = /\b(?:yet|for now|until|later|temporarily|first)\b/;
+const unquoted = (text: string) => text.replace(/```[\s\S]*?(?:```|$)/g, " ").replace(/`[^`\n]*`/g, " ").replace(/"[^"\n]*"|\u201c[^\u201d\n]*\u201d/g, " ");
+
+const normalizeClause = (text: string) => text.toLowerCase().replace(/['\u2019]/g, "").replace(/\s*[,&]\s*/g, " and ").replace(/[^a-z0-9]+/g, " ").trim();
+
+/**
+ * Requirements that `text` explicitly negates: "drop requirement 3", "don't do R2", "requirement 2 no longer
+ * applies", or "don't <the requirement's own wording>". Mentioning a number, adding a requirement or "don't forget
+ * requirement 3" is not a negation. Anything ambiguous returns nothing, so only a deterministic negation blocks.
+ */
+export function steeringNegations(ledger: ObjectiveLedger, text: string): string[] {
+  const live = gatingRequirements(ledger).filter((r) => !requirementDone(r));
+  const found = new Set<string>();
+  for (const sentence of unquoted(text).split(/[.!?;\n]+/)) {
+    const clause = normalizeClause(sentence);
+    if (!clause || DEFERRED.test(clause)) continue;
+    const refs: string[] = [];
+    for (const m of clause.matchAll(DROP)) {
+      if (!new RegExp(String.raw`\b${NEGATOR}\b`).test(clause.slice(0, m.index))) refs.push(m[0]);
+    }
+    for (const m of clause.matchAll(NO_NEED)) refs.push(m[0]);
+    for (const m of clause.matchAll(NO_LONGER)) refs.push(m[0]);
+    for (const ref of refs) for (const n of ref.match(/\d+/g) ?? []) found.add(`R${Number(n)}`);
+    for (const r of live) {
+      const own = normalizeClause(r.text);
+      if (own.split(" ").length < 3) continue;
+      if (new RegExp(String.raw`(?:^|\s)(?:dont|do not|never|no need to)\s+(?:to\s+)?${own}(?:\s|$)`).test(clause)) found.add(r.id);
+    }
+  }
+  return live.filter((r) => found.has(r.id.toUpperCase())).map((r) => r.id);
+}
+
+/** Records steering that negates requirements, once per steering id. The ledger's requirements are not touched. */
+export function recordSteeringConflict(ledger: ObjectiveLedger, id: string, text: string, requirements: string[], at = now()): SteeringConflict | undefined {
+  if (ledger.steering.some((s) => s.id === id) || ledger.steeringConflicts?.some((c) => c.id === id)) return undefined;
+  const conflict: SteeringConflict = { id, text, requirements, receivedAt: at, status: "pending" };
+  (ledger.steeringConflicts ??= []).push(conflict);
+  return conflict;
+}
+
+/**
+ * The operator's decision, recorded only while the conflict is still pending: approval descopes the negated
+ * requirements (accepted) and queues the steering; a refusal changes nothing. `note` is the sanitised steering text.
+ */
+export function resolveSteeringConflict(ledger: ObjectiveLedger, conflict: SteeringConflict, approved: boolean, note: string, at = now()): boolean {
+  if (conflict.status !== "pending") return false;
+  conflict.status = approved ? "approved" : "declined";
+  conflict.decidedAt = at;
+  if (!approved) return true;
+  for (const id of conflict.requirements) {
+    const r = ledger.requirements.find((req) => req.id === id);
+    if (!r) continue;
+    ledger.scopeChanges.push({ at, requirement: r.id, from: r.status, to: "descoped", reason: `operator approved steering ${conflict.id}` });
+    r.status = "descoped";
+    r.operatorAccepted = true;
+    r.note = clip(`operator approved steering ${conflict.id}: ${note}`, MAX_EVIDENCE_CHARS);
+    r.updatedAt = at;
+  }
+  queueSteering(ledger, conflict.id, conflict.text, at);
+  return true;
+}
+
+/** Conflicts still waiting when the turn closes can no longer be applied coherently: they stay unresolved, nothing changes. */
+export function settleSteeringConflicts(ledger: ObjectiveLedger, at = now()): SteeringConflict[] {
+  const settled: SteeringConflict[] = [];
+  for (const c of ledger.steeringConflicts ?? []) {
+    if (c.status !== "pending") continue;
+    c.status = "unresolved";
+    c.decidedAt = at;
+    settled.push(c);
+  }
+  return settled;
+}
+
+/** What a new objective would orphan: the earlier objective and its requirements that are not done. */
+export function supersededBy(previous: ObjectiveLedger, at = now()): SupersededObjective | undefined {
+  if (previous.outcome?.status === "completed") return undefined;
+  const unmet = previous.requirements.filter((r) => !requirementDone(r));
+  if (!unmet.length) return undefined;
+  return {
+    at,
+    objective: previous.objective,
+    objectiveSha256: previous.objectiveSha256,
+    requirements: unmet.map((r) => ({ id: r.id, text: r.text, status: r.status })),
+    status: "pending_decision",
+  };
 }
 
 /**

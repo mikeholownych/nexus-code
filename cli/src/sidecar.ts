@@ -95,7 +95,9 @@ export class SidecarServer {
   private alwaysApprove = false;
   private activeTurn?: Promise<void>;
   private turnAbort?: AbortController;
-  private pendingApproval?: { id: string; settle: (approved: boolean) => void };
+  private pendingApproval?: { id: string; tool: string; settle: (approved: boolean) => void };
+  /** Approvals are asked one at a time: a second request waits for the open one instead of replacing it. */
+  private approvalTail: Promise<unknown> = Promise.resolve();
   /** The last approval was settled by the operator's Deny, not by a cancel or a shutdown. */
   private operatorDeclined = false;
   private pendingCheckpointChoice?: { id: string; choices: readonly CheckpointChoice[]; settle: (choice: CheckpointChoice) => void };
@@ -339,7 +341,7 @@ export class SidecarServer {
    */
   private steer(id: string, text: string): void {
     // Seen by this process, or recorded in the session's objective ledger (applied before a restart and resume).
-    if (this.steerSeen.has(id) || this.app.getAgent().getObjective()?.steering.some((s) => s.id === id)) {
+    if (this.steerSeen.has(id) || this.app.getAgent().getObjective()?.steering.some((s) => s.id === id) || this.app.getAgent().getObjective()?.steeringConflicts?.some((c) => c.id === id)) {
       this.steerAck(id, "duplicate", "Already received; it is not applied again.");
       return;
     }
@@ -381,8 +383,19 @@ export class SidecarServer {
       this.steerAck(id, "duplicate", "Already received; it is not applied again.");
       return;
     }
-    this.followUps.push({ id, text });
-    this.steerAck(id, "deferred", "The turn is finishing; your message runs as its own follow-up turn once the turns before it have ended.");
+    if (queued.status === "conflict") {
+      const negates = (queued.requirements ?? []).join(", ");
+      if (queued.held) this.steerAck(id, "held", `Held: this would drop ${negates}. Nothing changed; decide on the approval prompt.`);
+      else this.steerAck(id, "rejected", `This would drop ${negates}, which needs your decision, and none could be asked; the conflict is recorded and nothing changed. Your message is back in the composer.`, text);
+      return;
+    }
+    if (queued.status === "no_active_turn") {
+      this.followUps.push({ id, text });
+      this.steerAck(id, "deferred", "The turn is finishing; your message runs as its own follow-up turn once the turns before it have ended.");
+      return;
+    }
+    const unhandled: never = queued.status;
+    throw new Error(`unhandled steering status ${String(unhandled)}`);
   }
 
   /**
@@ -548,7 +561,7 @@ export class SidecarServer {
       onAssistantDelta: (delta) => this.emit({ type: "assistant.delta", turn_id: turnId, text: delta }),
       onToolStart: ({ dispatch, callId, tool: rawTool, args }) => {
         const tool = rawTool;
-        const subject = toolSubject(args);
+        const subject = toolSubject(args, rawTool);
         const evidence = this.evidence.start(turnId, redactThenCap(rawTool, 200), subject, args);
         open.set(dispatch, evidence);
         this.emit({ type: "tool.start", turn_id: turnId, call_id: callId, tool, subject, evidence });
@@ -638,9 +651,9 @@ export class SidecarServer {
   }
 
   private confirmFor(turnId: string, signal: AbortSignal) {
-    return (tool: string, args: Record<string, any>) => {
-      if (this.alwaysApprove) return Promise.resolve(true);
-      return this.requestApproval(turnId, signal, tool, args);
+    return (tool: string, args: Record<string, any>, question?: AbortSignal) => {
+      if (this.alwaysApprove && tool !== DELIBERATE_APPROVAL) return Promise.resolve(true);
+      return this.requestApproval(turnId, question ? AbortSignal.any([signal, question]) : signal, tool, args);
     };
   }
 
@@ -759,8 +772,15 @@ export class SidecarServer {
   }
 
   private requestApproval(turnId: string, signal: AbortSignal, tool: string, args: Record<string, any>): Promise<boolean> {
-    this.operatorDeclined = false;
-    if (this.alwaysApprove) return Promise.resolve(true);
+    if (this.alwaysApprove && tool !== DELIBERATE_APPROVAL) return Promise.resolve(true);
+    const queued = this.approvalTail.then(() => this.openApproval(turnId, signal, tool, args));
+    this.approvalTail = queued.catch(() => {});
+    return queued;
+  }
+
+  private openApproval(turnId: string, signal: AbortSignal, tool: string, args: Record<string, any>): Promise<boolean> {
+    if (tool !== DELIBERATE_APPROVAL) this.operatorDeclined = false;
+    if (this.alwaysApprove && tool !== DELIBERATE_APPROVAL) return Promise.resolve(true);
     if (signal.aborted) return Promise.resolve(false);
     const id = `approval-${++this.approvalSeq}`;
     return new Promise<boolean>((resolve) => {
@@ -771,13 +791,13 @@ export class SidecarServer {
         resolve(approved);
       };
       signal.addEventListener("abort", onAbort, { once: true });
-      this.pendingApproval = { id, settle };
+      this.pendingApproval = { id, tool, settle };
       this.emit({
         type: "approval.request",
         id,
         turn_id: turnId,
         tool,
-        subject: toolSubject(args),
+        subject: toolSubject(args, tool),
         preview: redactedJson(args),
         review: approvalReview(tool, args, this.app.getConfig().workspace),
       });
@@ -790,14 +810,14 @@ export class SidecarServer {
       this.emit({ type: "error", id, code: "NO_PENDING_APPROVAL", message: `No pending approval with id ${id}.` });
       return;
     }
-    if (approved && always) {
+    if (approved && always && pending.tool !== DELIBERATE_APPROVAL) {
       this.alwaysApprove = true;
       this.mode = "auto";
       this.app.getAgent().setApprovalMode("auto");
       this.emitSessionState();
     }
     // Only the operator's own Deny says "denied by you"; a cancelled turn or a shutdown settles the approval as false too.
-    this.operatorDeclined = !approved;
+    if (pending.tool !== DELIBERATE_APPROVAL) this.operatorDeclined = !approved;
     pending.settle(approved);
   }
 
@@ -1107,7 +1127,7 @@ export class SidecarServer {
           try {
             args = JSON.parse(call.function.arguments || "{}");
           } catch {}
-          entries.push({ role: "tool", tool: call.function.name, text: toolSubject(args) });
+          entries.push({ role: "tool", tool: call.function.name, text: toolSubject(args, call.function.name) });
         }
       }
     }
@@ -1236,6 +1256,9 @@ export const FIELD_LIMITS: Partial<Record<SidecarEvent["type"], Readonly<Record<
 };
 
 /** Characters kept of a resumed conversation's entries: tool names and subjects are short, messages are bounded. */
+/** Approvals that change what the operator asked for: never covered by a blanket approval, always an explicit decision. */
+const DELIBERATE_APPROVAL = "steering_conflict";
+
 const HISTORY_LIMITS = { toolName: 80, toolSubject: 200, text: HISTORY_CHARS } as const;
 
 /** Longest `…[truncated N chars]` marker capText appends after the kept text. */
