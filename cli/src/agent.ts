@@ -2821,8 +2821,10 @@ export class AutonomousAgent {
   private async decideSteeringConflict(ledger: ObjectiveLedger, conflict: SteeringConflict, onConfirm: ConfirmHandler, abort: AbortController): Promise<void> {
     if (conflict.status !== "pending" || abort.signal.aborted) return;
     let approved = false;
+    let answered = false;
+    const withdrawn = new Promise<boolean>((resolve) => abort.signal.addEventListener("abort", () => resolve(false), { once: true }));
     try {
-      approved = await onConfirm(
+      approved = await Promise.race([onConfirm(
         "steering_conflict",
         {
           steering: conflict.id,
@@ -2830,11 +2832,13 @@ export class AutonomousAgent {
           negates: conflict.requirements.map((id) => ({ id, text: safeOperatorText(ledger.requirements.find((r) => r.id === id)?.text ?? "", 160) })),
         },
         abort.signal,
-      );
+      ), withdrawn]);
+      answered = true;
     } catch {}
     this.conflictAborts.delete(conflict.id);
     if (conflict.status !== "pending") return;
-    if (this.objective !== ledger || !this.activeTurn || this.activeTurn.closing) {
+    const turn = this.activeTurn;
+    if (!answered || abort.signal.aborted || this.objective !== ledger || !turn || turn.closing || turn.cancelRequestedAt || turn.controller.signal.aborted) {
       conflict.status = "unresolved";
       conflict.decidedAt = new Date().toISOString();
       this.reportUndecided(conflict);
@@ -6196,7 +6200,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         const orphaned = ledger ? supersededBy(ledger) : undefined;
         ledger = createLedger(taskPrompt, undefined, this.unitId);
         ledger.steering.push(...carried);
-        if (orphaned) ledger.superseded = [...(this.objective?.superseded ?? []), orphaned];
+        const prior = this.objective?.superseded ?? [];
+        if (prior.length || orphaned) ledger.superseded = [...prior, ...(orphaned ? [orphaned] : [])];
       } else {
         if (this.unitId && !ledger.unitId) {
           ledger.unitId = this.unitId;

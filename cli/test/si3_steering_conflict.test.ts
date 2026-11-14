@@ -489,3 +489,73 @@ describe("REPL steering decision", () => {
     assert.equal(await confirm.call({ rl: undefined }, { steering: "s1", text: "t", negates: [] }), false);
   });
 });
+
+describe("round 3: cancellation, superseded chain, handlers that ignore the signal", () => {
+  async function withConflict(handler: (resolve: (v: boolean) => void) => any, act: (agent: AutonomousAgent, answer: (v: boolean) => void) => void) {
+    const gw = await startGateway((n) => (n === 1 ? { ...listDir, delayMs: 300 } : { kind: "text", content: "stopping here" }));
+    const repo = makeRepo();
+    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo)));
+    const acks: any[] = [];
+    agent.setObserver({ onSteering: (e: any) => acks.push(e) } as any);
+    let answer!: (v: boolean) => void;
+    try {
+      const pending = agent.runTurn(OBJECTIVE, (_t, _a, signal) => new Promise<boolean>((resolve) => {
+        answer = resolve;
+        handler(resolve);
+        void signal;
+      }));
+      await inferring(agent);
+      agent.queueSteering("s1", "Drop requirement 3.");
+      await new Promise((r) => setTimeout(r, 20));
+      act(agent, answer);
+      await pending;
+      return { acks, ledger: agent.getObjective()!, agent };
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  }
+
+  test("cancelling the turn while a conflict prompt is open is undecided, never 'declined'", { timeout: 60_000 }, async () => {
+    const { acks, ledger } = await withConflict(() => {}, (agent, answer) => {
+      agent.requestCancel("operator");
+      answer(false);
+    });
+    assert.equal(ledger.steeringConflicts![0].status, "unresolved");
+    assert.deepEqual(ledger.requirements.map((r) => r.status), ["open", "open", "open"]);
+    assert.equal(acks.length, 1);
+    assert.match(acks[0].reason, /the turn ended before you decided/);
+    assert.ok(!acks.some((a) => /declined/.test(a.reason ?? "")));
+  });
+
+  test("a handler that ignores the signal and never answers does not stall later decisions", { timeout: 60_000 }, async () => {
+    const { ledger, agent } = await withConflict(() => {}, () => {});
+    assert.equal(ledger.steeringConflicts![0].status, "unresolved");
+    await Promise.race([(agent as any).steeringDecisions, new Promise((_, rej) => setTimeout(() => rej(new Error("chain stalled")), 3000))]);
+  });
+
+  test("a completed middle objective keeps the earlier superseded records (A -> B -> C)", { timeout: 60_000 }, async () => {
+    const gw = await startGateway(() => ({ kind: "text", content: "ok" }));
+    const repo = makeRepo();
+    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo)));
+    try {
+      await agent.runTurn("Fix the flaky parser test.");
+      agent.getObjective()!.outcome = undefined;
+      await agent.runTurn("Now rename the CLI flag --old to --new.");
+      const b = agent.getObjective()!;
+      assert.equal(b.superseded?.length, 1);
+      b.outcome = { status: "completed", reason: "done" } as any;
+      b.requirements.forEach((r) => (r.status = "verified"));
+      await agent.runTurn("Then update the changelog.");
+      const c = agent.getObjective()!;
+      assert.equal(c.superseded?.length, 1);
+      assert.equal(c.superseded![0].objective, "Fix the flaky parser test.");
+      assert.equal(c.superseded![0].status, "pending_decision");
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});
