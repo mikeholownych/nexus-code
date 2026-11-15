@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01X17FuZji3J55JbgmUAjUyW",
+  "agent_id": "adf54a28f3f98d4b6",
+  "subagent_type": "general-purpose",
+  "task_description": "Measure code, test and process health",
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 64658,
+    "cache_read_tokens": 741744,
+    "output_tokens": 11415,
+    "api_call_count": 12
+  },
+  "started_at": "2026-11-15T02:31:09.894594887Z",
+  "completed_at": "2026-11-15T02:32:57.205089158Z"
+}

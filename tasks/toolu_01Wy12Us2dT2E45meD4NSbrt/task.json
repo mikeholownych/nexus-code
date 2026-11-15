@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Wy12Us2dT2E45meD4NSbrt",
+  "agent_id": "a9ccb2272b94d68b1",
+  "subagent_type": "general-purpose",
+  "task_description": "Inventory Nexus capabilities for comparison",
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 86950,
+    "cache_read_tokens": 638626,
+    "output_tokens": 8838,
+    "api_call_count": 9
+  },
+  "started_at": "2026-11-15T02:26:34.817222579Z",
+  "completed_at": "2026-11-15T02:27:44.046327982Z"
+}

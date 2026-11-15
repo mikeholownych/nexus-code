@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_011CUwt2V1p1D7rDhXFuC5dG",
+  "agent_id": "ae7a54e57ee522423",
+  "subagent_type": "general-purpose",
+  "task_description": "Study Goose and Cline",
+  "token_usage": {
+    "input_tokens": 32,
+    "cache_creation_tokens": 75674,
+    "cache_read_tokens": 1137645,
+    "output_tokens": 10753,
+    "api_call_count": 16
+  },
+  "started_at": "2026-11-15T02:26:27.61140715Z",
+  "completed_at": "2026-11-15T02:28:09.513708587Z"
+}

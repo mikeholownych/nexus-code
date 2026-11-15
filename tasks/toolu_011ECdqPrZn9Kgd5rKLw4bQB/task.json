@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_011ECdqPrZn9Kgd5rKLw4bQB",
+  "agent_id": "adb05501f3a2c6163",
+  "subagent_type": "general-purpose",
+  "task_description": "Study opencode and Gemini CLI",
+  "token_usage": {
+    "input_tokens": 34,
+    "cache_creation_tokens": 105862,
+    "cache_read_tokens": 1257946,
+    "output_tokens": 12600,
+    "api_call_count": 17
+  },
+  "started_at": "2026-11-15T02:26:18.24993725Z",
+  "completed_at": "2026-11-15T02:28:15.576147568Z"
+}
