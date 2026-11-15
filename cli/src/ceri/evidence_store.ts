@@ -9,6 +9,10 @@ export interface IntegrityRecord {
   calculatedAt: string;
   fileHashes: Record<string, string>;
   compositeSha256: string;
+  migrated?: boolean;
+  migratedAt?: string;
+  migrationReason?: string;
+  normalizedAssertions?: string[];
 }
 
 export type IntegrityFailureReason =
@@ -148,7 +152,10 @@ export class CeriEvidenceStore {
       fs.mkdirSync(runDir);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-        throw new Error(`Run "${sRunId}" already exists for evaluation "${sEvalId}"; run ids are never reused or overwritten`);
+        throw new Error(
+          `Run "${sRunId}" already exists for evaluation "${sEvalId}"; run ids are never reused or overwritten. ` +
+            `If that run crashed before finalizeRun, quarantine it with abandonRun("${sEvalId}", "${sRunId}") and start again.`,
+        );
       }
       throw err;
     }
@@ -216,24 +223,7 @@ export class CeriEvidenceStore {
     const manifestPath = path.join(this.currentRunDir, "manifest.json");
     this.atomicWriteJson(manifestPath, this.currentManifest);
 
-    // Compute file hashes for tamper evidence
-    const files = fs.readdirSync(this.currentRunDir).filter((f) => f !== "integrity.json" && !f.startsWith(".tmp"));
-    const fileHashes: Record<string, string> = {};
-
-    for (const file of files.sort()) {
-      fileHashes[file] = createHash("sha256").update(fs.readFileSync(path.join(this.currentRunDir, file))).digest("hex");
-    }
-
-    const compositeSha256 = compositeOf(fileHashes);
-    const integrityRecord: IntegrityRecord = {
-      runId: this.currentManifest.runId,
-      calculatedAt: completedAt,
-      fileHashes,
-      compositeSha256,
-    };
-
-    const integrityPath = path.join(this.currentRunDir, "integrity.json");
-    this.atomicWriteJson(integrityPath, integrityRecord, false);
+    const compositeSha256 = this.writeIntegrity(this.currentRunDir, this.currentManifest.runId, completedAt);
 
     const result = { integrityHash: compositeSha256, runDir: this.currentRunDir };
     this.currentRunDir = undefined;
@@ -241,60 +231,175 @@ export class CeriEvidenceStore {
     return result;
   }
 
-  /**
-   * Checks a run's integrity record against the files on disk: record present and readable, naming this run, covering
-   * exactly the files present, with every file hash and the composite matching.
-   */
-  verifyRun(evaluationId: string, runId: string): { ok: true } | { ok: false; reason: IntegrityFailureReason; detail: string } {
+  private runDirOf(evaluationId: string, runId: string): { sEvalId: string; sRunId: string; runDir: string } {
     const sEvalId = sanitizeIdentifier(evaluationId, "evaluationId");
     const sRunId = sanitizeIdentifier(runId, "runId");
     const runDir = path.resolve(this.baseDir, sEvalId, sRunId);
     if (!runDir.startsWith(this.baseDir + path.sep)) {
       throw new Error(`Path traversal detected: ${runDir} is outside baseDir ${this.baseDir}`);
     }
+    return { sEvalId, sRunId, runDir };
+  }
+
+  /** Reads every evidence file of a run once (regular files only); the same buffers are hashed and parsed. */
+  private readRunFiles(runDir: string): Map<string, Buffer> | string {
+    const files = new Map<string, Buffer>();
+    for (const name of fs.readdirSync(runDir).sort()) {
+      if (name === "integrity.json" || name.startsWith(".tmp")) continue;
+      const full = path.join(runDir, name);
+      if (!fs.lstatSync(full).isFile()) return `'${name}' is not a regular file`;
+      files.set(name, fs.readFileSync(full));
+    }
+    return files;
+  }
+
+  private writeIntegrity(runDir: string, runId: string, calculatedAt: string, extra: Partial<IntegrityRecord> = {}): string {
+    const files = this.readRunFiles(runDir);
+    if (typeof files === "string") throw new Error(`Cannot write integrity record: ${files}`);
+    const fileHashes: Record<string, string> = {};
+    for (const [name, buf] of files) fileHashes[name] = createHash("sha256").update(buf).digest("hex");
+    const compositeSha256 = compositeOf(fileHashes);
+    const record: IntegrityRecord = { runId, calculatedAt, fileHashes, compositeSha256, ...extra };
+    this.atomicWriteJson(path.join(runDir, "integrity.json"), record, false);
+    return compositeSha256;
+  }
+
+  private verifyAndRead(
+    sEvalId: string,
+    sRunId: string,
+    runDir: string,
+  ): { ok: true; files: Map<string, Buffer>; migrated: boolean } | { ok: false; reason: IntegrityFailureReason; detail: string } {
     const fail = (reason: IntegrityFailureReason, detail: string) => ({ ok: false as const, reason, detail });
     const integrityPath = path.join(runDir, "integrity.json");
-    if (!fs.existsSync(integrityPath)) return fail("INTEGRITY_MISSING", `no integrity record for run '${sRunId}'`);
+    if (!fs.existsSync(integrityPath)) {
+      return fail(
+        "INTEGRITY_MISSING",
+        `no integrity record for run '${sRunId}'. If the run crashed before finalizeRun, quarantine it with abandonRun; ` +
+          `for evidence written before integrity records existed, an operator can run migrateLegacyRun`,
+      );
+    }
+    const legacy = ` (legacy evidence can be re-recorded by an operator with migrateLegacyRun("${sEvalId}", "${sRunId}", reason))`;
     let record: IntegrityRecord;
     try {
       record = JSON.parse(fs.readFileSync(integrityPath, "utf-8")) as IntegrityRecord;
       if (!record || typeof record.fileHashes !== "object" || record.fileHashes === null || typeof record.compositeSha256 !== "string") throw new Error("bad shape");
     } catch {
-      return fail("INTEGRITY_UNREADABLE", "integrity.json is not a valid integrity record");
+      return fail("INTEGRITY_UNREADABLE", `integrity.json is not a valid integrity record${legacy}`);
     }
-    if (record.runId !== sRunId) return fail("RUN_ID_MISMATCH", `record names run '${record.runId}', directory is '${sRunId}'`);
-    const files = fs.readdirSync(runDir).filter((f) => f !== "integrity.json" && !f.startsWith(".tmp")).sort();
+    if (record.runId !== sRunId) return fail("RUN_ID_MISMATCH", `record names run '${record.runId}', directory is '${sRunId}'${legacy}`);
+    const files = this.readRunFiles(runDir);
+    if (typeof files === "string") return fail("FILE_SET_MISMATCH", files);
     const recorded = Object.keys(record.fileHashes).sort();
-    if (files.join("\0") !== recorded.join("\0")) return fail("FILE_SET_MISMATCH", `files on disk [${files}] differ from recorded [${recorded}]`);
-    for (const file of files) {
-      const hash = createHash("sha256").update(fs.readFileSync(path.join(runDir, file))).digest("hex");
-      if (hash !== record.fileHashes[file]) return fail("HASH_MISMATCH", `${file} does not match its recorded hash`);
+    const present = [...files.keys()];
+    if (present.join("\0") !== recorded.join("\0")) return fail("FILE_SET_MISMATCH", `files on disk [${present}] differ from recorded [${recorded}]${legacy}`);
+    for (const [name, buf] of files) {
+      if (createHash("sha256").update(buf).digest("hex") !== record.fileHashes[name]) return fail("HASH_MISMATCH", `${name} does not match its recorded hash${legacy}`);
     }
-    if (compositeOf(record.fileHashes) !== record.compositeSha256) return fail("COMPOSITE_MISMATCH", "composite hash does not match the recorded file hashes");
-    return { ok: true };
+    if (compositeOf(record.fileHashes) !== record.compositeSha256) return fail("COMPOSITE_MISMATCH", `composite hash does not match the recorded file hashes${legacy}`);
+    return { ok: true, files, migrated: record.migrated === true };
   }
 
-  private requireVerified(sEvalId: string, sRunId: string): void {
-    if (!fs.existsSync(path.join(this.baseDir, sEvalId, sRunId))) return;
-    const verdict = this.verifyRun(sEvalId, sRunId);
-    if (!verdict.ok) throw new CeriEvidenceIntegrityError(verdict.reason, verdict.detail);
+  /**
+   * Checks a run's integrity record against the files on disk: record present and readable, naming this run, covering
+   * exactly the regular files present, with every file hash and the composite matching.
+   */
+  verifyRun(evaluationId: string, runId: string): { ok: true; migrated?: true } | { ok: false; reason: IntegrityFailureReason; detail: string } {
+    const { sEvalId, sRunId, runDir } = this.runDirOf(evaluationId, runId);
+    const v = this.verifyAndRead(sEvalId, sRunId, runDir);
+    if (!v.ok) return v;
+    return v.migrated ? { ok: true, migrated: true } : { ok: true };
+  }
+
+  /** Verified evidence files of a run, or undefined when the run does not exist. Throws on any integrity failure. */
+  private loadVerifiedFile(evaluationId: string, runId: string, file: string): Buffer | undefined {
+    const { sEvalId, sRunId, runDir } = this.runDirOf(evaluationId, runId);
+    if (!fs.existsSync(runDir)) return undefined;
+    const v = this.verifyAndRead(sEvalId, sRunId, runDir);
+    if (!v.ok) throw new CeriEvidenceIntegrityError(v.reason, v.detail);
+    return v.files.get(file);
+  }
+
+  /**
+   * Quarantines a run that never reached finalizeRun (a crash): the directory is renamed to `<id>.abandoned-<ms>`,
+   * never deleted, and the run id becomes available again. A finalized run cannot be abandoned.
+   */
+  abandonRun(evaluationId: string, runId: string): string {
+    const { sRunId, runDir } = this.runDirOf(evaluationId, runId);
+    if (!fs.existsSync(runDir)) throw new Error(`Cannot abandon: no run '${sRunId}' for evaluation '${evaluationId}'`);
+    if (fs.existsSync(path.join(runDir, "integrity.json"))) throw new Error(`Cannot abandon run '${sRunId}': it is finalized`);
+    const target = `${runDir}.abandoned-${Date.now()}`;
+    fs.renameSync(runDir, target);
+    if (this.currentRunDir === runDir) {
+      this.currentRunDir = undefined;
+      this.currentManifest = undefined;
+    }
+    return target;
+  }
+
+  /**
+   * One-way, operator-invoked re-recording of evidence written before integrity records were reliable (missing,
+   * redacted or mismatched record, string `passed`). The old integrity record and any rewritten assertions file are kept
+   * as `*.pre-migration-<ms>.*`; the new record is marked `migrated` with the reason. Only the exact strings "true" and
+   * "false" are normalized; anything else is refused. A run that already verifies is not migrated. This trusts the files
+   * as they are now: it records, it does not prove, that they are the original evidence.
+   */
+  migrateLegacyRun(evaluationId: string, runId: string, reason: string): { integrityHash: string; runDir: string } {
+    if (typeof reason !== "string" || !reason.trim()) throw new Error("migrateLegacyRun requires a non-empty reason");
+    const { sEvalId, sRunId, runDir } = this.runDirOf(evaluationId, runId);
+    if (!fs.existsSync(runDir)) throw new Error(`Cannot migrate: no run '${sRunId}' for evaluation '${sEvalId}'`);
+    const stamp = Date.now();
+    const files = this.readRunFiles(runDir);
+    if (typeof files === "string") throw new Error(`Cannot migrate run '${sRunId}': ${files}`);
+    if (this.verifyAndRead(sEvalId, sRunId, runDir).ok) throw new Error(`Run '${sRunId}' already verifies; nothing to migrate`);
+
+    const normalized: string[] = [];
+    let rewritten: string | undefined;
+    const raw = files.get("assertions.json");
+    if (raw) {
+      let data: unknown;
+      try {
+        data = JSON.parse(raw.toString("utf-8"));
+      } catch {
+        data = undefined;
+      }
+      const fix = (id: string, passed: unknown): boolean => {
+        if (typeof passed === "boolean") return passed;
+        if (passed === "true" || passed === "false") {
+          normalized.push(id);
+          return passed === "true";
+        }
+        throw new CeriEvidenceIntegrityError("NON_BOOLEAN_PASSED", `assertion '${id}' has passed=${JSON.stringify(passed)}, cannot be migrated`);
+      };
+      if (Array.isArray(data)) {
+        rewritten = JSON.stringify(data.map((i) => (i && typeof i === "object" && typeof i.id === "string" ? { ...i, passed: fix(i.id, i.passed) } : i)), null, 2);
+      } else if (data && typeof data === "object") {
+        rewritten = JSON.stringify(Object.fromEntries(Object.entries(data).map(([id, p]) => [id, fix(id, p)])), null, 2);
+      }
+    }
+    if (rewritten !== undefined && normalized.length > 0) {
+      fs.renameSync(path.join(runDir, "assertions.json"), path.join(runDir, `assertions.pre-migration-${stamp}.json`));
+      fs.writeFileSync(path.join(runDir, "assertions.json"), rewritten, "utf-8");
+    }
+    const integrityPath = path.join(runDir, "integrity.json");
+    if (fs.existsSync(integrityPath)) fs.renameSync(integrityPath, path.join(runDir, `integrity.pre-migration-${stamp}.json`));
+    const integrityHash = this.writeIntegrity(runDir, sRunId, new Date(stamp).toISOString(), {
+      migrated: true,
+      migratedAt: new Date(stamp).toISOString(),
+      migrationReason: reason.trim(),
+      normalizedAssertions: normalized,
+    });
+    return { integrityHash, runDir };
   }
 
   /**
    * Loads assertions recorded for a past evaluation run.
    */
   loadAssertions(evaluationId: string, runId: string): Record<string, boolean> | undefined {
-    const sEvalId = sanitizeIdentifier(evaluationId, "evaluationId");
-    const sRunId = sanitizeIdentifier(runId, "runId");
-    const assertionsPath = path.resolve(this.baseDir, sEvalId, sRunId, "assertions.json");
-    if (!assertionsPath.startsWith(this.baseDir + path.sep)) {
-      throw new Error(`Path traversal detected: ${assertionsPath} is outside baseDir ${this.baseDir}`);
-    }
-    this.requireVerified(sEvalId, sRunId);
-    if (!fs.existsSync(assertionsPath)) return undefined;
+    const raw = this.loadVerifiedFile(evaluationId, runId, "assertions.json");
+    if (!raw) return undefined;
     let data: unknown;
     try {
-      data = JSON.parse(fs.readFileSync(assertionsPath, "utf-8"));
+      data = JSON.parse(raw.toString("utf-8"));
     } catch {
       return undefined;
     }
@@ -322,16 +427,10 @@ export class CeriEvidenceStore {
    * Loads manifest for a past evaluation run.
    */
   loadManifest(evaluationId: string, runId: string): RunManifest | undefined {
-    const sEvalId = sanitizeIdentifier(evaluationId, "evaluationId");
-    const sRunId = sanitizeIdentifier(runId, "runId");
-    const manifestPath = path.resolve(this.baseDir, sEvalId, sRunId, "manifest.json");
-    if (!manifestPath.startsWith(this.baseDir + path.sep)) {
-      throw new Error(`Path traversal detected: ${manifestPath} is outside baseDir ${this.baseDir}`);
-    }
-    this.requireVerified(sEvalId, sRunId);
-    if (!fs.existsSync(manifestPath)) return undefined;
+    const raw = this.loadVerifiedFile(evaluationId, runId, "manifest.json");
+    if (!raw) return undefined;
     try {
-      return JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as RunManifest;
+      return JSON.parse(raw.toString("utf-8")) as RunManifest;
     } catch {
       return undefined;
     }
@@ -351,6 +450,7 @@ export class CeriEvidenceStore {
 
       const runDirs = fs.readdirSync(evalPath);
       for (const runId of runDirs) {
+        if (runId.includes(".abandoned-")) continue;
         const runPath = path.join(evalPath, runId);
         if (!fs.statSync(runPath).isDirectory()) continue;
 

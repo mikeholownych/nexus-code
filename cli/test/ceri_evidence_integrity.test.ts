@@ -112,3 +112,113 @@ test("MQ-6 defect 3: tampered or hash-mismatched records are rejected on load wi
     });
   }
 });
+
+test("MQ-6: a directory or symlink inside a run is FILE_SET_MISMATCH, not a raw filesystem error", () => {
+  withStore((store) => {
+    const runDir = finalized(store, "r1", [{ id: "a", passed: true }]);
+    fs.mkdirSync(path.join(runDir, "sub"));
+    assert.throws(() => store.loadAssertions("eval-1", "r1"), /FILE_SET_MISMATCH/);
+    assert.equal(store.verifyRun("eval-1", "r1").ok, false);
+  });
+  withStore((store, dir) => {
+    const runDir = finalized(store, "r1", [{ id: "a", passed: true }]);
+    fs.symlinkSync(path.join(dir, "eval-1", "r1", "manifest.json"), path.join(runDir, "link.json"));
+    assert.throws(() => store.loadManifest("eval-1", "r1"), /FILE_SET_MISMATCH/);
+  });
+  withStore((store, dir) => {
+    const runDir = finalized(store, "r1", [{ id: "a", passed: true }]);
+    const outside = path.join(dir, "outside.json");
+    fs.writeFileSync(outside, "[]");
+    fs.rmSync(path.join(runDir, "assertions.json"));
+    fs.symlinkSync(outside, path.join(runDir, "assertions.json"));
+    assert.throws(() => store.loadAssertions("eval-1", "r1"), CeriEvidenceIntegrityError);
+  });
+});
+
+test("MQ-6: map-form assertions load strictly", () => {
+  withStore((store) => {
+    const runDir = finalized(store, "r1", [{ id: "a", passed: true }]);
+    const rewrite = (data: unknown) => {
+      fs.writeFileSync(path.join(runDir, "assertions.json"), JSON.stringify(data));
+      store.migrateLegacyRun("eval-1", "r1", "test rewrite");
+    };
+    rewrite({ a: true, b: false });
+    assert.deepEqual(store.loadAssertions("eval-1", "r1"), { a: true, b: false });
+  });
+  withStore((store) => {
+    const runDir = finalized(store, "r1", [{ id: "a", passed: true }]);
+    fs.writeFileSync(path.join(runDir, "assertions.json"), JSON.stringify({ a: 1 }));
+    assert.throws(() => store.migrateLegacyRun("eval-1", "r1", "x"), /NON_BOOLEAN_PASSED/);
+  });
+});
+
+test("MQ-6: a crash between initRun and finalizeRun is recoverable with abandonRun, which never deletes", () => {
+  withStore((store, dir) => {
+    const runDir = store.initRun(manifest("r1"));
+    store.appendEvent({ type: "RUN_STARTED" });
+    assert.throws(() => store.loadManifest("eval-1", "r1"), /INTEGRITY_MISSING.*abandonRun/);
+    assert.throws(() => store.initRun(manifest("r1")), /abandonRun/);
+    assert.deepEqual(store.detectInterruptedRuns(), ["r1"]);
+
+    const moved = store.abandonRun("eval-1", "r1");
+    assert.match(path.basename(moved), /^r1\.abandoned-\d+$/);
+    assert.equal(fs.existsSync(runDir), false);
+    assert.ok(fs.existsSync(path.join(moved, "events.jsonl")), "evidence is kept");
+    assert.deepEqual(store.detectInterruptedRuns(), []);
+
+    finalized(store, "r1", [{ id: "a", passed: true }]);
+    assert.deepEqual(store.loadAssertions("eval-1", "r1"), { a: true });
+    void dir;
+  });
+});
+
+test("MQ-6: abandonRun refuses a finalized run and an unknown run", () => {
+  withStore((store) => {
+    finalized(store, "r1", [{ id: "a", passed: true }]);
+    assert.throws(() => store.abandonRun("eval-1", "r1"), /finalized/);
+    assert.throws(() => store.abandonRun("eval-1", "nope"), /no run/);
+  });
+});
+
+test("MQ-6 legacy: a pre-integrity run is rejected, and migrateLegacyRun writes a new marked record without losing the original", () => {
+  withStore((store, dir) => {
+    const runDir = path.join(dir, "eval-1", "legacy");
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.writeFileSync(path.join(runDir, "manifest.json"), JSON.stringify(manifest("legacy")));
+    const legacyAssertions = JSON.stringify([{ id: "a", passed: "false" }, { id: "b", passed: true }]);
+    fs.writeFileSync(path.join(runDir, "assertions.json"), legacyAssertions);
+    fs.writeFileSync(path.join(runDir, "integrity.json"), JSON.stringify({ runId: "[REDACTED:HIGH_ENTROPY_STRING]", fileHashes: {}, compositeSha256: "x" }));
+
+    assert.throws(() => store.loadAssertions("eval-1", "legacy"), /RUN_ID_MISMATCH.*migrateLegacyRun/);
+    assert.throws(() => store.migrateLegacyRun("eval-1", "legacy", "  "), /reason/);
+
+    const result = store.migrateLegacyRun("eval-1", "legacy", "v1.1.x evidence, redacted integrity record");
+    assert.equal(result.runDir, runDir);
+    assert.deepEqual(store.loadAssertions("eval-1", "legacy"), { a: false, b: true });
+    assert.deepEqual(store.verifyRun("eval-1", "legacy"), { ok: true, migrated: true });
+
+    const record = JSON.parse(fs.readFileSync(path.join(runDir, "integrity.json"), "utf-8"));
+    assert.equal(record.migrated, true);
+    assert.equal(record.migrationReason, "v1.1.x evidence, redacted integrity record");
+    assert.deepEqual(record.normalizedAssertions, ["a"]);
+    const kept = fs.readdirSync(runDir);
+    assert.ok(kept.some((f) => f.startsWith("assertions.pre-migration-")));
+    assert.ok(kept.some((f) => f.startsWith("integrity.pre-migration-")));
+    const orig = kept.find((f) => f.startsWith("assertions.pre-migration-"))!;
+    assert.equal(fs.readFileSync(path.join(runDir, orig), "utf-8"), legacyAssertions);
+  });
+});
+
+test("MQ-6 legacy: migration refuses a verified run and unrecoverable string values", () => {
+  withStore((store) => {
+    finalized(store, "r1", [{ id: "a", passed: true }]);
+    assert.throws(() => store.migrateLegacyRun("eval-1", "r1", "why"), /already verifies/);
+  });
+  withStore((store, dir) => {
+    const runDir = path.join(dir, "eval-1", "legacy");
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.writeFileSync(path.join(runDir, "assertions.json"), JSON.stringify([{ id: "a", passed: "maybe" }]));
+    assert.throws(() => store.migrateLegacyRun("eval-1", "legacy", "why"), /NON_BOOLEAN_PASSED/);
+    assert.equal(fs.existsSync(path.join(runDir, "integrity.json")), false);
+  });
+});
