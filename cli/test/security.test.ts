@@ -129,6 +129,84 @@ describe("ACC-TRUST-09: protected paths matching covers .env* and canonical, cas
   });
 });
 
+describe("Slice 6: protected paths match relative to the workspace root", () => {
+  function withNestedWorkspace(parentName: string, run: (ws: string, outer: string) => void): void {
+    const outer = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-security-rel-"));
+    try {
+      const ws = path.join(outer, parentName, "proj");
+      fs.mkdirSync(ws, { recursive: true });
+      run(ws, outer);
+    } finally {
+      fs.rmSync(outer, { recursive: true, force: true });
+    }
+  }
+
+  for (const parentName of [".env-tools", "id_rsa-backup", ".git"]) {
+    test(`workspace under '${parentName}/' is not blocked wholesale`, () => {
+      withNestedWorkspace(parentName, (ws) => {
+        fs.writeFileSync(path.join(ws, "main.ts"), "x");
+        fs.mkdirSync(path.join(ws, "sub"));
+        fs.writeFileSync(path.join(ws, "sub", "a.ts"), "x");
+        const sm = new SecurityManager(ws);
+        assert.equal(sm.isPathProtected("main.ts").protected, false);
+        assert.equal(sm.isPathProtected(path.join(ws, "main.ts")).protected, false);
+        assert.equal(sm.isPathProtected("sub/a.ts").protected, false);
+        assert.equal(sm.isPathProtected("sub/new.ts").protected, false);
+        assert.equal(sm.isPathProtected(path.join(ws, "sub", "a.ts")).protected, false);
+        // Still blocked inside such a workspace.
+        assert.equal(sm.isPathProtected(".git/hooks/x").protected, true);
+        assert.equal(sm.isPathProtected("sub/.env.local").protected, true);
+        assert.equal(sm.isPathProtected(path.join(ws, "id_rsa")).protected, true);
+      });
+    });
+  }
+
+  test("protected names inside an ordinary workspace stay blocked", async () => {
+    await withWorkspace(async (ws) => {
+      const sm = new SecurityManager(ws);
+      assert.equal(sm.isPathProtected(".git/hooks/x").protected, true);
+      assert.equal(sm.isPathProtected("sub/.env.local").protected, true);
+      assert.equal(sm.isPathProtected(path.join(ws, "a", "id_rsa.pub")).protected, true);
+    });
+  });
+
+  test("a symlink to .git is refused, also inside a workspace under .env-tools/", () => {
+    withNestedWorkspace(".env-tools", (ws) => {
+      fs.mkdirSync(path.join(ws, ".git"));
+      fs.writeFileSync(path.join(ws, ".git", "config"), "x");
+      fs.symlinkSync(path.join(ws, ".git"), path.join(ws, "g"));
+      const sm = new SecurityManager(ws);
+      assert.equal(sm.isPathProtected("g").protected, true);
+      assert.equal(sm.isPathProtected("g/config").protected, true);
+      assert.equal(sm.isPathProtected("g/new").protected, true);
+    });
+  });
+
+  test("a symlink resolving outside the workspace to a protected target is refused", () => {
+    withNestedWorkspace("plain", (ws, outer) => {
+      const outside = path.join(outer, "elsewhere");
+      fs.mkdirSync(outside);
+      fs.writeFileSync(path.join(outside, ".env"), "S=1");
+      fs.symlinkSync(path.join(outside, ".env"), path.join(ws, "leak.txt"));
+      const sm = new SecurityManager(ws);
+      assert.equal(sm.isPathProtected("leak.txt").protected, true);
+    });
+  });
+
+  test("a workspace-sourced policy can only add protected paths", async () => {
+    await withWorkspace(async (ws) => {
+      fs.writeFileSync(
+        path.join(ws, ".nexus-security.json"),
+        JSON.stringify({ protectedPaths: ["secrets/prod.json"], allowedPaths: [".git"], allowExternalSymlinks: true }),
+      );
+      const sm = new SecurityManager(ws);
+      assert.equal(sm.isPathProtected("secrets/prod.json").protected, true);
+      assert.equal(sm.isPathProtected(".git/config").protected, true);
+      assert.equal(sm.isPathProtected(".env").protected, true);
+    });
+  });
+});
+
 describe("ACC-SAFE-07 & REQ-SEC-108: Destructive-command tripwire tokenization and documented bypasses", () => {
   test("Destructive commands are blocked by tripwire with Destructive-command tripwire prefix", async () => {
     await withWorkspace(async (ws) => {

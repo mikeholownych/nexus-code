@@ -459,12 +459,16 @@ export class SecurityManager {
       return { protected: false };
     }
 
-    const checkCandidate = (cand: string): { protected: boolean; reason?: string } => {
+    // Patterns match a path relative to the workspace root, so a workspace that lives under a
+    // directory such as `~/.env-tools/` or `~/id_rsa-backup/` is not blocked wholesale. Absolute
+    // patterns (and targets outside the root) still match the absolute path.
+    const checkCandidate = (cand: string, absolutePatternsOnly = false): { protected: boolean; reason?: string } => {
       const clean = cand.replace(/\\/g, "/");
       const segments = clean.split("/").filter(Boolean);
       const base = path.posix.basename(clean).toLowerCase();
 
       for (const pattern of this.policy.protectedPaths || []) {
+        if (absolutePatternsOnly && !path.isAbsolute(pattern)) continue;
         const patLower = pattern.toLowerCase();
         if (patLower === ".env*" || patLower === ".env") {
           if (segments.some((seg) => seg.toLowerCase().startsWith(".env"))) {
@@ -498,20 +502,41 @@ export class SecurityManager {
       return { protected: false };
     };
 
-    // 1. Raw given path
-    const rawCheck = checkCandidate(targetPath);
+    // The path relative to `root` when it is inside it; otherwise null (the caller matches the
+    // absolute path, which keeps a symlink that leaves the workspace for a protected target refused).
+    const relativeInside = (root: string, abs: string): string | null => {
+      const rel = path.relative(root, abs);
+      if (rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel)) return null;
+      return rel;
+    };
+    const checkAgainstRoot = (root: string, abs: string, altRoot?: string): { protected: boolean; reason?: string } => {
+      const rel = relativeInside(root, abs) ?? (altRoot ? relativeInside(altRoot, abs) : null);
+      if (rel === null) return checkCandidate(abs);
+      const relCheck = checkCandidate(rel);
+      return relCheck.protected ? relCheck : checkCandidate(abs, true);
+    };
+
+    let realRoot = this.workspace;
+    try {
+      realRoot = fs.realpathSync(this.workspace);
+    } catch {}
+
+    // 1. Raw given path (relative paths are already workspace-relative)
+    const rawCheck = path.isAbsolute(targetPath)
+      ? checkAgainstRoot(this.workspace, path.resolve(targetPath), realRoot)
+      : checkCandidate(targetPath);
     if (rawCheck.protected) return rawCheck;
 
     // 2. Absolute path in workspace
     const absPath = path.isAbsolute(targetPath) ? targetPath : path.resolve(this.workspace, targetPath);
-    const absCheck = checkCandidate(absPath);
+    const absCheck = checkAgainstRoot(this.workspace, path.resolve(absPath), realRoot);
     if (absCheck.protected) return absCheck;
 
-    // 3. Canonical target (resolves symlinks)
+    // 3. Canonical target (resolves symlinks), relative to the resolved workspace root
     try {
       if (fs.existsSync(absPath)) {
         const real = fs.realpathSync(absPath);
-        const realCheck = checkCandidate(real);
+        const realCheck = checkAgainstRoot(realRoot, real, this.workspace);
         if (realCheck.protected) {
           return {
             protected: true,
@@ -523,7 +548,7 @@ export class SecurityManager {
         if (fs.existsSync(dir)) {
           const realDir = fs.realpathSync(dir);
           const canonicalTarget = path.join(realDir, path.basename(absPath));
-          const canonCheck = checkCandidate(canonicalTarget);
+          const canonCheck = checkAgainstRoot(realRoot, canonicalTarget, this.workspace);
           if (canonCheck.protected) return canonCheck;
         }
       }
