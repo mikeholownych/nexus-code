@@ -131,7 +131,13 @@ export interface BaselineIdentity {
   toolchainVersions: Record<string, string>;
 }
 
-export type CertificationStatus = "CERTIFYING" | "NON_CERTIFYING";
+/**
+ * IDENTITY_BOUND: the baseline identity was recorded, verified against the baseline manifest the caller supplied, and
+ * matches the current run. UNBOUND: anything less (the existing "non-certifying" case).
+ * This is a local, unsigned identity binding; not external qualification; an attacker who edits manifest, hash and
+ * identity together passes.
+ */
+export type IdentityBindingStatus = "IDENTITY_BOUND" | "UNBOUND";
 
 export interface BaselineSpecification {
   baselineId: string;
@@ -161,8 +167,8 @@ export interface BaselineComparisonResult {
   }>;
   confidence: number;
   explanation: string;
-  certification?: {
-    status: CertificationStatus;
+  identityBinding?: {
+    status: IdentityBindingStatus;
     reasons: string[];
     baselineIdentity?: BaselineIdentity;
     currentIdentity: BaselineIdentity;
@@ -198,6 +204,7 @@ export interface RemediationProposal {
 }
 
 export interface CeriOperationalReport {
+  identityBinding?: { bound: number; unbound: number; reasons: string[] };
   reportId: string;
   generatedAt: string;
   evaluationCoverage: {
