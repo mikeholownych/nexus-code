@@ -136,3 +136,53 @@ describe("docker sandbox in a real container (hardening S5)", { skip: HAVE_DOCKE
     assert.equal(r.stdout.trim(), "NET_DOWN", r.stdout + r.stderr);
   });
 });
+
+describe("docker workspace bind does not re-expose credentials under HOME (hardening S5)", { skip: HAVE_DOCKER && spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0 ? false : "docker daemon is not usable" }, () => {
+  /** A throwaway HOME under /var/tmp (not /tmp: the container mounts its own tmpfs there) with credential sentinels. */
+  function sentinelHome(): { home: string } {
+    const home = fs.mkdtempSync(path.join(fs.existsSync("/var/tmp") ? "/var/tmp" : os.tmpdir(), "nexus-s5-home-"));
+    cleanup.push(home);
+    fs.chmodSync(home, 0o755);
+    fs.mkdirSync(path.join(home, ".ssh"));
+    fs.writeFileSync(path.join(home, ".ssh", "id_test"), "SENTINEL-SSH");
+    fs.mkdirSync(path.join(home, ".config", "nexus"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".config", "nexus", "config.env"), "SENTINEL-NEXUS");
+    fs.mkdirSync(path.join(home, "proj"));
+    fs.writeFileSync(path.join(home, "proj", "a.txt"), "visible");
+    process.env.HOME = home;
+    delete process.env.NEXUS_SANDBOX_NETWORK;
+    return { home };
+  }
+  function run(workspace: string, command: string) {
+    const w = wrapSandboxedCommand(command, workspace, { mode: "docker" });
+    assert.equal(w.sandboxed, true, w.warning);
+    return spawnSync(w.argv![0], w.argv!.slice(1), { encoding: "utf8", timeout: 120_000, env: buildCommandEnvironment() });
+  }
+  const probe = (home: string) => `cat ${home}/.ssh/id_test ${home}/.config/nexus/config.env 2>&1; echo "A=$(cat ${home}/proj/a.txt)"; printf w > ${home}/proj/new.txt && echo WROTE`;
+  for (const [label, pick] of [["HOME", (h: string) => h], ["the parent of HOME", (h: string) => path.dirname(h)], ["HOME/proj", (h: string) => path.join(h, "proj")]] as const) {
+    test(`workspace = ${label}: credential sentinels unreadable, project files readable and writable`, () => {
+      const { home } = sentinelHome();
+      const r = run(pick(home), probe(home));
+      assert.ok(!r.stdout.includes("SENTINEL"), r.stdout + r.stderr);
+      if (label !== "HOME/proj") assert.ok(!fs.existsSync(path.join(home, ".ssh", "id_test")) || fs.readFileSync(path.join(home, ".ssh", "id_test"), "utf8") === "SENTINEL-SSH", "host file untouched");
+      assert.ok(r.stdout.includes("A=visible"), r.stdout + r.stderr);
+      assert.ok(r.stdout.includes("WROTE"), r.stdout + r.stderr);
+      fs.rmSync(path.join(home, "proj", "new.txt"), { force: true });
+    });
+  }
+  test("a credential symlink inside the workspace is overlaid at its target", () => {
+    const { home } = sentinelHome();
+    fs.symlinkSync(path.join(home, ".ssh"), path.join(home, "proj", "sshlink"));
+    const r = run(home, `cat ${home}/proj/sshlink/id_test 2>&1; echo done`);
+    assert.ok(!r.stdout.includes("SENTINEL"), r.stdout);
+  });
+  test("overlays are present in the argv as tmpfs for directories and /dev/null for files", () => {
+    const { home } = sentinelHome();
+    fs.writeFileSync(path.join(home, ".netrc"), "SENTINEL-NETRC");
+    const argv = wrapSandboxedCommand("true", home, { mode: "docker" }).argv!;
+    assert.ok(argv.some((a, i) => argv[i - 1] === "--tmpfs" && a.startsWith(`${home}/.ssh:`)));
+    assert.ok(argv.some((a, i) => argv[i - 1] === "--tmpfs" && a.startsWith(`${home}/.config/nexus:`)));
+    assert.ok(argv.some((a, i) => argv[i - 1] === "-v" && a === `/dev/null:${home}/.netrc:ro`));
+    assert.equal(run(home, `cat ${home}/.netrc 2>&1; echo done`).stdout.includes("SENTINEL"), false);
+  });
+});

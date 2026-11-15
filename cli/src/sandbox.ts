@@ -610,7 +610,15 @@ export function wrapSandboxedCommand(
     // name host paths, so they are replaced with container paths.
     const containerEnv = { ...buildCommandEnvironment(), HOME: "/tmp", PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", TMPDIR: "/tmp" };
     for (const [name, value] of Object.entries(containerEnv)) dockerArgs.push("--env", `${name}=${value}`);
-    dockerArgs.push("-v", `${absWorkspace}:${absWorkspace}`, "-w", absWorkspace, image, "sh", "-c", cmd);
+    dockerArgs.push("-v", `${absWorkspace}:${absWorkspace}`);
+    // When the workspace is HOME or above it, the bind would bring credential paths back (same hole as bwrap's
+    // workspace bind, see sandboxWorkspaceOverlays). Docker mounts by destination depth, so these nested mounts sit
+    // on top of the workspace mount. The docker socket and /run/user cannot lie inside a workspace bind, so they
+    // need no mask here.
+    const overlays = sandboxWorkspaceOverlays(absWorkspace);
+    for (const dir of overlays.dirs) dockerArgs.push("--tmpfs", `${dir}:ro,nosuid,nodev,size=1m`);
+    for (const file of overlays.files) dockerArgs.push("-v", `/dev/null:${file}:ro`);
+    dockerArgs.push("-w", absWorkspace, image, "sh", "-c", cmd);
 
     return {
       command: dockerArgs.map(quoteForShell).join(" "),
