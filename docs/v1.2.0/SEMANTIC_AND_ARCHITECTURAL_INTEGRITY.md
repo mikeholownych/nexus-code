@@ -63,7 +63,7 @@ A requirements DSL, a semantic geometry engine, a second evidence store, archite
 
 ## 7. Checkpoint
 
-Updated 2026-11-14 (evening). Status by unit:
+Updated 2026-11-15 for v1.2.0-rc.1. Status by unit:
 
 | Unit | State |
 |---|---|
@@ -71,16 +71,20 @@ Updated 2026-11-14 (evening). Status by unit:
 | CG-1 LSP honesty and lifecycle | merged (#494) |
 | SI-2 verification-config edit guard | merged (#495) |
 | (found in use) verifier definition unbindable blocked every completion | merged (#496) |
-| DV-1 structured attempts, ENVIRONMENT vs CANDIDATE_FAILED | open (#497) |
-| SI-3 steering conflict record | open (#498) |
-| CG-2 LSP trust, scrubbed environment, bounded buffers | open (#499) |
-| SI-6 CERI `semantic_integrity` domain (21 active, 4 pending) | open (#500) |
-| SI-7 kill-mid-tool-call fault injection (test-only; G-AI-5 holds) | open (#501) |
-| SI-4, SI-5, CG-3, CG-4, DV-2, DV-3, DV-4, TI-1 | not started |
+| DV-1 structured attempts, ENVIRONMENT vs CANDIDATE_FAILED | merged (#497) |
+| SI-3 steering conflict record | merged (#498) |
+| CG-2 LSP trust, scrubbed environment, bounded buffers | merged (#499) |
+| SI-6 CERI `semantic_integrity` domain | merged (#500, #508): 23 active, 2 pending |
+| SI-7 kill-mid-tool-call fault injection (test-only; G-AI-5 holds) | merged (#501) |
+| SI-8 isolation required under concurrency (G-AI-6 confirmed by SI-7) | merged (#503) |
+| CG-4 type-check evidence | merged (#504) |
+| SI-4 typed constraint/invariant requirements, `authorizedScope` | merged (#505) |
+| TI-1 request-shape snapshots | merged (#506) |
+| CG-3 structured diagnostics, evidence provenance, receipt dependencies | merged (#507) |
+| DV-2 convergence signal | merged (#509) |
+| SI-5 boundary rules, DV-3 regression obligations, DV-4 lineage and differential verification | deferred to v1.2.x |
 
-New finding from SI-7: **G-AI-6 is confirmed.** `maxConcurrentUnits > 1` does not require `git.isolate` and there is no write-set check (`operation_schema.ts` validates only the range; `operation_cli.ts` does not require isolation; the MAO-07 test already runs two non-isolated units with `maxConcurrentUnits: 2`). `docs/v1.1.0/SPEC.md` (~line 610) says isolation is newly enforced under concurrency. Unit **SI-8**: enforce isolation (or a declared write-set disjointness check) when concurrency is above 1, or correct the spec; test first; behaviour change for existing operation files that set `maxConcurrentUnits` above 1 without isolation, so it needs a release note.
-
-Also open: `compaction-03` (post-compaction check that every gating requirement is still present) has no owning unit; assign it to SI-4 or a new unit.
+Also open: CERI scenario `compaction-03` (post-compaction check that every gating requirement is still present) has no owning unit; `cumulative-change-03` needs SI-5.
 
 Standing limits: the CERI scenarios and every test in this plan are internal validation of this repository's own gating code. They are not independent qualification, and no v1.2.0 text may call the product frontier-grade on their strength.
 
