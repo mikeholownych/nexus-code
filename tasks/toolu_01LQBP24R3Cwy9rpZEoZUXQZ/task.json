@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01LQBP24R3Cwy9rpZEoZUXQZ",
+  "agent_id": "ac430d9680e8ff14a",
+  "subagent_type": "general-purpose",
+  "task_description": "v1.2.1 PR-1 extract openai-chat protocol",
+  "token_usage": {
+    "input_tokens": 64,
+    "cache_creation_tokens": 100622,
+    "cache_read_tokens": 3043706,
+    "output_tokens": 23978,
+    "api_call_count": 31
+  },
+  "started_at": "2026-11-15T03:22:58.800158978Z",
+  "completed_at": "2026-11-15T03:36:58.605743466Z"
+}
