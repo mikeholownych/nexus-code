@@ -23,6 +23,7 @@ import {
   hasOpenRequirements,
   invalidateVerified,
   PINNED_LEDGER_PREFIX,
+  openRequirements,
   priorAttempt,
   queueSteering,
   recordSteeringConflict,
@@ -177,6 +178,29 @@ const drivers: Record<string, () => unknown | Promise<unknown>> = {
     const ledger = ledgerWith(NUMBERED, "R2", "implemented", "src/api.ts");
     const result = applyRequirementUpdates(ledger, [{ id: "R2", status: "verified" }]);
     return { ok: result.ok, refusal: /needs a passing verifier run/.test(result.errors.join()) ? "no_passing_verifier" : result.errors.join(), statusAfter: ledger.requirements[1].status };
+  },
+  "hidden-invariant-03": () => {
+    const cmd = "npm run check-invariant";
+    const ledger = createLedger(`1. Add the flag\n2. Invariant: the public API is unchanged [verify: ${cmd}]`);
+    const inv = ledger.requirements[1];
+    const gates = () => openRequirements(ledger).some((r) => r.id === inv.id) && !requirementDone(inv);
+    const gatesBefore = gates();
+    applyRequirementUpdates(ledger, [{ id: inv.id, status: "implemented", evidence: "src/api.ts untouched" }]);
+    const gatesAfterClaim = gates();
+    const refused = applyRequirementUpdates(ledger, [{ id: inv.id, status: "verified", evidence: "checked" }], undefined, undefined, undefined, () => undefined);
+    const blocked = !refused.ok && refused.errors.some((e) => e.includes(`passing run of its verifier '${cmd}'`)) && inv.status === "implemented";
+    const verified = applyRequirementUpdates(ledger, [{ id: inv.id, status: "verified", evidence: "checked" }], undefined, undefined, undefined, () => ({ n: 1, command: cmd, inputs: "i", status: "PASSED", at: "t" }));
+    const modelLedger = createLedger("1. Add the flag\n2. Add the docs");
+    applyRequirementUpdates(modelLedger, [{ text: "No new dependency", kind: "invariant", verifier: "npm run model-check" }]);
+    const model = modelLedger.requirements.find((r) => r.source === "model")!;
+    applyRequirementUpdates(modelLedger, [{ id: model.id, status: "implemented", evidence: "none added" }]);
+    const modelRun = applyRequirementUpdates(modelLedger, [{ id: model.id, status: "verified", evidence: "ran it" }], undefined, undefined, undefined, (command) => ({ n: 1, command, inputs: "i", status: "PASSED", at: "t" }));
+    return {
+      invariantGatesCompletion: gatesBefore && gatesAfterClaim,
+      unverifiedInvariantBlocksVerified: blocked,
+      operatorVerifierPassVerifies: verified.ok && inv.status === "verified" && requirementDone(inv),
+      modelDeclaredVerifierCannotComplete: !modelRun.ok && model.status === "implemented" && !requirementDone(model) && openRequirements(modelLedger).some((r) => r.id === model.id),
+    };
   },
   "self-validating-01": async () =>
     turnFacts(await scriptedTurn(
@@ -356,11 +380,10 @@ test("the frozen scenario file is the one the manifest pins, in a registered CER
 });
 
 const PENDING_FROZEN: Record<string, string> = {
-  "hidden-invariant-03": "SI-4",
   "compaction-03": "unassigned (Codex row 'SI-6 / compaction': post-compaction check)",
   "cumulative-change-03": "SI-5",
 };
-const ACTIVE_FROZEN = 22;
+const ACTIVE_FROZEN = 23;
 
 test("the scenario set cannot shrink or be reclassified without changing this file too", () => {
   const pending = Object.fromEntries(frozen.scenarios.filter((s) => s.status === "pending").map((s) => [s.id, s.pendingUnit]));

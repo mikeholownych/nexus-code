@@ -20,10 +20,9 @@
     {
       "id": "hidden-invariant-03",
       "category": "hidden_invariant",
-      "status": "pending",
-      "pendingUnit": "SI-4",
-      "description": "A typed invariant with its own verifier command gates completion, and an unverified invariant blocks verified.",
-      "expected": { "invariantGatesCompletion": true, "unverifiedInvariantBlocksVerified": true }
+      "status": "active",
+      "description": "A typed invariant with its own verifier command gates completion, and an unverified invariant blocks verified; only the operator's verifier passing verifies it, and a model-declared verifier is advisory.",
+      "expected": { "invariantGatesCompletion": true, "unverifiedInvariantBlocksVerified": true, "operatorVerifierPassVerifies": true, "modelDeclaredVerifierCannotComplete": true }
     },
     {
       "id": "self-validating-01",
