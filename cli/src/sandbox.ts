@@ -47,6 +47,25 @@ const BROAD_DENIED = new Set([".config", ".local/share", ".local", ".cache"]);
 export const SANDBOX_HOME_READONLY_SETTING = "NEXUS_SANDBOX_HOME_READONLY";
 export const SANDBOX_NETWORK_SETTING = "NEXUS_SANDBOX_NETWORK";
 
+/**
+ * The Docker sandbox image. The pin lives here and nowhere else: a floating tag (`alpine:latest`) lets whoever controls
+ * the registry change what runs the agent's commands. This is the multi-arch index digest of alpine 3.23, resolved
+ * from the registry (`docker buildx imagetools inspect alpine:3.23`) on 2026-11-15. Refresh it deliberately, never to
+ * a tag. The operator may substitute their own image with NEXUS_SANDBOX_DOCKER_IMAGE (operator environment or
+ * config.env, never a project .env); it must also be pinned by digest or no container is started.
+ */
+export const DOCKER_SANDBOX_IMAGE = "alpine:3.23@sha256:469c9ea410b9215eaee7976ba6c0639039b444be8e5d638f7abbada189971eb2";
+export const DOCKER_SANDBOX_IMAGE_SETTING = "NEXUS_SANDBOX_DOCKER_IMAGE";
+const PINNED_IMAGE = /^[^\s@]+@sha256:[0-9a-f]{64}$/;
+const DOCKER_PIDS_LIMIT = "512";
+
+/** The image to run, or undefined when the operator's override is not digest-pinned (fail closed). */
+export function dockerSandboxImage(): string | undefined {
+  const configured = operatorSetting(DOCKER_SANDBOX_IMAGE_SETTING)?.trim();
+  if (!configured) return DOCKER_SANDBOX_IMAGE;
+  return PINNED_IMAGE.test(configured) ? configured : undefined;
+}
+
 export interface SandboxHomeMount {
   path: string;
   source: "default" | "PATH" | "operator";
@@ -364,7 +383,7 @@ function probeDockerSandbox(): boolean {
     const probe = wrapSandboxedCommand("printf writable > probe.txt", workspace, { mode: "docker" });
     if (!probe.sandboxed) return false;
     if (!probe.argv?.length) return false;
-    execFileSync(probe.argv[0], probe.argv.slice(1), { stdio: "ignore", timeout: 15000 });
+    execFileSync(probe.argv[0], probe.argv.slice(1), { stdio: "ignore", timeout: 60000 }); // first run may pull the pinned image
     return fs.readFileSync(path.join(workspace, "probe.txt"), "utf8") === "writable";
   } catch {
     return false;
@@ -562,21 +581,36 @@ export function wrapSandboxedCommand(
       };
     }
 
-    const mountMode = options.readOnlyHost ? ":ro" : "";
+    const image = dockerSandboxImage();
+    if (!image) {
+      return {
+        command: cmd,
+        sandboxed: false,
+        engine: "none",
+        warning: `${DOCKER_SANDBOX_IMAGE_SETTING} must name an image pinned by digest (name@sha256:<64 hex>); refusing to run an unpinned image.`,
+      };
+    }
+
+    // Hardened `docker run`: unprivileged host uid, no capabilities, no setuid escalation, read-only root with a
+    // writable /tmp tmpfs, bounded process count, no network unless the operator opted in (same switch as bwrap).
+    const networkAllowed = options.network !== false && (options.network === true || sandboxNetworkEnabled());
     const dockerArgs = [
       "docker",
       "run",
       "--rm",
-      ...(options.network === false || !(options.network === true || sandboxNetworkEnabled()) ? ["--network", "none"] : []),
-      "-v",
-      `${absWorkspace}:${absWorkspace}${mountMode}`,
-      "-w",
-      absWorkspace,
-      "alpine:latest",
-      "sh",
-      "-c",
-      cmd,
+      "--user", `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`,
+      "--cap-drop", "ALL",
+      "--security-opt", "no-new-privileges",
+      ...(networkAllowed ? [] : ["--network", "none"]),
+      "--pids-limit", DOCKER_PIDS_LIMIT,
+      "--read-only",
+      "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m",
     ];
+    // Nothing is inherited: the container starts with the scrubbed command environment only. HOME, PATH and TMPDIR
+    // name host paths, so they are replaced with container paths.
+    const containerEnv = { ...buildCommandEnvironment(), HOME: "/tmp", PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", TMPDIR: "/tmp" };
+    for (const [name, value] of Object.entries(containerEnv)) dockerArgs.push("--env", `${name}=${value}`);
+    dockerArgs.push("-v", `${absWorkspace}:${absWorkspace}`, "-w", absWorkspace, image, "sh", "-c", cmd);
 
     return {
       command: dockerArgs.map(quoteForShell).join(" "),
