@@ -164,7 +164,7 @@ Order: PR-1, PR-2, PR-3, PR-9, PR-11 first; then PR-4, PR-5, PR-12; then the nat
 
 ## 5. Sequencing and release split
 
-Capacity warning. After the 2026-11-15 decisions the unit list is about three times what v1.2.0 carried, and v1.2.0 took a week of agent work with a 70-minute CI cycle. All of it cannot be one release without cutting corners that this project does not cut. Recommendation (decision D12): **v1.2.1 = Phase 0 + Phase 1 + Phase 2; v1.2.2 = Phase 3 and the native provider protocols.** Anything not merged with green gates rolls with a dated note in this file; a unit is never half-merged to hit a date.
+Capacity warning. After the 2026-11-15 decisions the unit list is about three times what v1.2.0 carried, and v1.2.0 took a week of agent work with a 70-minute CI cycle. All of it cannot be one release without cutting corners that this project does not cut. Decision D12 (accepted 2026-11-15): **v1.2.1 = Phase 0 + Phase 1 + Phase 2; v1.2.2 = Phase 3 and the native provider protocols.** Anything not merged with green gates rolls with a dated note in this file; a unit is never half-merged to hit a date.
 
 Phase 0 (immediately after v1.2.0 ships): MQ-0, DH-1, DH-2, DH-5, PC-2, PC-1. These cut the cycle time, remove the hang class and finish the evidence.
 
@@ -178,7 +178,7 @@ D9 note: "every cloud provider configurable" is delivered in v1.2.1 for every Op
 
 ## 6. Owner decisions
 
-Answered 2026-11-15: defaults accepted for D1–D4, D6, D10 and D11; D5, D7 and D9 changed; D8 reviewed. D12 is new.
+Answered 2026-11-15: defaults accepted for D1–D4, D6, D10 and D11; D5, D7 and D9 changed; D8 reviewed; D12 (release split) accepted as recommended.
 
 | Id | Decision | Answer |
 |---|---|---|
@@ -193,7 +193,7 @@ Answered 2026-11-15: defaults accepted for D1–D4, D6, D10 and D11; D5, D7 and 
 | D9 | Providers | **every cloud provider configurable**, using models.dev data (PR workstream) |
 | D10 | CI restructure | default accepted: keep required check names, no extra minutes (PC-1 gain is limited accordingly) |
 | D11 | Integration priority | default accepted: `stream-json` output and the GitHub Action (RD-3, RD-4); ACP waits |
-| D12 | NEW: release split | open. Recommendation: v1.2.1 and v1.2.2 as in section 5. Default if unanswered: that split |
+| D12 | Release split | **accepted as recommended** (2026-11-15): v1.2.1 = Phases 0–2; v1.2.2 = Phase 3 and the native provider protocols |
 
 ### Deferral relevance review (D8)
 
