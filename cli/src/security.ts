@@ -51,7 +51,6 @@ export interface SecurityPolicy {
   blockedCommands?: string[];
   protectedPaths?: string[];
   allowedDomains?: string[];
-  allowExternalSymlinks?: boolean;
   verificationPaths?: VerificationPathsPolicy;
 }
 
@@ -259,7 +258,6 @@ export class SecurityManager {
             ...(Array.isArray(parsed.protectedPaths) ? parsed.protectedPaths : []),
           ],
           allowedDomains: Array.isArray(parsed.allowedDomains) ? parsed.allowedDomains : undefined,
-          allowExternalSymlinks: Boolean(parsed.allowExternalSymlinks),
           verificationPaths: parseVerificationPolicy(parsed.verificationPaths),
         };
       } catch {
@@ -271,7 +269,6 @@ export class SecurityManager {
       blockedCommands: [...DEFAULT_BLOCKED_COMMANDS],
       protectedPaths: [...DEFAULT_PROTECTED_PATHS],
       allowedDomains: undefined,
-      allowExternalSymlinks: false,
       verificationPaths: parseVerificationPolicy(undefined),
     };
   }
