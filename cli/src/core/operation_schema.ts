@@ -171,6 +171,27 @@ export function validateOperationPolicy(policy: Partial<OperationPolicy>): void 
 }
 
 /**
+ * Concurrent units must not share a worktree: without `git.isolate` two units would write the same checkout.
+ * Returns the operator-facing problem, or undefined when the combination is safe.
+ */
+export function concurrencyIsolationProblem(maxConcurrentUnits: number | undefined, isolated: boolean): string | undefined {
+  if (isolated || maxConcurrentUnits === undefined || maxConcurrentUnits <= 1) return undefined;
+  return `policy.maxConcurrentUnits is ${maxConcurrentUnits}, but without git.isolate concurrent units would share one worktree; set "git": { "isolate": true } or run with maxConcurrentUnits 1`;
+}
+
+/**
+ * A record created before the isolation rule (or hand-edited) may ask for concurrency without isolation. It is not
+ * refused, which would strand it: its limit is clamped to 1 and the returned warning names the fix.
+ */
+export function clampUnisolatedConcurrency(state: Pick<DurableOperationState, "policy" | "git">): string | undefined {
+  const problem = concurrencyIsolationProblem(state.policy?.maxConcurrentUnits, Boolean(state.git?.isolate));
+  if (!problem) return undefined;
+  const limit = state.policy.maxConcurrentUnits;
+  state.policy.maxConcurrentUnits = 1;
+  return `${problem}; running this operation with maxConcurrentUnits 1 (was ${limit})`;
+}
+
+/**
  * Resource slots, validated wherever a resource enters the record. A value out of range must be refused at the door:
  * discovering it at load would make an operation that was accepted once permanently unreadable.
  */
