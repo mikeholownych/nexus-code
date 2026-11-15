@@ -22,6 +22,7 @@ checkpoint and continues by itself. A turn ends for one of these reasons only:
 | no progress for `--stagnation-steps` consecutive steps (default 12) | `STAGNATION_DETECTED` |
 | the same action (or a re-read of lines already in context) gives no new information on an unchanged workspace after two recovery notes, and recovery is exhausted | `STAGNATION_DETECTED` |
 | the operator's verifier fails `NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS` times (default 3) in `task_completed` with the same failure, an A/B alternation or a rising failing-test count, each on a changed workspace | `VERIFIER_NOT_CONVERGING` (execution `BLOCKED`, attempt history attached) |
+| the same tool call with identical arguments returns the same result `NEXUS_REPEATED_CALL_HARD` times (default 5) within the last 12 calls, in a step that changed nothing in the workspace; a note is injected at `NEXUS_REPEATED_CALL_SOFT` (default 3) | `TOOL_CALL_LOOP` (execution `BLOCKED`, the call and history attached) |
 | inference fails and provider recovery cannot wait it out | `INFERENCE_FAILED` |
 | the model's reply is cut off at the output limit twice in a row (see below) | `INFERENCE_FAILED` (`output_truncated/client`) |
 | a compaction (or another record the next action depends on) cannot be written | `PERSISTENCE_FAILED` |

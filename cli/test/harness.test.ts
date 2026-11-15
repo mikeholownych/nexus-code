@@ -2086,7 +2086,7 @@ error[E0308]: mismatched types
           return {
             role: "assistant",
             content: `<thought>${turn === 1 ? "DURABLE_MULTI_TURN_DECISION_ISSUE8 DURABLE_MULTI_TURN_FINDING_ISSUE8" : `Finding ${turn}`}: continue the implementation and keep prior verification results.</thought>`,
-            tool_calls: [{ id, type: "function", function: { name: "list_dir", arguments: JSON.stringify({ path: "src" }) } }],
+            tool_calls: [{ id, type: "function", function: { name: "list_dir", arguments: JSON.stringify({ path: `src/part${turn}` }) } }],
           };
         }
         return { role: "assistant", content: "All implementation steps and verification are complete." };

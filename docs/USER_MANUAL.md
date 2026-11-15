@@ -352,6 +352,14 @@ more) with the same failing tests across changed workspace states, with the fail
 and runs skipped on unchanged inputs are ignored, and a changing failure set never trips it. Only `task_completed`
 is covered: a loop of `run_tests` calls alone is bounded by `--stagnation-steps` (`STAGNATION_DETECTED`) instead.
 
+A third brake counts identical tool calls regardless of timing: a call with the same tool name and the same arguments
+(compared as stable JSON) that returns the same result, seen in the last 12 calls even with other calls between them.
+At `NEXUS_REPEATED_CALL_SOFT` repeats (default 3) the model gets a corrective note naming the call; at
+`NEXUS_REPEATED_CALL_HARD` (default 5), in a step that changed nothing in the workspace, the turn ends `BLOCKED` / `NOT_ESTABLISHED` with reason `TOOL_CALL_LOOP` and the
+repeated call and recent call history (arguments redacted) attached. A repeat whose result changed (a file that was
+edited, command output that differs) is progress and is not counted. Both are also settable as
+`continuation.repeatedCallSoft` / `continuation.repeatedCallHard`.
+
 The operator's objective and its
 numbered requirements are pinned for the model on every request (never summarised away); the agent records
 requirement progress with evidence, and a turn that stops with requirements open ends `REQUIREMENTS_INCOMPLETE`

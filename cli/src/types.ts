@@ -172,6 +172,10 @@ export interface ContinuationBudget {
    * show the same failure, an A/B alternation or a rising failing-test count (default 3, NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS).
    */
   verifierConvergenceAttempts?: number;
+  /** Identical tool calls with an identical result in the recent window: the soft threshold adds a corrective note (default 3, NEXUS_REPEATED_CALL_SOFT). */
+  repeatedCallSoft?: number;
+  /** The hard threshold ends the turn BLOCKED as TOOL_CALL_LOOP (default 5, NEXUS_REPEATED_CALL_HARD). */
+  repeatedCallHard?: number;
 }
 
 /** Failed verifier attempts on changing candidates that show no convergence before the turn stops (see ContinuationBudget). */
