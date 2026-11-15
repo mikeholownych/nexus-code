@@ -16,7 +16,7 @@ import type { Command } from "commander";
 import pc from "picocolors";
 import { buildConfig, mergeOperationPolicy } from "./config.js";
 import { ConvergenceScheduler, DecisionRejected, newOperation, type DurableOperationState, type OperationEvent, type OperationPolicy, type WorkUnitSpec } from "./core/operation.js";
-import { UnsupportedOperationSchemaError, validateOperationPolicy, validateResourceSlots } from "./core/operation_schema.js";
+import { UnsupportedOperationSchemaError, clampUnisolatedConcurrency, concurrencyIsolationProblem, validateOperationPolicy, validateResourceSlots } from "./core/operation_schema.js";
 import { MessageRejected, publishMessage } from "./core/operation_messages.js";
 import { ROLE_PROFILES, specialistInputsProblem } from "./core/roles.js";
 import { AgentWorkUnitExecutor, applyOperatorDecision, driveOperation, OperationLockedError, OperationStore, resourcesFromConfig } from "./core/operation_runner.js";
@@ -108,6 +108,8 @@ export function validateOperationSpec(spec: unknown): asserts spec is OperationS
     } catch (error: any) {
       throw new OperationSpecError(String(error?.message ?? error).replace(/^operation \(new\): /, ""));
     }
+    const problem = concurrencyIsolationProblem(s.policy.maxConcurrentUnits, s.git?.isolate === true);
+    if (problem) throw new OperationSpecError(problem);
   }
   if (s.resources !== undefined) {
     if (!Array.isArray(s.resources)) throw new OperationSpecError("operation spec 'resources' must be an array");
@@ -201,6 +203,8 @@ function printStatus(op: DurableOperationState): void {
 }
 
 async function drive(op: DurableOperationState, config: HarnessConfig, store: OperationStore, discoverCatalog: boolean, json: boolean): Promise<void> {
+  const clamped = clampUnisolatedConcurrency(op);
+  if (clamped && !json) console.error(pc.yellow(`warning: ${safeTerminal(clamped)}`));
   const controller = new AbortController();
   const onSignal = () => controller.abort();
   process.once("SIGINT", onSignal);
