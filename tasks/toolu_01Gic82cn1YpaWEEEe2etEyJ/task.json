@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Gic82cn1YpaWEEEe2etEyJ",
+  "agent_id": "aef76df9f0629b485",
+  "subagent_type": "general-purpose",
+  "task_description": "Relevance review of old deferrals (D8)",
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 58431,
+    "cache_read_tokens": 480163,
+    "output_tokens": 6698,
+    "api_call_count": 8
+  },
+  "started_at": "2026-11-15T02:45:38.482494291Z",
+  "completed_at": "2026-11-15T02:46:37.666124855Z"
+}
