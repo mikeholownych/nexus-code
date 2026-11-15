@@ -94,6 +94,7 @@ Dependencies: MQ-1 → MQ-2 → MQ-8. MQ-3 and MQ-4 are independent. Decision D3
 | WM-1 | Schema-driven argument repair (stringified JSON, "20" to 20, nulls, arrays) only where the schema makes the fix unambiguous (reference: opencode `plugin/tool-input-repair.ts`); every repair recorded | repair counted in the matrix as repaired, never as native valid | M | P1 |
 | WM-2 | Edit-failure feedback: when an edit does not apply, return the closest actual lines (reference: Aider `editblock_coder.py:100-312`) | test with whitespace and elision mismatches | S | P1 |
 | WM-3 | Extend the G1.1-4 matrix to every alias the gateway serves, with pacing and cache-bypass checks unchanged | per-alias table in evidence | S | P1 |
+| WM-4 | Function-call-style text recovery (found 2026-11-15 on the published v1.2.0 matrix: `engineering/lead-reasoning` answered the plain `read_file` prompt with the text `read_file(path="README.md")` and no native call, 10 of 10, so 45 of 50 attempts were invalid and the client's safe retry never engaged): recognise a whole-content call to an offered tool written as `name(arg="value")`, or inside a `[...]` list (the pythonic template format), as a call written as text, so the existing feedback and forced-`tool_choice` retry applies. Recognition only: nothing is executed from text (REQ-AGT-112); the G1.1-4 matrix keeps counting native calls only | table of accepted and rejected forms (prose that merely mentions a call, unknown tool, unbalanced, a variable argument); a mock-gateway test where the first reply is function-call text and the retry returns a native call; a matrix taken on the v1.2.1 release candidate before any claim | S | P1 |
 
 ### CX: context
 
@@ -178,7 +179,7 @@ Capacity warning. After the 2026-11-15 decisions the unit list is about three ti
 
 Phase 0 (immediately after v1.2.0 ships): MQ-0, DH-1, DH-2, DH-5, PC-2, PC-1. These cut the cycle time, remove the hang class and finish the evidence.
 
-Phase 1 (independent, parallelisable): MQ-3, MQ-5, MQ-6, MQ-1, then MQ-2 (needs MQ-5/MQ-6 to be called certifying); PR-1, PR-2, PR-3, PR-9, PR-11; CS-3, CS-4, WM-1, WM-2, CX-1, CX-5, VC-5.
+Phase 1 (independent, parallelisable): MQ-3, MQ-5, MQ-6, MQ-1, then MQ-2 (needs MQ-5/MQ-6 to be called certifying); PR-1, PR-2, PR-3, PR-9, PR-11; CS-3, CS-4, WM-1, WM-2, WM-4, CX-1, CX-5, VC-5.
 
 Phase 2: PR-4, PR-5, PR-12; CS-7, CS-8 (D5); MQ-7 slices B and C; CS-1 and CS-2 (defaults per D1 and D2: CS-1 stays opt-in unless the default is changed by a later decision); CX-2, CX-3, VC-1, RD-3, RD-4, MT-3, WM-3, MQ-4, PC-3, DH-3, DH-4, DH-6, CX-7, CS-11, VC-9.
 

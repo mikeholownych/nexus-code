@@ -1,0 +1,15 @@
+Probe, 2026-11-15 17:49Z, under the GATEWAY claim: the plain read_file prompt sent 10 times to engineering/lead-reasoning
+through the v1.2.0 client (client.chatCompletion, temperature 0, response cache bypassed). Prompt:
+"Call the read_file tool exactly once with arguments that satisfy its supplied JSON Schema. Do not add prose."
+Columns: alias, tool, attempt, latency, number of native tool calls, toolCallSource, content when there is no call.
+
+engineering/lead-reasoning read_file 0 ms=11827 calls=0 source=native "read_file(path=\"README.md\")" reasoningLen=2552
+engineering/lead-reasoning read_file 1 ms=11740 calls=0 source=native "read_file(path=\"README.md\")" reasoningLen=2552
+engineering/lead-reasoning read_file 2 ms=11781 calls=0 source=native "read_file(path=\"README.md\")" reasoningLen=2552
+engineering/lead-reasoning read_file 3 ms=11648 calls=0 source=native "read_file(path=\"README.md\")" reasoningLen=2552
+engineering/lead-reasoning read_file 4 ms=11594 calls=0 source=native "read_file(path=\"README.md\")" reasoningLen=2552
+engineering/lead-reasoning read_file 5 ms=11659 calls=0 source=native "read_file(path=\"README.md\")" reasoningLen=2552
+engineering/lead-reasoning read_file 6 ms=11941 calls=0 source=native "read_file(path=\"README.md\")" reasoningLen=2552
+engineering/lead-reasoning read_file 7 ms=11698 calls=0 source=native "read_file(path=\"README.md\")" reasoningLen=2552
+engineering/lead-reasoning read_file 8 ms=11672 calls=0 source=native "read_file(path=\"README.md\")" reasoningLen=2552
+engineering/lead-reasoning read_file 9 ms=11580 calls=0 source=native "read_file(path=\"README.md\")" reasoningLen=2552

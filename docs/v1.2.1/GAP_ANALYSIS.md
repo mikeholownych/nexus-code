@@ -143,6 +143,7 @@ Disposition: **P0** must-have for v1.2.1; **P1** should-have; **P2** stretch, ma
 | GA-38 | Loop patterns not audited against peers: A/B ping-pong and consecutive no-progress messages (OpenHands thresholds 4/3/3/6) | research 2026-11-15 (OpenHands docs) | P2 | CS-11 |
 | GA-39 | Headless "needs an operator decision" paths are not confirmed to share one resumable outcome | research 2026-11-15 (Anthropic trends report, trend 4) | P2 | VC-9 |
 | GA-40 | No measurement that instruction files or context clearing change outcomes; no multi-hour run with a resume | research 2026-11-15 (trends report, context-management post, agent-rules-books) | P2 | MQ-8 |
+| GA-43 | A reply that is a function-call-style text call (`read_file(path="README.md")`) is not recognised as a call written as text, so the safe retry never engages; it made 45 of 50 `lead-reasoning` read_file attempts invalid on the published v1.2.0 matrix | G1.1-4 on v1.2.0, 2026-11-15 (`docs/evidence/v1.2.0/G1.1-4-v1.2.0.md`) | P1 | WM-4 |
 
 ## 6. What not to copy
 
