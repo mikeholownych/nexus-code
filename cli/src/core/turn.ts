@@ -207,6 +207,34 @@ export interface VerificationEvidence {
   deadlineSecs?: number;
   outputSha256?: string;
   candidateId?: string;
+  /** Type-check run beside the verifier. A scoped fact about the named configuration, never about the code in general. */
+  typecheck?: TypecheckEvidence;
+  at: string;
+}
+
+export interface TypecheckEvidence {
+  /**
+   * ENVIRONMENT: the check could not run or be attributed here (not a candidate failure). PREEXISTING: errors exist, but
+   * none in a file the candidate modified; it is not a pass and does not block.
+   */
+  status: "PASSED" | "FAILED" | "TIMED_OUT" | "ENVIRONMENT" | "NOT_APPLICABLE" | "PREEXISTING";
+  /** False when the result is recorded only (operator-configured verifier, or NEXUS_TYPECHECK mode "record"). */
+  enforced?: boolean;
+  tool?: string;
+  toolVersion?: string;
+  /** Hash of the resolved tool launcher. */
+  toolSha256?: string;
+  command?: string;
+  configPath?: string;
+  configSha256?: string;
+  exitCode?: number | null;
+  errorCount?: number;
+  firstDiagnostics?: string[];
+  /** What the result holds for: "under <configPath>", never universal. */
+  scope?: string;
+  /** Redacted, control characters made visible, capped, and fenced as untrusted compiler output. */
+  excerpt?: string;
+  candidateId?: string;
   at: string;
 }
 

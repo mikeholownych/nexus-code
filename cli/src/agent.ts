@@ -66,7 +66,7 @@ import { openRepo, currentEntry, NotARepositoryError } from "./worktrunk/repo.js
 import { replacedWorktreeReason, verifyCheckout } from "./core/checkout_trust.js";
 import { WORKTREE_BINDING_VERSION } from "./core/state.js";
 import { isSandboxAvailable } from "./sandbox.js";
-import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand, verifierTimeoutSecs } from "./tester.js";
+import { runTestSuiteWithExecutor, discoverTypecheck, runTypecheck, typecheckMode, discoverVerifier, describeVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand, verifierTimeoutSecs } from "./tester.js";
 import { ENABLE_TOOLS_CAPABILITY, TOOL_GROUPS, groupsTriggeredBy, toolGroupOf } from "./core/tool_groups.js";
 import { isInlineProgramVerifier, snapshotVerifierDefinitionWithReason, judgeWithoutCopy, prepareBaselineTestsCopy, requiresWorkspaceVerifierDefinitionBinding, trustedDeliverablesFromBaseline, testsChangedSince, snapshotTests, snapshotVerifierDefinition, verifierDefinitionChangedSince, verifierDefinitionMatchesSnapshot, tddRedTestsMatchSnapshot, type ChangeBaseline, type Independence } from "./core/independent_check.js";
 import { ensurePrivateDir, appendPrivateFile } from "./core/durable_file.js";
@@ -75,6 +75,7 @@ import { credentialOriginOf, InferenceError, type TruncatedCall, TokenCountError
 import {
   TurnResult,
   VerificationEvidence,
+  TypecheckEvidence,
   InterruptionRecord,
   InferenceFailure,
   CapacityRecord,
@@ -962,6 +963,7 @@ export class AutonomousAgent {
   private configuredFullAccess: boolean = false;
   /** Evidence from the verifier run that covers the current workspace changes. Cleared by any later mutation. */
   private verificationEvidence?: VerificationEvidence;
+  private lastTypecheck?: TypecheckEvidence;
   private verificationEvidenceRawOutput: string = "";
   private turnMutations: number = 0;
   /** Argument syntax of this turn's tool calls, as parsed (reported on the turn result for evaluation). */
@@ -2192,7 +2194,7 @@ export class AutonomousAgent {
    * Durable progress within a turn. A failed write is tolerated here: the turn-end checkpoint writes the same state,
    * and an operation whose result never reached the durable conversation is detected on recovery.
    */
-  private async ensureVerifierApproved(command: string, confirmHandler?: ConfirmHandler, origin?: string): Promise<boolean> {
+  private async ensureVerifierApproved(command: string, confirmHandler?: ConfirmHandler, origin?: string, binding?: string): Promise<boolean> {
     const isTrusted = isWorkspaceTrusted(this.config.workspace, this.isReadOnly());
     const mode = this.getApprovalMode();
     const policyContext: PolicyContext = {
@@ -2209,7 +2211,8 @@ export class AutonomousAgent {
 
     const desc = describeVerifier(this.config.workspace, command);
     const verifierCmd = desc?.command || command;
-    const digest = desc?.digest || createHash("sha256").update(verifierCmd).digest("hex");
+    const baseDigest = desc?.digest || createHash("sha256").update(verifierCmd).digest("hex");
+    const digest = binding ? createHash("sha256").update(`${baseDigest}\n${binding}`).digest("hex") : baseDigest;
     const cacheKey = `${this.config.workspace}:${verifierCmd}:${digest}`;
 
     if (this.approvedVerifiers.has(cacheKey)) {
@@ -2233,6 +2236,90 @@ export class AutonomousAgent {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Runs the project's type-check after a passing verifier, through the verifier's approval gate. It blocks only when an
+   * error is located in a file this task modified; errors elsewhere are recorded as PREEXISTING. The result holds
+   * "under <config>", never for the code in general.
+   */
+  private async runTypecheckOracle(opts: {
+    candidateId?: string;
+    current?: { inputs: string; epoch: string; mutationSeq: number; external: string };
+    budgetSecs: number;
+    onConfirm?: ConfirmHandler;
+    configured: boolean;
+  }): Promise<{ evidence: TypecheckEvidence; block?: string }> {
+    const at = () => new Date().toISOString();
+    const mode = typecheckMode(this.config.typecheck, opts.configured);
+    const skipped = (scope: string, extra: Partial<TypecheckEvidence> = {}) => ({
+      evidence: (this.lastTypecheck = { status: "NOT_APPLICABLE", scope, candidateId: opts.candidateId, ...extra, at: at() }),
+    });
+    if (mode === "off") return skipped("disabled by NEXUS_TYPECHECK / typecheck setting");
+    const check = discoverTypecheck(this.config.workspace);
+    if (!check) return skipped("no tsconfig.json or Cargo.toml found");
+    const named = { tool: check.tool, command: check.command, configPath: check.configPath, configSha256: check.configSha256, ...(check.toolSha256 ? { toolSha256: check.toolSha256 } : {}) };
+    if (check.skipReason) return skipped(check.skipReason, named);
+    const enforced = mode === "enforce";
+    const ledger = this.objective;
+    const current = opts.current;
+    const prior = ledger && current && enforced ? priorAttempt(ledger, check.command, current) : undefined;
+    if (ledger && current && prior?.status === "FAILED" && this.lastTypecheck?.command === check.command) {
+      recordAttempt(ledger, { command: check.command, ...current, status: "SKIPPED_UNCHANGED_INPUTS", ...(prior.failedCheck ? { failedCheck: prior.failedCheck } : {}) });
+      return {
+        evidence: this.lastTypecheck,
+        block: `Verification Oracle: ${check.command} already failed on these exact workspace inputs (attempt #${prior.n}); nothing it checks has changed, so it was not run again.\n${prior.failedCheck ? `Failed check: ${prior.failedCheck}\n` : ""}Fix the type errors, then call task_completed again.`,
+      };
+    }
+    if (!(await this.ensureVerifierApproved(check.command, opts.onConfirm, "type-check for the task", check.toolSha256))) {
+      return enforced
+        ? { evidence: (this.lastTypecheck = { status: "NOT_APPLICABLE", scope: "type-check not approved", ...named, enforced, candidateId: opts.candidateId, at: at() }), block: `Verification Oracle: type-check execution was not approved by operator (${check.command}).` }
+        : skipped("type-check not approved", named);
+    }
+    this.activity("verifying", { tool: check.command });
+    const run = await runTypecheck(
+      check,
+      (command, timeout_secs) => this.bridge.executeTool("run_command", { command, timeout_secs }),
+      this.config.workspace,
+      this.modifiedFiles,
+      opts.budgetSecs,
+    );
+    const excerpt = `(untrusted compiler output)\n${safeTerminal(foldVoluminousOutput(run.output || "", 30, 2000))}`;
+    const evidence: TypecheckEvidence = {
+      status: run.status,
+      enforced,
+      ...named,
+      ...(run.version ? { toolVersion: run.version } : {}),
+      exitCode: run.exitCode,
+      ...(run.errorCount !== undefined ? { errorCount: run.errorCount, firstDiagnostics: (run.firstDiagnostics ?? []).map((d) => safeTerminal(d)) } : {}),
+      scope: `under ${check.configPath}`,
+      ...(run.status === "PASSED" ? {} : { excerpt }),
+      candidateId: opts.candidateId,
+      at: at(),
+    };
+    this.lastTypecheck = evidence;
+    const blocking = run.status === "FAILED" || run.status === "TIMED_OUT";
+    if (ledger && current && (blocking || run.status === "PASSED")) {
+      recordAttempt(ledger, {
+        command: check.command,
+        ...current,
+        mutationSeq: this.mutationSeq,
+        status: run.status === "PASSED" ? "PASSED" : run.status === "TIMED_OUT" ? "TIMED_OUT" : "FAILED",
+        ...(blocking
+          ? {
+              failedCheck: safeTerminal(run.firstDiagnostics?.[0] ?? run.status).slice(0, 240),
+              ...attemptEvidence(run.output, run.exitCode, { timedOut: run.status === "TIMED_OUT" }),
+              ...(run.status === "FAILED" ? { classification: "CANDIDATE_FAILED" as const, failingTests: (run.firstDiagnostics ?? []).map((d) => safeTerminal(d).slice(0, 240)) } : {}),
+            }
+          : {}),
+      });
+    }
+    if (!enforced || !blocking) return { evidence };
+    const what = run.status === "FAILED" ? "failed" : `timed out after ${opts.budgetSecs}s`;
+    return {
+      evidence,
+      block: `Verification Oracle: tests passed, but the ${check.tool} type-check ${what} under ${check.configPath} (sha256 ${check.configSha256.slice(0, 12)}), so the changes are NOT verified.\nCommand: ${check.command}\n${excerpt}\nFix the type errors, then call task_completed again.`,
+    };
   }
 
   /**
@@ -4679,7 +4766,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             if (prior && (prior.status === "FAILED" || prior.status === "TIMED_OUT") && this.objective && current) {
               recordAttempt(this.objective, { command: verifierCommand, ...current, status: "SKIPPED_UNCHANGED_INPUTS", ...(prior.failedCheck ? { failedCheck: prior.failedCheck } : {}), ...(prior.classification ? { classification: prior.classification } : {}), ...(prior.exitCode !== undefined ? { exitCode: prior.exitCode } : {}), ...(prior.failingTests ? { failingTests: prior.failingTests } : {}) });
               if (!this.verificationEvidence || this.verificationEvidence.status === "PASSED") {
-                this.verificationEvidence = { status: prior.status, command: verifierCommand, source, exitSuccess: false, candidateId, at: prior.at };
+                this.verificationEvidence = { status: prior.status, command: verifierCommand, source, exitSuccess: false, candidateId, ...(this.lastTypecheck ? { typecheck: this.lastTypecheck } : {}), at: prior.at };
               }
               return {
                 success: false,
@@ -4721,6 +4808,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             const deadlineSecs = this.config.verifierTimeoutSecs ?? DEFAULT_VERIFIER_TIMEOUT_SECS;
             this.activity("verifying", { tool: verifierCommand });
             verificationStateBefore = this.isRecordableWorktree() && !this.config.dryRun ? captureVerificationState(this.config.workspace) : undefined;
+            const verifierStartedAt = Date.now();
             const testRes = await runTestSuiteWithExecutor(
               this.config.workspace,
               (command) => this.bridge.executeTool("run_command", { command, timeout_secs: deadlineSecs }),
@@ -4745,17 +4833,31 @@ ${NEXUS_RUNTIME_IDENTITY}`;
                 : new Set(this.config.trustedDeliverableFiles ?? []),
               baselineTests ?? undefined,
             ));
+            // A passing verifier is not acceptance while the project's type-check fails under its own configuration.
+            const typecheckOutcome = testRes.success
+              ? await this.runTypecheckOracle({
+                  candidateId,
+                  current,
+                  budgetSecs: Math.max(30, deadlineSecs - Math.round((Date.now() - verifierStartedAt) / 1000)),
+                  onConfirm,
+                  configured: Boolean(configured),
+                })
+              : undefined;
+            const typecheck = typecheckOutcome?.evidence;
+            const typecheckBlock = typecheckOutcome?.block;
+            const testsAndTypesPass = testRes.success && !typecheckBlock;
             // A discovered verifier's pass makes the change VERIFIED only on independent evidence (fail-before /
             // pass-after on tests the change did not write); the operator's configured verifier is their own check.
             const independence: Independence | undefined = unboundDetail
               ? { independent: false, detail: unboundDetail }
-              : source === "discovered" && testRes.success && isDeliverableBound ? await this.judgeIndependence(verifierCommand, deadlineSecs, onConfirm) : undefined;
+              : source === "discovered" && testsAndTypesPass && isDeliverableBound ? await this.judgeIndependence(verifierCommand, deadlineSecs, onConfirm) : undefined;
             const evidence: VerificationEvidence = {
-              status: testRes.success ? "PASSED" : testRes.timedOut ? "TIMED_OUT" : "FAILED",
+              status: testsAndTypesPass ? "PASSED" : testRes.timedOut ? "TIMED_OUT" : "FAILED",
               command: verifierCommand,
               source,
-              exitSuccess: testRes.success,
+              exitSuccess: testsAndTypesPass,
               hasExecutedTests: hasExecuted,
+              ...(typecheck ? { typecheck } : {}),
               isDeliverableBound,
               ...(unboundDetail ? { definitionBound: false } : {}),
               ...(independence ? { independent: independence.independent, independenceDetail: independence.detail } : {}),
@@ -4766,8 +4868,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             };
             this.verificationEvidence = evidence;
             this.verificationEvidenceRawOutput = testRes.rawOutput || "";
-            this.turnVerifierRuns.push({ command: verifierCommand, phase: "completion", passed: testRes.success });
-            if (configured) this.turnConfiguredVerifier = testRes.success ? "PASSED" : "FAILED";
+            this.turnVerifierRuns.push({ command: verifierCommand, phase: "completion", passed: testsAndTypesPass });
+            if (configured) this.turnConfiguredVerifier = testsAndTypesPass ? "PASSED" : "FAILED";
             if (this.objective && candidateId) {
               recordAttempt(this.objective, {
                 command: verifierCommand,
@@ -4776,11 +4878,11 @@ ${NEXUS_RUNTIME_IDENTITY}`;
                 // Read after the run: the verifier's own command is not a change to its inputs.
                 mutationSeq: this.mutationSeq,
                 external: externalInputsFingerprint(this.config.workspace),
-                status: evidence.status,
+                status: testRes.success ? "PASSED" : testRes.timedOut ? "TIMED_OUT" : "FAILED",
                 isDeliverableBound,
                 ...(independence ? { independent: independence.independent } : {}),
                 filtered: isFilteredVerifierCommand(verifierCommand),
-                ...(evidence.status === "PASSED" ? {} : { failedCheck: failedCheckFrom(testRes.rawOutput || ""), ...attemptEvidence(testRes.rawOutput || "", testRes.exitCode, { timedOut: testRes.timedOut, executorFailed: testRes.executorFailed }) }),
+                ...(testRes.success ? {} : { failedCheck: failedCheckFrom(testRes.rawOutput || ""), ...attemptEvidence(testRes.rawOutput || "", testRes.exitCode, { timedOut: testRes.timedOut, executorFailed: testRes.executorFailed }) }),
               });
             }
             if (testRes.timedOut) {
@@ -4808,6 +4910,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
                 }),
               };
             }
+            if (typecheckBlock) return { success: false, output: "", error: typecheckBlock };
             if (!testRes.success) {
               const hints = formatDiagnosticHints(testRes.diagnostics);
               const evidenceLine = describeAttemptEvidence(attemptEvidence(testRes.rawOutput || "", testRes.exitCode, { timedOut: testRes.timedOut, executorFailed: testRes.executorFailed }));

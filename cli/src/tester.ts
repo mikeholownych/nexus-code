@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -147,6 +148,227 @@ export function discoverVerifier(workspace: string, filterPattern?: string): Dis
   return null;
 }
 
+export type TypecheckMode = "off" | "record" | "enforce";
+
+/** NEXUS_TYPECHECK (off | enforce) overrides the configured mode; a configured verifier makes the check record-only by default. */
+export function typecheckMode(configured: TypecheckMode | undefined, hasConfiguredVerifier: boolean): TypecheckMode {
+  const env = process.env.NEXUS_TYPECHECK?.trim().toLowerCase();
+  if (env === "off" || env === "enforce") return env;
+  return configured ?? (hasConfiguredVerifier ? "record" : "enforce");
+}
+
+export interface DiscoveredTypecheck {
+  tool: "tsc" | "cargo";
+  /** Prints the tool version; run as its own call so no shell operator is assumed. */
+  probe: string;
+  command: string;
+  /** Workspace-relative configuration file the check ran under. */
+  configPath: string;
+  configSha256: string;
+  /** Hash of the resolved tool launcher, so an approval binds to the binary that runs. */
+  toolSha256?: string;
+  /** Set when the configuration is not one a type-check can stand for (e.g. a solution-style tsconfig). */
+  skipReason?: string;
+}
+
+const sha256File = (file: string): string | undefined => {
+  try {
+    return createHash("sha256").update(fs.readFileSync(fs.realpathSync(file))).digest("hex");
+  } catch {
+    return undefined;
+  }
+};
+
+function resolveOnPath(name: string): string | undefined {
+  for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
+    if (!dir) continue;
+    const candidate = path.join(dir, name);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {}
+  }
+  return undefined;
+}
+
+/** A type-check is selected only when its configuration file exists; otherwise none applies. */
+export function discoverTypecheck(workspace: string): DiscoveredTypecheck | null {
+  const root = path.resolve(workspace);
+  const read = (rel: string): string | null => {
+    try {
+      return fs.readFileSync(path.join(root, rel), "utf-8");
+    } catch {
+      return null;
+    }
+  };
+  const sha = (text: string) => createHash("sha256").update(text).digest("hex");
+  const tsconfig = read("tsconfig.json");
+  if (tsconfig !== null) {
+    const local = path.join(root, "node_modules/.bin/tsc");
+    const useLocal = fs.existsSync(local);
+    const tsc = useLocal ? "./node_modules/.bin/tsc" : "tsc";
+    const solution = /"(?:references|composite)"\s*:/.test(tsconfig);
+    return {
+      tool: "tsc",
+      probe: `${tsc} --version`,
+      command: `${tsc} --noEmit --incremental false -p tsconfig.json`,
+      configPath: "tsconfig.json",
+      configSha256: sha(tsconfig),
+      toolSha256: sha256File(useLocal ? local : resolveOnPath("tsc") ?? ""),
+      ...(solution ? { skipReason: "tsconfig.json is solution-style or composite (references/composite), so a plain tsc run does not check it" } : {}),
+    };
+  }
+  for (const rel of ["Cargo.toml", "core/Cargo.toml"]) {
+    const text = read(rel);
+    if (text !== null) {
+      const manifest = rel === "Cargo.toml" ? "" : ` --manifest-path ${rel}`;
+      const target = path.join(os.tmpdir(), `nexus-typecheck-${sha(root).slice(0, 16)}`);
+      return {
+        tool: "cargo",
+        probe: "cargo --version",
+        command: `CARGO_TARGET_DIR='${target}' cargo check --offline --locked${manifest}`,
+        configPath: rel,
+        configSha256: sha(text),
+        toolSha256: sha256File(resolveOnPath("cargo") ?? ""),
+      };
+    }
+  }
+  return null;
+}
+
+export interface TypecheckDiagnostics {
+  errorCount: number;
+  /** Files (as printed by the tool) that carry at least one located error. */
+  files: string[];
+  /** Error codes of diagnostics with no source location (configuration errors). */
+  unlocatedCodes: string[];
+  first: string[];
+}
+
+/** tsc `path(line,col): error TSxxxx` and `path:line:col - error TSxxxx`; cargo `error...` followed by `--> path:line:col`. */
+export function parseTypecheckDiagnostics(output: string): TypecheckDiagnostics {
+  const files = new Set<string>();
+  const unlocatedCodes: string[] = [];
+  const first: string[] = [];
+  let errorCount = 0;
+  let cargoError: string | undefined;
+  const note = (line: string) => {
+    errorCount++;
+    if (first.length < 5) first.push(line.trim().slice(0, 240));
+  };
+  for (const raw of output.split("\n")) {
+    const line = raw.replace(/\r$/, "");
+    const tsc = line.match(/^(.+?)\((\d+),(\d+)\): error (TS\d+):/) ?? line.match(/^(.+?):(\d+):(\d+) - error (TS\d+):/);
+    if (tsc) {
+      files.add(tsc[1]);
+      note(line);
+      continue;
+    }
+    const bare = line.match(/^error (TS\d+):/);
+    if (bare) {
+      unlocatedCodes.push(bare[1]);
+      note(line);
+      continue;
+    }
+    const header = line.match(/^(error|warning)(?:\[\w+\])?:/);
+    if (header) {
+      cargoError = header[1] === "error" ? line : undefined;
+      continue;
+    }
+    const arrow = line.match(/^\s*--> (.+?):\d+:\d+/);
+    if (arrow && cargoError) {
+      files.add(arrow[1]);
+      note(cargoError);
+      cargoError = undefined;
+    }
+  }
+  return { errorCount, files: [...files], unlocatedCodes, first };
+}
+
+export type TypecheckStatus = "PASSED" | "FAILED" | "TIMED_OUT" | "ENVIRONMENT" | "PREEXISTING";
+
+export interface TypecheckRun {
+  status: TypecheckStatus;
+  exitCode: number | null;
+  version?: string;
+  output: string;
+  errorCount?: number;
+  firstDiagnostics?: string[];
+}
+
+export type TimedExecutor = (command: string, timeoutSecs: number) => Promise<{ success: boolean; output: string; error?: string; timedOut?: boolean }>;
+
+/**
+ * Decide what a non-zero check means. It blocks (FAILED) only when an error is located in a file the candidate modified;
+ * errors only in untouched files are PREEXISTING, and output that cannot be attributed is ENVIRONMENT.
+ */
+export function classifyTypecheck(
+  check: Pick<DiscoveredTypecheck, "tool" | "configPath">,
+  output: string,
+  workspace: string,
+  modified: ReadonlySet<string>,
+): { status: "FAILED" | "ENVIRONMENT" | "PREEXISTING"; diagnostics: TypecheckDiagnostics } {
+  const diagnostics = parseTypecheckDiagnostics(output);
+  // No located error: configuration (TS5xxx/TS6xxx), missing type packages, dependency resolution, offline or lockfile
+  // failures. These say the check could not run here, not that the candidate broke it.
+  if (diagnostics.files.length === 0) return { status: "ENVIRONMENT", diagnostics };
+  const root = path.resolve(workspace);
+  const bases = [root, path.resolve(root, path.dirname(check.configPath))];
+  const real = (f: string) => {
+    try {
+      return fs.realpathSync(f);
+    } catch {
+      return f;
+    }
+  };
+  const touched = new Set<string>();
+  for (const m of modified) {
+    touched.add(path.resolve(m));
+    touched.add(real(m));
+  }
+  const hit = diagnostics.files.some((f) => bases.some((b) => {
+    const abs = path.resolve(b, f);
+    return touched.has(abs) || touched.has(real(abs));
+  }));
+  return { status: hit ? "FAILED" : "PREEXISTING", diagnostics };
+}
+
+export async function runTypecheck(
+  check: DiscoveredTypecheck,
+  execute: TimedExecutor,
+  workspace: string,
+  modified: ReadonlySet<string>,
+  budgetSecs: number,
+): Promise<TypecheckRun> {
+  const PROBE_SECS = 30;
+  let version: string | undefined;
+  try {
+    const probe = parseExecution(await execute(check.probe, Math.min(PROBE_SECS, budgetSecs)));
+    if (!probe.succeeded) return { status: "ENVIRONMENT", exitCode: probe.exitCode ?? null, output: probe.rawOutput };
+    const line = probe.rawOutput.split("\n")[0]?.trim() ?? "";
+    if (/\d+\.\d+/.test(line)) version = line.slice(0, 100);
+  } catch (error: any) {
+    return { status: "ENVIRONMENT", exitCode: null, output: String(error?.message ?? error) };
+  }
+  let run: ReturnType<typeof parseExecution>;
+  try {
+    run = parseExecution(await execute(check.command, budgetSecs));
+  } catch (error: any) {
+    return { status: "ENVIRONMENT", exitCode: null, version, output: String(error?.message ?? error) };
+  }
+  const base = { exitCode: run.exitCode ?? null, version, output: run.rawOutput };
+  if (run.timedOut) return { ...base, status: "TIMED_OUT" };
+  if (run.succeeded) return { ...base, status: "PASSED" };
+  if (run.exitCode === undefined || run.exitCode === null || run.exitCode === 126 || run.exitCode === 127) return { ...base, status: "ENVIRONMENT" };
+  const { status, diagnostics } = classifyTypecheck(check, run.rawOutput, workspace, modified);
+  return {
+    ...base,
+    status,
+    errorCount: diagnostics.errorCount,
+    firstDiagnostics: diagnostics.first,
+  };
+}
+
 export interface VerifierDescription {
   command: string;
   evidence: string;
@@ -273,6 +495,36 @@ export function runTestSuite(workspace: string, filterPattern?: string): TestRun
   return summarizeTestRun(command, success, rawOutput);
 }
 
+export interface ParsedExecution {
+  succeeded: boolean;
+  timedOut: boolean;
+  /** Undefined when the runner returned no execution envelope (the command's exit status is then unknown). */
+  exitCode?: number | null;
+  rawOutput: string;
+}
+
+/** Unwrap the runner's envelope; a killed or timed-out command has `exit_code: null`. */
+export function parseExecution(result: { success: boolean; output: string; error?: string; timedOut?: boolean }): ParsedExecution {
+  let succeeded = false;
+  let timedOut = result.timedOut === true;
+  let exitCode: number | null | undefined;
+  let rawOutput = [result.output, result.error].filter(Boolean).join("\n");
+  if (result.success) {
+    try {
+      const execution = JSON.parse(result.output);
+      if (execution && typeof execution === "object" && "exit_code" in execution) {
+        timedOut = execution.timed_out === true;
+        exitCode = typeof execution.exit_code === "number" ? execution.exit_code : null;
+        succeeded = exitCode === 0 && !timedOut;
+        rawOutput = [execution.stdout, execution.stderr, result.error].filter(Boolean).join("\n");
+      }
+    } catch {
+      // Unknown executor output is not proof that the command exited successfully.
+    }
+  }
+  return { succeeded, timedOut, exitCode, rawOutput };
+}
+
 /** Execute test discovery or an explicit verifier through the caller's mutation boundary. */
 export async function runTestSuiteWithExecutor(
   workspace: string,
@@ -283,24 +535,8 @@ export async function runTestSuiteWithExecutor(
   if (command === "none") return summarizeTestRun("none", false, "no verifier: no verification command is configured or discovered in this workspace.");
   try {
     const result = await execute(command);
-    let commandSucceeded = false;
-    let timedOut = result.timedOut === true;
-    let exitCode: number | undefined;
-    let rawOutput = [result.output, result.error].filter(Boolean).join("\n");
-    if (result.success) {
-      try {
-        const execution = JSON.parse(result.output);
-        // The runner's envelope is always unwrapped: a killed or timed-out command has `exit_code: null`.
-        if (execution && typeof execution === "object" && "exit_code" in execution) {
-          timedOut = execution.timed_out === true;
-          commandSucceeded = execution.exit_code === 0 && !timedOut;
-          if (typeof execution.exit_code === "number") exitCode = execution.exit_code;
-          rawOutput = [execution.stdout, execution.stderr, result.error].filter(Boolean).join("\n");
-        }
-      } catch {
-        // Unknown executor output is not proof that the command exited successfully.
-      }
-    }
+    const { succeeded: commandSucceeded, timedOut, exitCode: parsedExit, rawOutput } = parseExecution(result);
+    const exitCode = typeof parsedExit === "number" ? parsedExit : undefined;
     const summary = summarizeTestRun(command, commandSucceeded, rawOutput);
     const withExit = {
       ...summary,
