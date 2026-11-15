@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Detailed per-release documentation is maintained in [`docs/releases/`](docs/releases/).
 
+## [v1.2.0] - Unreleased
+
+### Changed
+
+- **Breaking validation change:** `nexus operation run` now rejects a spec whose own `policy.maxConcurrentUnits` is above 1 unless it sets `git.isolate: true`, because concurrent units otherwise write the same worktree. Fix: add `"git": { "isolate": true }` or set the limit to 1. Records already on disk are not refused: `nexus operation resume` and `decide` clamp such a record to one unit at a time and warn. The library API `newOperation` is unchanged.
+
 ## [v1.1.4] - Unreleased
 
 Release notes: [`docs/releases/v1.1.4.md`](docs/releases/v1.1.4.md). Candidate notes: [`rc.3`](docs/releases/v1.1.4-rc.3.md), [`rc.2`](docs/releases/v1.1.4-rc.2.md), [`rc.1`](docs/releases/v1.1.4-rc.1.md) (ledger closed except the listed items; external qualification pending).

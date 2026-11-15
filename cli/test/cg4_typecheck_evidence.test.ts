@@ -254,12 +254,28 @@ describe("type-check as verifier evidence: agent level", () => {
     });
   });
 
+  test("a requirement-tagged attempt of the same command is not a prior task type-check", { timeout: 60_000 }, async () => {
+    await withAgent({ "tsconfig.json": TSCONFIG, "types.ts": TYPES_OK }, { path: "tsc" }, async (agent) => {
+      const check = discoverTypecheck((agent as any).config.workspace)!;
+      const current = { inputs: "i", epoch: "e", mutationSeq: 1, external: "x" };
+      (agent as any).objective = { verification: [{ n: 1, at: "t", command: check.command, ...current, status: "FAILED", requirementId: "R1" }] };
+      (agent as any).lastTypecheck = { status: "FAILED", command: check.command, at: "t" };
+      (agent as any).ensureVerifierApproved = async () => true;
+      let executed = 0;
+      (agent as any).bridge.executeTool = async () => (executed++, { success: true, output: JSON.stringify({ exit_code: 0, stdout: "Version 5.0.0\n", stderr: "" }) });
+      const { evidence, block } = await (agent as any).runTypecheckOracle({ current, budgetSecs: 30, configured: false });
+      assert.equal(block, undefined);
+      assert.equal(evidence.status, "PASSED");
+      assert.equal(executed, 2);
+    });
+  });
+
   test("the approval digest binds the resolved tool", { timeout: 60_000 }, async () => {
     const files = { "tsconfig.json": TSCONFIG, "types.ts": TYPES_OK };
     await withAgent(files, { path: "tsc", config: { approvalMode: "ask", fullAccess: false } }, async (agent) => {
       const digests: string[] = [];
       for (const binding of ["a", "b"]) {
-        await (agent as any).ensureVerifierApproved("tsc --noEmit", async (_kind: string, info: { digest: string }) => (digests.push(info.digest), true), binding);
+        await (agent as any).ensureVerifierApproved("tsc --noEmit", async (_kind: string, info: { digest: string }) => (digests.push(info.digest), true), undefined, binding);
         (agent as any).approvedVerifiers.clear();
       }
       if (digests.length === 2) assert.notEqual(digests[0], digests[1]);
