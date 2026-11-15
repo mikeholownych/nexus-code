@@ -122,6 +122,23 @@ export type ComparativeOutcome =
   | "CANCELLED"
   | "INCOMPARABLE";
 
+export interface BaselineIdentity {
+  manifestSha256: string;
+  model: { name: string; digest?: string; quantization?: string };
+  sampling: ModelMetadata["parameters"];
+  configurationSha256: string;
+  evaluatorVersion: string;
+  toolchainVersions: Record<string, string>;
+}
+
+/**
+ * IDENTITY_BOUND: the baseline identity was recorded, verified against the baseline manifest the caller supplied, and
+ * matches the current run. UNBOUND: anything less (the existing "non-certifying" case).
+ * This is a local, unsigned identity binding; not external qualification; an attacker who edits manifest, hash and
+ * identity together passes.
+ */
+export type IdentityBindingStatus = "IDENTITY_BOUND" | "UNBOUND";
+
 export interface BaselineSpecification {
   baselineId: string;
   evaluationId: string;
@@ -133,6 +150,7 @@ export interface BaselineSpecification {
   manifestSha256: string;
   establishedAt: string;
   assertions?: Record<string, boolean>;
+  identity?: BaselineIdentity;
 }
 
 export interface BaselineComparisonResult {
@@ -149,6 +167,12 @@ export interface BaselineComparisonResult {
   }>;
   confidence: number;
   explanation: string;
+  identityBinding?: {
+    status: IdentityBindingStatus;
+    reasons: string[];
+    baselineIdentity?: BaselineIdentity;
+    currentIdentity: BaselineIdentity;
+  };
 }
 
 export type EpistemologicalType =
@@ -180,6 +204,7 @@ export interface RemediationProposal {
 }
 
 export interface CeriOperationalReport {
+  identityBinding?: { bound: number; unbound: number; reasons: string[] };
   reportId: string;
   generatedAt: string;
   evaluationCoverage: {

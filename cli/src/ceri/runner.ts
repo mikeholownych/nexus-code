@@ -1,4 +1,5 @@
 import * as os from "node:os";
+import { randomBytes } from "node:crypto";
 import { execSync } from "node:child_process";
 import { getBuildIdentity } from "../build_identity.js";
 import {
@@ -22,6 +23,7 @@ export interface EvaluationRunnerOptions {
   evidenceStore: CeriEvidenceStore;
   baseline?: BaselineSpecification;
   baselineAssertions?: Record<string, boolean>;
+  baselineManifest?: RunManifest;
   isRepeatReproduction?: boolean;
 }
 
@@ -82,7 +84,7 @@ export class CeriEvaluationRunner {
     validateEvaluationDefinition(definition);
 
     const gitInfo = CeriEvaluationRunner.getGitProvenance();
-    const runId = `run-${definition.id}-${Date.now()}`;
+    const runId = `run-${definition.id}-${Date.now()}-${randomBytes(3).toString("hex")}`;
     const startedAt = new Date().toISOString();
 
     const manifest: RunManifest = {
@@ -179,15 +181,29 @@ export class CeriEvaluationRunner {
     // 4. Perform baseline comparison if baseline specification is present
     let comparison: BaselineComparisonResult | undefined;
     if (options.baseline) {
-      const loadedBaselineAssertions =
-        options.baselineAssertions ??
-        options.baseline.assertions ??
-        options.evidenceStore.loadAssertions(
-          options.baseline.evaluationId,
-          options.baseline.baselineId
-        );
+      let loadedBaselineAssertions = options.baselineAssertions ?? options.baseline.assertions;
+      let baselineManifest = options.baselineManifest;
+      let integrityFailure: string | undefined;
+      try {
+        loadedBaselineAssertions ??= options.evidenceStore.loadAssertions(options.baseline.evaluationId, options.baseline.baselineId);
+        baselineManifest ??= options.evidenceStore.loadManifest(options.baseline.evaluationId, options.baseline.baselineId);
+      } catch (err) {
+        if (!(err instanceof Error) || err.name !== "CeriEvidenceIntegrityError") throw err;
+        integrityFailure = err.message;
+      }
 
-      if (!loadedBaselineAssertions) {
+      if (integrityFailure) {
+        comparison = {
+          baselineId: options.baseline.baselineId,
+          currentRunId: manifest.runId,
+          isEligibleForComparison: false,
+          incomparabilityReasons: [integrityFailure],
+          outcome: "INCOMPARABLE",
+          divergences: [],
+          confidence: 0.0,
+          explanation: `Baseline evidence failed its integrity check: ${integrityFailure}`,
+        };
+      } else if (!loadedBaselineAssertions) {
         comparison = {
           baselineId: options.baseline.baselineId,
           currentRunId: manifest.runId,
@@ -207,7 +223,8 @@ export class CeriEvaluationRunner {
           assertionResults,
           options.baseline,
           loadedBaselineAssertions,
-          options.isRepeatReproduction ?? false
+          options.isRepeatReproduction ?? false,
+          { baselineManifest }
         );
       }
     }
