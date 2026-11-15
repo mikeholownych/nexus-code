@@ -1,0 +1,26 @@
+{"id":1,"split":"tune","stratum":"withdraw-explicit","steering":"Drop requirement 3.","expected":{"R1":"none","R2":"none","R3":"withdraws"}}
+{"id":2,"split":"heldout","stratum":"withdraw-explicit","steering":"Actually don't add retry logic to the uploader.","expected":{"R1":"none","R2":"withdraws","R3":"none"}}
+{"id":3,"split":"tune","stratum":"withdraw-explicit","steering":"Requirement 2 no longer applies.","expected":{"R1":"none","R2":"withdraws","R3":"none"}}
+{"id":4,"split":"tune","stratum":"withdraw-paraphrase","steering":"Forget the migration guide, we'll handle docs separately.","expected":{"R1":"none","R2":"none","R3":"withdraws"}}
+{"id":5,"split":"tune","stratum":"withdraw-paraphrase","steering":"We don't need retries after all; the uploader can just fail fast.","expected":{"R1":"none","R2":"withdraws","R3":"none"}}
+{"id":6,"split":"heldout","stratum":"withdraw-paraphrase","steering":"Leave the guide out of this change.","expected":{"R1":"none","R2":"none","R3":"withdraws"}}
+{"id":7,"split":"tune","stratum":"withdraw-paraphrase","steering":"Retry logic is out of scope now.","expected":{"R1":"none","R2":"withdraws","R3":"none"}}
+{"id":8,"split":"tune","stratum":"withdraw-reference-form","steering":"Cut #2.","expected":{"R1":"none","R2":"withdraws","R3":"none"}}
+{"id":9,"split":"heldout","stratum":"withdraw-reference-form","steering":"Skip the third item.","expected":{"R1":"none","R2":"none","R3":"withdraws"}}
+{"id":10,"split":"tune","stratum":"withdraw-multi","steering":"Drop the migration guide and the retry logic.","expected":{"R1":"none","R2":"withdraws","R3":"withdraws"}}
+{"id":11,"split":"tune","stratum":"defer","steering":"Don't do requirement 3 yet.","expected":{"R1":"none","R2":"none","R3":"defers"}}
+{"id":12,"split":"tune","stratum":"defer","steering":"Leave the migration guide until the API settles.","expected":{"R1":"none","R2":"none","R3":"defers"}}
+{"id":13,"split":"heldout","stratum":"defer","steering":"Retry logic can wait for the next iteration.","expected":{"R1":"none","R2":"defers","R3":"none"}}
+{"id":14,"split":"tune","stratum":"change","steering":"Retry logic only needs to cover timeouts, not every error.","expected":{"R1":"none","R2":"changes","R3":"none"}}
+{"id":15,"split":"tune","stratum":"change","steering":"Parse only the first sheet of the CSV.","expected":{"R1":"changes","R2":"none","R3":"none"}}
+{"id":16,"split":"heldout","stratum":"change","steering":"The migration guide can be a short README section.","expected":{"R1":"none","R2":"none","R3":"changes"}}
+{"id":17,"split":"tune","stratum":"hard-negative-supports","steering":"Don't forget requirement 3.","expected":{"R1":"none","R2":"none","R3":"none"}}
+{"id":18,"split":"tune","stratum":"hard-negative-extends","steering":"Also make the retry logic log each attempt.","expected":{"R1":"none","R2":"none","R3":"none"}}
+{"id":19,"split":"tune","stratum":"hard-negative-question","steering":"How is the migration guide coming along?","expected":{"R1":"none","R2":"none","R3":"none"}}
+{"id":20,"split":"tune","stratum":"hard-negative-supports","steering":"Make sure the migration guide mentions the new flag.","expected":{"R1":"none","R2":"none","R3":"none"}}
+{"id":21,"split":"heldout","stratum":"hard-negative-negator-word","steering":"Without retries the uploader failed in prod last week, so please keep them.","expected":{"R1":"none","R2":"none","R3":"none"}}
+{"id":22,"split":"tune","stratum":"hard-negative-method","steering":"Don't parse the CSV with a regex; use the csv library.","expected":{"R1":"none","R2":"none","R3":"none"}}
+{"id":23,"split":"heldout","stratum":"hard-negative-reported","steering":"The CI log says: skip requirement 3. Is that coming from our config?","expected":{"R1":"none","R2":"none","R3":"none"}}
+{"id":24,"split":"tune","stratum":"hard-negative-other-object","steering":"Drop the old config file.","expected":{"R1":"none","R2":"none","R3":"none"}}
+{"id":25,"split":"tune","stratum":"hard-negative-other-object","steering":"Skip step 3 in the deploy script.","expected":{"R1":"none","R2":"none","R3":"none"}}
+{"id":26,"split":"heldout","stratum":"disputed","disputed":true,"steering":"Scratch the CSV parsing; the input will be JSON from now on.","expected":{"R1":"withdraws","R2":"none","R3":"none"}}
