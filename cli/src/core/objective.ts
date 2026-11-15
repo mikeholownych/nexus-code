@@ -894,10 +894,10 @@ export function convergenceSignal(
   const converging: ConvergenceSignal = { state: "converging", evidence: "", attempts: [] };
   const n = Math.max(2, Math.floor(attempts));
   const comparable = ledger.verification.filter((a) => a.n > (ledger.convergenceResetAfter ?? 0));
-  const target = command ?? comparable.filter((a) => a.status === "FAILED" && a.classification === "CANDIDATE_FAILED").at(-1)?.command;
+  const target = command ?? comparable.filter((a) => a.requirementId === undefined && a.status === "FAILED" && a.classification === "CANDIDATE_FAILED").at(-1)?.command;
   const history: VerificationAttempt[] = [];
   for (const a of comparable) {
-    if (a.command !== target) continue;
+    if (a.command !== target || a.requirementId !== undefined) continue;
     if (a.status === "PASSED") history.length = 0;
     else if (a.status === "FAILED" && a.classification === "CANDIDATE_FAILED") history.push(a);
   }

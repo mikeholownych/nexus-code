@@ -97,6 +97,13 @@ describe("DV-2 convergenceSignal", () => {
     assert.equal(convergenceSignal(ledgerOf(...noise, ...noise, ...noise)).state, "converging");
   });
 
+  test("a requirement verifier's failures are not a task-verifier stall", () => {
+    const req = () => failed(["a"], { requirementId: "R1" });
+    assert.equal(convergenceSignal(ledgerOf(req(), req(), req())).state, "converging");
+    assert.equal(convergenceSignal(ledgerOf(failed(["a"]), req(), failed(["a"]), req(), failed(["a"]))).state, "stalled", "task failures still count around them");
+    assert.equal(convergenceSignal(ledgerOf(failed(["a"]), failed(["a"]), req(), req())).state, "converging");
+  });
+
   test("a pass ends the history", () => {
     const pass: Omit<VerificationAttempt, "n" | "at"> = { command: "make test", inputs: "p", status: "PASSED" };
     assert.equal(convergenceSignal(ledgerOf(failed(["a"]), failed(["a"]), pass, failed(["a"]))).state, "converging");
