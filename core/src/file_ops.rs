@@ -386,7 +386,21 @@ fn indentation_only_match(original: &str, old_content: &str) -> Option<(usize, S
     if orig_lines.len() < window.len() {
         return None;
     }
-    let matches: Vec<usize> = (0..=(orig_lines.len() - window.len()))
+    // Candidate starts come from the occurrences of the snippet line that is rarest in the file, so a file of
+    // many repeated lines does not cost windows times snippet lines.
+    let mut positions: std::collections::HashMap<&str, Vec<usize>> = std::collections::HashMap::new();
+    for (i, l) in orig_lines.iter().enumerate() {
+        positions.entry(l.trim()).or_default().push(i);
+    }
+    let (anchor, hits) = window
+        .iter()
+        .enumerate()
+        .map(|(k, l)| (k, positions.get(l.trim()).map(Vec::as_slice).unwrap_or(&[])))
+        .min_by_key(|(_, h)| h.len())?;
+    let matches: Vec<usize> = hits
+        .iter()
+        .filter_map(|&p| p.checked_sub(anchor))
+        .filter(|&i| i + window.len() <= orig_lines.len())
         .filter(|&i| window.iter().enumerate().all(|(k, l)| orig_lines[i + k].trim() == l.trim()))
         .collect();
     match matches.as_slice() {
@@ -402,6 +416,9 @@ const FEEDBACK_MAX_CHARS: usize = 2000;
 /// Most snippet lines compared, and most file lines scanned by the single-line fuzzy fallback.
 const FEEDBACK_MAX_SNIPPET_LINES: usize = 200;
 const FEEDBACK_MAX_FUZZY_SCAN: usize = 5000;
+/// A line that occurs more often than this in the file cannot identify a location, and indexing it would make the
+/// vote cost snippet lines times file lines.
+const FEEDBACK_MAX_OCCURRENCES: usize = 50;
 
 /// A file whose content must never be echoed in a failed-edit message: the agent may be denied reading it, and
 /// the message goes into the model context. The CLI refuses protected paths before it calls the core; this is the
@@ -463,10 +480,17 @@ fn closest_lines_feedback(path: &str, original: &str, old_content: &str) -> Opti
     }
     // Each snippet line that appears in the file (trimmed; trivial lines like "}" do not count) votes for the
     // window start it implies.
+    let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for l in &orig_lines {
+        let t = l.trim();
+        if t.chars().count() >= 4 {
+            *counts.entry(t).or_insert(0) += 1;
+        }
+    }
     let mut by_text: std::collections::HashMap<&str, Vec<usize>> = std::collections::HashMap::new();
     for (i, l) in orig_lines.iter().enumerate() {
         let t = l.trim();
-        if t.chars().count() >= 4 {
+        if counts.get(t).is_some_and(|&c| c <= FEEDBACK_MAX_OCCURRENCES) {
             by_text.entry(t).or_default().push(i);
         }
     }
@@ -499,8 +523,10 @@ fn closest_lines_feedback(path: &str, original: &str, old_content: &str) -> Opti
     let start = start?;
     let end = (start + n).min(orig_lines.len());
     let window = &orig_lines[start..end];
+    // Show from just before the first line that differs, so a long snippet's cap does not hide the mismatch.
+    let shown_from = old_lines.iter().zip(window.iter()).position(|(a, b)| a.trim() != b.trim()).map_or(0, |k| k.saturating_sub(1));
     let mut out = String::from("Closest lines in the file:\n");
-    out.push_str(&untrusted_lines_block(start + 1, window));
+    out.push_str(&untrusted_lines_block(start + shown_from + 1, &window[shown_from..]));
     if old_lines.iter().any(|l| is_elision_line(l)) {
         out.push_str("Hint: the snippet contains an elision marker (\"...\"); old_content must be the exact literal text, with no lines left out.\n");
     }
@@ -2304,6 +2330,20 @@ mod tests {
         let (res, _) = edit_in("none", "n.txt", "alpha\nbeta\n", "completely different\ntext here", "x");
         let err = res.unwrap_err();
         assert!(err.starts_with("Could not find exact text match") && !err.contains("untrusted"), "{err}");
+    }
+
+    #[test]
+    fn test_failed_edit_feedback_cost_is_bounded_on_repetitive_files() {
+        let mut orig: String = "continue;\n".repeat(60_000);
+        orig.push_str("fn distinctive_one() {\n    let marker = 1;\n    distinctive_two();\n}\n");
+        let mut old: String = "continue;\n".repeat(150);
+        old.push_str("fn distinctive_one() {\n    let marker = 2;\n    distinctive_two();\n}\n");
+        let started = std::time::Instant::now();
+        let (res, after) = edit_in("repeat", "r.rs", &orig, &old, "x\n");
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+        let err = res.unwrap_err();
+        assert!(err.contains("distinctive_one") && err.contains("let marker = 1;"), "{err}");
+        assert_eq!(after, orig);
     }
 }
 
