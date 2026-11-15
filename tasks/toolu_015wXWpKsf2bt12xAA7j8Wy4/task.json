@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_015wXWpKsf2bt12xAA7j8Wy4",
+  "agent_id": "a67ad75e317beafd4",
+  "subagent_type": "general-purpose",
+  "task_description": "REA study of installed harness clients (bounded)",
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 102773,
+    "cache_read_tokens": 702646,
+    "output_tokens": 12095,
+    "api_call_count": 10
+  },
+  "started_at": "2026-11-15T03:21:40.426215352Z",
+  "completed_at": "2026-11-15T03:29:05.952528166Z"
+}

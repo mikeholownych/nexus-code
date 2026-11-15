@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Pazwto5uS1mmqbNY6adE2T",
+  "agent_id": "ad817362ac094b6a4",
+  "subagent_type": "general-purpose",
+  "task_description": "v1.2.1 DH-1 and DH-2 docs drift",
+  "token_usage": {
+    "input_tokens": 52,
+    "cache_creation_tokens": 76028,
+    "cache_read_tokens": 1975017,
+    "output_tokens": 16409,
+    "api_call_count": 26
+  },
+  "started_at": "2026-11-15T03:22:57.985596485Z",
+  "completed_at": "2026-11-15T03:29:30.021739112Z"
+}
