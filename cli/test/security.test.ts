@@ -205,6 +205,14 @@ describe("Slice 6: protected paths match relative to the workspace root", () => 
       assert.equal(sm.isPathProtected(".env").protected, true);
     });
   });
+
+  test("the unused allowExternalSymlinks key is no longer part of the parsed policy", async () => {
+    await withWorkspace(async (ws) => {
+      fs.writeFileSync(path.join(ws, ".nexus-security.json"), JSON.stringify({ allowExternalSymlinks: true }));
+      const policy = (new SecurityManager(ws) as unknown as { policy: Record<string, unknown> }).policy;
+      assert.equal("allowExternalSymlinks" in policy, false);
+    });
+  });
 });
 
 describe("ACC-SAFE-07 & REQ-SEC-108: Destructive-command tripwire tokenization and documented bypasses", () => {
