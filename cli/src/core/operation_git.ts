@@ -18,7 +18,7 @@ import * as path from "node:path";
 import { trustedGitArgs } from "../git.js";
 import { ensureGitExclude } from "./git_exclude.js";
 import { GIT_SAFE, attributesTree, driverRefusal, safeGitEnv, snapshotSupport } from "./specialist_inputs.js";
-import { verifierTimeoutSecs } from "../tester.js";
+import { runVerifierShell, verifierTimeoutSecs } from "../tester.js";
 import type {
   IntegrationReceipt,
   OperationGitState,
@@ -626,23 +626,14 @@ export class OperationGit {
   /** Re-run the unit's verifier on the merged tree. The unit's own evidence already proved it executed tests. */
   private verifyMerged(command: string): { ok: boolean; reason?: string } {
     const deadlineMs = (this.options.verifyTimeoutSecs ?? verifierTimeoutSecs()) * 1000;
-    try {
-      execFileSync("bash", ["-c", command], {
-        cwd: this.plan.integrationWorktree,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: deadlineMs,
-      });
-      return { ok: true };
-    } catch (error: any) {
-      const timedOut = error?.signal === "SIGTERM" || error?.code === "ETIMEDOUT";
-      const tail = String(error?.stderr || error?.stdout || "").trim().split("\n").slice(-6).join("\n");
-      return {
-        ok: false,
-        reason:
-          `integration verification failed on the merged tree: ${command}${timedOut ? " (timed out)" : ""}` +
-          (tail ? `\n${tail}` : ""),
-      };
-    }
+    const ran = runVerifierShell(command, this.plan.integrationWorktree, deadlineMs);
+    if (ran.success) return { ok: true };
+    const tail = ran.output.trim().split("\n").slice(-6).join("\n");
+    return {
+      ok: false,
+      reason:
+        `integration verification failed on the merged tree: ${command}${ran.timedOut ? " (timed out)" : ""}` +
+        (tail ? `\n${tail}` : ""),
+    };
   }
 }

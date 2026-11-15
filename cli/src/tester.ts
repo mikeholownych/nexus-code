@@ -1,8 +1,9 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { buildMcpEnvironment } from "./mcp.js";
 import { extractCompilerDiagnostics, Diagnostic } from "./diagnostics.js";
 
 export interface TestRunResult {
@@ -465,6 +466,34 @@ export function describeVerifier(workspace: string, commandOverride?: string): V
   };
 }
 
+export interface VerifierShellResult {
+  success: boolean;
+  timedOut: boolean;
+  output: string;
+}
+
+/**
+ * Run an already approved verifier command line outside the tool runner. The line is one `bash -c` argument, so it is
+ * the only thing that executes; the child gets the scrubbed MCP environment (no inherited credentials), no stdin, a
+ * hard SIGKILL deadline and bounded output.
+ */
+export function runVerifierShell(command: string, cwd: string, timeoutMs: number): VerifierShellResult {
+  const ran = spawnSync("bash", ["-c", command], {
+    cwd,
+    env: buildMcpEnvironment(),
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  const timedOut = (ran.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
+  const output = ran.error && !timedOut && !ran.stdout && !ran.stderr
+    ? ran.error.message
+    : `${ran.stdout ?? ""}\n${ran.stderr ?? ""}`;
+  return { success: !ran.error && ran.status === 0, timedOut, output };
+}
+
 /**
  * Execute automated test suite with diagnostic error parsing (Candidate #47)
  */
@@ -476,21 +505,9 @@ export function runTestSuite(workspace: string, filterPattern?: string): TestRun
   }
   const command = discovered.command;
 
-  let rawOutput = "";
-  let success = false;
-
-  try {
-    rawOutput = execSync(command, {
-      cwd: root,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-      timeout: verifierTimeoutSecs() * 1000,
-    });
-    success = true;
-  } catch (err: any) {
-    rawOutput = (err.stdout || "") + "\n" + (err.stderr || err.message || "");
-    success = false;
-  }
+  const ran = runVerifierShell(command, root, verifierTimeoutSecs() * 1000);
+  const rawOutput = ran.output;
+  const success = ran.success;
 
   return summarizeTestRun(command, success, rawOutput);
 }
