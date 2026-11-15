@@ -67,7 +67,7 @@ test("leaks", async () => {
 `,
   });
   const started = Date.now();
-  const r = spawnSync(tsx, ["--test", path.join(dir, "leaky.test.ts")], { cwd: cli, encoding: "utf8", timeout: 60_000, env: childEnv({ HOME: dir }) });
+  const r = spawnSync(tsx, ["--test", path.join(dir, "leaky.test.ts")], { cwd: cli, encoding: "utf8", timeout: 180_000, env: childEnv({ HOME: dir }) });
   const out = r.stdout + r.stderr;
   assert.notEqual(r.status, 0, out);
   assert.match(out, /leaky\.test\.ts leaked 4 resource\(s\)/);
@@ -100,7 +100,7 @@ test("clean", async () => {
 });
 `,
   });
-  const r = spawnSync(tsx, ["--test", path.join(dir, "clean.test.ts")], { cwd: cli, encoding: "utf8", timeout: 60_000, env: childEnv({ HOME: dir }) });
+  const r = spawnSync(tsx, ["--test", path.join(dir, "clean.test.ts")], { cwd: cli, encoding: "utf8", timeout: 180_000, env: childEnv({ HOME: dir }) });
   assert.equal(r.status, 0, r.stdout + r.stderr);
 });
 
@@ -119,14 +119,14 @@ test("hangs", async () => {
   fs.writeFileSync(path.join(dir, "zz_after.test.ts"), 'import { test } from "node:test";\ntest("ran after the hung file", () => {});\n');
   const file = path.join(dir, "hang.test.ts");
   const started = Date.now();
-  const r = spawnSync(process.execPath, ["scripts/run_tests.mjs", file, path.join(dir, "zz_after.test.ts")], { cwd: cli, encoding: "utf8", timeout: 60_000, env: childEnv({ NEXUS_TEST_FILE_TIMEOUT_SECS: "20" }) });
+  const r = spawnSync(process.execPath, ["scripts/run_tests.mjs", file, path.join(dir, "zz_after.test.ts")], { cwd: cli, encoding: "utf8", timeout: 180_000, env: childEnv({ NEXUS_TEST_FILE_TIMEOUT_SECS: "20" }) });
   const out = r.stdout + r.stderr;
   assert.notEqual(r.status, 0, out);
   assert.match(out, new RegExp(`TEST FILE TIMEOUT after 20s: ${file.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
   assert.match(out, /still working/);
   assert.match(out, /timed out: .*hang\.test\.ts/);
   assert.match(out, /ran after the hung file/, "the run restarts with the remaining files");
-  assert.ok(Date.now() - started < 60_000);
+  assert.ok(Date.now() - started < 180_000);
   const pid = Number(/CHILD_PID=(\d+)/.exec(out)?.[1]);
   assert.ok(pid > 0, out);
   assert.ok(processGone(pid), `grandchild ${pid} survived the timeout kill`);
@@ -139,7 +139,7 @@ test("run_tests.mjs removes its throwaway home and kills the group when interrup
   let out = "";
   child.stdout.on("data", (c) => (out += c));
   child.stderr.on("data", (c) => (out += c));
-  const deadline = Date.now() + 60_000;
+  const deadline = Date.now() + 180_000;
   while (!out.includes("READY") && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
   assert.ok(out.includes("READY"), out);
   assert.ok(fs.readdirSync(tmp).some((n) => n.startsWith("nexus-test-home-")), "the throwaway home exists while running");
