@@ -1,0 +1,17 @@
+{
+  "status": 200,
+  "ms": 14294,
+  "finish": "stop",
+  "content": "{\n  \"r1.withdraws\": \"no\",\n  \"r1.defers\": \"no\",\n  \"r1.changes\": \"no\",\n  \"r2.withdraws\": \"no\",\n  \"r2.defers\": \"no\",\n  \"r2.changes\": \"yes\",\n  \"r3.withdraws\": \"no\",\n  \"r3.defers\": \"no\",\n  \"r3.changes\": \"no\"\n}",
+  "answers": {
+    "r1.withdraws": "no",
+    "r1.defers": "no",
+    "r1.changes": "no",
+    "r2.withdraws": "no",
+    "r2.defers": "no",
+    "r2.changes": "yes",
+    "r3.withdraws": "no",
+    "r3.defers": "no",
+    "r3.changes": "no"
+  }
+}
