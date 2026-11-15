@@ -43,7 +43,7 @@ Packaging builds the Rust binaries inside the approved, digest-pinned builder im
 
 The root `package.json` version is the single source of truth. After changing it, run `node scripts/sync-version.mjs` to update `cli/package.json`, its lockfile, `core/Cargo.toml` and `core/Cargo.lock`. CI and the release workflow run `node scripts/sync-version.mjs --check`, which fails on any drift or on a tag that does not match.
 
-CI validates pull requests and `main`. A SemVer tag matching `package.json` triggers the controlled GitHub Release workflow; prerelease tags are marked prereleases. Releases contain the versioned archive and `SHA256SUMS`. Find the published stable release and any prereleases on the [GitHub Releases page](https://github.com/mikeholownych/nexus-code/releases).
+CI validates pull requests and `main`. A SemVer tag matching `package.json` triggers the controlled GitHub Release workflow; prerelease tags are marked prereleases. Releases contain the versioned archive and `SHA256SUMS`. Find the published stable release and any prereleases on the [GitHub Releases page](https://github.com/mikeholownych/nexus-code/releases). Documentation steps after a stable tag: [Release process](RELEASE_PROCESS.md).
 
 The installer uses these stable URLs:
 

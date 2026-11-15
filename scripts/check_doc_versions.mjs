@@ -1,8 +1,11 @@
-// Doc version drift check (v1.2.1 DH-1). docs/releases/LATEST holds the latest stable tag (one line, vX.Y.Z); the release
-// step is the only thing that changes it. Checks, with exit 1 on any problem:
+// Doc version drift check (v1.2.1 DH-1). docs/releases/LATEST holds the latest stable tag (one line, vX.Y.Z). It is moved
+// by a MANUAL follow-up commit after the stable tag is published, not by the release workflow (see "After the stable tag"
+// in docs/RELEASE_PROCESS.md). Checks, with exit 1 on any problem:
 //   1. LATEST is a stable tag, has docs/releases/<tag>.md, and is not newer than the package.json version.
-//   2. README.md: every "latest stable release is [vX]" names LATEST, every stable NEXUS_VERSION=vX pin is LATEST, and no
-//      version at or below LATEST is described as "in development".
+//   2. README.md has a "latest stable release is [vX]" status line naming LATEST, and no version at or below LATEST is
+//      described as "in development" (also "still in active development" and similar).
+//      Every stable NEXUS_VERSION=vX pin in README.md, quickstart.md and docs/*.md is LATEST (rc pins are allowed;
+//      docs/releases/* and docs/vX.Y.Z/* are historical and not scanned).
 //   3. CHANGELOG.md: a "## [vX] - Unreleased" heading is allowed only for a version newer than LATEST.
 // `--root <dir>` checks another tree (used by its test).
 import fs from "node:fs";
@@ -27,14 +30,22 @@ const pkg = JSON.parse(read("package.json")).version;
 if (cmp(latest, pkg) > 0) problems.push(`LATEST ${latest} is newer than package.json version ${pkg}`);
 
 const readme = read("README.md");
-for (const m of readme.matchAll(/latest stable release is \[?(v\d+\.\d+\.\d+)/g)) {
+const statusLines = [...readme.matchAll(/latest stable release is \[?(v\d+\.\d+\.\d+)/g)];
+if (statusLines.length === 0) problems.push("README.md has no 'latest stable release is' status line");
+for (const m of statusLines) {
   if (m[1] !== latest) problems.push(`README.md names ${m[1]} as the latest stable release; LATEST is ${latest}`);
 }
-for (const m of readme.matchAll(/NEXUS_VERSION=(v\d+\.\d+\.\d+)(?![-\w.])/g)) {
-  if (m[1] !== latest) problems.push(`README.md install pin NEXUS_VERSION=${m[1]} is not the latest stable ${latest}`);
-}
-for (const m of readme.matchAll(/(v\d+\.\d+\.\d+)[^.\n]{0,20}\bin development/g)) {
+for (const m of readme.matchAll(/(v\d+\.\d+\.\d+)\b[^.\n]{0,40}\bin (?:\w+ ){0,2}development/g)) {
   if (cmp(m[1], latest) <= 0) problems.push(`README.md says ${m[1]} is in development but ${latest} is released`);
+}
+const pinFiles = ["README.md", "quickstart.md"];
+const docsDir = path.join(root, "docs");
+if (fs.existsSync(docsDir)) for (const f of fs.readdirSync(docsDir)) if (f.endsWith(".md")) pinFiles.push(`docs/${f}`);
+for (const rel of pinFiles) {
+  if (!fs.existsSync(path.join(root, rel))) continue;
+  for (const m of read(rel).matchAll(/NEXUS_VERSION=(v\d+\.\d+\.\d+)(?![-\w.])/g)) {
+    if (m[1] !== latest) problems.push(`${rel} install pin NEXUS_VERSION=${m[1]} is not the latest stable ${latest}`);
+  }
 }
 
 for (const m of read("CHANGELOG.md").matchAll(/^## \[(v\d+\.\d+\.\d+)\]\s*-\s*Unreleased/gm)) {
