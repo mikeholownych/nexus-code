@@ -98,7 +98,7 @@ describe("automatic mid-turn context compaction", () => {
           return {
             role: "assistant",
             content: `<thought>$${turn === 1 ? "DURABLE_AUTO_FINDING_1" : `Finding ${turn}`}: continue.</thought>`,
-            tool_calls: [{ id, type: "function", function: { name: "list_dir", arguments: JSON.stringify({ path: "src" }) } }],
+            tool_calls: [{ id, type: "function", function: { name: "list_dir", arguments: JSON.stringify({ path: `src/part-${turn}` }) } }],
           };
         }
         return { role: "assistant", content: "Done." };

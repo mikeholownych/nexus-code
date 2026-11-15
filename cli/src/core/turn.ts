@@ -37,6 +37,8 @@ export type TurnReason =
   | "VERIFIER_TIMED_OUT"
   /** The same failure repeated, alternated or grew across fresh candidates: the turn stopped for the operator to decide. */
   | "VERIFIER_NOT_CONVERGING"
+  /** The model repeated one tool call with identical arguments and an identical result until the hard threshold. */
+  | "TOOL_CALL_LOOP"
   | "INFERENCE_FAILED"
   | "STEP_LIMIT_REACHED"
   | "STEP_PAUSED"
@@ -364,6 +366,13 @@ export interface TurnResult {
     evidence: string;
     attempts: Array<{ n: number; command: string; status: string; classification?: string; failingTests?: string[]; failedCheck?: string; candidate: string }>;
   };
+  /** Present when the turn stopped as TOOL_CALL_LOOP: the repeated call (arguments redacted) and the recent calls with their counts. */
+  repeatedCall?: {
+    tool: string;
+    arguments: string;
+    count: number;
+    history: Array<{ tool: string; arguments: string; count: number }>;
+  };
   /** Where the operator's objective stands: open requirements, the failed check and the next action. */
   objective?: {
     status: "completed" | "incomplete" | "blocked";
@@ -422,6 +431,9 @@ export function assertTurnResultInvariants(t: TurnResult): TurnResult {
   }
   if (t.reason === "VERIFIER_NOT_CONVERGING" && (t.execution !== "BLOCKED" || t.outcome !== "NOT_ESTABLISHED" || !t.convergence)) {
     throw new TurnResultInvariantError("VERIFIER_NOT_CONVERGING requires a BLOCKED, NOT_ESTABLISHED turn carrying its attempt history");
+  }
+  if (t.reason === "TOOL_CALL_LOOP" && (t.execution !== "BLOCKED" || t.outcome !== "NOT_ESTABLISHED" || !t.repeatedCall)) {
+    throw new TurnResultInvariantError("TOOL_CALL_LOOP requires a BLOCKED, NOT_ESTABLISHED turn carrying the repeated call");
   }
   if (t.execution === "FAILED" && t.outcome !== "NOT_ESTABLISHED") {
     throw new TurnResultInvariantError("FAILED must not claim an engineering outcome");
@@ -516,6 +528,12 @@ export function summarizeTurn(t: TurnResult): { heading: string; line: string } 
     return {
       heading: "TURN BLOCKED - VERIFIER NOT CONVERGING",
       line: `execution=BLOCKED outcome=NOT_ESTABLISHED (VERIFIER_NOT_CONVERGING: ${t.convergence?.evidence ?? t.detail ?? "repeated verifier failures"}). Nothing is verified; the operator decides how to proceed.`,
+    };
+  }
+  if (exec === "BLOCKED" && t.reason === "TOOL_CALL_LOOP") {
+    return {
+      heading: "TURN BLOCKED - REPEATED TOOL CALL",
+      line: `execution=BLOCKED outcome=NOT_ESTABLISHED (TOOL_CALL_LOOP: ${t.detail ?? "the same tool call repeated"}). Nothing is verified; the operator decides how to proceed.`,
     };
   }
   if (exec === "BLOCKED") return { heading: "TURN BLOCKED", line: `execution=BLOCKED outcome=NOT_ESTABLISHED${tail}` };

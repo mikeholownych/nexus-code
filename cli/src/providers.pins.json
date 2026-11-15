@@ -1,0 +1,16 @@
+{
+  "anthropic": { "suffixes": ["anthropic.com"], "source": "https://docs.anthropic.com/en/api" },
+  "cerebras": { "suffixes": ["cerebras.ai"], "defaultBaseUrl": "https://api.cerebras.ai/v1", "source": "https://inference-docs.cerebras.ai/resources/openai" },
+  "cohere": { "suffixes": ["cohere.com", "cohere.ai"], "source": "https://docs.cohere.com/" },
+  "deepinfra": { "suffixes": ["deepinfra.com"], "defaultBaseUrl": "https://api.deepinfra.com/v1/openai", "source": "https://docs.deepinfra.com/api-reference/chat-completions/openai-chat-completions" },
+  "deepseek": { "suffixes": ["deepseek.com"], "source": "https://api-docs.deepseek.com/" },
+  "fireworks-ai": { "suffixes": ["fireworks.ai"], "source": "https://docs.fireworks.ai/" },
+  "google": { "suffixes": ["googleapis.com"], "source": "https://ai.google.dev/gemini-api/docs" },
+  "groq": { "suffixes": ["groq.com"], "defaultBaseUrl": "https://api.groq.com/openai/v1", "source": "https://console.groq.com/docs/openai" },
+  "mistral": { "suffixes": ["mistral.ai"], "defaultBaseUrl": "https://api.mistral.ai/v1", "source": "https://docs.mistral.ai/api/" },
+  "openai": { "suffixes": ["openai.com"], "source": "https://platform.openai.com/docs/api-reference" },
+  "openrouter": { "suffixes": ["openrouter.ai"], "source": "https://openrouter.ai/docs" },
+  "perplexity": { "suffixes": ["perplexity.ai"], "source": "https://docs.perplexity.ai/" },
+  "togetherai": { "suffixes": ["together.ai", "together.xyz"], "defaultBaseUrl": "https://api.together.ai/v1", "source": "https://docs.together.ai/docs/inference/openai-compatibility" },
+  "xai": { "suffixes": ["x.ai"], "defaultBaseUrl": "https://api.x.ai/v1", "source": "https://docs.x.ai/docs/api-reference" }
+}

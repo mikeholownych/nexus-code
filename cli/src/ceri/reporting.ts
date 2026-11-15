@@ -23,6 +23,9 @@ export class CeriReportGenerator {
     const regressionCandidates: string[] = [];
     const blockers: string[] = [];
     const executedEvaluationIds = new Set<string>();
+    let boundCount = 0;
+    let unboundCount = 0;
+    const bindingReasons = new Set<string>();
 
     let executedRuns = 0;
     let comparedRuns = 0;
@@ -31,6 +34,11 @@ export class CeriReportGenerator {
         executedRuns++;
         executedEvaluationIds.add(manifest.evaluationId);
         if (comparison?.isEligibleForComparison) comparedRuns++;
+      }
+      if (comparison?.identityBinding) {
+        if (comparison.identityBinding.status === "IDENTITY_BOUND") boundCount++;
+        else unboundCount++;
+        for (const r of comparison.identityBinding.reasons) bindingReasons.add(r);
       }
       if (manifest.status === "FAILED") failedRuns++;
       else if (manifest.status === "COMPLETED") passedRuns++;
@@ -72,6 +80,7 @@ export class CeriReportGenerator {
         failedRuns,
       },
       baselineId: options?.baselineId,
+      identityBinding: boundCount + unboundCount > 0 ? { bound: boundCount, unbound: unboundCount, reasons: [...bindingReasons] } : undefined,
       regressions: {
         confirmed: confirmedRegressions,
         candidates: regressionCandidates,
@@ -159,7 +168,16 @@ export class CeriReportGenerator {
     lines.push(`| Incomparable Configurations | ${report.incomparableCount} |`);
     lines.push("");
 
-    lines.push(`## 3. Explicit Measurement Limitations`);
+    if (report.identityBinding) {
+      lines.push(`## 3. Baseline Identity Binding`);
+      lines.push(`- IDENTITY_BOUND: ${report.identityBinding.bound}`);
+      lines.push(`- UNBOUND: ${report.identityBinding.unbound}`);
+      for (const r of report.identityBinding.reasons) lines.push(`  - ${r}`);
+      lines.push(`- Caveat: local, unsigned identity binding; not external qualification; an attacker who edits manifest, hash and identity together passes.`);
+      lines.push("");
+    }
+
+    lines.push(`## ${report.identityBinding ? 4 : 3}. Explicit Measurement Limitations`);
     for (const lim of report.limitations) {
       lines.push(`- ${lim}`);
     }
