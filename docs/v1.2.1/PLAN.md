@@ -189,7 +189,7 @@ Answered 2026-11-15: defaults accepted for D1–D4, D6, D10 and D11; D5, D7 and 
 | D5 | Prompt-injection scanner and egress inspector | **include** in v1.2.1 (CS-7, CS-8) |
 | D6 | Platform priority and CI cost | default accepted: Linux x86_64 only for v1.2.1; RD-1 waits for a later decision |
 | D7 | CERI F02/F06 and audit Slices B–G | **include** (MQ-5, MQ-6, MQ-7); B and C in v1.2.1, D–G in v1.2.2 |
-| D8 | Relevance of old deferrals and issues | **reviewed**: issues #2, #5, #7, #49 closed with comments, #1 and #6 kept open and labelled v1.2.1 (2026-11-15); deferral table below |
+| D8 | Relevance of old deferrals and issues | **reviewed and applied** (2026-11-15): issues #2, #5, #7, #49 closed with comments, #1 and #6 kept open and labelled v1.2.1; the five recommended drops approved (DISC-005, cgroup containment, split-record schema, hosted/multi-tenant, autonomous tool generation); deferral table below |
 | D9 | Providers | **every cloud provider configurable**, using models.dev data (PR workstream) |
 | D10 | CI restructure | default accepted: keep required check names, no extra minutes (PC-1 gain is limited accordingly) |
 | D11 | Integration priority | default accepted: `stream-json` output and the GitHub Action (RD-3, RD-4); ACP waits |
@@ -210,14 +210,14 @@ Reviewed 2026-11-15 against current code and docs (read-only; nothing was run). 
 | Network-isolated sandbox for generated code | SUPERSEDED (partly) | `eval/isolate.mjs:555,587,723` unshare the network; whether the default client sandbox path does is to be checked under CS-1 |
 | Harness² review (#69) | DONE | issue closed; recommendation "borrow, offline only" |
 
-**Recommended to drop (needs your approval; nothing is dropped without it):**
+**Dropped (owner approved 2026-11-15; each reopens only on the stated condition):**
 
 | Item | Why |
 |---|---|
 | DISC-005 encryption sinks (REQ:254) | REQ:102 says no v1 sink needs it; egress has only irreversible redaction; reopen if a sink appears |
-| cgroup containment (REQ:260) | no code; bubblewrap (CS-1) is the chosen mechanism; cgroups need a privileged dependency |
-| Persistence split-record schema (REQ:265) | conditional on ACC-CONT-08 failing; durable compaction commits exist (`CHANGELOG.md:106`); CX-2 covers corrupt-compaction fallback (the ACC-CONT-08 result itself was not confirmed) |
-| Hosted / multi-tenant (`docs/v1.1.2/ROADMAP.md:185`) | contradicts the single-operator trust boundary and this plan's non-goals |
+| cgroup containment (REQ:260) | no code; bubblewrap (CS-1) is the chosen mechanism; cgroups need a privileged dependency (evaluator cgroup limits from v1.1.4 A9 are a separate, existing feature and are unaffected) |
+| Persistence split-record schema (REQ:265) | conditional on ACC-CONT-08 failing; durable compaction commits exist (`CHANGELOG.md:106`); CX-2 covers corrupt-compaction fallback. Caveat: the ACC-CONT-08 result itself was not confirmed in the review, so this reopens if that acceptance is ever found failing |
+| Hosted / multi-tenant (`docs/v1.1.2/ROADMAP.md:185`) | contradicts the single-operator trust boundary and this plan's non-goals; reopens only with a new trust-boundary design |
 | Autonomous tool generation (`ROADMAP.md:186`) | models creating tool definitions without oversight conflicts with verification-first |
 
 **Still relevant, carried or unscheduled:**
