@@ -8,6 +8,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { CandidateMutationEvent, CandidateMutationHook } from "./spine.js";
+import { TOOLCHAIN_PREFIX, UNVERIFIED_UNTRUSTED, defaultVersionProbe, type VersionProbe } from "../material_deps.js";
 
 export type CandidateFileStatus = "modified" | "added" | "deleted" | "untracked" | "typechange";
 
@@ -65,6 +66,8 @@ export interface CandidateComputeOptions {
   includeUntracked?: boolean;
   ignoredPatterns?: string[];
   materialDependencies?: MaterialValidationDependency[];
+  /** Reads the current version of a toolchain dependency (default: node, the installed typescript, rustc). */
+  versionProbe?: VersionProbe;
   /** Optional stricter manifest bound; values above the hard limit are clamped. */
   maxEntries?: number;
   /** Optional stricter byte bound; values above the hard limit are clamped. */
@@ -171,6 +174,10 @@ export interface CandidateValidationDecision {
   currentCandidateId?: string;
   receiptCandidateId?: string;
   reason?: string;
+  /** The receipt recorded no material dependencies (it predates them), so only the candidate's files were checked. */
+  legacy?: boolean;
+  /** Toolchain dependencies that could not be re-read now; the receipt stays valid, with these unchecked. */
+  unverifiableDependencies?: string[];
 }
 
 export interface EntryStructuralDetails {
@@ -1049,7 +1056,7 @@ export class CandidateTracker {
           const effectiveWsRoot = candidateIdentity?.workspacePath || workspaceRoot;
 
           const candidateDeps = new Set(
-            receipt.materialDependencies.map((d) => d.path || d.name)
+            (receipt.materialDependencies ?? []).map((d) => d.path || d.name)
           );
 
           let touchesCandidate = false;
@@ -1175,9 +1182,23 @@ export class CandidateTracker {
     }
 
     // CAND-002: Verify material validation dependencies remain unchanged
+    const unverifiable: string[] = [];
     if (receipt.materialDependencies && receipt.materialDependencies.length > 0) {
+      const probe = options.versionProbe ?? defaultVersionProbe;
       for (const dep of receipt.materialDependencies) {
-        if (dep.path) {
+        if (dep.name.startsWith(TOOLCHAIN_PREFIX)) {
+          const current = probe(dep.name.slice(TOOLCHAIN_PREFIX.length), workspacePath);
+          if (current === null || current === UNVERIFIED_UNTRUSTED || dep.versionOrHash === UNVERIFIED_UNTRUSTED) {
+            unverifiable.push(dep.name);
+          } else if (current !== dep.versionOrHash) {
+            return {
+              valid: false,
+              currentCandidateId: currentIdentity.candidateId,
+              receiptCandidateId: receipt.candidateId,
+              reason: `CAND-002: Toolchain '${dep.name.slice(TOOLCHAIN_PREFIX.length)}' changed since validation: recorded ${dep.versionOrHash}, found ${current}.`,
+            };
+          }
+        } else if (dep.path) {
           const depFullPath = path.isAbsolute(dep.path)
             ? dep.path
             : path.join(workspacePath, dep.path);
@@ -1208,6 +1229,8 @@ export class CandidateTracker {
       valid: true,
       currentCandidateId: currentIdentity.candidateId,
       receiptCandidateId: receipt.candidateId,
+      ...(receipt.materialDependencies?.length ? {} : { legacy: true }),
+      ...(unverifiable.length ? { unverifiableDependencies: unverifiable } : {}),
     };
   }
 

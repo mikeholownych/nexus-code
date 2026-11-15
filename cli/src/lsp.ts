@@ -81,6 +81,7 @@ export interface LspDiagnostic {
   severity: "error" | "warning" | "information" | "hint";
   message: string;
   source?: string;
+  code?: string | number;
 }
 
 /**
@@ -221,6 +222,7 @@ export class LspClient {
               severity: d.severity === 1 ? "error" : d.severity === 2 ? "warning" : "information",
               message: d.message,
               source: d.source,
+              ...(d.code !== undefined && d.code !== null ? { code: d.code } : {}),
             }));
             const current = this.opened.get(params.uri);
             if (typeof params.version === "number" && current && params.version !== current.version) {

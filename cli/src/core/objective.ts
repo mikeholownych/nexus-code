@@ -88,6 +88,8 @@ export interface Requirement {
   source: "objective" | "steering" | "model";
   /** Implementation and validation evidence (file paths, commands, test names). */
   evidence: string[];
+  /** Who produced each evidence item, keyed by its text. Items without an entry are the model's claim. */
+  evidenceSources?: Record<string, "tool" | "model">;
   /** Reason for blocked/descoped; required for both. */
   note?: string;
   /** The operator accepted this requirement's descoping (only the operator's own command sets this). */
@@ -438,6 +440,7 @@ export function applyRequirementUpdates(
     const evidence = (Array.isArray(update.evidence) ? update.evidence : update.evidence ? [update.evidence] : [])
       .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
       .map((item) => clip(item.trim(), MAX_EVIDENCE_CHARS));
+    const claimed = new Set(evidence);
     const note = typeof update.note === "string" && update.note.trim() ? clip(update.note.trim(), MAX_EVIDENCE_CHARS) : undefined;
     let requirement = update.id ? ledger.requirements.find((r) => r.id === update.id) : undefined;
     if (!requirement) {
@@ -563,10 +566,15 @@ export function applyRequirementUpdates(
     for (const item of evidence) {
       if (!requirement.evidence.includes(item)) {
         requirement.evidence.push(item);
+        (requirement.evidenceSources ??= {})[item] = claimed.has(item) ? "model" : "tool";
         changed = true;
       }
     }
-    if (requirement.evidence.length > MAX_EVIDENCE_ITEMS) requirement.evidence = requirement.evidence.slice(-MAX_EVIDENCE_ITEMS);
+    if (requirement.evidence.length > MAX_EVIDENCE_ITEMS) {
+      requirement.evidence = requirement.evidence.slice(-MAX_EVIDENCE_ITEMS);
+      const kept = requirement.evidenceSources;
+      if (kept) requirement.evidenceSources = Object.fromEntries(requirement.evidence.filter((e) => e in kept).map((e) => [e, kept[e]]));
+    }
     requirement.updatedAt = at;
   }
   if (typeof nextAction === "string" && nextAction.trim() && nextAction.trim() !== ledger.nextAction) {

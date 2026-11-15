@@ -290,6 +290,12 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   (background) codes, never 256-colour `38;5;n`, so 8/16-colour terminals and the Linux console show them; 256-colour
   codes are used only where `TERM` names 256 colours.
 
+  Receipts and toolchain changes: a worktree validation receipt records the versions of the toolchain that ran the verifier
+  (node, the installed typescript, rustc for Cargo projects) and hashes of the build configuration (package.json, lockfiles,
+  tsconfig, Makefile, Cargo and similar). If one of those changes, including a node upgrade between a session and its
+  `--resume`, the receipt is invalidated and the verifier must run again. A tool that cannot be read at the time of the check
+  is reported as unverifiable and does not invalidate the receipt; receipts recorded before this was added are marked legacy.
+
 ### Live TUI: newline key and mouse
 
 - **New line.** `Ctrl+J` inserts a newline in the draft in every terminal; `Alt+Enter` does where the terminal sends it
