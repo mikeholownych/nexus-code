@@ -55,7 +55,7 @@ From the ledger pass (`docs/v1.1.4/FINDINGS.md`, `docs/releases/v1.1.4.md`, `v1.
 | DV-3 | operator-authorised regression obligations (G-DV-4) | D, "v1.2.x" |
 | DV-4 | attempt lineage; differential verification against a declared reference (G-DV-3, G-DV-5) | D, "v1.2.x" |
 | CG-5 | LSP references and impact analysis (G-CG-7, G-CG-8), only if SI-5 needs it | D, plan only |
-| compaction-03 | post-compaction check that every gating requirement is present | U, no owning unit |
+| compaction-03 | post-compaction check that every gating requirement is present | U; owner CX-5 (acceptance set by the 2026-11-15 compaction audit) |
 | cumulative-change-03 | needs SI-5 | D |
 | G-SI-6 | `compact --llm` summaries unlabelled in a system message; no ledger integrity binding | U |
 | G-AI-3 / G-AI-4 | cross-operation architecture evaluation; CERI domains for architecture, contract breakage, concurrency | U (partly covered) |
@@ -121,7 +121,7 @@ Disposition: **P0** must-have for v1.2.1; **P1** should-have; **P2** stretch, ma
 | GA-16 | No schema-driven argument repair; no closest-lines edit feedback | §2.2 | P1 | WM-1, WM-2 |
 | GA-17 | Model conformance only by hand | §2.2 | P1 | WM-3 |
 | GA-18 | Compaction: unlabelled summaries, no integrity binding, no probe, no tool-output masking, no precompute | §2.2; G-SI-6 | P1 | CX-1…CX-4 |
-| GA-19 | `compaction-03` has no owner | ledger | P1 | CX-5 |
+| GA-19 | `compaction-03` has no owner (owned by CX-5; the 2026-11-15 audit found the default compaction deterministic, so CX-3 covers only the summarising path) | ledger | P1 | CX-5 |
 | GA-20 | Prompt caching not requested (no `cache_control` found) | inventory | P2 | CX-6 |
 | GA-21 | SI-5, DV-3, DV-4 and the pending CERI scenarios | ledger | P1/P2 | VC-1…VC-4 |
 | GA-22 | `verified` not re-checked on resume; resumed unbound baseline memory-only | v1.2.0 limits | P1 | VC-5 |
