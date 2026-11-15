@@ -197,7 +197,50 @@ Answered 2026-11-15: defaults accepted for D1–D4, D6, D10 and D11; D5, D7 and 
 
 ### Deferral relevance review (D8)
 
-Pending: an agent is classifying each older deferral (v1.0 post-v1 backlog, v1.1.2 roadmap "deferred to v1.2", v1.1.0 STATUS open rows, post-v1 roadmap docs, issue #69) as DONE, SUPERSEDED, STILL RELEVANT or RECOMMEND DROP with cited evidence. The table replaces this paragraph in a follow-up commit of the same PR. Nothing is dropped without your approval; only issues were closed.
+Reviewed 2026-11-15 against current code and docs (read-only; nothing was run). Verdicts are conservative: DONE and SUPERSEDED cite evidence; where no implementation could be found the item stays STILL RELEVANT, because a hidden implementation under a different name cannot be ruled out. Source prefix `REQ` = `docs/v1.0.0/REQUIREMENTS.md`. Issue #69 (Harness² review) is already closed (2026-11-05; `docs/v1.1.4/HARNESS2-REVIEW.md`).
+
+**Closed by this review (recorded here; the source documents are historical):**
+
+| Item | Verdict | Evidence |
+|---|---|---|
+| REQ-PER-107 directory fsync | DONE | `core/src/file_ops.rs:189-194` syncs the parent directory after rename (it ignores the error: a nit) |
+| ACC-V11-MAO-07 real kill; GIT-02 crash before merge; GIT-04 cancel; CTX-04 checkpoint restore | DONE | `cli/test/operation_release_acceptance.test.ts:264, 343, 424, 462` (not run in this review) |
+| `repro.yml` pinned to `^v1\.0\.0-rc` | DONE | `.github/workflows/repro.yml:43` now accepts any `vX.Y.Z-rc.N` (scheduling it is PC-4) |
+| `nexus eval` scoring (VER-07b-e) | SUPERSEDED | scoring integrity lives in `eval/score.mjs` (Wilson intervals); `nexus eval` is labelled experimental (DEC-07); MQ-2 reuses `eval/score.mjs` |
+| Network-isolated sandbox for generated code | SUPERSEDED (partly) | `eval/isolate.mjs:555,587,723` unshare the network; whether the default client sandbox path does is to be checked under CS-1 |
+| Harness² review (#69) | DONE | issue closed; recommendation "borrow, offline only" |
+
+**Recommended to drop (needs your approval; nothing is dropped without it):**
+
+| Item | Why |
+|---|---|
+| DISC-005 encryption sinks (REQ:254) | REQ:102 says no v1 sink needs it; egress has only irreversible redaction; reopen if a sink appears |
+| cgroup containment (REQ:260) | no code; bubblewrap (CS-1) is the chosen mechanism; cgroups need a privileged dependency |
+| Persistence split-record schema (REQ:265) | conditional on ACC-CONT-08 failing; durable compaction commits exist (`CHANGELOG.md:106`); CX-2 covers corrupt-compaction fallback (the ACC-CONT-08 result itself was not confirmed) |
+| Hosted / multi-tenant (`docs/v1.1.2/ROADMAP.md:185`) | contradicts the single-operator trust boundary and this plan's non-goals |
+| Autonomous tool generation (`ROADMAP.md:186`) | models creating tool definitions without oversight conflicts with verification-first |
+
+**Still relevant, carried or unscheduled:**
+
+| Item | Carried by | Note |
+|---|---|---|
+| REQ-AGT-111 single step loop (REQ:251; only a subset exists, `cli/test/agt111_subagent_parity.test.ts`) | MT-1 | the `agent.ts` split is the place to unify the loops |
+| CTX-001 provenance graph (REQ:252) | CX-1 (partial) | v1 subset only; a per-item graph is not planned |
+| CTX-002 knowledge freshness (REQ:253) | none | knowledge is trust-gated and auto-extract is off; low priority |
+| ACT-002 delegation depth (REQ:255; hard-coded `depth >= 2` at `agent.ts:5047`) | none | the bound is safe; configurability is a convenience |
+| EXECUTION_CONVERGENCE I3/I4 and the stale/corrupt lock race (REQ:256, :105) | PC-2 (re-verify) | lock code exists in `worktrunk/registry.ts`, `upgrade_journal.ts`, `core/candidate.ts`; no re-verification found |
+| `/tdd` phase enforcement (VER-08, REQ:257) | none | experimental label only |
+| Per-role allowlists (REQ:259; `roleToolAllowList`, `agent.ts:5490`, covers reviewer and researcher) | none | extending to other roles has no unit |
+| macOS, arm64, musl (DEC-12, REQ:262) | RD-1, RD-2 | gated on D6 |
+| REQ-REL-106 self-uninstall (REQ:263) | none | low priority |
+| RPC worker isolation (REQ:266) | CS-4 (adjacent) | unscheduled |
+| PTY determinism (REQ:267) | MT-2 (adjacent) | TUI test flake source |
+| Per-command approval allowlists (REQ:268) | CS-1 (adjacent) | reduces prompt fatigue without removing review |
+| `git.publish` PR publication (DEC-V11-12; explicitly refused at `operation_cli.ts:74`) | RD-4 (adjacent) | needs egress and policy controls first; keep the explicit refusal |
+| Interactive TUI multi-agent pane (`ROADMAP.md:188`) | MT-2 | depends on a PTY redesign |
+| CI `git diff cli/dist` step (`ci.yml:72,176`) | PC-1 | proves nothing; fix or remove in the CI restructure |
+
+Rows with "none" need an owner or an explicit deferral note before the v1.2.1 release; this table is that note until you decide otherwise.
 
 ## 7. What "externally qualified" means here
 
