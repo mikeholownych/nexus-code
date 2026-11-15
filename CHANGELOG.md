@@ -8,6 +8,8 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 ## [v1.2.0] - Unreleased
 
+Release notes: [`docs/releases/v1.2.0.md`](docs/releases/v1.2.0.md). Candidate: [`rc.1`](docs/releases/v1.2.0-rc.1.md). Plan: [`docs/v1.2.0/SEMANTIC_AND_ARCHITECTURAL_INTEGRITY.md`](docs/v1.2.0/SEMANTIC_AND_ARCHITECTURAL_INTEGRITY.md).
+
 ### Changed
 
 - **Breaking validation change:** `nexus operation run` now rejects a spec whose own `policy.maxConcurrentUnits` is above 1 unless it sets `git.isolate: true`, because concurrent units otherwise write the same worktree. Fix: add `"git": { "isolate": true }` or set the limit to 1. Records already on disk are not refused: `nexus operation resume` and `decide` clamp such a record to one unit at a time and warn. The library API `newOperation` is unchanged.
