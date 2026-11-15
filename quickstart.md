@@ -95,7 +95,7 @@ Inside the interactive live TUI, run `/upgrade` or `/upgrade --check`. An upgrad
 Alternatively, run the installer pipeline to reinstall or upgrade:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v1.1.4 sh
+curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v1.2.0 sh
 ```
 
 Removal is manual and limited to Nexus-owned paths:
