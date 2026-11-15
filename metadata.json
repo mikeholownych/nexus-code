@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M7GP811J1WXTVHF81487RG5G",
+  "strategy": "manual-commit",
+  "branch": "v1/hardening-s3-docs",
+  "checkpoints_count": 6,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 82,
+    "cache_creation_tokens": 52304,
+    "cache_read_tokens": 30248347,
+    "output_tokens": 35805,
+    "api_call_count": 35,
+    "subagent_tokens": {
+      "input_tokens": 64,
+      "cache_creation_tokens": 543568,
+      "cache_read_tokens": 4994762,
+      "output_tokens": 13743,
+      "api_call_count": 27
+    }
+  },
+  "redaction": {
+    "replacements": 181,
+    "layers": {
+      "betterleaks": 36,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 36,
+      "credentialed_uri": 15,
+      "entropy": 124,
+      "key_context": 0,
+      "provider_token": 27,
+      "shell_stdin": 0
+    }
+  }
+}
