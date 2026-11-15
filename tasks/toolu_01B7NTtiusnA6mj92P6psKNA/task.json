@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01B7NTtiusnA6mj92P6psKNA",
+  "agent_id": "a67337be300b451d3",
+  "task_description": "v1.2.1 WM-4 function-call-text recovery",
+  "token_usage": {
+    "input_tokens": 50,
+    "cache_creation_tokens": 90720,
+    "cache_read_tokens": 1818290,
+    "output_tokens": 16619,
+    "api_call_count": 25
+  },
+  "started_at": "2026-11-15T17:50:46.002874343Z",
+  "completed_at": "2026-11-15T18:00:22.443253034Z"
+}
