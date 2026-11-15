@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01FyFkweUPaYaRAEzCizkMWw",
+  "agent_id": "aa37b7e07afeae267",
+  "subagent_type": "general-purpose",
+  "task_description": "v1.2.1 MQ-6 then MQ-5 CERI integrity",
+  "token_usage": {
+    "input_tokens": 82,
+    "cache_creation_tokens": 112649,
+    "cache_read_tokens": 3562903,
+    "output_tokens": 40063,
+    "api_call_count": 40
+  },
+  "started_at": "2026-11-15T03:22:57.615236983Z",
+  "completed_at": "2026-11-15T03:45:35.832753252Z"
+}
