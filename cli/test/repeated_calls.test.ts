@@ -5,6 +5,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import "./helpers/leak_guard.js";
 import { AutonomousAgent } from "../src/agent.js";
 import { DEFAULT_CONTINUATION, HarnessConfig } from "../src/types.js";
 import { startGateway, makeRepo, Reply } from "./helpers/fixtures.js";

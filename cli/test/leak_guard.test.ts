@@ -21,6 +21,9 @@ function childEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
 
 function scratch(files: Record<string, string>): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-leakguard-"));
+  // The fixtures run the way the product's own tests do (ESM, as in cli/package.json): without this, a temp directory loads
+  // them as CommonJS, where an import cycle in src/ that ESM tolerates (tools.ts <-> parser.ts) breaks the fixture.
+  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ type: "module" }));
   for (const [name, text] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), text);
   return dir;
 }
