@@ -695,12 +695,13 @@ export function supersededBy(previous: ObjectiveLedger, at = now()): SupersededO
 
 /**
  * After any change to the workspace, verified requirements rest on a verifier run of an older state: they become
- * implemented (model-reported) again, with a note. Returns the ids demoted.
+ * implemented (model-reported) again, with a note. Returns the ids demoted. `keep` spares a requirement whose run still
+ * applies (resume: its recorded inputs equal the workspace's current candidate identity).
  */
-export function invalidateVerified(ledger: ObjectiveLedger, reason: string, at = now()): string[] {
+export function invalidateVerified(ledger: ObjectiveLedger, reason: string, at = now(), keep?: (r: Requirement) => boolean): string[] {
   const demoted: string[] = [];
   for (const r of ledger.requirements) {
-    if (r.status !== "verified") continue;
+    if (r.status !== "verified" || keep?.(r)) continue;
     r.status = "implemented";
     r.note = clip(`verification invalidated: ${reason}${r.verifiedBy ? ` (was verifier #${r.verifiedBy.attempt})` : ""}`, MAX_EVIDENCE_CHARS);
     r.verifiedBy = undefined;
