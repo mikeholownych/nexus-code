@@ -1,3 +1,4 @@
+/** Shared by fixtures and the guard. Scripted gateways register here whether or not a test file imports `leak_guard`; nothing checks them unless it does. */
 export interface Tracked {
   kind: string;
   name: string;

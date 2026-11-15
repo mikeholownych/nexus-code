@@ -3,6 +3,10 @@
  * every RustCoreBridge or AutonomousAgent not shut down, scripted gateway not closed, child process still running and
  * timer still pending, then releases them so the process can exit instead of hanging the job.
  * Resources it cannot see by itself (a custom server) can be registered with `trackResource`.
+ * Timers: ref'd timeouts above the count when the file finished loading (a timer created while the file loads is not
+ * counted; node:test's own timers are gone by teardown). The check hook is registered once the file has finished
+ * loading, so it runs after the file's own `after` hooks; a file that registers hooks after a top-level `await` can run
+ * its hooks after the guard's check, and should then release in the test itself.
  */
 import { after } from "node:test";
 import childProcess from "node:child_process";
@@ -22,7 +26,7 @@ proto.spawn = function (this: childProcess.ChildProcess, ...args: unknown[]) {
   return result;
 };
 
-const baselineTimers = activeTimers();
+let baselineTimers = 0;
 function activeTimers(): number {
   return process.getActiveResourcesInfo().filter((r) => r === "Timeout").length;
 }
@@ -36,16 +40,19 @@ export function describeSurvivors(): string[] {
 }
 
 // Registered once the file has finished loading so it runs after the file's own `after` hooks.
-queueMicrotask(() => after(async () => {
-  let lines = describeSurvivors();
-  for (let i = 0; i < 20 && lines.length; i++) {
-    await new Promise((r) => setTimeout(r, 100));
-    lines = describeSurvivors();
-  }
-  if (!lines.length) return;
-  for (const s of survivors()) await Promise.resolve(s.release()).catch(() => {});
-  (RustCoreBridge as any).shutdownAllGlobal();
-  clearTracked();
-  setTimeout(() => process.exit(1), 2_000).unref();
-  throw new Error(`${process.argv[1] ?? "test file"} leaked ${lines.length} resource(s) past the end of the file:\n  ${lines.join("\n  ")}`);
-}));
+queueMicrotask(() => {
+  baselineTimers = activeTimers();
+  after(async () => {
+    let lines = describeSurvivors();
+    for (let i = 0; i < 20 && lines.length; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      lines = describeSurvivors();
+    }
+    if (!lines.length) return;
+    for (const s of survivors()) await Promise.resolve(s.release()).catch(() => {});
+    (RustCoreBridge as any).shutdownAllGlobal();
+    clearTracked();
+    setTimeout(() => process.stdout.write("", () => process.exit(1)), 5_000).unref();
+    throw new Error(`${process.argv[1] ?? "test file"} leaked ${lines.length} resource(s) past the end of the file:\n  ${lines.join("\n  ")}`);
+  });
+});

@@ -234,6 +234,6 @@ a user systemd unit or `@reboot` cron entry. That hook is not installed by Nexus
 - Re-verified for v1.2.1 (PC-2): an exhausted 502/504 parks the unit and it resumes (I3); an unknown host (ENOTFOUND) is
   configuration, so it blocks with an operator decision by design; parked advisory work no longer postpones the decision
   a blocked required unit needs (I4, fixed); the operation lock takeover is serialised and an unreadable lock goes stale
-  after 30 s (fixed). Still open: a context-capacity block does not reroute to a larger qualified resource.
+  after 30 s on the same host and filesystem clock (fixed; stale takeover needs `/usr/bin/flock` and fails closed without it). Still open: a context-capacity block does not reroute to a larger qualified resource.
 - Resource requirements per role are qualification labels; real capability metadata depends on provider catalogs
   (`--discover`), which aihost aliases do not publish beyond the model list.

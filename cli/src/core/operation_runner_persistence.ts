@@ -186,6 +186,9 @@ export class OperationStore {
    * untouched for OPERATION_LOCK_UNREADABLE_GRACE_MS (its holder died mid-write). Takeover is serialised through a
    * kernel-owned guard and unlinks only the file that was judged stale, so two resumers cannot both take it.
    * Returns the release function.
+   * Assumptions: the unreadable-lock rule compares the lock file's mtime with this process's clock, so it holds on one
+   * host and one filesystem (NFS, or clock skew beyond the grace, can take a live lock over early). The stale takeover
+   * depends on the `flock` utility (/usr/bin/flock); without it a stale lock fails closed with a manual-removal message.
    */
   acquire(id: string): () => void {
     const lockPath = path.join(this.manager.getBaseDir(), `${id}.lock`);
@@ -207,7 +210,7 @@ export class OperationStore {
       if (!guard) throw locked(judged.holder);
       try {
         operationLockSeams.afterStaleCheck?.();
-        const now = this.judgeLock(lockPath);
+        const now = this.judgeLock(lockPath, false);
         if (!now.stale || now.ino !== judged.ino || now.mtimeNs !== judged.mtimeNs) throw locked(now.holder);
         fs.unlinkSync(lockPath);
         try {
@@ -229,7 +232,7 @@ export class OperationStore {
     };
   }
 
-  private judgeLock(lockPath: string): { stale: boolean; holder: { pid?: number; host?: string; at?: string }; ino?: bigint; mtimeNs?: bigint } {
+  private judgeLock(lockPath: string, report = true): { stale: boolean; holder: { pid?: number; host?: string; at?: string }; ino?: bigint; mtimeNs?: bigint } {
     let stat: fs.BigIntStats;
     try {
       stat = fs.lstatSync(lockPath, { bigint: true });
@@ -241,7 +244,7 @@ export class OperationStore {
       const parsed = JSON.parse(fs.readFileSync(lockPath, "utf-8"));
       if (parsed && typeof parsed === "object") holder = parsed;
     } catch {
-      reportOperationDiagnostic(this.onDiagnostic, "persistence", "lock_read_failed");
+      if (report) reportOperationDiagnostic(this.onDiagnostic, "persistence", "lock_read_failed");
     }
     const identity = { ino: stat.ino, mtimeNs: stat.mtimeNs };
     if (!holder) return { stale: Date.now() - Number(stat.mtimeNs / 1_000_000n) > OPERATION_LOCK_UNREADABLE_GRACE_MS, holder: {}, ...identity };
