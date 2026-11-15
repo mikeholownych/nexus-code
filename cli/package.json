@@ -8,7 +8,7 @@
     "harness": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc && node scripts/write_build_info.mjs",
+    "build": "tsc && node scripts/copy_data.mjs && node scripts/write_build_info.mjs",
     "test": "npm run test:cli && npm run test:scope",
     "test:cli": "node scripts/run_tests.mjs",
     "test:scope": "bash ../scripts/terminal-acceptance/test-scope-procs.sh",
