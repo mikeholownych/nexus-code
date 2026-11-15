@@ -6,6 +6,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Detailed per-release documentation is maintained in [`docs/releases/`](docs/releases/).
 
+## [Unreleased]
+
+### Security
+
+- Commands run through `run_command` no longer inherit credentials from the Nexus process. Variables from `~/.config/nexus/config.env`, plus anything named like a key, token, secret or password, `AWS_*`, `GH_TOKEN` and similar, are removed from the command environment, including inside the write-mode bwrap sandbox. To pass a variable through deliberately, list its name in `NEXUS_COMMAND_ENV_PASSTHROUGH` (operator environment or `config.env` only). Commands that relied on `SSH_AUTH_SOCK`, `GH_TOKEN` and similar must now opt in. Without `--sandbox` a command still runs as your user and can read your files and its parent processes' environment.
+- Write-mode `--sandbox` now actually confines. `$HOME` is masked (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/nexus` unreadable, also when the workspace is `$HOME`); only toolchain directories are mounted read-only (extend with `NEXUS_SANDBOX_HOME_READONLY`); the network is off by default (`--sandbox-network` or `NEXUS_SANDBOX_NETWORK=1` to opt in; `--yes` does not imply it); commands start in a new session (no `/dev/tty`, so `sudo` and password prompts fail) and die with the runner; `nexus doctor` lists the effective mounts. Files outside `$HOME` remain readable inside the sandbox.
+- The legacy task-worktree merge refuses a worktree whose `.git` was replaced, and runs Git with hooks and fsmonitor disabled; a planted `core.fsmonitor` or hook in an agent-writable worktree no longer runs code outside it. The repository's own hooks no longer fire on that commit and merge.
+- Docker sandbox (to be reconciled with the final hardening Slice 5 code): digest-pinned image, non-root `--user`, `--cap-drop ALL`, `--security-opt no-new-privileges`, `--network none` by default with the same opt-in as the bwrap sandbox, `--pids-limit`, `--read-only` root with a tmpfs `/tmp`, and the scrubbed environment passed with `--env`.
+
+### Fixed
+
+- Protected-path matching is relative to the workspace root, so projects under directories such as `~/.env-tools/` are no longer blocked wholesale; symlinks to protected targets are still refused.
+
+### Removed
+
+- The unread `allowExternalSymlinks` policy key (files that set it still load; the key is ignored).
+
 ## [v1.2.0] - 2026-11-15
 
 Release notes: [`docs/releases/v1.2.0.md`](docs/releases/v1.2.0.md). Candidate: [`rc.1`](docs/releases/v1.2.0-rc.1.md). Plan: [`docs/v1.2.0/SEMANTIC_AND_ARCHITECTURAL_INTEGRITY.md`](docs/v1.2.0/SEMANTIC_AND_ARCHITECTURAL_INTEGRITY.md).
