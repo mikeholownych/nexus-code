@@ -975,6 +975,12 @@ export class AutonomousAgent {
   private receiptBaselineJudged: boolean = false;
   /** A persisted baseline retained only as untrusted continuity evidence after recovery. */
   private untrustedRecoveredBaseline?: DurableTaskState["changeBaseline"];
+  /**
+   * A recovered record that an unbound-verifier pass rested on (the definition could not be bound at capture). Unlike the
+   * baseline it is honoured only to weaken: the pass stays regression evidence, never VERIFIED, and only while the
+   * definition is still unbindable now.
+   */
+  private recoveredUnboundVerifier?: { command: string; reason: string };
   private recoveredOperation?: DurableTaskState["operation"];
   private extensionPosture?: { workspace: string; readOnly: boolean };
   /** Full-access intent captured at construction; effective only while the mode permits it and read-only is off. */
@@ -1708,6 +1714,7 @@ export class AutonomousAgent {
             failed: this.changeBaseline.failed,
             tests: this.changeBaseline.tests ? Object.fromEntries(this.changeBaseline.tests) : null,
             verifier: this.changeBaseline.verifier ? Object.fromEntries(this.changeBaseline.verifier) : null,
+            ...(this.changeBaseline.verifierUnbindableReason ? { verifierUnbindableReason: this.changeBaseline.verifierUnbindableReason } : {}),
             trustedDeliverables: this.changeBaseline.trustedDeliverables,
             ...(this.changeBaseline.tddRedVerifier ? { tddRedVerifier: Object.fromEntries(this.changeBaseline.tddRedVerifier) } : {}),
             ...(this.changeBaseline.tddRedTests ? { tddRedTests: Object.fromEntries(this.changeBaseline.tddRedTests) } : {}),
@@ -1797,6 +1804,7 @@ export class AutonomousAgent {
     // and make candidate-edited tests look pristine.
     this.changeBaseline = undefined;
     this.untrustedRecoveredBaseline = state.changeBaseline ?? undefined;
+    this.recheckOnResume();
     this.restoreHistory(state.history);
     const committed = Array.isArray((state.history as any)?.committedCompactions) ? new Set<string>((state.history as any).committedCompactions) : undefined;
     const archived = this.stateManager.readArchive(state.taskId, committed);
@@ -2169,6 +2177,7 @@ export class AutonomousAgent {
     this.activeProviderRecovery = recovery?.providerRecovery ?? null;
     this.recoveredOperation = recovery?.operation;
     this.untrustedRecoveredBaseline = recovery?.changeBaseline ?? undefined;
+    this.recheckOnResume();
     // Session files are writable by the same local identity that can run candidate
     // commands. Their pending flag and any verifier snapshot cannot authenticate
     // that the workspace remained unchanged since the session was saved. Treat
@@ -2459,6 +2468,7 @@ export class AutonomousAgent {
                 failed: this.changeBaseline.failed,
                 tests: this.changeBaseline.tests ? Object.fromEntries(this.changeBaseline.tests) : null,
                 verifier: this.changeBaseline.verifier ? Object.fromEntries(this.changeBaseline.verifier) : null,
+                ...(this.changeBaseline.verifierUnbindableReason ? { verifierUnbindableReason: this.changeBaseline.verifierUnbindableReason } : {}),
                 trustedDeliverables: this.changeBaseline.trustedDeliverables,
                 ...(this.changeBaseline.tddRedVerifier ? { tddRedVerifier: Object.fromEntries(this.changeBaseline.tddRedVerifier) } : {}),
                 ...(this.changeBaseline.tddRedTests ? { tddRedTests: Object.fromEntries(this.changeBaseline.tddRedTests) } : {}),
@@ -3135,6 +3145,22 @@ export class AutonomousAgent {
   private pinnedUserText(text: string): boolean {
     if (!this.objective) return false;
     return text.startsWith(STEERING_PREFIX) || text.startsWith(this.objective.objective);
+  }
+
+  /**
+   * Resume: a `verified` requirement rests on a verifier run of the workspace as it was then. It stays verified only if
+   * that run's recorded inputs equal the candidate identity now (the one receipts use); otherwise, or when the identity
+   * cannot be computed, it is demoted. Also keeps the unbound-pass marker from the recovered baseline record.
+   */
+  private recheckOnResume(): void {
+    if (this.objective) {
+      const current = this.verifierState()?.inputs;
+      invalidateVerified(this.objective, "the workspace changed since the verifier run (resumed task)", undefined, (r) => Boolean(current) && r.verifiedBy?.inputs === current);
+    }
+    const recorded = this.untrustedRecoveredBaseline;
+    this.recoveredUnboundVerifier = recorded?.command && recorded.verifierUnbindableReason && !recorded.verifier
+      ? { command: recorded.command, reason: recorded.verifierUnbindableReason }
+      : undefined;
   }
 
   /** The workspace state a verifier result must match to still apply (see priorAttempt). */
@@ -4776,7 +4802,14 @@ ${NEXUS_RUNTIME_IDENTITY}`;
               (hasTddRedVerifier
                 ? !tddRedVerifierMatches
                 : verifierDefinitionChangedSince(this.config.workspace, this.changeBaseline!));
-            const unboundReason = bindsWorkspaceDefinition && matchingBaseline && !hasTddRedVerifier && !this.changeBaseline?.verifier?.size ? this.changeBaseline?.verifierUnbindableReason : undefined;
+            // After a restart the baseline is gone but the recorded unbound marker remains: honoured only while the
+            // definition is still unbindable now, so a forged marker cannot excuse a bindable verifier.
+            const recoveredUnbound = bindsWorkspaceDefinition && !matchingBaseline && this.recoveredUnboundVerifier?.command === verifierCommand
+              ? snapshotVerifierDefinitionWithReason(this.config.workspace, verifierCommand, this.config.trustedDeliverableFiles ?? [])
+              : undefined;
+            const unboundReason = bindsWorkspaceDefinition && matchingBaseline && !hasTddRedVerifier && !this.changeBaseline?.verifier?.size
+              ? this.changeBaseline?.verifierUnbindableReason
+              : recoveredUnbound && !recoveredUnbound.verifier ? recoveredUnbound.reason : undefined;
             const unboundDetail = unboundReason
               ? `the verifier's definition could not be bound (${unboundReason}), so it was not verified unchanged (the candidate could have edited it) and the pass is regression evidence only`
               : undefined;
@@ -7720,8 +7753,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       // deliverable scope. Its passing tests are regression evidence only; keep the obligation pending.
       // Recovered work is different: the snapshot itself is unauthenticated, so even that evidence
       // cannot support REGRESSION_FREE until a trusted baseline exists.
+      // The recovered unbound marker is the exception: it never claims more than regression evidence.
       if (
-        !this.verificationBaselineInvalidated &&
+        (!this.verificationBaselineInvalidated || (evidence?.definitionBound === false && this.recoveredUnboundVerifier?.command === evidence.command)) &&
         evidence?.status === "PASSED" &&
         evidence.hasExecutedTests === true &&
         (evidence.isDeliverableBound === false || evidence.definitionBound === false)
