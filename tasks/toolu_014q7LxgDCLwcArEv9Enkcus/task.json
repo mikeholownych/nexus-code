@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_014q7LxgDCLwcArEv9Enkcus",
+  "agent_id": "a6841039d498f87de",
+  "subagent_type": "general-purpose",
+  "task_description": "Local Code/Security/Slop review of CG-3",
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 49058,
+    "cache_read_tokens": 249799,
+    "output_tokens": 6816,
+    "api_call_count": 5
+  },
+  "started_at": "2026-11-14T23:57:34.565736247Z",
+  "completed_at": "2026-11-14T23:58:32.689623555Z"
+}

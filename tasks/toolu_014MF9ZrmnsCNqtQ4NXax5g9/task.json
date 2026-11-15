@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_014MF9ZrmnsCNqtQ4NXax5g9",
+  "agent_id": "a405208de83cd32d8",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement CG-3 diagnostic records and source tags",
+  "token_usage": {
+    "input_tokens": 82,
+    "cache_creation_tokens": 116888,
+    "cache_read_tokens": 4098487,
+    "output_tokens": 37399,
+    "api_call_count": 40
+  },
+  "started_at": "2026-11-14T23:48:39.27488438Z",
+  "completed_at": "2026-11-14T23:57:15.826950416Z"
+}
