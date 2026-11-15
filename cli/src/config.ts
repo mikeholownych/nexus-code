@@ -9,7 +9,7 @@ import { providerApiKey } from "./credentials.js";
 import { validateBranchName } from "./worktrunk/paths.js";
 import { DEFAULT_OPERATION_POLICY } from "./core/operation.js";
 import { readSmallFile } from "./core/checkout_trust.js";
-import { ContinuationBudget, DEFAULT_CONTINUATION, HarnessConfig, ApprovalMode } from "./types.js";
+import { ContinuationBudget, DEFAULT_CONTINUATION, DEFAULT_CONVERGENCE_ATTEMPTS, HarnessConfig, ApprovalMode } from "./types.js";
 
 /** A project `.env` larger than this is ignored (it is repository-controlled). */
 const MAX_PROJECT_ENV_BYTES = 256 * 1024;
@@ -165,6 +165,7 @@ const PROJECT_ENV_KEYS = new Set([
   "NEXUS_MAX_TOTAL_STEPS",
   "NEXUS_MAX_TURN_MINUTES",
   "NEXUS_STAGNATION_STEPS",
+  "NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS",
   "NEXUS_VERIFIER_TIMEOUT_SECS",
   "NEXUS_REASONING_EFFORT",
   "NEXUS_STRICT_TOKEN_COUNT",
@@ -725,6 +726,7 @@ export function continuationBudget(options: any): ContinuationBudget | undefined
     maxTotalSteps: Number.isFinite(steps) ? Math.floor(steps) : steps,
     maxTurnMinutes: positive(options.maxTurnMinutes, effectiveSetting("NEXUS_MAX_TURN_MINUTES"), DEFAULT_CONTINUATION.maxTurnMinutes),
     stagnationSteps: Math.floor(positive(options.stagnationSteps, effectiveSetting("NEXUS_STAGNATION_STEPS"), DEFAULT_CONTINUATION.stagnationSteps)),
+    verifierConvergenceAttempts: Math.floor(positive(undefined, effectiveSetting("NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS"), DEFAULT_CONVERGENCE_ATTEMPTS)),
   };
 }
 

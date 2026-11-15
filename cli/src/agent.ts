@@ -149,6 +149,8 @@ import {
   ledgerNeedsPinning,
   openRequirements,
   priorAttempt,
+  convergenceSignal,
+  convergenceHistory,
   queueSteering,
   steeringNegations,
   recordSteeringConflict,
@@ -989,6 +991,10 @@ export class AutonomousAgent {
   private turnStartState: string | undefined;
   /** The operator-configured verifier's latest result in this turn (FAILED: it refused a completion and has not passed since). */
   private turnConfiguredVerifier: "NOT_RUN" | "PASSED" | "FAILED" = "NOT_RUN";
+  /** Set when this turn's verifier attempts stopped converging; the loop ends the turn BLOCKED with it. */
+  private turnConvergence?: NonNullable<TurnResult["convergence"]>;
+  /** The newest attempt the non-converging judgement covered; consumed (convergenceResetAfter) only when the turn actually stops on it. */
+  private turnConvergenceUpTo?: number;
   /** Key for the durable operation record of each tool call (provider call ids may be redacted on disk). */
   private operationSeq = 0;
   /** Told after each durable progress write, so a host can keep its own session record in step. */
@@ -4913,6 +4919,18 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             }
             if (typecheckBlock) return { success: false, output: "", error: typecheckBlock };
             if (!testRes.success) {
+              const signal = this.objective ? convergenceSignal(this.objective, this.config.continuation?.verifierConvergenceAttempts, verifierCommand) : undefined;
+              if (this.objective && signal && signal.state !== "converging") {
+                this.turnConvergenceUpTo = this.objective.verification.at(-1)?.n;
+                this.turnConvergence = { state: signal.state, evidence: signal.evidence, attempts: convergenceHistory(signal.attempts) };
+                return {
+                  success: false,
+                  output: "",
+                  error:
+                    `Verification Oracle: ${testRes.command} is not converging: ${signal.evidence}. Retrying will not settle it, so Nexus stops here and nothing is verified. ` +
+                    `The operator must decide whether to change the approach, fix the verifier or accept the current state; do not claim completion.`,
+                };
+              }
               const hints = formatDiagnosticHints(testRes.diagnostics);
               const evidenceLine = describeAttemptEvidence(attemptEvidence(testRes.rawOutput || "", testRes.exitCode, { timedOut: testRes.timedOut, executorFailed: testRes.executorFailed }));
               const oracleFailContent = `Verification Oracle: The selected verifier did not pass.\nCommand: ${testRes.command}\n${evidenceLine ? `Evidence: ${evidenceLine}\n` : ""}${foldVoluminousOutput(testRes.rawOutput || "")}${hints}\nResolve the verification failure before calling task_completed.`;
@@ -6410,6 +6428,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     this.turnMutations = 0;
     this.turnToolCallSyntax = { native: 0, trailing: 0, structural: 0, invalid: 0 };
     this.turnConfiguredVerifier = "NOT_RUN";
+    this.turnConvergence = undefined;
+    this.turnConvergenceUpTo = undefined;
     this.turnCarriedChanges = this.hasPendingModifications;
     this.turnDenials = 0;
     this.turnFileWrites = 0;
@@ -6570,6 +6590,12 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       let stateUnknownNoted = false;
 
       while (modelStop === "NONE" && !interruption && !inferenceFailure && !persistenceFailure) {
+        const convergence = this.turnConvergence as TurnResult["convergence"];
+        if (convergence && !stopReason) {
+          stopReason = "VERIFIER_NOT_CONVERGING";
+          stopDetail = convergence.evidence;
+          if (this.objective && this.turnConvergenceUpTo !== undefined) this.objective.convergenceResetAfter = this.turnConvergenceUpTo;
+        }
         if (stopReason) break;
         if (currentStep > maxTotalSteps) {
           stopReason = budget ? "STEP_BUDGET_EXHAUSTED" : "STEP_LIMIT_REACHED";
@@ -7510,7 +7536,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       verification: evidence,
       interruption: input.interruption,
       inferenceFailure: input.inferenceFailure,
-      steps: { used: input.stepsUsed, max: input.maxSteps ?? this.config.maxSteps, limitReached: input.limitReached },
+      steps: { used: input.stepsUsed, max: input.maxSteps ?? this.config.maxSteps, limitReached: input.limitReached && input.stopReason !== "VERIFIER_NOT_CONVERGING" },
       unverifiedChangesPending: this.hasPendingModifications,
       finishedAt: new Date().toISOString(),
       ...(input.continuation ? { continuation: input.continuation } : {}),
@@ -7554,6 +7580,12 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         ...base, execution: "BLOCKED", outcome: "NOT_ESTABLISHED", reason: "CONTEXT_CAPACITY_EXCEEDED",
         detail: `${c.estimatedPromptTokens}+${c.completionReserveTokens}+${c.toolResponseReserveTokens}>${c.contextLimit}`,
         finalOutputComplete: false, capacity: c,
+      }));
+    }
+    if (input.limitReached && input.stopReason === "VERIFIER_NOT_CONVERGING" && this.turnConvergence) {
+      return deepFreezeTurn(assertTurnResultInvariants({
+        ...base, execution: "BLOCKED", outcome: "NOT_ESTABLISHED", reason: "VERIFIER_NOT_CONVERGING",
+        detail: this.turnConvergence.evidence.slice(0, 300), finalOutputComplete: false, convergence: this.turnConvergence,
       }));
     }
     if (input.limitReached) {
@@ -7730,6 +7762,10 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     let nextAction = ledger.nextAction;
     if (!done && !nextAction) {
       if (failedCheck && turn.verification?.command) nextAction = `Fix the failing check (${failedCheck}) and rerun ${turn.verification.command}.`;
+      else if (turn.reason === "VERIFIER_NOT_CONVERGING") {
+        const why = { stalled: "keeps failing the same way across different attempts", oscillating: "alternates between two sets of failures across attempts", diverging: "fails more tests with each attempt" }[turn.convergence?.state ?? "stalled"];
+        nextAction = `The verifier ${why}; decide whether to change the approach, fix the verifier or accept the state.`;
+      }
       else if (turn.reason === "STAGNATION_DETECTED") nextAction = "Review the repeated action and give the agent new direction (steer or a narrower request).";
       else if (turn.reason === "STEP_BUDGET_EXHAUSTED" || turn.reason === "TIME_BUDGET_EXHAUSTED" || turn.reason === "STEP_PAUSED") nextAction = "Send a follow-up to continue from the saved state, or raise the budget.";
       else if (remaining.length) nextAction = `Continue with ${remaining[0]}.`;

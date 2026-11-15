@@ -347,6 +347,20 @@ export function projectTurn(turn: TurnResult): TurnResult {
     verification: turn.verification ? { ...turn.verification, command: redactOptional(turn.verification.command) } : null,
     interruption: turn.interruption ? { ...turn.interruption, outstandingTool: redactOptional(turn.interruption.outstandingTool) } : null,
     inferenceFailure: turn.inferenceFailure ? { ...turn.inferenceFailure, message: redactSecrets(turn.inferenceFailure.message) } : null,
+    ...(turn.convergence
+      ? {
+          convergence: {
+            ...turn.convergence,
+            evidence: redactSecrets(turn.convergence.evidence),
+            attempts: turn.convergence.attempts.map((a) => ({
+              ...a,
+              command: redactSecrets(a.command),
+              ...(a.failedCheck ? { failedCheck: redactSecrets(a.failedCheck) } : {}),
+              ...(a.failingTests ? { failingTests: a.failingTests.map((t) => redactSecrets(t)) } : {}),
+            })),
+          },
+        }
+      : {}),
     ...(turn.turnEvidence
       ? { turnEvidence: { ...turn.turnEvidence, verifierRuns: turn.turnEvidence.verifierRuns.map((r) => ({ ...r, command: redactSecrets(r.command) })) } }
       : {}),
