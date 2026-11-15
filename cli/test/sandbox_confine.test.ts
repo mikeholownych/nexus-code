@@ -66,7 +66,7 @@ describe("write-mode --sandbox confines the host (hardening S2)", { skip: SKIP }
     process.env.PATH = `${home}/.cargo/bin:${home}/tc/bin:${home}/.ssh:${saved.PATH}`;
     const r = sandboxRun("cargo --version && node --version && cat ~/.cargo/credentials.toml; ls ~/.ssh 2>&1", workspace);
     assert.match(r.stdout, /cargo 9\.9\.9-test/);
-    assert.match(r.stdout, new RegExp(`v${process.versions.node.replace(/\./g, "\\.")}`));
+    assert.ok(r.stdout.includes(`v${process.versions.node}`), r.stdout);
     assert.doesNotMatch(r.stdout + r.stderr, /SENTINEL/);
     const effective = sandboxHomeMounts();
     assert.ok(effective.mounts.some((m) => m.path === path.join(home, ".cargo") && m.source === "default"));
