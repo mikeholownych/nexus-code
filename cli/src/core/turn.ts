@@ -276,6 +276,8 @@ export interface CapacityRecord {
   modelCalled: boolean;
   pendingMessageRetained: boolean;
   pendingMessageChars: number;
+  /** Gating requirements the request would not have carried (CX-5): the turn stopped rather than send without them. */
+  missingRequirements?: string[];
 }
 
 export interface TurnResult {
@@ -511,6 +513,12 @@ export function summarizeTurn(t: TurnResult): { heading: string; line: string } 
   if (exec === "BLOCKED" && t.capacity) {
     const c = t.capacity;
     const fate = c.pendingMessageRetained ? "your message and the conversation so far are kept" : "your message was not added to the conversation";
+    if (c.missingRequirements?.length) {
+      return {
+        heading: "TURN BLOCKED - OBJECTIVE REQUIREMENT NOT RETAINED",
+        line: `execution=BLOCKED outcome=NOT_ESTABLISHED (CONTEXT_CAPACITY_EXCEEDED: the request would not carry requirement(s) ${c.missingRequirements.join(", ")}). No request was sent; ${fate}. Requirements are never cut to fit: raise --context-limit or narrow the objective.`,
+      };
+    }
     if (c.unmeasured) {
       return {
         heading: "TURN BLOCKED - REQUEST NOT MEASURED",
