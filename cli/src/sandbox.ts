@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { buildCommandEnvironment } from "./command_env.js";
 import { operatorSetting } from "./client.js";
+import { sandboxNetworkFlagSet, setSandboxNetworkFlag } from "./sandbox_network.js";
 
 export type SandboxMode = "auto" | "bwrap" | "docker" | "none";
 
@@ -125,14 +126,49 @@ export function sandboxHomeMounts(env: NodeJS.ProcessEnv = process.env): Sandbox
   return result;
 }
 
-let sandboxNetworkFlag = false;
-/** `--sandbox-network` (an operator's command-line choice). */
-export function setSandboxNetworkFlag(value: boolean): void {
-  sandboxNetworkFlag = value;
+export interface SandboxWorkspaceOverlays {
+  dirs: string[];
+  files: string[];
 }
+
+/**
+ * The writable workspace bind is applied on top of the masked HOME, so when the workspace is HOME, sits above it, or
+ * contains a credential directory, it would bring that directory back. These are the existing credential paths
+ * (the specific HOME_DENIED entries and the masked files) that lie inside the workspace: a directory gets an empty
+ * tmpfs and a file /dev/null mounted over it, after the workspace bind. Pure function of HOME, the workspace and the
+ * file system.
+ */
+export function sandboxWorkspaceOverlays(workspace: string, env: NodeJS.ProcessEnv = process.env): SandboxWorkspaceOverlays {
+  const home = path.resolve(env.HOME || os.homedir());
+  const root = path.resolve(workspace);
+  const out: SandboxWorkspaceOverlays = { dirs: [], files: [] };
+  if (home === "/") return out;
+  const candidates = [...HOME_DENIED.filter((entry) => !BROAD_DENIED.has(entry)), ...HOME_MASKED_FILES].map((rel) => path.join(home, rel));
+  for (const candidate of candidates) {
+    if (!isPathWithin(candidate, root)) continue;
+    // A symlink is overlaid at its target when that lies inside the workspace; the link then reads the overlay.
+    let target = candidate;
+    try {
+      if (fs.lstatSync(candidate).isSymbolicLink()) target = fs.realpathSync(candidate);
+    } catch {
+      continue;
+    }
+    if (!isPathWithin(target, root)) continue;
+    try {
+      const stat = fs.statSync(target);
+      const list = stat.isDirectory() ? out.dirs : stat.isFile() ? out.files : undefined;
+      if (list && !list.includes(target)) list.push(target);
+    } catch {
+      // Dangling link or vanished path: nothing to hide.
+    }
+  }
+  return out;
+}
+
+export { setSandboxNetworkFlag };
 /** Whether write-mode sandboxed commands may use the network: only on an explicit operator opt-in. */
 export function sandboxNetworkEnabled(): boolean {
-  if (sandboxNetworkFlag) return true;
+  if (sandboxNetworkFlagSet()) return true;
   return /^(1|true|yes|on)$/i.test((operatorSetting(SANDBOX_NETWORK_SETTING) ?? "").trim());
 }
 
@@ -465,6 +501,10 @@ export function wrapSandboxedCommand(
         }
       }
       bwrapArgs.push("--bind", absWorkspace, absWorkspace);
+      // The workspace bind above would re-expose credential paths when the workspace is, or contains, $HOME.
+      const overlays = sandboxWorkspaceOverlays(absWorkspace);
+      for (const dir of overlays.dirs) bwrapArgs.push("--tmpfs", dir);
+      for (const file of overlays.files) bwrapArgs.push("--ro-bind", "/dev/null", file);
       // bwrap passes its own environment to the command. Start empty and set back only the scrubbed command
       // environment, so a sandboxed command cannot see the operator's credentials either (read-only branch above
       // already starts from --clearenv with a fixed PATH/HOME).

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync, spawn } from "node:child_process";
 import { buildCommandEnvironment } from "../src/command_env.js";
-import { wrapSandboxedCommand, isBwrapAvailable, sandboxHomeMounts, setSandboxNetworkFlag, sandboxNetworkNotice } from "../src/sandbox.js";
+import { wrapSandboxedCommand, isBwrapAvailable, sandboxHomeMounts, setSandboxNetworkFlag, sandboxNetworkNotice, sandboxWorkspaceOverlays } from "../src/sandbox.js";
 
 const SKIP = isBwrapAvailable() ? false : "bwrap is not installed on this host";
 
@@ -192,6 +192,59 @@ PY`;
     const { workspace } = throwawayHome();
     const r = sandboxRun("tty; echo done", workspace);
     assert.match(r.stdout, /done/);
+  });
+});
+
+describe("a workspace that is, contains or sits under HOME does not re-expose credentials (hardening S2)", { skip: SKIP }, () => {
+  function seed(home: string): void {
+    for (const [rel, body] of [[".ssh/id_test", "SENTINEL-SSH"], [".config/nexus/config.env", "SENTINEL-NEXUS"], [".aws/credentials", "SENTINEL-AWS"], [".netrc", "SENTINEL-NETRC"], [".cargo/credentials.toml", "SENTINEL-CARGO"], ["proj/a.txt", "ordinary"], [".cargo/bin/cargo", "#!/bin/sh\necho 'cargo 9.9.9-test'\n"]]) {
+      fs.mkdirSync(path.dirname(path.join(home, rel)), { recursive: true });
+      fs.writeFileSync(path.join(home, rel), body, { mode: rel.endsWith("cargo") ? 0o755 : 0o644 });
+    }
+  }
+  const SNOOP = "cat $HOME/.ssh/id_test $HOME/.config/nexus/config.env $HOME/.aws/credentials $HOME/.netrc $HOME/.cargo/credentials.toml 2>&1; ls -A $HOME/.ssh 2>&1";
+
+  test("workspace = HOME: credentials stay hidden, ordinary files and the toolchain stay usable and writable", () => {
+    const { home } = throwawayHome();
+    seed(home);
+    process.env.PATH = `${home}/.cargo/bin:${saved.PATH}`;
+    const r = sandboxRun(`${SNOOP}; cat proj/a.txt; cargo --version; echo new > proj/b.txt`, home);
+    assert.doesNotMatch(r.stdout + r.stderr, /SENTINEL/);
+    assert.match(r.stdout, /ordinary/);
+    assert.match(r.stdout, /cargo 9\.9\.9-test/);
+    assert.equal(fs.readFileSync(path.join(home, "proj/b.txt"), "utf8").trim(), "new");
+    // The host files are untouched.
+    assert.equal(fs.readFileSync(path.join(home, ".ssh/id_test"), "utf8"), "SENTINEL-SSH");
+  });
+
+  test("workspace = HOME/proj behaves as before", () => {
+    const { home } = throwawayHome();
+    seed(home);
+    const r = sandboxRun(`${SNOOP}; cat a.txt`, path.join(home, "proj"));
+    assert.doesNotMatch(r.stdout + r.stderr, /SENTINEL/);
+    assert.match(r.stdout, /ordinary/);
+    assert.deepEqual(sandboxWorkspaceOverlays(path.join(home, "proj")), { dirs: [], files: [] });
+  });
+
+  test("workspace = an ancestor of HOME: the denied paths under it are masked", () => {
+    const { home } = throwawayHome();
+    seed(home);
+    const parent = path.dirname(home);
+    const wrapped = wrapSandboxedCommand(`cat ${home}/.ssh/id_test ${home}/.config/nexus/config.env ${home}/.cargo/credentials.toml 2>&1; cat ${home}/proj/a.txt`, parent, { mode: "bwrap" });
+    const r = spawnSync(wrapped.argv![0], wrapped.argv!.slice(1), { encoding: "utf8", timeout: 20_000, env: buildCommandEnvironment() });
+    assert.doesNotMatch(r.stdout + r.stderr, /SENTINEL/);
+    assert.match(r.stdout, /ordinary/);
+    assert.ok(sandboxWorkspaceOverlays(parent).dirs.includes(path.join(home, ".ssh")));
+  });
+
+  test("the overlay set is a pure function: only existing denied paths inside the workspace", () => {
+    const { home } = throwawayHome();
+    seed(home);
+    const o = sandboxWorkspaceOverlays(home);
+    assert.ok(o.dirs.includes(path.join(home, ".ssh")) && o.dirs.includes(path.join(home, ".aws")) && o.dirs.includes(path.join(home, ".config/nexus")));
+    assert.ok(o.files.includes(path.join(home, ".netrc")) && o.files.includes(path.join(home, ".cargo/credentials.toml")));
+    assert.ok(!o.dirs.includes(path.join(home, ".gnupg")), "absent paths are not overlaid");
+    assert.deepEqual(sandboxWorkspaceOverlays("/var/tmp/definitely-not-home-xyz"), { dirs: [], files: [] });
   });
 });
 

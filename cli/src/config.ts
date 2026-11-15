@@ -8,7 +8,7 @@ import { baseUrlSetting, originOf, parseOriginList, PROVIDERS, providerDefinitio
 import { providerApiKey } from "./credentials.js";
 import { validateBranchName } from "./worktrunk/paths.js";
 import { DEFAULT_OPERATION_POLICY } from "./core/operation.js";
-import { setSandboxNetworkFlag } from "./sandbox.js";
+import { setSandboxNetworkFlag } from "./sandbox_network.js";
 import { readSmallFile } from "./core/checkout_trust.js";
 import { resolveRepeatedCallSettings } from "./core/repeated_calls.js";
 import { ContinuationBudget, DEFAULT_CONTINUATION, DEFAULT_CONVERGENCE_ATTEMPTS, HarnessConfig, ApprovalMode } from "./types.js";

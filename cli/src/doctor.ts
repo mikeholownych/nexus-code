@@ -25,7 +25,7 @@ import { parse as parseDotenv } from "dotenv";
 import { LocalLlmClient, credentialStorageHome, operatorSetting } from "./client.js";
 import { credentialsPath } from "./credentials.js";
 import { mcpConfigFiles } from "./mcp.js";
-import { isBwrapAvailable, sandboxHomeMounts, sandboxNetworkEnabled } from "./sandbox.js";
+import { isBwrapAvailable, sandboxHomeMounts, sandboxNetworkEnabled, sandboxWorkspaceOverlays } from "./sandbox.js";
 import { pluginDirs } from "./plugins.js";
 import { untrustedWorkspaceExtensions, WORKSPACE_MCP_FILES, isWorkspaceTrusted } from "./workspace_trust.js";
 import { BuildIdentity, getBuildIdentity } from "./build_identity.js";
@@ -575,6 +575,14 @@ const sandboxCheck: Check = async (ctx) => {
     ...m.masked.map((x) => `  hidden file: ${x}`),
     ...m.refused.map((x) => `  refused: ${x.path} (${x.reason})`),
   ];
+  const workspace = ctx.config?.workspace;
+  if (workspace) {
+    const o = sandboxWorkspaceOverlays(workspace);
+    // Non-empty only when the workspace is, contains or sits above HOME.
+    if (o.dirs.length || o.files.length) {
+      evidence.push("the workspace holds credential paths; they are emptied inside the sandbox:", ...o.dirs.map((x) => `  masked dir: ${x}`), ...o.files.map((x) => `  masked file: ${x}`));
+    }
+  }
   return f("sandbox.confinement", "runtime", "pass", "Write-mode --sandbox masks HOME, binds only the listed toolchain directories read-only, and has no network unless opted in.", evidence, "Extend the mounts with NEXUS_SANDBOX_HOME_READONLY (comma-separated paths; operator environment or config.env only).");
 };
 
