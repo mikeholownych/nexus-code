@@ -3,7 +3,6 @@
 // exceeds NEXUS_TEST_FILE_TIMEOUT_SECS (the parent then kills the group and restarts with the remaining files), and
 // {"done":true,"tests":n,"fail":n} when the run ends. Output keeps the spec reporter format, with colour on a TTY.
 import fs from "node:fs";
-import path from "node:path";
 import { run } from "node:test";
 import { spec } from "node:test/reporters";
 
@@ -21,8 +20,14 @@ const watch = (file) => {
   tail = [];
   timer = setTimeout(() => report({ timeout: file, tail }), timeoutMs);
 };
+// The watchdog is armed by the first top-level event of each file. Node 24 emits one named after the file itself; Node 22
+// (process isolation) emits only the file's own top-level tests, so keying on a file-named event never armed it there.
+let current;
 stream.on("test:dequeue", (e) => {
-  if (e.nesting === 0 && e.file && path.resolve(cwd, e.name) === e.file) watch(e.file);
+  if (e.nesting === 0 && e.file && e.file !== current) {
+    current = e.file;
+    watch(e.file);
+  }
 });
 stream.on("test:stdout", (e) => lastLines(e.message));
 stream.on("test:stderr", (e) => lastLines(e.message));
