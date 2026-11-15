@@ -62,8 +62,7 @@
     {
       "id": "compaction-03",
       "category": "compaction",
-      "status": "pending",
-      "pendingUnit": "unassigned (Codex row 'SI-6 / compaction': post-compaction check)",
+      "status": "active",
       "description": "A post-compaction check reports a gating requirement that is missing from the context the model will be sent.",
       "expected": { "droppedRequirementReported": true }
     },

@@ -160,6 +160,8 @@ import {
   recordAttempt,
   recoveryInput,
   renderPinnedLedger,
+  missingGatingRequirements,
+  PINNED_LEDGER_PREFIX,
   renderRecoveryContext,
   trackingOf,
 } from "./core/objective.js";
@@ -288,6 +290,18 @@ export class ContextBudgetError extends Error {
           `exceeds the ${contextLimit} token limit after safe compaction.`,
     );
     this.name = "ContextBudgetError";
+  }
+}
+
+/**
+ * The request would not tell the model every gating requirement of the pinned ledger (CX-5). The ledger is never cut to
+ * fit, so the request is refused: this is a capacity block that names the requirements.
+ */
+export class LedgerNotRetainedError extends ContextBudgetError {
+  constructor(public readonly missingRequirements: string[], estimatedTokens: number, completionReserve: number, toolResponseReserve: number, contextLimit: number) {
+    super(estimatedTokens, completionReserve, toolResponseReserve, contextLimit);
+    this.message = `Request refused before sending: the pinned objective ledger would not carry ${missingRequirements.join(", ")}; gating requirements are never dropped or truncated.`;
+    this.name = "LedgerNotRetainedError";
   }
 }
 
@@ -3074,6 +3088,25 @@ export class AutonomousAgent {
     return Boolean(this.objective && this.durable);
   }
 
+  /**
+   * After a compaction: the gating requirements the request built from `messages` would not carry. The ledger is
+   * rebuilt for every request, never stored in the conversation, so none is expected missing; this proves it.
+   */
+  private ledgerMissingFrom(messages: ChatMessage[]): string[] {
+    const ledger = this.objective;
+    if (!ledger || !this.pinsLedger()) return [];
+    const sent = this.requestMessages(messages).filter((m) => typeof m.content === "string" && m.content.startsWith(PINNED_LEDGER_PREFIX)).map((m) => m.content as string).join("\n");
+    return missingGatingRequirements(ledger, sent);
+  }
+
+  /** Throws LedgerNotRetainedError when the request built from `messages` would lose a gating requirement. */
+  private assertLedgerRetained(messages: ChatMessage[]): void {
+    const missing = this.ledgerMissingFrom(messages);
+    if (!missing.length) return;
+    const reserves = this.getContextReserves();
+    throw new LedgerNotRetainedError(missing, this.scaledBudget(messages, this.contextLimit()).totalActiveTokens, reserves.completion, reserves.toolResponse, this.contextLimit());
+  }
+
   /** Whether the operator's objective message is still in `messages` (else the pinned block carries it verbatim). */
   private objectiveInContext(messages: ChatMessage[]): boolean {
     const objective = this.objective?.objective;
@@ -4203,6 +4236,9 @@ export class AutonomousAgent {
       throw new ContextBudgetError(budget.totalActiveTokens, reserves.completion, reserves.toolResponse, contextLimit);
     }
 
+    // Whatever the ladder did, the request must still carry every gating requirement, or it is not sent.
+    this.assertLedgerRetained(this.messages);
+
     if (!process.stdout.isTTY || process.env.NEXUS_DEBUG === "1") console.log(`[context_admission] step=${step} request_id=${requestId} state=admitted estimated_tokens=${budget.totalActiveTokens} completion_reserve=${reserves.completion} tool_response_reserve=${reserves.toolResponse} limit=${contextLimit} compacted=${compacted} messages=${this.messages.length}`);
     return Array.from(new Set(removedNow));
   }
@@ -4458,6 +4494,8 @@ export class AutonomousAgent {
 
     const summaryIndex = compacted.findIndex((message) => message.role === "system" && message !== original[0]);
     if (summaryIndex >= 0) compacted[summaryIndex] = { role: "system", content: summaryText.trim() };
+    const lost = this.ledgerMissingFrom(compacted);
+    if (lost.length) return { ok: false, durable: false, message: `Not compacted: the request would no longer carry gating requirement(s) ${lost.join(", ")}; the conversation is unchanged.${llmNote}` };
     const limit = this.contextLimit();
     const beforeTokens = calculateContextBudget(this.requestMessages(original), this.getEffectiveTools(), limit).totalActiveTokens;
     const afterTokens = calculateContextBudget(this.requestMessages(compacted), this.getEffectiveTools(), limit).totalActiveTokens;
@@ -6907,6 +6945,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           capacityBlock = {
             promptCountSource: err.count.source,
             ...(err.count.unmeasured ? { unmeasured: err.count.unmeasured } : {}),
+            ...(err instanceof LedgerNotRetainedError ? { missingRequirements: err.missingRequirements } : {}),
             estimatedPromptTokens: err.estimatedTokens,
             completionReserveTokens: err.completionReserveTokens,
             toolResponseReserveTokens: err.toolResponseReserveTokens,

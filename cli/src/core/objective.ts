@@ -1066,6 +1066,14 @@ export function renderPinnedLedger(
   return out.join("\n");
 }
 
+/**
+ * The gating requirements missing from `sent` (the pinned block of a request): a requirement counts as present only
+ * with its row (`- R1 [`) and its complete wording. Used after compaction to prove the model is still told every one.
+ */
+export function missingGatingRequirements(ledger: ObjectiveLedger, sent: string): string[] {
+  return gatingRequirements(ledger).filter((r) => !sent.includes(`- ${r.id} [`) || !sent.includes(r.text)).map((r) => r.id);
+}
+
 /** How the recovery context is rendered: evidence presence, the stagnation limit, and which tools the agent may call. */
 export interface RecoveryContextOptions {
   present?: (callId: string) => boolean;
