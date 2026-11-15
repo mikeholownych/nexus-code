@@ -116,7 +116,7 @@ Disposition: **P0** must-have for v1.2.1; **P1** should-have; **P2** stretch, ma
 | GA-11 | Repeated identical tool calls undetected except by timing | §2.2 | P1 | CS-3 |
 | GA-12 | Shell invocation of verifier commands (`tester.ts:483`, `operation_git.ts:630`) not audited | §4 security | P1 | CS-4 |
 | GA-13 | Example-call edge can force a native call under auto approval | ledger | P2 | CS-5 |
-| GA-14 | No injection scanner; no egress inspector comparable to Goose | §2.2 | DEF | decision D5 |
+| GA-14 | No injection scanner; no egress inspector comparable to Goose | §2.2 | P1 (D5 included 2026-11-15) | CS-7, CS-8 |
 | GA-15 | LSP unsandboxed and untested against real servers | v1.2.0 limits | P2 | CS-6 |
 | GA-16 | No schema-driven argument repair; no closest-lines edit feedback | §2.2 | P1 | WM-1, WM-2 |
 | GA-17 | Model conformance only by hand | §2.2 | P1 | WM-3 |
@@ -127,16 +127,17 @@ Disposition: **P0** must-have for v1.2.1; **P1** should-have; **P2** stretch, ma
 | GA-22 | `verified` not re-checked on resume; resumed unbound baseline memory-only | v1.2.0 limits | P1 | VC-5 |
 | GA-23 | Type-check misses callers in untouched files and shell-changed files; Go and Python unchecked | v1.2.0 limits | P2 | VC-6 |
 | GA-24 | Convergence only on `task_completed` | v1.2.0 limits | P2 | VC-7 |
-| GA-25 | F02/F06 and Slices B–G (certifying comparisons) | ledger | DEF | decision D7 |
+| GA-25 | F02/F06 and Slices B–G (certifying comparisons) | ledger | P0 (F02, F06), P1/P2 (slices) (D7 included 2026-11-15) | MQ-5, MQ-6, MQ-7 |
 | GA-26 | `agent.ts` 8.2k lines, one class; two ~5.4k-line TUI files | §4 size | P1 | MT-1, MT-2 |
 | GA-27 | Redaction and sanitiser duplication across 9 files and TS/Rust | §4 duplication | P1 | MT-3 |
 | GA-28 | Docs stale: README, CHANGELOG, manual (54 hits), STATUS frozen, no examples | §4 docs | P0 | DH-1…DH-3 |
 | GA-29 | Six issues open since October, labelled v1.0.0 | ledger | P1 | DH-4 |
-| GA-30 | v1.0 backlog and v1.1.2 roadmap deferrals have no target release | ledger | DEF | decision D8 |
-| GA-31 | Providers: no Gemini, Azure, Bedrock, Vertex | inventory | DEF | decision D9 |
+| GA-30 | v1.0 backlog and v1.1.2 roadmap deferrals have no target release | ledger | reviewed under D8; issues closed 2026-11-15; deferral table in `PLAN.md` §6 | DH-4 |
+| GA-31 | Providers: no Gemini, Azure, Bedrock, Vertex; one unnamed `compatible` slot with no headers, query parameters or custom auth header; no per-model capability or price data (`providers.ts:46-116`, `client.ts`, `model_catalog.ts`, `CLOUD_PROVIDERS.md:165-167`) | inventory; provider audit 2026-11-15 | P1 (D9: all cloud providers configurable, models.dev data) | PR-1…PR-12 |
 | GA-32 | Cross-runner reproducibility is a manual dispatch | §4 release | P2 | PC-4 |
 | GA-33 | No crash reporting; OTLP opt-in status unverified | §4 ops | P2 | PC-5 |
 | GA-34 | `commander` one major behind (inf, registry not checked); 2 Dependabot PRs | §4 deps | P2 | PC-6 |
+| GA-36 | Forced `tool_choice: required` is sent without checking whether the model accepts it (models.dev lists `capabilities.tools.choice` per model; an Azure-hosted Claude entry accepts only `auto` and `none`) | models.dev `providers/azure/models/`; `client.ts:1720-1760` | P1 | PR-4 |
 | GA-35 | Not extracted: `qualification_2026-10-12` evidence and `docs/v1.0.0/READINESS.md` | §1 | P0 (finish the ledger) | DH-5 |
 
 ## 6. What not to copy

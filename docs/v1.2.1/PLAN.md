@@ -1,6 +1,6 @@
 # Nexus Code v1.2.1 plan
 
-Status: PLAN, written 2026-11-15 against `main` plus the v1.2.0-rc.1 notes. Evidence and the full gap register are in [`GAP_ANALYSIS.md`](GAP_ANALYSIS.md); gap ids (GA-nn) refer to it. Owner decisions are listed in section 6 and nothing marked "decision" starts without one.
+Status: PLAN, written 2026-11-15 against `main` plus the v1.2.0-rc.1 notes. Evidence and the full gap register are in [`GAP_ANALYSIS.md`](GAP_ANALYSIS.md); gap ids (GA-nn) refer to it. Owner decisions are recorded in section 6 (answered 2026-11-15) and nothing marked "decision" starts without one.
 
 ## 1. Purpose and theme
 
@@ -50,6 +50,9 @@ Size: S = one PR; M = two to four PRs; L = a program. P0 = must-have, P1 = shoul
 | MQ-2 | False-completion metric: for every run record Nexus's own verdict and the benchmark's ground truth; report pass rate, **claimed-done-but-wrong rate**, and **verified-but-wrong rate** with Wilson 95% intervals (the repo already has the interval code in `eval/score.mjs`); compare against the same model through at least one peer harness already adapted in `eval/configs/pilot-*.json` | a report where a false VERIFIED is named and explained; the notes state the sample size and that it is self-run | M | P0 |
 | MQ-3 | Real-project smoke: a nightly job that runs a scripted task on pinned copies of representative repositories (a JS project with `node_modules`, a Makefile project, a Python project, a Rust project, and the owner's own repositories where licensing allows) and fails when `task_completed` errors, hangs or ends UNVERIFIED for an avoidable reason. This is the test that would have caught the v1.1.4 every-completion error before release | job red on a seeded regression (a repo whose verifier cannot be bound must complete as REGRESSION_FREE) | M | P0 |
 | MQ-4 | Scheduled model conformance: a nightly or weekly job that runs the tool-call matrix against the configured gateway aliases and alerts on a drop; claim protocol so it never collides with a human run (template: Goose `model-toolcall-conformance.yml`) | one alert path tested with a forced failure | S | P1 |
+| MQ-5 | CERI baseline identity bound to evidence (audit F02): baseline manifest, model digest, sampling and configuration recorded and verified when a comparison is made; a comparison without bound baselines is labelled non-certifying (decision D7, included) | a comparison against an edited baseline fails; test with a swapped manifest | M | P0 |
+| MQ-6 | CERI evidence loading verifies the integrity record (audit F06): `passed:"false"` no longer loads as true, run-id collisions are refused, a tampered record is rejected (D7) | tests for each of the three defects | M | P0 |
+| MQ-7 | Audit Slices B–G, decide each as a unit or a dated deferral, then build in this order: B evidence lifecycle, C verified baselines and paired comparisons (needed for MQ-2 to be called certifying), E request-context manifests, D installed-evaluator adapter, F recovery reference checker, G bounded campaigns (D7). B and C are P1; D, E, F, G are P2 and may roll | each slice either merged with tests or carries a dated deferral in this file | L | P1/P2 |
 
 Dependencies: MQ-1 → MQ-2. MQ-3 and MQ-4 are independent. Decision D3 (what is published) and D4 (scope and cost) gate MQ-1 and MQ-2.
 
@@ -75,6 +78,8 @@ Dependencies: MQ-1 → MQ-2. MQ-3 and MQ-4 are independent. Decision D3 (what is
 | CS-4 | Audit and harden `tester.ts:483` (`execSync(command)`) and `operation_git.ts:630` (`bash -c command`): where `command` can come from the model or the workspace, route through the same approval, redaction and sandbox path as `run_command` | tests with metacharacters and a workspace-defined command; no unapproved shell path remains | S | P1 |
 | CS-5 | Example-call edge: a user asking the model to print an example call must not end in an executed call under auto or full-access approval | regression test from the PR #487 trace | S | P2 |
 | CS-6 | LSP: exercise real servers where installed (rust-analyzer, tsserver, pyright, gopls) in a non-required CI job; sandbox when containment (CS-1) is on | job green on the four servers or a recorded reason per server | M | P2 |
+| CS-7 | Prompt-injection scanner (decision D5, included): deterministic checks, with no new runtime dependency, on untrusted content entering the model (tool results, fetched pages, MCP responses, file contents, diagnostics): instruction-like imperatives aimed at the agent, hidden or bidirectional Unicode, fake system or tool-call markup, encoded payloads. A hit labels the block as suspected injection, fences it, and raises an approval for any action that follows it in the same step; it never silently deletes content. Reference: Goose `security/scanner.rs` (ML-based; ours is deterministic and its limits are stated) | a labelled corpus (public injection samples plus benign code and docs) with a measured detection rate and false-positive rate reported in the PR; request-shape snapshot shows the fence; the notes state it is a heuristic, not a guarantee | M | P1 |
+| CS-8 | Egress inspector (D5): inspect outbound requests and tool arguments to external destinations for secrets and workspace-private data using the existing redaction table (MT-3) and `core/egress.ts` classification; ask or deny per policy, and record the decision. Reference: Goose `security/egress_inspector.rs` | test: a tool call that sends a `.env` value to an external host is refused; internal and loopback hosts unaffected | M | P1 |
 
 ### WM: weak-model robustness
 
@@ -94,6 +99,27 @@ Dependencies: MQ-1 → MQ-2. MQ-3 and MQ-4 are independent. Decision D3 (what is
 | CX-4 | Tool-output masking above a token threshold, with the full output retrievable by id (references: Gemini CLI `toolOutputMaskingService.ts:25`, Cline cached tool results) | request-shape snapshot shows the mask marker; the id resolves | S | P2 |
 | CX-5 | Post-compaction invariant: every gating requirement is present, or the turn blocks (owns CERI `compaction-03`) | scenario active | S | P1 |
 | CX-6 | Prompt caching: request cache hints for providers that support them; measure cached-token share | share reported in the matrix | S | P2 |
+
+### PR: providers (decision D9: every cloud provider configurable)
+
+Audit of 2026-11-15 (`cli/src/providers.ts:46-116`): six hard-coded provider ids (`openrouter`, `openai`, `anthropic`, `chatgpt`, `copilot`, `compatible`); a closed protocol set (`openai-chat` inline in `client.ts`, `openai-responses`, `anthropic-messages` under `cli/src/protocols/`); one unnamed `compatible` slot with no extra headers, no query parameters (so Azure's `?api-version=` breaks), no custom auth header name, no static model list; model lists only from `GET {base}/models`; no per-model capability or price data (context defaults to 65,536 when a cloud provider advertises none); `docs/CLOUD_PROVIDERS.md:165-167` lists Gemini, Azure OpenAI, Bedrock and Vertex as not implemented. Reference data: models.dev (MIT, `sst/models.dev`, 334 provider files, about 10,600 model files; `https://models.dev/api.json`). About 290 of its providers are plain OpenAI-compatible with a base URL and an environment-variable key; per-model `limit.context/input/output`, `capabilities.tools.choice` (the forced-tool modes a model accepts), `capabilities.reasoning.effort`, cache and `cost` fields are present.
+
+| Unit | What | Accept | Size | Pri |
+|---|---|---|---|---|
+| PR-1 | Extract the inline `openai-chat` path from `client.ts` into `cli/src/protocols/openai_chat.ts` with the same `NativeResult` contract; no behaviour change | all provider tests unchanged and green; request-shape snapshots (TI-1) unchanged | M | P1 |
+| PR-2 | Data-driven provider registry: a `ProviderDef` schema (id, label, protocol, base URL template with validated variables such as `{resource}`, query, headers, auth kind `bearer`/`header`/`none`, env names, model source, capability defaults, `omitParams`, `streamOnly`); the six existing ids become table entries; the Copilot gpt-5 protocol rule and ChatGPT parameter omission become data; a user file `~/.config/nexus/providers.json` (operator-only; a project-level file is refused, like `NEXUS_PROVIDER`); several named compatible providers instead of one slot | a user-defined Azure OpenAI provider works against a mock server (URL with deployment, `api-version` query, `api-key` header); existing providers behave identically; schema validation errors name the field | M | P1 |
+| PR-3 | models.dev snapshot: an offline generator script turns the models.dev data into `cli/src/providers.generated.ts` (provider ids, base URLs and env names for the OpenAI-compatible set; per-model context, output, tool-choice modes, reasoning effort, cache and price), dated and schema-validated, with no runtime network fetch; an explicit `nexus models refresh` writes a local cache that overrides the snapshot | table validates in CI; the snapshot date is shown by `nexus providers`; the cache is used only when the operator ran refresh | M | P1 |
+| PR-4 | Capability-aware behaviour from that data: use `capabilities.tools.choice` before forcing `tool_choice: required` in the content-form re-ask (a model that lists only `auto` and `none` gets the corrective note instead of a request error), use per-model context and output limits instead of the 65,536 default, offer the model's reasoning effort levels | a mock model that rejects forced tool use does not receive `required`; context limit resolves from the snapshot; G1.1-4 matrix (WM-3) unchanged on the gateway aliases | S | P1 |
+| PR-5 | The OpenAI-compatible long tail as data: Azure OpenAI, Gemini's OpenAI-compatible endpoint, Mistral, Groq, Together, DeepSeek, xAI, Fireworks, Cerebras, Perplexity, Cloudflare Workers AI and Bedrock's OpenAI-compatible endpoint with a bearer API key | one recorded-fixture conversation per provider definition (text, tool call, reasoning, error, truncation); no live call | M | P1 |
+| PR-6 | Gemini native protocol (`generateContent` / `streamGenerateContent`; `functionCall` and thought parts map to `NativeResult`; `x-goog-api-key` header kind) | fixture conversation including parallel tool calls | M | P1 |
+| PR-7 | Amazon Bedrock Converse protocol with SigV4 signing written on `node:crypto` (no dependency), the AWS event-stream binary framing parser, and the AWS credential chain from environment and shared config files | fixture conversation plus signature test vectors from AWS documentation | L | P1 |
+| PR-8 | Google Vertex: Gemini protocol with `gcp-adc` auth (service-account JWT signed with `node:crypto`, or a token from `gcloud`), regional URL template with project and location, token refresh | fixture plus a token-refresh test with an injected clock | M | P2 |
+| PR-9 | Egress and credential safety for configurable URLs: https-only unless the host is in `NEXUS_LOCAL_ORIGINS`, no userinfo in URLs, validated template variables, no header may override `Host` or another provider's auth, custom header names added to the redaction list automatically, each key bound to its provider's origin (as `credentialFor` does today) | SSRF and header-injection tests; a credential for provider A is never sent to provider B | M | P1 |
+| PR-10 | Per-provider usage and cost limits keyed by provider id, with prices from the snapshot; unknown cost keeps the current refuse-when-a-cost-limit-is-set behaviour | limit tests per provider | S | P2 |
+| PR-11 | Test strategy: recorded SSE fixtures per protocol and per provider definition asserting request shape (URL, headers, query, body); schema test for the generated table; no live calls (live inference is the gateway only) | fixture count per provider listed in the PR | M | P1 |
+| PR-12 | Docs and ops: rewrite `docs/CLOUD_PROVIDERS.md`, `nexus providers` shows source (built-in, snapshot, user file, cache), doctor checks for configured providers | docs match behaviour; doctor test | S | P1 |
+
+Order: PR-1, PR-2, PR-3, PR-9, PR-11 first; then PR-4, PR-5, PR-12; then the native protocols PR-6, PR-7, PR-8; PR-10 last. Risks: credential and SSRF handling (PR-9 is not optional), staleness of generated data (dated and validated), and SigV4 and ADC being the largest single pieces.
 
 ### RD: reach and distribution
 
@@ -132,36 +158,46 @@ Dependencies: MQ-1 → MQ-2. MQ-3 and MQ-4 are independent. Decision D3 (what is
 | DH-1 | README status line, install example and platform line; `CHANGELOG.md` headings for v1.1.3, v1.1.4 and v1.2.0 | no reference to a stale "stable" version; a check script fails on drift | S | P0 |
 | DH-2 | `USER_MANUAL.md`: 54 hits of v1.1.0–v1.1.3 reviewed and corrected; a section for each v1.2.0 behaviour change | review table in the PR | S | P0 |
 | DH-3 | `examples/`: a minimal verified-completion example, a worktree example, an operation file with `git.isolate`, and the CI example from RD-4 | each example runs in CI | M | P1 |
-| DH-4 | Issues #1, #2, #5, #6, #7 and #49: close as superseded or re-scope against this plan; docs/v1.1.0/STATUS.md marked historical; `FINDINGS.md` header corrected | decision D8; tracker has no stale v1.0.0-labelled issue | S | P1 |
+| DH-4 | Issues reviewed 2026-11-15 (D8): #2, #5, #7 and #49 closed as superseded or completed with comments naming where each requirement went (MQ-1/MQ-2, PC-4, DH-6, merged PR #33); #1 (held-out corpus) and #6 (independent continuity acceptance) kept open and labelled v1.2.1. Remaining: mark docs/v1.1.0/STATUS.md historical, correct the `FINDINGS.md` header, and apply the deferral relevance review below | tracker has no stale v1.0.0 issue; the review table is in this file | S | P1 |
 | DH-5 | Finish the ledger: read `docs/reviews/evidence/qualification_2026-10-12/` and `docs/v1.0.0/READINESS.md` and add anything not yet in `GAP_ANALYSIS.md` | gap register updated with sources | S | P0 |
+| DH-6 | Decide whether to switch `scripts/check_requirements.mjs` to enforce mode (the one open fragment of closed issue #7) and, if yes, bring the ledger rows to their accepted statuses | decision recorded; gate behaviour matches it | S | P2 |
 
-## 5. Sequencing
+## 5. Sequencing and release split
 
-Phase 0 (immediately after v1.2.0 ships): MQ-0, DH-1, DH-2, DH-5, PC-2, PC-1. These unblock everything else: they cut the cycle time, remove the hang class, and finish the evidence.
+Capacity warning. After the 2026-11-15 decisions the unit list is about three times what v1.2.0 carried, and v1.2.0 took a week of agent work with a 70-minute CI cycle. All of it cannot be one release without cutting corners that this project does not cut. Recommendation (decision D12): **v1.2.1 = Phase 0 + Phase 1 + Phase 2; v1.2.2 = Phase 3 and the native provider protocols.** Anything not merged with green gates rolls with a dated note in this file; a unit is never half-merged to hit a date.
 
-Phase 1: MQ-3, MQ-1, then MQ-2; CS-3, CS-4, WM-1, WM-2, CX-1, CX-5, VC-5 (all small, independent, parallelisable).
+Phase 0 (immediately after v1.2.0 ships): MQ-0, DH-1, DH-2, DH-5, PC-2, PC-1. These cut the cycle time, remove the hang class and finish the evidence.
 
-Phase 2: CS-1 and CS-2 (after decisions D1, D2), CX-2, CX-3, VC-1, RD-3, RD-4, MT-3, WM-3, MQ-4, PC-3.
+Phase 1 (independent, parallelisable): MQ-3, MQ-5, MQ-6, MQ-1, then MQ-2 (needs MQ-5/MQ-6 to be called certifying); PR-1, PR-2, PR-3, PR-9, PR-11; CS-3, CS-4, WM-1, WM-2, CX-1, CX-5, VC-5.
 
-Phase 3 (stretch, may roll): RD-1, MT-1, VC-2, VC-3, VC-6, CX-4, CX-6, RD-2, RD-5, RD-6, CS-5, CS-6, VC-7, MT-2, PC-4…PC-6.
+Phase 2: PR-4, PR-5, PR-12; CS-7, CS-8 (D5); MQ-7 slices B and C; CS-1 and CS-2 (defaults per D1 and D2: CS-1 stays opt-in unless the default is changed by a later decision); CX-2, CX-3, VC-1, RD-3, RD-4, MT-3, WM-3, MQ-4, PC-3, DH-3, DH-4, DH-6.
 
-Cut lines: **v1.2.1 = Phase 0 + Phase 1 + whatever of Phase 2 is merged with green gates**. Phase 3 and anything not merged rolls to v1.2.2 with a dated note in this file. A unit is never half-merged to hit a date.
+Phase 3 (v1.2.2): native protocols PR-6 (Gemini), PR-7 (Bedrock), PR-8 (Vertex), PR-10; MQ-7 slices D, E, F, G; RD-1 (macOS arm64; D6 default is Linux x86_64 only, so this waits for a decision), MT-1, MT-2, VC-2, VC-3, VC-6, VC-7, CX-4, CX-6, RD-2, RD-5, RD-6, CS-5, CS-6, PC-4, PC-5, PC-6.
 
-## 6. Owner decisions needed
+D9 note: "every cloud provider configurable" is delivered in v1.2.1 for every OpenAI-compatible provider and for Azure OpenAI, Gemini's compatible endpoint and Bedrock's OpenAI-compatible endpoint (PR-2, PR-3, PR-5), which is most of the 334 providers in models.dev. The three native protocols (Gemini, Bedrock Converse with SigV4, Vertex with ADC) are the largest pieces and ship in v1.2.2 unless you move them up.
 
-| Id | Decision | Needed by | Default if not answered |
-|---|---|---|---|
-| D1 | Flip containment to default-on when bubblewrap is available (CS-1) | before CS-1 starts | keep opt-in |
-| D2 | Shell writes to verification files: block completion, revert, or stay record-only (CS-2) | before CS-2 starts | record-only |
-| D3 | What may be published (model names, gateway alias names, numbers) and the claim wording | before MQ-2 reports | publish nothing |
-| D4 | Benchmark scope (which subset, how many tasks), the gateway time budget, and whether a third-party reproduction is required for "qualified" (section 7) | before MQ-1 | pinned small subset, self-run, labelled as such |
-| D5 | Prompt-injection scanner and egress inspector scope (GA-14) | before v1.2.2 | defer |
-| D6 | Platform priority and CI runner cost: macOS arm64 first, Windows, Linux arm64 (RD) | before RD-1 | Linux x86_64 only |
-| D7 | Implement or formally defer the F02/F06 CERI items and audit Slices B–G (certifying comparisons) | before MQ-2 is called "certifying" | non-certifying comparisons only |
-| D8 | Disposition of the v1.0 post-v1 backlog, the v1.1.2 roadmap deferrals (`git.publish`, hosted, multi-agent TUI pane) and issues #1, #2, #5, #6, #7, #49 | before DH-4 | close the six issues as superseded; leave the backlog documented and unscheduled |
-| D9 | Providers: Gemini, Azure, Bedrock, Vertex | before v1.2.2 | defer |
-| D10 | CI restructure: required check names may change; extra runner minutes allowed | before PC-1 | keep names; no extra minutes (limits the gain) |
-| D11 | Integration priority: GitHub Action, ACP/IDE, or neither in v1.2.1 | before RD-4 / RD-5 | RD-3 and RD-4 only |
+## 6. Owner decisions
+
+Answered 2026-11-15: defaults accepted for D1–D4, D6, D10 and D11; D5, D7 and D9 changed; D8 reviewed. D12 is new.
+
+| Id | Decision | Answer |
+|---|---|---|
+| D1 | Containment default-on when bubblewrap is available (CS-1) | default accepted: stays opt-in |
+| D2 | Shell writes to verification files (CS-2) | default accepted: record-only (CS-2 is built as an opt-in hard stop) |
+| D3 | What may be published | default accepted: publish nothing until a result exists; wording reviewed before MQ-2 reports |
+| D4 | Benchmark scope and cost; third-party reproduction | default accepted: small pinned subset, self-run, labelled E1 |
+| D5 | Prompt-injection scanner and egress inspector | **include** in v1.2.1 (CS-7, CS-8) |
+| D6 | Platform priority and CI cost | default accepted: Linux x86_64 only for v1.2.1; RD-1 waits for a later decision |
+| D7 | CERI F02/F06 and audit Slices B–G | **include** (MQ-5, MQ-6, MQ-7); B and C in v1.2.1, D–G in v1.2.2 |
+| D8 | Relevance of old deferrals and issues | **reviewed**: issues #2, #5, #7, #49 closed with comments, #1 and #6 kept open and labelled v1.2.1 (2026-11-15); deferral table below |
+| D9 | Providers | **every cloud provider configurable**, using models.dev data (PR workstream) |
+| D10 | CI restructure | default accepted: keep required check names, no extra minutes (PC-1 gain is limited accordingly) |
+| D11 | Integration priority | default accepted: `stream-json` output and the GitHub Action (RD-3, RD-4); ACP waits |
+| D12 | NEW: release split | open. Recommendation: v1.2.1 and v1.2.2 as in section 5. Default if unanswered: that split |
+
+### Deferral relevance review (D8)
+
+Pending: an agent is classifying each older deferral (v1.0 post-v1 backlog, v1.1.2 roadmap "deferred to v1.2", v1.1.0 STATUS open rows, post-v1 roadmap docs, issue #69) as DONE, SUPERSEDED, STILL RELEVANT or RECOMMEND DROP with cited evidence. The table replaces this paragraph in a follow-up commit of the same PR. Nothing is dropped without your approval; only issues were closed.
 
 ## 7. What "externally qualified" means here
 
