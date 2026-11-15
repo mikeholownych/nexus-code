@@ -20,7 +20,9 @@ export const WIRE_PROTOCOLS: Record<WireProtocol, ProtocolAdapter> = {
     native: false,
     nativeTools: false,
     build: buildChatRequest,
+    // Chat responses carry no provider state: owner and keepReasoning are ignored.
     parse: (data) => parseChatResponse(data),
+    // Likewise ignored here; reasoning text is always kept on the message.
     stream: (_owner, _keepReasoning, onToken) => chatStreamParser(onToken),
   },
   "openai-responses": {
@@ -38,3 +40,9 @@ export const WIRE_PROTOCOLS: Record<WireProtocol, ProtocolAdapter> = {
     stream: (owner, _keepReasoning, onToken) => anthropicStreamParser(owner, onToken),
   },
 };
+
+export function wireProtocol(name: string): ProtocolAdapter {
+  const adapter = (WIRE_PROTOCOLS as Record<string, ProtocolAdapter | undefined>)[name];
+  if (!adapter) throw new Error(`unknown wire protocol: ${name}`);
+  return adapter;
+}

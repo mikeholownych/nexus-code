@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildChatRequest, chatStreamParser, chatUsage, parseChatResponse } from "../src/protocols/openai_chat.js";
-import { WIRE_PROTOCOLS } from "../src/protocols/index.js";
+import { WIRE_PROTOCOLS, wireProtocol } from "../src/protocols/index.js";
 
 const base = { model: "m", messages: [{ role: "user" as const, content: "hi" }], tools: [], temperature: 0.2, maxOutputTokens: 100, owner: "x:m" };
 
@@ -39,4 +39,9 @@ test("stream parser: no finish_reason and no [DONE] is incomplete; fragments wit
 
 test("registry: chat is the client's own pipeline, the other protocols share the native path", () => {
   assert.deepEqual(Object.entries(WIRE_PROTOCOLS).map(([k, v]) => [k, v.native]), [["openai-chat", false], ["openai-responses", true], ["anthropic-messages", true]]);
+});
+
+test("wireProtocol throws a clear error for an unknown protocol", () => {
+  assert.throws(() => wireProtocol("nope"), /unknown wire protocol: nope/);
+  assert.equal(wireProtocol("openai-chat"), WIRE_PROTOCOLS["openai-chat"]);
 });

@@ -31,7 +31,7 @@ import { redactSecrets } from "./ui.js";
 import { classifyLocality, setLocalityAuthorityResolver } from "./core/egress.js";
 import { connectionFor, disclosureClass, operatorSettingKeyForAuth, type ResolvedConnection } from "./providers.js";
 import { ProviderStreamError, readSse, type NativeRequestInput, type NativeResult } from "./protocols/common.js";
-import { WIRE_PROTOCOLS } from "./protocols/index.js";
+import { wireProtocol } from "./protocols/index.js";
 import { buildChatRequest, chatStreamParser, chatUsage, ChatErrorFrame, parseChatResponse, readChatStream } from "./protocols/openai_chat.js";
 import { UsageLedger, type UsageReport } from "./usage.js";
 import { localEndpointCredential, localEndpointCredentials, resolveCredential, saveCredential, type StoredCredential } from "./credentials.js";
@@ -220,20 +220,6 @@ export function environmentCredential(operatorEndpoint: string): { apiKey: strin
   }
   if (isStoredCredential(apiKey)) return undefined;
   return { apiKey, origin: originOf(process.env.LOCAL_LLM_ENDPOINT ?? operatorEndpoint) };
-}
-
-export interface ChatCompletionResponse {
-  id: string;
-  choices: Array<{
-    index: number;
-    message: ChatMessage;
-    finish_reason: string;
-  }>;
-  usage?: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
-  };
 }
 
 export type StreamTokenCallback = (token: string) => void;
@@ -760,7 +746,7 @@ export class LocalLlmClient {
 
   /** Whether the connection supports native tool calling (Responses, Anthropic, or OpenAI-compatible accepting tools). */
   public supportsNativeTools(): boolean {
-    if (WIRE_PROTOCOLS[this.conn.protocol].nativeTools) return true;
+    if (wireProtocol(this.conn.protocol).nativeTools) return true;
     return !this.unsupportedParams.has("tools");
   }
 
@@ -1710,7 +1696,7 @@ export class LocalLlmClient {
    * Token usage and cost of every request are summed into the last-usage report.
    */
   private async askAgainForNativeCall(response: ChatMessage, messages: ChatMessage[], tools: ToolDefinition[], signal?: AbortSignal, onToken?: StreamTokenCallback): Promise<ChatMessage> {
-    if (WIRE_PROTOCOLS[this.conn.protocol].native || this.conn.streamOnly || this.askedAgain.has(response) || !isContentCallReply(response, tools, messages)) return response;
+    if (wireProtocol(this.conn.protocol).native || this.conn.streamOnly || this.askedAgain.has(response) || !isContentCallReply(response, tools, messages)) return response;
     this.askedAgain.add(response);
     const corrected: ChatMessage[] = [...messages, { role: "assistant", content: response.content }, { role: "user", content: CONTENT_CALL_NOTE }];
     const usages = [this.lastUsageReport];
@@ -1747,7 +1733,7 @@ export class LocalLlmClient {
   }
 
   private async chatCompletionOnce(messages: ChatMessage[], tools: ToolDefinition[], requestId: string, signal?: AbortSignal, toolChoice: "auto" | "required" = "auto"): Promise<ChatMessage> {
-    if (WIRE_PROTOCOLS[this.conn.protocol].native) return this.nativeCompletion(messages, tools, undefined, requestId, signal, this.conn.streamOnly);
+    if (wireProtocol(this.conn.protocol).native) return this.nativeCompletion(messages, tools, undefined, requestId, signal, this.conn.streamOnly);
     if (this.conn.streamOnly) return this.chatCompletionStreamOnce(messages, tools, undefined, requestId, signal);
     return this.executeWithFailover("chatCompletion", async (currentEp) => {
       if (signal?.aborted) throw abortedError(requestId);
@@ -1963,7 +1949,7 @@ export class LocalLlmClient {
     requestId: string,
     signal?: AbortSignal,
   ): Promise<ChatMessage> {
-    if (WIRE_PROTOCOLS[this.conn.protocol].native) return this.nativeCompletion(messages, tools, onToken, requestId, signal, true);
+    if (wireProtocol(this.conn.protocol).native) return this.nativeCompletion(messages, tools, onToken, requestId, signal, true);
     return this.executeWithFailover("chatCompletionStream", async (currentEp) => {
       if (signal?.aborted) throw abortedError(requestId);
       const url = `${currentEp}/chat/completions`;
@@ -2126,7 +2112,7 @@ export class LocalLlmClient {
       await this.prepareCredential(currentEp, requestId);
       this.preflight(currentEp, requestId, JSON.stringify(messages).length + JSON.stringify(tools).length);
       const outbound = this.egress(messages, tools, currentEp);
-      const wire = WIRE_PROTOCOLS[this.conn.protocol];
+      const wire = wireProtocol(this.conn.protocol);
       const owner = `${this.conn.providerId}:${this.model}`;
       const input: NativeRequestInput = {
         model: this.model,
