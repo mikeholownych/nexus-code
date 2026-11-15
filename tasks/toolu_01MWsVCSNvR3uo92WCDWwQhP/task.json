@@ -1,0 +1,14 @@
+{
+  "tool_use_id": "toolu_01MWsVCSNvR3uo92WCDWwQhP",
+  "agent_id": "ae50b812197dda7b2",
+  "task_description": "Hardening slice 5: Docker sandbox",
+  "token_usage": {
+    "input_tokens": 52,
+    "cache_creation_tokens": 100780,
+    "cache_read_tokens": 1933136,
+    "output_tokens": 20042,
+    "api_call_count": 25
+  },
+  "started_at": "2026-11-15T21:50:43.729358457Z",
+  "completed_at": "2026-11-15T21:55:14.60197999Z"
+}
