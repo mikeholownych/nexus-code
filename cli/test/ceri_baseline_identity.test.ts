@@ -225,9 +225,16 @@ test("MQ-5 runner: a bound baseline run is IDENTITY_BOUND; an edited baseline ma
     const edited = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
     edited.model.digest = DIGEST_EVIL;
     fs.writeFileSync(manifestPath, JSON.stringify(edited));
-    const bad = await CeriEvaluationRunner.runEvaluation(runnerDef(), { ...runnerOptions(store), baseline: spec }, pass);
-    assert.equal(bad.comparison?.outcome, "INCOMPARABLE");
-    assert.match(bad.comparison?.incomparabilityReasons?.join(";") ?? "", /BASELINE_MANIFEST_MISMATCH/);
+    // Integrity layer (MQ-6): an edit that was not re-recorded is rejected on load, before identity is even compared.
+    const tampered = await CeriEvaluationRunner.runEvaluation(runnerDef(), { ...runnerOptions(store), baseline: spec }, pass);
+    assert.equal(tampered.comparison?.outcome, "INCOMPARABLE");
+    assert.match(tampered.comparison?.incomparabilityReasons?.join(";") ?? "", /HASH_MISMATCH/);
+    // Identity layer (MQ-5): once an operator re-records the edited run, the store accepts it and the baseline's bound
+    // manifest hash no longer matches.
+    store.migrateLegacyRun("eval-rt", baseRun.manifest.runId, "operator re-recorded an edited manifest");
+    const rebound = await CeriEvaluationRunner.runEvaluation(runnerDef(), { ...runnerOptions(store), baseline: spec }, pass);
+    assert.equal(rebound.comparison?.outcome, "INCOMPARABLE");
+    assert.match(rebound.comparison?.incomparabilityReasons?.join(";") ?? "", /BASELINE_MANIFEST_MISMATCH/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
