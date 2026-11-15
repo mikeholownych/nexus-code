@@ -145,6 +145,7 @@ Disposition: **P0** must-have for v1.2.1; **P1** should-have; **P2** stretch, ma
 | GA-40 | No measurement that instruction files or context clearing change outcomes; no multi-hour run with a resume | research 2026-11-15 (trends report, context-management post, agent-rules-books) | P2 | MQ-8 |
 | GA-41 | The steering-conflict check is a regex that returns nothing on paraphrases (3 of 12 withdrawals caught in the 2026-11-15 pilot); a judge closes it in the pilot but the evidence is 12 positives and the gateway judge is too slow for the synchronous path | pilot `docs/research/steering-judgment/` | P2 (gated) | VC-10 |
 | GA-42 | `eval_integrity` scanner test failed once under runner load (SIGTERM during enumeration) | CI, 2026-11-15 (#542 first run) | P2 | PC-7 |
+| GA-43 | A reply that is a function-call-style text call (`read_file(path="README.md")`) is not recognised as a call written as text, so the safe retry never engages; it made 45 of 50 `lead-reasoning` read_file attempts invalid on the published v1.2.0 matrix | G1.1-4 on v1.2.0, 2026-11-15 (`docs/evidence/v1.2.0/G1.1-4-v1.2.0.md`) | P1 | WM-4 |
 
 ## 6. What not to copy
 
