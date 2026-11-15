@@ -5,6 +5,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { RustCoreBridge } from "../src/tools.js";
 import { isBwrapAvailable } from "../src/sandbox.js";
+import "./helpers/leak_guard.js";
 
 // Cancelling or timing out a sandboxed run_command must end the whole sandbox, in both modes. The runner kills by
 // process group, so a sandbox that leaves its group (bwrap --new-session) survives. Survivors are found by pid:
