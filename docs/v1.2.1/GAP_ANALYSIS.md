@@ -139,6 +139,10 @@ Disposition: **P0** must-have for v1.2.1; **P1** should-have; **P2** stretch, ma
 | GA-34 | `commander` one major behind (inf, registry not checked); 2 Dependabot PRs | §4 deps | P2 | PC-6 |
 | GA-36 | Forced `tool_choice: required` is sent without checking whether the model accepts it (models.dev lists `capabilities.tools.choice` per model; an Azure-hosted Claude entry accepts only `auto` and `none`) | models.dev `providers/azure/models/`; `client.ts:1720-1760` | P1 | PR-4 |
 | GA-35 | Not extracted: `qualification_2026-10-12` evidence and `docs/v1.0.0/READINESS.md` | §1 | P0 (finish the ledger) | DH-5 |
+| GA-37 | Project instruction files: `@path` imports are not expanded (`getProjectRules` loads the first file raw) | research 2026-11-15 (agent-rules-books) | P2 | CX-7 |
+| GA-38 | Loop patterns not audited against peers: A/B ping-pong and consecutive no-progress messages (OpenHands thresholds 4/3/3/6) | research 2026-11-15 (OpenHands docs) | P2 | CS-11 |
+| GA-39 | Headless "needs an operator decision" paths are not confirmed to share one resumable outcome | research 2026-11-15 (Anthropic trends report, trend 4) | P2 | VC-9 |
+| GA-40 | No measurement that instruction files or context clearing change outcomes; no multi-hour run with a resume | research 2026-11-15 (trends report, context-management post, agent-rules-books) | P2 | MQ-8 |
 
 ## 6. What not to copy
 
