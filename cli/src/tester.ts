@@ -1,8 +1,10 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { operatorSetting } from "./client.js";
+import { buildMcpEnvironment } from "./mcp.js";
 import { extractCompilerDiagnostics, Diagnostic } from "./diagnostics.js";
 
 export interface TestRunResult {
@@ -465,6 +467,110 @@ export function describeVerifier(workspace: string, commandOverride?: string): V
   };
 }
 
+export interface VerifierShellResult {
+  success: boolean;
+  timedOut: boolean;
+  /** The command's exit status; null when it was killed by a signal or never started. */
+  exitCode: number | null;
+  output: string;
+  /** The output exceeded the capture limit: `output` holds the last bytes only. */
+  truncated: boolean;
+}
+
+const VERIFIER_OUTPUT_TAIL_BYTES = 4 * 1024 * 1024;
+const VERIFIER_PASSTHROUGH_DEFAULT = [
+  "CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "GOPATH", "GOCACHE", "GOFLAGS", "GOROOT", "GOMODCACHE",
+  "NODE_OPTIONS", "NVM_DIR", "VOLTA_HOME", "PYENV_ROOT", "VIRTUAL_ENV", "PYTHONPATH", "JAVA_HOME", "CI",
+  "XDG_CACHE_HOME", "LD_LIBRARY_PATH", "UV_*", "GRADLE_*", "MAVEN_*", "DOTNET_*",
+];
+const SECRET_NAME = /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/i;
+const TOOLCHAIN_HINT_NAME = /^(NEXUS_|ANSIBLE_|PIP_|NPM_|CONDA_|RUBY|GEM_|BUNDLE_|PYTHON|CARGO_|RUST|GO[A-Z]|JAVA|NODE_|PNPM_|YARN_)/;
+
+function passthroughMatches(name: string, patterns: string[]): boolean {
+  return patterns.some((pattern) => (pattern.endsWith("*") ? name.startsWith(pattern.slice(0, -1)) : name === pattern));
+}
+
+/**
+ * The environment of a verifier child: the MCP allowlist, a default toolchain list (never a name that looks like a
+ * secret), and the names the operator opted in with NEXUS_VERIFIER_ENV_PASSTHROUGH (comma-separated, a trailing `*`
+ * is a prefix). That setting is read as an operator setting, never from a project .env; a NEXUS_* variable passes only
+ * when the operator names it there. Only inherited environment variables are scrubbed: files under HOME (config.env,
+ * .ssh, .aws, .npmrc, .netrc, .cargo/credentials.toml) stay readable to the verifier.
+ */
+export function buildVerifierEnvironment(): Record<string, string> {
+  const env = buildMcpEnvironment();
+  const optIn = (operatorSetting("NEXUS_VERIFIER_ENV_PASSTHROUGH") ?? "").split(",").map((n) => n.trim()).filter(Boolean);
+  for (const [name, value] of Object.entries(process.env)) {
+    if (value === undefined || name in env) continue;
+    if (passthroughMatches(name, optIn) || (passthroughMatches(name, VERIFIER_PASSTHROUGH_DEFAULT) && !SECRET_NAME.test(name))) {
+      env[name] = value;
+    }
+  }
+  return env;
+}
+
+/** Names (never values) of toolchain-looking variables the parent has but the verifier did not receive. */
+export function withheldToolchainNames(env: Record<string, string> = buildVerifierEnvironment()): string[] {
+  return Object.keys(process.env)
+    .filter((name) => !(name in env) && TOOLCHAIN_HINT_NAME.test(name) && !SECRET_NAME.test(name))
+    .sort()
+    .slice(0, 12);
+}
+
+export function environmentHint(): string {
+  const withheld = withheldToolchainNames();
+  return "environment: command not found. The verifier runs with a scrubbed environment (inherited variables only); " +
+    "add names to NEXUS_VERIFIER_ENV_PASSTHROUGH (comma-separated, trailing * for a prefix)." +
+    (withheld.length ? ` Set here but not passed: ${withheld.join(", ")}.` : "");
+}
+
+let timeoutBinary: boolean | undefined;
+function hasTimeoutBinary(): boolean {
+  timeoutBinary ??= spawnSync("timeout", ["--version"], { stdio: "ignore" }).status === 0;
+  return timeoutBinary;
+}
+
+/**
+ * Run an already approved verifier command line outside the tool runner. The line is one `bash -c` argument, so it is
+ * the only thing that executes. The child gets the verifier environment (see buildVerifierEnvironment), no stdin, and
+ * a hard deadline: `timeout -s KILL` signals its whole process group, so grandchildren do not outlive it (without the
+ * `timeout` binary only bash is killed). Output goes to a file and the LAST bytes are kept.
+ */
+export function runVerifierShell(command: string, cwd: string, timeoutMs: number): VerifierShellResult {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-verifier-"));
+  const file = path.join(dir, "out");
+  const fd = fs.openSync(file, "w+");
+  try {
+    const wrapped = hasTimeoutBinary();
+    const started = Date.now();
+    const ran = spawnSync(
+      wrapped ? "timeout" : "bash",
+      wrapped ? ["-s", "KILL", `${Math.max(timeoutMs, 1) / 1000}s`, "bash", "-c", command] : ["-c", command],
+      { cwd, env: buildVerifierEnvironment(), stdio: ["ignore", fd, fd], timeout: timeoutMs + 5000, killSignal: "SIGKILL" },
+    );
+    const size = fs.fstatSync(fd).size;
+    const length = Math.min(size, VERIFIER_OUTPUT_TAIL_BYTES);
+    const buffer = Buffer.alloc(length);
+    fs.readSync(fd, buffer, 0, length, size - length);
+    const truncated = size > length;
+    const timedOut =
+      (ran.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT" ||
+      (wrapped && (ran.status === 137 || ran.signal === "SIGKILL") && Date.now() - started >= timeoutMs - 50);
+    const spawnFailure = ran.error && !timedOut ? `${ran.error.message}\n` : "";
+    const exitCode = ran.error ? null : ran.status;
+    return {
+      success: !ran.error && ran.status === 0,
+      timedOut,
+      exitCode,
+      truncated,
+      output: `${spawnFailure}${truncated ? `[output truncated: last ${length} of ${size} bytes]\n` : ""}${buffer.toString("utf-8")}`,
+    };
+  } finally {
+    fs.closeSync(fd);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 /**
  * Execute automated test suite with diagnostic error parsing (Candidate #47)
  */
@@ -476,21 +582,9 @@ export function runTestSuite(workspace: string, filterPattern?: string): TestRun
   }
   const command = discovered.command;
 
-  let rawOutput = "";
-  let success = false;
-
-  try {
-    rawOutput = execSync(command, {
-      cwd: root,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-      timeout: verifierTimeoutSecs() * 1000,
-    });
-    success = true;
-  } catch (err: any) {
-    rawOutput = (err.stdout || "") + "\n" + (err.stderr || err.message || "");
-    success = false;
-  }
+  const ran = runVerifierShell(command, root, verifierTimeoutSecs() * 1000);
+  const rawOutput = ran.exitCode === 127 ? `${ran.output}\n${environmentHint()}` : ran.output;
+  const success = ran.success;
 
   return summarizeTestRun(command, success, rawOutput);
 }

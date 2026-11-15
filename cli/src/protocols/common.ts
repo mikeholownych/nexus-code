@@ -13,6 +13,8 @@ export interface NativeResult {
   effectiveModel?: string;
   /** Visible text received, for failure reporting. */
   text: string;
+  /** The provider's own finish_reason, where the protocol has one (openai-chat). */
+  finishReason?: string;
 }
 
 export interface NativeRequestInput {
@@ -26,6 +28,8 @@ export interface NativeRequestInput {
   owner: string;
   reasoningEffort?: string;
   thinkingBudget?: number;
+  /** openai-chat only. */
+  chat?: { toolChoice: "auto" | "required"; capOutput: boolean; usage: "openrouter" | "stream-options" | "native" | "none" };
 }
 
 export interface NativeRequest {

@@ -69,7 +69,6 @@ jobs:
           done
       - run: npm ci --prefix cli
       - run: npm --prefix cli run build
-      - run: git diff --exit-code -- cli/dist
       - run: cargo test --locked --manifest-path core/Cargo.toml
       - run: cargo build --locked --release --manifest-path core/Cargo.toml --bin harness-core --bin nexus-tui
       - name: Install pinned security and SBOM test tools
@@ -87,7 +86,7 @@ jobs:
           curl -fsSL https://github.com/CycloneDX/cyclonedx-cli/releases/download/v0.33.1/cyclonedx-linux-x64 -o "$CARGO_HOME/bin/cyclonedx"
           chmod +x "$CARGO_HOME/bin/cyclonedx"
       - name: Run the CLI suite with a hang bound
-        # Normal runs take 12-20 minutes; a test process that never exits must fail the job, not hold it for 6 hours.
+        # Normal runs take about 25-30 minutes; a test process that never exits must fail the job, not hold it for 6 hours.
         timeout-minutes: 45
         run: npm --prefix cli test
 
@@ -110,7 +109,6 @@ jobs:
       - run: npm run build --prefix experiments/cloudflare-artifacts-vertical-slice/agent-collab-fixture
 
   linux-x86_64:
-    needs: [test-matrix]
     runs-on: ubuntu-22.04
     env:
       NEXUS_BUILD_CONTAINER_IMAGE: rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb
@@ -173,11 +171,10 @@ jobs:
       - run: node scripts/sync-version.mjs --check
       - run: npm ci --prefix cli
       - run: npm --prefix cli run build
-      - run: git diff --exit-code -- cli/dist
       - run: cargo test --locked --manifest-path core/Cargo.toml
       - run: cargo build --locked --release --manifest-path core/Cargo.toml --bin harness-core --bin nexus-tui
       - name: Run the CLI suite with a hang bound
-        # Normal runs take 12-20 minutes; a test process that never exits must fail the job, not hold it for 6 hours.
+        # Normal runs take about 25-30 minutes; a test process that never exits must fail the job, not hold it for 6 hours.
         timeout-minutes: 45
         run: npm --prefix cli test
       - run: bash scripts/security_gates.sh

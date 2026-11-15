@@ -352,6 +352,24 @@ more) with the same failing tests across changed workspace states, with the fail
 and runs skipped on unchanged inputs are ignored, and a changing failure set never trips it. Only `task_completed`
 is covered: a loop of `run_tests` calls alone is bounded by `--stagnation-steps` (`STAGNATION_DETECTED`) instead.
 
+A third brake counts identical tool calls regardless of timing: a call with the same tool name and the same arguments
+(compared as stable JSON) that returns the same result (timings and ids ignored), seen in the last 64 calls even with
+other calls between them. At `NEXUS_REPEATED_CALL_SOFT` repeats (default 3) the model gets a corrective note naming the
+call. At the hard threshold, in a step that changed nothing in the workspace, the turn ends `BLOCKED` /
+`NOT_ESTABLISHED` with reason `TOOL_CALL_LOOP` and the repeated call and recent call history (arguments redacted)
+attached. The hard threshold depends on the call, with `NEXUS_REPEATED_CALL_HARD` (default 5) as the base:
+
+| Call | Soft | Hard |
+|---|---|---|
+| Workspace reads (`read_file`, `list_dir`, `search_code`, `git_status`, ...): counted only while the workspace is unchanged | 3 | 5 |
+| `run_command`, writes and other tools: a failing rerun between edits with identical output is a loop | 3 | 10 |
+| An unchanged successful external poll (`tail build.log`, `docker ps`), which Nexus already spaces with backoff | 3 | 20 |
+
+A repeat whose result changed, a read after an edit, and a turn whose workspace state cannot be established are never
+stopped (the note still appears). Both settings are whole numbers (soft at least 2, hard above soft); other values are
+ignored and `nexus doctor` warns. They work with `--no-continuation`. A project `.env` can only lower them: the
+effective value is the smaller of the project's and your own.
+
 The operator's objective and its
 numbered requirements are pinned for the model on every request (never summarised away); the agent records
 requirement progress with evidence, and a turn that stops with requirements open ends `REQUIREMENTS_INCOMPLETE`
@@ -469,6 +487,12 @@ Nexus Code provides high-performance tools executed via compiled native 64-bit R
 ---
 
 ## 4. Safety, Compliance & Resilience
+
+### Verifier environment (`NEXUS_VERIFIER_ENV_PASSTHROUGH`)
+
+The operation runner re-runs a unit's approved verifier on the merged tree in a child whose inherited **environment variables** are scrubbed: the MCP allowlist (`PATH`, `HOME`, `LANG`, proxy and CA settings, ...) plus common toolchain variables (`CARGO_HOME`, `RUSTUP_*`, `GOPATH`, `GOCACHE`, `GOFLAGS`, `NODE_OPTIONS`, `NVM_DIR`, `VOLTA_HOME`, `PYENV_ROOT`, `VIRTUAL_ENV`, `PYTHONPATH`, `JAVA_HOME`, `CI`, `XDG_CACHE_HOME`, `LD_LIBRARY_PATH`, `UV_*`, `GRADLE_*`, `MAVEN_*`, `DOTNET_*`). Any name containing `KEY`, `TOKEN`, `SECRET`, `PASSWORD` or `CREDENTIAL` is never passed by default, and no `NEXUS_*` variable is.
+
+To pass more, set `NEXUS_VERIFIER_ENV_PASSTHROUGH` to a comma-separated list of names (a trailing `*` is a prefix), for example `NEXUS_EVAL_TEST_*,ANSIBLE_CONFIG,VIRTUAL_ENV`. Names you list are passed even if they look secret. The setting is read from the operator environment or `~/.config/nexus/config.env` only; a project `.env` cannot set it. This scrubs inherited variables only: files under `HOME` (`~/.config/nexus/config.env`, `~/.ssh`, `~/.aws`, `.npmrc`, `.netrc`, `~/.cargo/credentials.toml`) remain readable by the verifier. A verifier that exits 126/127 is reported as an environment problem (naming this setting), not as a candidate failure. `nexus doctor` shows the current value.
 
 ### Durable operation scheduling policy
 

@@ -1,11 +1,124 @@
+import { createHash } from "node:crypto";
 import type {
   RunManifest,
+  BaselineIdentity,
   BaselineSpecification,
   BaselineComparisonResult,
   ComparativeOutcome,
 } from "./contracts.js";
 
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : 1));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+const MODEL_DIGEST = /^sha256:[0-9a-f]{64}$/;
+
+/** Sampling values that are undefined, null or not finite are treated as absent. */
+function normalizeSampling(sampling: BaselineIdentity["sampling"]): BaselineIdentity["sampling"] {
+  return Object.fromEntries(
+    Object.entries(sampling ?? {}).filter(([, v]) => v !== undefined && v !== null && !(typeof v === "number" && !Number.isFinite(v))),
+  ) as BaselineIdentity["sampling"];
+}
+
+function sha256(value: unknown): string {
+  return createHash("sha256").update(canonicalJson(value)).digest("hex");
+}
+
 export class CeriBaselineComparator {
+  static manifestSha256(manifest: RunManifest): string {
+    return sha256(manifest);
+  }
+
+  /** The identity a run's manifest binds: model, sampling, configuration, evaluator and tool versions. */
+  static identityOf(manifest: RunManifest): BaselineIdentity {
+    return {
+      manifestSha256: this.manifestSha256(manifest),
+      model: { name: manifest.model.name, digest: manifest.model.digest, quantization: manifest.model.quantization },
+      sampling: normalizeSampling(manifest.model.parameters),
+      configurationSha256: sha256({ routingConfig: manifest.routingConfig, agentProfileVersion: manifest.agentProfileVersion }),
+      evaluatorVersion: manifest.harnessVersion,
+      toolchainVersions: manifest.toolchainVersions,
+    };
+  }
+
+  /**
+   * Builds a baseline specification whose identity and manifest hash are taken from the baseline run's own manifest.
+   * Call it on the FINALIZED manifest as stored (e.g. `store.loadManifest`), not an in-flight one: a RUNNING manifest is
+   * refused because its hash would change at finalization.
+   */
+  static bindBaseline(
+    manifest: RunManifest,
+    fields: { baselineId: string; selectionRationale: string; establishedAt: string; assertions?: Record<string, boolean> }
+  ): BaselineSpecification {
+    if (manifest.status !== "COMPLETED" && manifest.status !== "FAILED") {
+      throw new Error(`Cannot bind a baseline to a run that is not finished (status '${manifest.status}')`);
+    }
+    const identity = this.identityOf(manifest);
+    return {
+      ...fields,
+      evaluationId: manifest.evaluationId,
+      evaluationVersion: manifest.evaluationVersion,
+      sourceCommit: manifest.sourceCommit,
+      modelName: manifest.model.name,
+      modelQuantization: manifest.model.quantization,
+      manifestSha256: identity.manifestSha256,
+      identity,
+    };
+  }
+
+  /**
+   * IDENTITY_BOUND only when the baseline identity is recorded with a well-formed manifest hash, the baseline manifest is
+   * supplied and verified, model digests and sampling temperature are recorded on both sides, and digest, sampling,
+   * configuration, evaluator and tool versions all match. Otherwise UNBOUND, with reasons.
+   * Local, unsigned identity binding; not external qualification; an attacker who edits manifest, hash and identity
+   * together passes.
+   */
+  private static bindIdentity(
+    manifest: RunManifest,
+    baseline: BaselineSpecification,
+    baselineManifest: RunManifest | undefined
+  ): NonNullable<BaselineComparisonResult["identityBinding"]> {
+    const currentIdentity = this.identityOf(manifest);
+    const reasons: string[] = [];
+    const bound = baseline.identity;
+    const unbound = (why: string) => reasons.push(`BASELINE_IDENTITY_UNBOUND: ${why}`);
+    if (!SHA256_HEX.test(baseline.manifestSha256 ?? "")) unbound("manifestSha256 is not a sha256 hex digest");
+    if (!bound) unbound("baseline identity not recorded");
+    else if (!baselineManifest) reasons.push("baseline manifest not supplied; baseline identity unverified");
+    if (bound) {
+      const baseSampling = normalizeSampling(bound.sampling);
+      const curSampling = currentIdentity.sampling;
+      if (!MODEL_DIGEST.test(bound.model.digest ?? "")) reasons.push("baseline model digest not recorded or malformed");
+      if (!MODEL_DIGEST.test(currentIdentity.model.digest ?? "")) reasons.push("current model digest not recorded or malformed");
+      if (typeof baseSampling.temperature !== "number") reasons.push("baseline sampling temperature not recorded");
+      if (typeof curSampling.temperature !== "number") reasons.push("current sampling temperature not recorded");
+      const diffs: Array<[string, unknown, unknown]> = [
+        ["model digest", bound.model.digest, currentIdentity.model.digest],
+        ["sampling parameters", baseSampling, curSampling],
+        ["configuration", bound.configurationSha256, currentIdentity.configurationSha256],
+        ["evaluator version", bound.evaluatorVersion, currentIdentity.evaluatorVersion],
+        ["toolchain versions", bound.toolchainVersions, currentIdentity.toolchainVersions],
+      ];
+      for (const [name, b, c] of diffs) {
+        if (canonicalJson(b) !== canonicalJson(c)) reasons.push(`${name} differ between baseline and current run`);
+      }
+    }
+    return {
+      status: reasons.length === 0 ? "IDENTITY_BOUND" : "UNBOUND",
+      reasons,
+      baselineIdentity: bound,
+      currentIdentity,
+    };
+  }
+
   /**
    * Checks whether a run is eligible for direct comparison against a designated baseline.
    */
@@ -62,6 +175,40 @@ export class CeriBaselineComparator {
     baseline: BaselineSpecification,
     baselineAssertions: Record<string, boolean>,
     isRepeatReproduction = false,
+    options?: { isPriorRegressionCandidate?: boolean; isKnownFlaky?: boolean; baselineManifest?: RunManifest }
+  ): BaselineComparisonResult {
+    const identityBinding = this.bindIdentity(manifest, baseline, options?.baselineManifest);
+    const tampered: string[] = [];
+    if (options?.baselineManifest && SHA256_HEX.test(baseline.manifestSha256 ?? "")) {
+      if (this.manifestSha256(options.baselineManifest) !== baseline.manifestSha256) {
+        tampered.push("BASELINE_MANIFEST_MISMATCH: the supplied baseline manifest does not match the recorded manifestSha256");
+      }
+      if (baseline.identity && canonicalJson(baseline.identity) !== canonicalJson(this.identityOf(options.baselineManifest))) {
+        tampered.push("BASELINE_IDENTITY_MISMATCH: the recorded baseline identity does not match the baseline manifest");
+      }
+    }
+    if (tampered.length > 0) {
+      return {
+        baselineId: baseline.baselineId,
+        currentRunId: manifest.runId,
+        isEligibleForComparison: false,
+        incomparabilityReasons: tampered,
+        outcome: "INCOMPARABLE",
+        divergences: [],
+        confidence: 0.0,
+        explanation: `Baseline is not the one that was recorded: ${tampered.join("; ")}`,
+        identityBinding: { ...identityBinding, status: "UNBOUND", reasons: [...tampered, ...identityBinding.reasons] },
+      };
+    }
+    return { ...this.classifyRuns(manifest, currentAssertions, baseline, baselineAssertions, isRepeatReproduction, options), identityBinding };
+  }
+
+  private static classifyRuns(
+    manifest: RunManifest,
+    currentAssertions: Record<string, boolean>,
+    baseline: BaselineSpecification,
+    baselineAssertions: Record<string, boolean>,
+    isRepeatReproduction: boolean,
     options?: { isPriorRegressionCandidate?: boolean; isKnownFlaky?: boolean }
   ): BaselineComparisonResult {
     // 1. Check basic execution statuses and failure types

@@ -960,6 +960,19 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         ],
       };
     }
+    if (turn.reason === "TOOL_CALL_LOOP") {
+      const detail = (turn.detail ?? "").slice(0, 200);
+      return {
+        kind: "failed",
+        cause: "EXECUTION_FAILED",
+        reason: `TOOL_CALL_LOOP: ${detail}`.slice(0, 300),
+        question: `${unit.title} stopped because the model kept repeating one tool call (TOOL_CALL_LOOP): ${detail}. Nothing is verified. Retry it, or revise it?`,
+        options: [
+          { label: "retry", action: { kind: "retry" } },
+          { label: "revise the unit (note required)", action: { kind: "revise" } },
+        ],
+      };
+    }
     if (turn.reason === "VERIFIER_NOT_CONVERGING") {
       const state = turn.convergence?.state ?? "stalled";
       const evidence = (turn.convergence?.evidence ?? turn.detail ?? "").slice(0, 200);

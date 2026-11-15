@@ -22,7 +22,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import { parse as parseDotenv } from "dotenv";
-import { LocalLlmClient, credentialStorageHome } from "./client.js";
+import { LocalLlmClient, credentialStorageHome, operatorSetting } from "./client.js";
 import { credentialsPath } from "./credentials.js";
 import { mcpConfigFiles } from "./mcp.js";
 import { pluginDirs } from "./plugins.js";
@@ -32,12 +32,13 @@ import { defaultSessionsDir } from "./session.js";
 import { defaultTaskStateDir } from "./core/state.js";
 import type { TaskMessageCursor } from "./core/task_message_log.js";
 import { coreCargoManifest, resolveCoreBinary } from "./tools.js";
-import { isProjectEnvKey } from "./config.js";
+import { isProjectEnvKey, repeatedCallSettings } from "./config.js";
 import { classifyLocality } from "./core/egress.js";
 import { redactSecrets } from "./ui.js";
 import { SafePathError, ancestryProblem, chmodVerified, identityOf, mkdirVerified, readVerified, unlinkVerified, writeExclusiveVerified, type Identity } from "./safe_fs.js";
 import { isNexusDirPermissive } from "./core/durable_file.js";
 export { isNexusDirPermissive };
+import { DEFAULT_REPEATED_CALL_HARD, DEFAULT_REPEATED_CALL_SOFT } from "./core/repeated_calls.js";
 import { DEFAULT_CONVERGENCE_ATTEMPTS, type HarnessConfig } from "./types.js";
 
 export const DOCTOR_SCHEMA_VERSION = 2;
@@ -283,7 +284,10 @@ const CONFIG_KEYS: Array<{ key: string; flag?: string; field: keyof HarnessConfi
   { key: "NEXUS_MAX_TURN_MINUTES", flag: "maxTurnMinutes", field: (c) => (c.continuation ? (Number.isFinite(c.continuation.maxTurnMinutes) ? String(c.continuation.maxTurnMinutes) : "none") : "continuation off"), fallback: "none" },
   { key: "NEXUS_STAGNATION_STEPS", flag: "stagnationSteps", field: (c) => (c.continuation ? String(c.continuation.stagnationSteps) : "continuation off"), fallback: "12" },
   { key: "NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS", field: (c) => String(c.continuation?.verifierConvergenceAttempts ?? DEFAULT_CONVERGENCE_ATTEMPTS), fallback: "3" },
+  { key: "NEXUS_REPEATED_CALL_SOFT", field: (c) => String(c.repeatedCalls?.soft ?? DEFAULT_REPEATED_CALL_SOFT), fallback: "3" },
+  { key: "NEXUS_REPEATED_CALL_HARD", field: (c) => String(c.repeatedCalls?.hard ?? DEFAULT_REPEATED_CALL_HARD), fallback: "5" },
   { key: "NEXUS_VERIFIER_TIMEOUT_SECS", field: (c) => String(c.verifierTimeoutSecs ?? 300), fallback: "300" },
+  { key: "NEXUS_VERIFIER_ENV_PASSTHROUGH", field: () => operatorSetting("NEXUS_VERIFIER_ENV_PASSTHROUGH"), fallback: "none (toolchain defaults only)" },
   { key: "PLANNER_LLM_MODEL", flag: "plannerModel", field: (c) => c.plannerModel },
   { key: "CODER_LLM_MODEL", flag: "coderModel", field: (c) => c.coderModel },
 ];
@@ -407,6 +411,14 @@ const projectEnvCheck: Check = async (ctx) => {
     [file],
     "Move settings you meant for Nexus to ~/.config/nexus/config.env (or your shell environment); a repository cannot change TLS, proxies, credentials, timeouts, the shell or trust.",
   );
+};
+
+const repeatedCallCheck: Check = async () => {
+  const { soft, hard, warnings } = repeatedCallSettings();
+  if (warnings.length) {
+    return f("config.repeated_calls", "config", "warn", `Repeated-call thresholds: ${warnings.join("; ")}. Using soft ${soft}, hard ${hard}.`, [], "Set NEXUS_REPEATED_CALL_SOFT (whole number >= 2) and NEXUS_REPEATED_CALL_HARD (greater than soft) in ~/.config/nexus/config.env; a project .env can only lower them.");
+  }
+  return f("config.repeated_calls", "config", "pass", `Repeated identical tool calls: note at ${soft}, stop at ${hard} (commands ${hard * 2}, polls ${hard * 4}).`);
 };
 
 interface EndpointEvidence {
@@ -1124,6 +1136,7 @@ const CHECKS: Array<[string, Check]> = [
   ["launcher", launcherCheck],
   ["config", configCheck],
   ["project_env_ignored", projectEnvCheck],
+  ["repeated_calls", repeatedCallCheck],
   ["endpoint", endpointChecks],
   ["inference", inferenceCheck],
   ["shell", shellCheck],
