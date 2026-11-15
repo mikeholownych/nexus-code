@@ -20,6 +20,11 @@ const DEFAULT_ENDPOINT = "http://localhost:1234/v1";
 let credentialAuthorityRecorded = false;
 let shellEnvironment: Record<string, string | undefined> = {};
 let userConfigFile: Record<string, string> = {};
+
+/** Names set by ~/.config/nexus/config.env (not their values), so a child process can be kept clear of them. */
+export function userConfigEnvKeys(): string[] {
+  return Object.keys(userConfigFile);
+}
 let operatorJsonOperationPolicy: HarnessConfig["operationPolicy"];
 let operatorJsonOperationPolicyError: Error | undefined;
 const SHELL_PRECEDENCE_KEYS = ["NEXUS_VERIFY_ATTESTATION"] as const;

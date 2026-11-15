@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
+import { buildCommandEnvironment } from "./command_env.js";
 
 export type SandboxMode = "auto" | "bwrap" | "docker" | "none";
 
@@ -319,6 +320,13 @@ export function wrapSandboxedCommand(
         "--tmpfs", "/tmp",
       );
       bwrapArgs.push("--bind", absWorkspace, absWorkspace);
+      // bwrap passes its own environment to the command. Start empty and set back only the scrubbed command
+      // environment, so a sandboxed command cannot see the operator's credentials either (read-only branch above
+      // already starts from --clearenv with a fixed PATH/HOME).
+      bwrapArgs.push("--clearenv");
+      for (const [name, value] of Object.entries(buildCommandEnvironment())) {
+        bwrapArgs.push("--setenv", name, value);
+      }
     }
 
     bwrapArgs.push("--chdir", absWorkspace, "--unshare-pid");

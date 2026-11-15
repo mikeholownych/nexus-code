@@ -14,6 +14,7 @@ import { InformationFlowBoundary, matchesLocalOrigins, parseLocalOrigins } from 
 import { htmlToReadableText } from "./core/html_text.js";
 import { CapabilityRegistry, HARNESS_TOOLS, defaultRegistry } from "./core/capabilities.js";
 import { isSafeReadOnlyCommand } from "./core/authority.js";
+import { buildCommandEnvironment } from "./command_env.js";
 import { getBuildIdentity } from "./build_identity.js";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
 import { fenceDiagnostics, lspDiagnosticRecords } from "./diagnostics.js";
@@ -790,6 +791,8 @@ export class RustCoreBridge {
     try {
       this.rpcProcess = spawn(command, spawnArgs, {
         cwd: this.workspace,
+        // The engine's commands inherit its environment: keep the operator's credentials out of it (command_env.ts).
+        env: buildCommandEnvironment(),
         stdio: ["pipe", "pipe", "pipe"],
       });
 
@@ -1115,6 +1118,8 @@ export class RustCoreBridge {
     try {
       const res = spawnSync(command, spawnArgs, {
         cwd: this.workspace,
+        // Same environment as the persistent engine, so the two paths cannot drift.
+        env: buildCommandEnvironment(),
         encoding: "utf-8",
         maxBuffer: 10 * 1024 * 1024,
       });
