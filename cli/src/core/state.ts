@@ -997,6 +997,8 @@ export class DurableStateManager {
                   receipt.invalidationReason = decision.reason || "Material validation dependency changed while offline";
                   invalidatedReceiptCount++;
                   diagnostics.push(`Material dependency changed while offline: ${receipt.invalidationReason}`);
+                } else if (decision.unverifiableDependencies?.length) {
+                  diagnostics.push(`Receipt ${receipt.receiptId} kept: could not re-read ${decision.unverifiableDependencies.join(", ")}.`);
                 }
               }
             }

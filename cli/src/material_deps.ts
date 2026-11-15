@@ -6,7 +6,10 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
 import { spawnSync } from "node:child_process";
+import { buildLspEnvironment } from "./lsp.js";
+import { isWorkspaceTrusted } from "./workspace_trust.js";
 import type { MaterialValidationDependency } from "./core/candidate.js";
 
 const CONFIG_FILES = [
@@ -39,18 +42,45 @@ function readJsonVersion(file: string): string | null {
   }
 }
 
+export const UNVERIFIED_UNTRUSTED = "unverified (workspace untrusted)";
+
+const rustcVersions = new Map<string, string>();
+
 /**
- * node comes from the running process and typescript from its installed package.json, so neither runs a command.
- * rustc is probed with a bounded `rustc --version` (no shell, 3s) and only when the workspace is a Rust project.
+ * `rustc --version` from an absolute PATH entry outside the workspace, run from the temp directory with the
+ * language-server environment allowlist, bounded to 3s and cached per resolved binary and mtime.
  */
+export function probeRustc(workspace: string, run: typeof spawnSync = spawnSync): string | null {
+  if (!fs.existsSync(path.join(workspace, "Cargo.toml"))) return null;
+  if (!isWorkspaceTrusted(workspace)) return UNVERIFIED_UNTRUSTED;
+  const env = buildLspEnvironment(workspace);
+  for (const dir of (env.PATH ?? "").split(path.delimiter)) {
+    if (!dir) continue;
+    const bin = path.join(dir, "rustc");
+    let mtime: number;
+    try {
+      fs.accessSync(bin, fs.constants.X_OK);
+      mtime = fs.statSync(bin).mtimeMs;
+    } catch {
+      continue;
+    }
+    const key = `${bin}\0${mtime}`;
+    const cached = rustcVersions.get(key);
+    if (cached) return cached;
+    const result = run(bin, ["--version"], { cwd: os.tmpdir(), env, encoding: "utf-8", timeout: 3000, shell: false });
+    const version = result.status === 0 ? String(result.stdout).trim().slice(0, 200) : "";
+    if (!version) return null;
+    rustcVersions.set(key, version);
+    return version;
+  }
+  return null;
+}
+
+/** node comes from the running process and typescript from its installed package.json; neither runs a command. */
 export const defaultVersionProbe: VersionProbe = (tool, workspace) => {
   if (tool === "node") return process.version;
   if (tool === "tsc") return readJsonVersion(path.join(workspace, "node_modules", "typescript", "package.json"));
-  if (tool === "rustc") {
-    if (!fs.existsSync(path.join(workspace, "Cargo.toml"))) return null;
-    const run = spawnSync("rustc", ["--version"], { cwd: workspace, encoding: "utf-8", timeout: 3000, shell: false });
-    return run.status === 0 ? run.stdout.trim().slice(0, 200) : null;
-  }
+  if (tool === "rustc") return probeRustc(workspace);
   return null;
 };
 

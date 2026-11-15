@@ -459,7 +459,11 @@ export function applyRequirementUpdates(
         changed = true;
       }
     }
-    if (requirement.evidence.length > MAX_EVIDENCE_ITEMS) requirement.evidence = requirement.evidence.slice(-MAX_EVIDENCE_ITEMS);
+    if (requirement.evidence.length > MAX_EVIDENCE_ITEMS) {
+      requirement.evidence = requirement.evidence.slice(-MAX_EVIDENCE_ITEMS);
+      const kept = requirement.evidenceSources;
+      if (kept) requirement.evidenceSources = Object.fromEntries(requirement.evidence.filter((e) => e in kept).map((e) => [e, kept[e]]));
+    }
     requirement.updatedAt = at;
   }
   if (typeof nextAction === "string" && nextAction.trim() && nextAction.trim() !== ledger.nextAction) {
