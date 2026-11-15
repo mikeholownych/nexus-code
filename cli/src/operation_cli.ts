@@ -57,7 +57,7 @@ export class OperationSpecError extends Error {
 // `git.publish` would leave the operator believing a PR will be opened, and a typo such as `depends` would drop a
 // dependency and run work out of order.
 const SPEC_KEYS = ["id", "objective", "units", "resources", "discoverCatalog", "policy", "git"] as const;
-const UNIT_KEYS = ["id", "title", "role", "prompt", "dependsOn", "requires", "required", "taskClass", "contextBudget", "inputs"] as const;
+const UNIT_KEYS = ["id", "title", "role", "prompt", "dependsOn", "requires", "required", "taskClass", "contextBudget", "inputs", "authorizedScope"] as const;
 const POLICY_KEYS = ["maxWaitMs", "unknownResumeBudget", "maxRunsPerUnit", "minWaitMs", "maxConcurrentUnits"] as const;
 const GIT_KEYS = ["isolate", "baseRef"] as const;
 const REQUIREMENT_KEYS = ["capabilities", "qualification", "minContext", "independentOf", "minTrust"] as const;

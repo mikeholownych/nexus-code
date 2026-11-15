@@ -183,6 +183,8 @@ export interface WorkUnit {
    * whose start prompt cannot fit this budget is blocked before any inference.
    */
   contextBudget?: number;
+  /** Operator-declared paths a reviewed change may touch; a reviewer's evidence package carries it, and a diff outside it is rejected. */
+  authorizedScope?: string[];
   /** Named inputs the unit's role contract requires (specialists); enforced before the unit starts. */
   inputs?: Record<string, string>;
   /** Hash of the effective inputs last submitted in this unit's conversation; a resume repeats them only on change. */
@@ -456,8 +458,29 @@ export interface WorkUnitSpec {
   taskClass?: string;
   /** Operator cap on this unit's prompt context, in tokens. */
   contextBudget?: number;
+  /** Paths (files or directories) a reviewed change may touch; absent declares no scope. */
+  authorizedScope?: string[];
   /** Named inputs for a specialist role's contract (see SPECIALIST_CONTRACTS[role].inputRequirements). */
   inputs?: Record<string, string>;
+}
+
+/** A unit's declared scope as repository-relative path prefixes ("*" alone matches everything); anything else is refused. */
+function normalizeScope(unitId: string, scope: unknown): string[] {
+  if (!Array.isArray(scope) || scope.length === 0 || scope.some((p) => typeof p !== "string")) {
+    throw new Error(`Work unit '${unitId}': authorizedScope must be a non-empty array of paths`);
+  }
+  return (scope as string[]).map((raw) => {
+    const p = raw.trim().replace(/^(?:\.\/+)+/, "").replace(/\/+$/, "").replace(/\/{2,}/g, "/");
+    const why =
+      !p || p === "." ? "is empty (use \"*\" for the whole repository)"
+      : p === "*" ? ""
+      : /^(?:\/|[A-Za-z]:)/.test(p) ? "must be relative to the repository"
+      : p.split(/[\\/]/).includes("..") ? "must not contain '..'"
+      : /[*?[]/.test(p) ? "must not contain glob characters (a path prefix, or \"*\" alone)"
+      : "";
+    if (why) throw new Error(`Work unit '${unitId}': authorizedScope entry ${JSON.stringify(raw)} ${why}`);
+    return p;
+  });
 }
 
 export function newOperation(
@@ -478,6 +501,7 @@ export function newOperation(
     if (u.contextBudget !== undefined && (!Number.isInteger(u.contextBudget) || u.contextBudget <= 0)) {
       throw new Error(`Work unit '${u.id}': contextBudget must be a positive integer number of tokens`);
     }
+    if (u.authorizedScope !== undefined) normalizeScope(u.id, u.authorizedScope);
     if (u.inputs !== undefined) {
       const problem = specialistInputsProblem(u.inputs);
       if (problem) throw new Error(`Work unit '${u.id}': ${problem}`);
@@ -512,6 +536,7 @@ export function newOperation(
       ...(u.required === false ? { required: false } : {}),
       ...(u.taskClass ? { taskClass: u.taskClass } : {}),
       ...(u.contextBudget !== undefined ? { contextBudget: u.contextBudget } : {}),
+      ...(u.authorizedScope ? { authorizedScope: normalizeScope(u.id, u.authorizedScope) } : {}),
       // A specialist unit always records its inputs (possibly none): a unit with no `inputs` field predates input
       // enforcement and is grandfathered by the executor.
       ...(u.inputs !== undefined || isSpecialistRole(u.role) ? { inputs: redactForPersistence({ ...(u.inputs ?? {}) }) } : {}),
