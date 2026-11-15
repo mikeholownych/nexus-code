@@ -10,6 +10,7 @@ import { writePrivateFile } from "./durable_file.js";
 import { CURRENT_STATE_SCHEMA_VERSION, DurableStateManager, type DurableTaskState, UnsupportedSchemaVersionError } from "./state.js";
 import { WorkspacePath } from "./workspace_path.js";
 import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./operation_runner_diagnostics.js";
+import { acquireFileGuard, releaseFileGuard, type FileGuard } from "./file_guard.js";
 import { withStateStoreGuard } from "./state_store_guard.js";
 import { redactTaskStateForPersistence } from "./persistence_protection.js";
 
@@ -181,28 +182,43 @@ export class OperationStore {
 
   /**
    * One driver per operation: a second process resuming it would execute its units twice. The lock names the
-   * holder's pid; a lock whose holder on this host is gone is stale and taken over. Returns the release function.
+   * holder's pid; a lock whose holder on this host is gone is stale and taken over, and so is an unreadable lock
+   * untouched for OPERATION_LOCK_UNREADABLE_GRACE_MS (its holder died mid-write). Takeover is serialised through a
+   * kernel-owned guard and unlinks only the file that was judged stale, so two resumers cannot both take it.
+   * Returns the release function.
    */
   acquire(id: string): () => void {
     const lockPath = path.join(this.manager.getBaseDir(), `${id}.lock`);
     const create = () => fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, host: os.hostname(), at: new Date().toISOString() }), { flag: "wx" });
+    const locked = (holder: { pid?: number; host?: string }) =>
+      new OperationLockedError(`Operation ${id} is already being driven by pid ${holder.pid ?? "?"} on ${holder.host ?? "?"} (lock ${lockPath}).`);
     try {
       create();
     } catch (err: any) {
       if (err?.code !== "EEXIST") throw err;
-      let holder: { pid?: number; host?: string; at?: string } = {};
+      const judged = this.judgeLock(lockPath);
+      if (!judged.stale) throw locked(judged.holder);
+      let guard: FileGuard | null;
       try {
-        holder = JSON.parse(fs.readFileSync(lockPath, "utf-8"));
-      } catch {
-        reportOperationDiagnostic(this.onDiagnostic, "persistence", "lock_read_failed");
+        guard = acquireFileGuard(`${lockPath}.reclaim`, { label: "Operation lock reclaim guard" });
+      } catch (guardError) {
+        throw new OperationLockedError(`Operation ${id} has a stale lock at ${lockPath} that cannot be taken over safely here (${(guardError as Error).message}); remove it by hand once no nexus command is using this workspace.`);
       }
-      // A lock written before this host last booted is stale even if its pid has since been reused.
-      const beforeBoot = holder.at !== undefined && Date.parse(holder.at) < Date.now() - os.uptime() * 1000;
-      if (holder.host !== os.hostname() || (!beforeBoot && holder.pid !== undefined && processAlive(holder.pid))) {
-        throw new OperationLockedError(`Operation ${id} is already being driven by pid ${holder.pid ?? "?"} on ${holder.host ?? "?"} (lock ${lockPath}).`);
+      if (!guard) throw locked(judged.holder);
+      try {
+        operationLockSeams.afterStaleCheck?.();
+        const now = this.judgeLock(lockPath);
+        if (!now.stale || now.ino !== judged.ino || now.mtimeNs !== judged.mtimeNs) throw locked(now.holder);
+        fs.unlinkSync(lockPath);
+        try {
+          create();
+        } catch (createError: any) {
+          if (createError?.code === "EEXIST") throw locked({});
+          throw createError;
+        }
+      } finally {
+        releaseFileGuard(guard);
       }
-      fs.rmSync(lockPath, { force: true });
-      create();
     }
     return () => {
       try {
@@ -211,6 +227,28 @@ export class OperationStore {
         reportOperationDiagnostic(this.onDiagnostic, "persistence", "lock_release_failed");
       }
     };
+  }
+
+  private judgeLock(lockPath: string): { stale: boolean; holder: { pid?: number; host?: string; at?: string }; ino?: bigint; mtimeNs?: bigint } {
+    let stat: fs.BigIntStats;
+    try {
+      stat = fs.lstatSync(lockPath, { bigint: true });
+    } catch {
+      return { stale: false, holder: {} };
+    }
+    let holder: { pid?: number; host?: string; at?: string } | undefined;
+    try {
+      const parsed = JSON.parse(fs.readFileSync(lockPath, "utf-8"));
+      if (parsed && typeof parsed === "object") holder = parsed;
+    } catch {
+      reportOperationDiagnostic(this.onDiagnostic, "persistence", "lock_read_failed");
+    }
+    const identity = { ino: stat.ino, mtimeNs: stat.mtimeNs };
+    if (!holder) return { stale: Date.now() - Number(stat.mtimeNs / 1_000_000n) > OPERATION_LOCK_UNREADABLE_GRACE_MS, holder: {}, ...identity };
+    // A lock written before this host last booted is stale even if its pid has since been reused.
+    const beforeBoot = holder.at !== undefined && Date.parse(holder.at) < Date.now() - os.uptime() * 1000;
+    const stale = holder.host === os.hostname() && (beforeBoot || holder.pid === undefined || !processAlive(holder.pid));
+    return { stale, holder, ...identity };
   }
 
   /** Most recently updated operation in this workspace that is waiting or running (to resume after restart). */
@@ -245,6 +283,11 @@ export class OperationStore {
     writePrivateFile(backup, bytes, { durable: true, mode: 0o600 });
   }
 }
+
+const OPERATION_LOCK_UNREADABLE_GRACE_MS = 30_000;
+
+/** Test seam: runs between judging a lock stale and taking it over. Not an extension point. */
+export const operationLockSeams: { afterStaleCheck?: () => void } = {};
 
 export class OperationLockedError extends Error {
   constructor(message: string) {

@@ -196,7 +196,9 @@ export class ConvergenceScheduler {
     if (this.state.units.filter(isRequired).every((u) => u.status === "COMPLETE")) return { kind: "complete" };
 
     const parked = this.state.units.filter((u) => u.status === "PARKED");
-    if (parked.length) {
+    // Parked advisory work is never awaited, so it cannot postpone the decision a blocked required unit needs.
+    const decisionOutstanding = this.state.units.some((u) => isRequired(u) && u.status === "BLOCKED" && u.blocked);
+    if (parked.length && (parked.some(isRequired) || !decisionOutstanding)) {
       const waitSince = this.state.wait ? Date.parse(this.state.wait.since) : now;
       if (now - waitSince >= this.state.policy.maxWaitMs) {
         for (const u of parked) this.block(u, this.waitBound(u, now - waitSince));

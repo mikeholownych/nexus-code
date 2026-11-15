@@ -682,3 +682,38 @@ describe("provider catalog enrichment (optional)", () => {
     assert.equal(state.units[1].status, "WAITING_ON_DEPENDENCY");
   });
 });
+
+// ---------------------------------------------------------------- PC-2 re-verification of I3 and I4
+
+const f502 = (): InferenceFailure => ({ kind: "http_error", origin: "provider", message: "HTTP 502", httpStatus: 502, condition: "TEMPORARILY_UNAVAILABLE", execution: "UNKNOWN" });
+const fNotFound = (): InferenceFailure => ({ kind: "network_error", origin: "transport", message: "fetch failed (cause: ENOTFOUND)", condition: "PERMANENT_FAILURE", execution: "NOT_EXECUTED" });
+
+describe("PC-2 re-verification: I3 and I4", () => {
+  test("I3: an exhausted 502 parks the unit with a wake condition and it completes once the resource answers", async () => {
+    const h = harness([unit("x")], [res("a")], (u, r, ctx, n) => (n === 1 ? displaced(ctx, f502()) : done()), { probe: () => true });
+    await h.runner.run();
+    assert.ok(h.types().includes("WORK_PARKED"));
+    assert.ok(!h.types().includes("WORK_BLOCKED"));
+    assert.equal(h.state.status, "COMPLETE");
+  });
+
+  test("I3: an unknown host (ENOTFOUND) is configuration, not an outage: it blocks with an operator decision instead of parking", async () => {
+    const h = harness([unit("x")], [res("a")], (u, r, ctx) => displaced(ctx, fNotFound()));
+    await h.runner.run();
+    assert.equal(h.state.status, "BLOCKED");
+    assert.equal(h.state.units[0].blocked?.decision.cause, "RESOURCE_NEEDS_OPERATOR");
+    assert.ok(!h.types().includes("WORK_PARKED"));
+  });
+
+  test("I4: parked advisory work does not hide the decision a blocked required unit is waiting for", async () => {
+    const h = harness([unit("req", { requires: { capabilities: ["deep"] } }), unit("adv", { required: false })],
+      [res("deep", { capabilities: ["tools", "deep"], endpoint: "https://e1.test/v1", provider: "https://e1.test" }), res("b", { endpoint: "https://e2.test/v1", provider: "https://e2.test" })],
+      (u, r, ctx) => (u.id === "req" ? displaced(ctx, f401()) : displaced(ctx, f429())));
+    await h.runner.run();
+    assert.equal(h.state.status, "BLOCKED");
+    assert.equal(h.state.units.find((u) => u.id === "req")!.status, "BLOCKED");
+    assert.equal(h.state.units.find((u) => u.id === "adv")!.status, "PARKED", "the advisory unit stays parked; it never ran past its first displacement");
+    assert.equal(h.calls.filter((c) => c.unit === "adv").length, 1);
+    assert.ok(h.state.blocked?.decisions.some((d) => d.unitId === "req"));
+  });
+});

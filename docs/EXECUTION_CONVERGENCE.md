@@ -231,9 +231,9 @@ a user systemd unit or `@reboot` cron entry. That hook is not installed by Nexus
   and no cancellation signal separate from the parent turn. Folding it into a single shared step function remains post-v1.
 - The legacy REPL and the slash router each wire `/team` to `TeamOrchestrator` (display only; same operation).
 - Roles run sequentially; the scheduler would allow parallel units but no concurrency was added.
-- Open (I3): an exhausted 502/504 or ENOTFOUND blocks the unit instead of parking it, and a context-capacity
-  block does not reroute to a larger qualified resource. Open (I4): parked advisory work can hide a required unit's
-  decision in the report. Open: stale-lock takeover can race between two resumers, and a corrupt lock never
-  becomes stale. See `docs/reviews/NEXUS_CONVERGENCE_INVARIANT_REMEDIATION.md`.
+- Re-verified for v1.2.1 (PC-2): an exhausted 502/504 parks the unit and it resumes (I3); an unknown host (ENOTFOUND) is
+  configuration, so it blocks with an operator decision by design; parked advisory work no longer postpones the decision
+  a blocked required unit needs (I4, fixed); the operation lock takeover is serialised and an unreadable lock goes stale
+  after 30 s (fixed). Still open: a context-capacity block does not reroute to a larger qualified resource.
 - Resource requirements per role are qualification labels; real capability metadata depends on provider catalogs
   (`--discover`), which aihost aliases do not publish beyond the model list.
