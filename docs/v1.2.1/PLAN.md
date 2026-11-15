@@ -67,6 +67,7 @@ Dependencies: MQ-1 → MQ-2. MQ-3 and MQ-4 are independent. Decision D3 (what is
 | VC-5 | Re-check `verified` on resume (invalidate when the candidate identity differs) and persist the unbound-pass marker so a resumed task does not hit the "no matching baseline" refusal | resume test: edited workspace demotes `verified`; resume after an unbound pass completes as REGRESSION_FREE | S | P1 |
 | VC-6 | Type-check gaps: baseline run to catch callers broken in untouched files, count shell-changed files as modified (workspace diff, not edit tools), Go (`go vet`) and Python (pyright/mypy when configured) | a change that breaks an untouched caller blocks VERIFIED; opt-out stays | M | P2 |
 | VC-7 | Convergence on the `run_tests` path and for operator-configured verifiers | a `run_tests`-only loop stops with the history attached | S | P2 |
+| VC-8 | Per-role tool allowlists beyond reviewer and researcher (old backlog REQ:259, accepted 2026-11-15): allowlists for implementer and tester, consistent with SI-2's tester scoping (`roleToolAllowList`, `cli/src/agent.ts:5490`) | each role's disallowed tool is refused with a reason; existing flows unchanged | S | P2 (v1.2.2) |
 
 ### CS: containment and security
 
@@ -80,6 +81,8 @@ Dependencies: MQ-1 → MQ-2. MQ-3 and MQ-4 are independent. Decision D3 (what is
 | CS-6 | LSP: exercise real servers where installed (rust-analyzer, tsserver, pyright, gopls) in a non-required CI job; sandbox when containment (CS-1) is on | job green on the four servers or a recorded reason per server | M | P2 |
 | CS-7 | Prompt-injection scanner (decision D5, included): deterministic checks, with no new runtime dependency, on untrusted content entering the model (tool results, fetched pages, MCP responses, file contents, diagnostics): instruction-like imperatives aimed at the agent, hidden or bidirectional Unicode, fake system or tool-call markup, encoded payloads. A hit labels the block as suspected injection, fences it, and raises an approval for any action that follows it in the same step; it never silently deletes content. Reference: Goose `security/scanner.rs` (ML-based; ours is deterministic and its limits are stated) | a labelled corpus (public injection samples plus benign code and docs) with a measured detection rate and false-positive rate reported in the PR; request-shape snapshot shows the fence; the notes state it is a heuristic, not a guarantee | M | P1 |
 | CS-8 | Egress inspector (D5): inspect outbound requests and tool arguments to external destinations for secrets and workspace-private data using the existing redaction table (MT-3) and `core/egress.ts` classification; ask or deny per policy, and record the decision. Reference: Goose `security/egress_inspector.rs` | test: a tool call that sends a `.env` value to an external host is refused; internal and loopback hosts unaffected | M | P1 |
+| CS-9 | Per-command approval rules (old backlog item "per-command approval allowlists", accepted 2026-11-15): Codex-style prefix rules with a three-level outcome (allow < prompt < forbidden), load-time examples that must match or fail the load, and a record of which rule decided; reduces prompt fatigue without removing review. Reference: openai/codex `execpolicy` (`docs/v1.2.0/SEMANTIC_AND_ARCHITECTURAL_INTEGRITY.md` §10) | a rule file with a contradicting example fails to load; a prefix rule allows `git status` and still prompts for `git push`; the deciding rule appears in the session export | M | P1 (v1.2.2) |
+| CS-10 | RPC worker isolation (old backlog REQ:266, accepted for v1.2.2), designed together with CS-1 containment so the core worker and tool commands share one containment model | design note merged first; then tests that a compromised worker cannot reach the workspace outside its allowed paths | M | P2 (v1.2.2) |
 
 ### WM: weak-model robustness
 
@@ -131,13 +134,14 @@ Order: PR-1, PR-2, PR-3, PR-9, PR-11 first; then PR-4, PR-5, PR-12; then the nat
 | RD-4 | GitHub Action wrapper around `nexus run` with a verification-gated exit code | decision D11; example workflow in `examples/` | M | P1 |
 | RD-5 | ACP server mode for IDE hosts (references: Goose `crates/goose/src/acp`, Cline `apps/cli/src/acp`) | decision D11; a protocol conformance test | L | P2 |
 | RD-6 | Session fork (reference: Cline `core/src/session/fork-metadata.ts`) | fork test: two divergent continuations, both resumable | M | P2 |
+| RD-7 | `nexus uninstall` (old backlog REQ-REL-106, accepted 2026-11-15): removes the install and optionally state, verifies what it removes against the install manifest, never touches the workspace or `~/.config/nexus` without `--purge` | uninstall test on a throwaway prefix; refuses a path outside the manifest | S | P2 (v1.2.2) |
 
 ### PC: process and CI
 
 | Unit | What | Accept | Size | Pri |
 |---|---|---|---|---|
 | PC-1 | CI wall time: run `linux-x86_64` in parallel with `test-matrix` where its work does not need it, split the CLI suite into shards, cache toolchains; update the stale "12–20 minutes" comment (decision D10: required check names and runner minutes) | median PR CI under 40 minutes with the same required-check semantics; measured over 20 runs | M | P0 |
-| PC-2 | Leak and hang guard: a shared test helper that registers bridges, agents, gateways and child processes and fails the file at teardown if any survive; a per-file timeout in `run_tests.mjs`; a rule that lists test files constructing a bridge or agent without it (2 found, names to be captured first) | the SI-2-style leak fails in 1 minute with the file name, not in 45 minutes | M | P0 |
+| PC-2 | Leak and hang guard: a shared test helper that registers bridges, agents, gateways and child processes and fails the file at teardown if any survive; a per-file timeout in `run_tests.mjs`; a rule that lists test files constructing a bridge or agent without it (2 found, names to be captured first); also re-verify the stale/corrupt lock race and EXECUTION_CONVERGENCE I3/I4 from the old backlog and fix any defect found (accepted 2026-11-15) | the SI-2-style leak fails in 1 minute with the file name, not in 45 minutes; the re-verification result is recorded and any defect it shows is fixed with a regression test | M | P0 |
 | PC-3 | Flake budget: record rerun-on-failure events, report weekly, fail when a test needs reruns twice in 20 runs | report committed as an artifact | S | P1 |
 | PC-4 | Cross-runner reproducibility (22.04 vs 24.04) as a scheduled job, not a manual dispatch | job green; alert on drift | S | P2 |
 | PC-5 | Opt-in crash and error reporting: confirm what OTLP does today (opt-in status unverified), document it, add a local crash report file under `~/.nexus/` | doc plus a test that nothing leaves the host without opt-in | S | P2 |
@@ -172,7 +176,7 @@ Phase 1 (independent, parallelisable): MQ-3, MQ-5, MQ-6, MQ-1, then MQ-2 (needs 
 
 Phase 2: PR-4, PR-5, PR-12; CS-7, CS-8 (D5); MQ-7 slices B and C; CS-1 and CS-2 (defaults per D1 and D2: CS-1 stays opt-in unless the default is changed by a later decision); CX-2, CX-3, VC-1, RD-3, RD-4, MT-3, WM-3, MQ-4, PC-3, DH-3, DH-4, DH-6.
 
-Phase 3 (v1.2.2): native protocols PR-6 (Gemini), PR-7 (Bedrock), PR-8 (Vertex), PR-10; MQ-7 slices D, E, F, G; RD-1 (macOS arm64; D6 default is Linux x86_64 only, so this waits for a decision), MT-1, MT-2, VC-2, VC-3, VC-6, VC-7, CX-4, CX-6, RD-2, RD-5, RD-6, CS-5, CS-6, PC-4, PC-5, PC-6.
+Phase 3 (v1.2.2): native protocols PR-6 (Gemini), PR-7 (Bedrock), PR-8 (Vertex), PR-10; CS-9, CS-10, VC-8, RD-7 (added 2026-11-15 from the old-backlog review); MQ-7 slices D, E, F, G; RD-1 (macOS arm64; D6 default is Linux x86_64 only, so this waits for a decision), MT-1, MT-2, VC-2, VC-3, VC-6, VC-7, CX-4, CX-6, RD-2, RD-5, RD-6, CS-5, CS-6, PC-4, PC-5, PC-6.
 
 D9 note: "every cloud provider configurable" is delivered in v1.2.1 for every OpenAI-compatible provider and for Azure OpenAI, Gemini's compatible endpoint and Bedrock's OpenAI-compatible endpoint (PR-2, PR-3, PR-5), which is most of the 334 providers in models.dev. The three native protocols (Gemini, Bedrock Converse with SigV4, Vertex with ADC) are the largest pieces and ship in v1.2.2 unless you move them up.
 
@@ -225,22 +229,22 @@ Reviewed 2026-11-15 against current code and docs (read-only; nothing was run). 
 | Item | Carried by | Note |
 |---|---|---|
 | REQ-AGT-111 single step loop (REQ:251; only a subset exists, `cli/test/agt111_subagent_parity.test.ts`) | MT-1 | the `agent.ts` split is the place to unify the loops |
-| CTX-001 provenance graph (REQ:252) | CX-1 (partial) | v1 subset only; a per-item graph is not planned |
-| CTX-002 knowledge freshness (REQ:253) | none | knowledge is trust-gated and auto-extract is off; low priority |
-| ACT-002 delegation depth (REQ:255; hard-coded `depth >= 2` at `agent.ts:5047`) | none | the bound is safe; configurability is a convenience |
-| EXECUTION_CONVERGENCE I3/I4 and the stale/corrupt lock race (REQ:256, :105) | PC-2 (re-verify) | lock code exists in `worktrunk/registry.ts`, `upgrade_journal.ts`, `core/candidate.ts`; no re-verification found |
-| `/tdd` phase enforcement (VER-08, REQ:257) | none | experimental label only |
-| Per-role allowlists (REQ:259; `roleToolAllowList`, `agent.ts:5490`, covers reviewer and researcher) | none | extending to other roles has no unit |
-| macOS, arm64, musl (DEC-12, REQ:262) | RD-1, RD-2 | gated on D6 |
-| REQ-REL-106 self-uninstall (REQ:263) | none | low priority |
-| RPC worker isolation (REQ:266) | CS-4 (adjacent) | unscheduled |
-| PTY determinism (REQ:267) | MT-2 (adjacent) | TUI test flake source |
-| Per-command approval allowlists (REQ:268) | CS-1 (adjacent) | reduces prompt fatigue without removing review |
-| `git.publish` PR publication (DEC-V11-12; explicitly refused at `operation_cli.ts:74`) | RD-4 (adjacent) | needs egress and policy controls first; keep the explicit refusal |
-| Interactive TUI multi-agent pane (`ROADMAP.md:188`) | MT-2 | depends on a PTY redesign |
+| CTX-001 provenance graph (REQ:252) | CX-1 (partial) | **decided 2026-11-15: partial coverage accepted;** a per-item graph is not planned |
+| CTX-002 knowledge freshness (REQ:253) | none | **decided 2026-11-15: unscheduled.** Knowledge is trust-gated and auto-extract is off; low risk |
+| ACT-002 delegation depth (REQ:255; hard-coded `depth >= 2` at `agent.ts:5047`) | none | **decided 2026-11-15: won't fix.** The bound is safe; a knob adds nothing |
+| EXECUTION_CONVERGENCE I3/I4 and the stale/corrupt lock race (REQ:256, :105) | PC-2 (re-verify, then fix any defect; decided 2026-11-15) | lock code exists in `worktrunk/registry.ts`, `upgrade_journal.ts`, `core/candidate.ts`; no re-verification found |
+| `/tdd` phase enforcement (VER-08, REQ:257) | none | **decided 2026-11-15: stays experimental, no unit;** graduate or drop later |
+| Per-role allowlists (REQ:259; `roleToolAllowList`, `agent.ts:5490`, covers reviewer and researcher) | VC-8 | **decided 2026-11-15: P2 unit in v1.2.2** |
+| macOS, arm64, musl (DEC-12, REQ:262) | RD-1, RD-2 | gated on D6 (Linux x86_64 only for v1.2.1; a later decision) |
+| REQ-REL-106 self-uninstall (REQ:263) | RD-7 | **decided 2026-11-15: P2 unit in v1.2.2** |
+| RPC worker isolation (REQ:266) | CS-10 | **decided 2026-11-15: v1.2.2, designed with CS-1** |
+| PTY determinism (REQ:267) | MT-2 | **decided 2026-11-15: folded into MT-2 (v1.2.2)** |
+| Per-command approval allowlists (REQ:268) | CS-9 | **decided 2026-11-15: own unit, v1.2.2** |
+| `git.publish` PR publication (DEC-V11-12; explicitly refused at `operation_cli.ts:74`) | none | **decided 2026-11-15: keep the explicit refusal;** revisit after CS-8 and CS-1, as a candidate for the next release train |
+| Interactive TUI multi-agent pane (`ROADMAP.md:188`) | MT-2 | **decided 2026-11-15: candidate for the next release train** (needs the PTY redesign first) |
 | CI `git diff cli/dist` step (`ci.yml:72,176`) | PC-1 | proves nothing; fix or remove in the CI restructure |
 
-Rows with "none" need an owner or an explicit deferral note before the v1.2.1 release; this table is that note until you decide otherwise.
+Every row above now carries a decision (2026-11-15). Open sources not yet reviewed: `docs/reviews/evidence/qualification_2026-10-12/` and `docs/v1.0.0/READINESS.md` (DH-5).
 
 ## 7. What "externally qualified" means here
 
