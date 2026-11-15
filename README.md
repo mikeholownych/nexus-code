@@ -9,7 +9,7 @@
 
 **Nexus Code** is an open-source, local-first AI coding agent and execution harness. It pairs a TypeScript agent and sidecar with native Rust workspace tools and a Ratatui terminal user interface (TUI), with opt-in sandboxing, human approval modes, and Git worktree isolation.
 
-> **Status:** the latest stable release is [v1.1.4](https://github.com/mikeholownych/nexus-code/releases). v1.2.0 is in release qualification (candidate `v1.2.0-rc.1`) and is not yet released. Development plans and this README do not establish release readiness; see [GitHub Releases](https://github.com/mikeholownych/nexus-code/releases) and [`docs/releases/`](docs/releases/).
+> **Status:** the latest stable release is [v1.2.0](https://github.com/mikeholownych/nexus-code/releases/tag/v1.2.0). It has no independent external qualification, and its live tool-call validity gate (G1.1-4) was not met on this build; see [`docs/releases/v1.2.0.md`](docs/releases/v1.2.0.md) for the known limitations. Development plans and this README do not establish release readiness; see [GitHub Releases](https://github.com/mikeholownych/nexus-code/releases) and [`docs/releases/`](docs/releases/).
 >
 > The Cloudflare contest entry is historical: see [docs/CLOUDFLARE_CONTEST.md](docs/CLOUDFLARE_CONTEST.md).
 
@@ -104,7 +104,7 @@ export PATH="$HOME/.local/bin:$PATH"
 > [!NOTE]
 > To pin a release or install a prerelease, set `NEXUS_VERSION` to a tag from [GitHub Releases](https://github.com/mikeholownych/nexus-code/releases):
 > ```sh
-> curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v1.1.4 sh
+> curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v1.2.0 sh
 > ```
 
 ### 2. Inference Setup

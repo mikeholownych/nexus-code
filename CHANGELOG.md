@@ -6,7 +6,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Detailed per-release documentation is maintained in [`docs/releases/`](docs/releases/).
 
-## [v1.2.0] - Unreleased
+## [v1.2.0] - 2026-11-15
 
 Release notes: [`docs/releases/v1.2.0.md`](docs/releases/v1.2.0.md). Candidate: [`rc.1`](docs/releases/v1.2.0-rc.1.md). Plan: [`docs/v1.2.0/SEMANTIC_AND_ARCHITECTURAL_INTEGRITY.md`](docs/v1.2.0/SEMANTIC_AND_ARCHITECTURAL_INTEGRITY.md).
 

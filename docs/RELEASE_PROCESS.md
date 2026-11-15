@@ -11,5 +11,3 @@ The release workflow does not touch the README, the CHANGELOG or `docs/releases/
 3. Replaces `Unreleased` in the CHANGELOG heading of the new version with the tag date.
 
 `node scripts/check_doc_versions.mjs` (run in CI) fails when any of these disagree with `LATEST`, so the follow-up PR is the one that turns it green again. The stable-promotion commit itself passes because `LATEST` still names the previous stable tag and the new version may stay `Unreleased` until `LATEST` moves.
-
-v1.2.0 needs this follow-up: `LATEST` is `v1.1.4` and the CHANGELOG heading `[v1.2.0]` says `Unreleased` until it is done.
