@@ -175,13 +175,28 @@ rather than guessed). These are budgets, not a guarantee of the provider's invoi
 
 ## models.dev snapshot
 
-`cli/src/providers.generated.ts` is a dated snapshot of [models.dev](https://github.com/sst/models.dev) (MIT): per
-provider the id, display name, credential variable names, base URL template (`${VAR}` kept verbatim), and wire-protocol
-class (`openai-chat`, `openai-responses`, `anthropic-messages`, or `native:<npm package>`); per model the context,
-output and input limits, tool-call support, accepted `tool_choice` modes, reasoning effort levels, and input/output
-price per million tokens. Only chat models that support tool calls are kept; deprecated, alpha and websocket-only
-entries are dropped. `cli/src/core/models_snapshot.ts` reads it (`snapshotDate`, `snapshotProvider`, `snapshotModel`,
-`resolveContext`, `acceptsToolChoice`, which answers `"unknown"` when the snapshot has no data).
+`cli/src/providers.generated.json` is a dated, schema-validated snapshot of [models.dev](https://github.com/sst/models.dev)
+(MIT), with the source commit sha in its header: per provider the id, display name, credential variable names, base URL
+template (`${VAR}` kept verbatim), and wire-protocol class (`openai-chat`, `openai-responses`, `anthropic-messages`, or
+`native:<npm package>`); per model the context, output and input limits, tool-call support, accepted `tool_choice`
+modes, reasoning effort levels, and input/output price per million tokens. Only chat models that support tool calls
+are kept; deprecated, alpha and websocket-only entries are dropped. `cli/src/core/models_snapshot.ts` reads it lazily
+on first lookup (`snapshotDate`, `snapshotProvider`, `snapshotModel`, `resolveContext`, `acceptsToolChoice`, which
+answers `"unknown"` when the snapshot has no data). `npm run build` copies the JSON into `dist`, so the release
+tarball carries it.
+
+Validation, in the generator (a violation aborts) and again in the loader (the entry is dropped):
+- credential variable names must match `^[A-Z0-9][A-Z0-9_]{1,63}$`; `AWS_*`, `GOOGLE_APPLICATION_CREDENTIALS`, `*_SSH*`
+  and `GITHUB_TOKEN` are refused except for amazon-bedrock, google-vertex(-anthropic) and github-copilot;
+- a base URL is https (http only for localhost, 127.0.0.1, ::1), has no user or password, and its `${VAR}` names must be
+  among that provider's own env names;
+- well-known providers are host-pinned in `cli/src/providers.pins.json` (host suffixes, source link, and a curated
+  default base URL for groq, mistral, xai, cerebras, deepinfra and togetherai); a refresh that moves a pinned provider
+  off its suffix fails.
+
+Base URL semantics: `hostFromEnv: true` means the host (or the whole URL) comes from an env variable (neon, databricks,
+snowflake-cortex), so PR-2 and PR-5 must validate it after substitution. An absent `baseUrl` means unresolvable from
+the snapshot: a native protocol, or `needsBaseUrl: true` (perplexity), which the operator must supply.
 
 Nothing is fetched at runtime or in CI. To regenerate, fetch the data by hand, then run the offline generator:
 
@@ -192,5 +207,6 @@ node scripts/gen_models_snapshot.mjs /tmp/api.json --date YYYY-MM-DD --commit <s
 ```
 
 `api.json` has no tool-choice data, so `--tools-from` reads it as text from the clone's TOML files; without it the
-`toolChoice` field is absent and lookups answer `"unknown"`. The output is deterministic and schema-validated before it
-is written.
+`toolChoice` field is absent and lookups answer `"unknown"`. Unknown flags, a missing value or a malformed `--commit`
+exit 2. The output is deterministic. A check that the committed file equals the generator's output cannot run offline
+without `api.json`; CI validates the committed file's schema and pins instead.
