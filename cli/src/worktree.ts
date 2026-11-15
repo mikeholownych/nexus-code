@@ -13,7 +13,7 @@ import { WORKTREE_BINDING_VERSION } from "./core/state_schema.js";
 import { WorkspacePath } from "./core/workspace_path.js";
 import { ensureWorktree } from "./worktrunk/core.js";
 import { openRepo } from "./worktrunk/repo.js";
-import { git as pinnedGit, nestedRepositoryReason } from "./worktrunk/git.js";
+import { git as pinnedGit, nestedRepositoryReason, printable } from "./worktrunk/git.js";
 export { ensureGitExclude };
 
 export interface WorktreeInfo {
@@ -292,16 +292,28 @@ export class WorktreeManager {
     }
   }
 
+  /**
+   * Why Git must not be run in the task worktree, or undefined when it is the registered linked worktree of this
+   * repository. The agent can write the worktree and its `.git` pointer, so a replaced pointer, a planted nested
+   * repository or any other `.git` the agent could have authored (configuration with `core.fsmonitor`, hooks) is refused
+   * before any Git command reads it.
+   */
+  private untrustedWorktreeReason(worktreePath: string): string | undefined {
+    try {
+      if (!this.isLinkedWorktree(worktreePath)) return `${worktreePath} is not a linked worktree of this repository`;
+      return nestedRepositoryReason(worktreePath);
+    } catch (err: any) {
+      return `${worktreePath} could not be verified: ${err?.message ?? err}`;
+    }
+  }
+
   /** Ignored task output is still a task effect and must not be silently discarded by merge. */
   public hasIgnoredChanges(taskId: string): boolean {
     const worktreePath = path.join(this.getWorktreesBaseDir(), taskId);
     if (!fs.existsSync(worktreePath)) return false;
     try {
-      return execFileSync("git", ["status", "--porcelain", "--ignored=matching", "--untracked-files=all"], {
-        cwd: worktreePath,
-        encoding: "utf-8",
-        stdio: ["ignore", "pipe", "ignore"],
-      })
+      if (this.untrustedWorktreeReason(worktreePath)) return true; // unverifiable output is not safe to discard
+      return pinnedGit(worktreePath, ["status", "--porcelain", "--ignored=matching", "--untracked-files=all"]).stdout
         .split("\n")
         .map((l) => l.trim())
         .some((line) => line.startsWith("!! ") && !line.startsWith("!! .nexus/") && line !== "!! .nexus");
@@ -313,11 +325,7 @@ export class WorktreeManager {
   /** Dirty developer state prevents an automatic merge from disturbing the originating checkout. */
   public rootHasChanges(): boolean {
     try {
-      return execFileSync("git", ["status", "--porcelain"], {
-        cwd: this.checkoutRoot,
-        encoding: "utf-8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }).trim().length > 0;
+      return pinnedGit(this.checkoutRoot, ["status", "--porcelain"]).stdout.trim().length > 0;
     } catch {
       return true;
     }
@@ -344,6 +352,19 @@ export class WorktreeManager {
         branch,
         commitsMerged: 0,
         error: `Worktree path ${worktreePath} does not exist.`,
+      };
+    }
+
+    // The agent can write this worktree, `.git` pointer included: no Git command (candidate identity and validation
+    // included) runs in it until the pointer is verified, and every command after that is pinned (worktrunk/git.ts).
+    const untrusted = this.untrustedWorktreeReason(worktreePath);
+    if (untrusted) {
+      return {
+        success: false,
+        taskId,
+        branch,
+        commitsMerged: 0,
+        error: `Refusing to merge ${taskId}: the worktree is not a trusted linked worktree of this repository (${printable(untrusted)}).`,
       };
     }
 
@@ -410,36 +431,25 @@ export class WorktreeManager {
 
     try {
       // 1. In worktree: commit any modified or untracked files
-      const statusOut = execFileSync("git", ["status", "--porcelain"], {
-        cwd: worktreePath,
-        encoding: "utf-8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }).trim();
+      const statusOut = pinnedGit(worktreePath, ["status", "--porcelain"]).stdout.trim();
 
       let hasCommits = false;
       if (statusOut.length > 0) {
-        execFileSync("git", ["add", "-A"], { cwd: worktreePath });
-        execFileSync("git", ["commit", "-m", commitMessage], { cwd: worktreePath });
+        pinnedGit(worktreePath, ["add", "-A"]);
+        pinnedGit(worktreePath, ["commit", "-m", commitMessage]);
         hasCommits = true;
       }
 
       // Check commit count on branch relative to main branch
       let commitCount = hasCommits ? 1 : 0;
       try {
-        const countOut = execFileSync("git", ["rev-list", "--count", `HEAD..${branch}`], {
-          cwd: this.checkoutRoot,
-          encoding: "utf-8",
-          stdio: ["ignore", "pipe", "ignore"],
-        }).trim();
+        const countOut = pinnedGit(this.checkoutRoot, ["rev-list", "--count", "--end-of-options", `HEAD..refs/heads/${branch}`]).stdout.trim();
         commitCount = Math.max(commitCount, parseInt(countOut, 10) || 0);
       } catch {}
 
       // 2. Merge speculative branch into the active branch of the originating checkout
       if (commitCount > 0) {
-        execFileSync("git", ["merge", "--no-ff", branch, "-m", commitMessage], {
-          cwd: this.checkoutRoot,
-          encoding: "utf-8",
-        });
+        pinnedGit(this.checkoutRoot, ["merge", "--no-ff", "-m", commitMessage, "--end-of-options", `refs/heads/${branch}`]);
       }
 
       // 3. Remove worktree and delete branch
