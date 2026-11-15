@@ -65,7 +65,7 @@ import { homeDir } from "./worktrunk/core.js";
 import { openRepo, currentEntry, NotARepositoryError } from "./worktrunk/repo.js";
 import { replacedWorktreeReason, verifyCheckout } from "./core/checkout_trust.js";
 import { WORKTREE_BINDING_VERSION } from "./core/state.js";
-import { isSandboxAvailable } from "./sandbox.js";
+import { isSandboxAvailable, sandboxNetworkNotice } from "./sandbox.js";
 import { runTestSuiteWithExecutor, discoverTypecheck, runTypecheck, typecheckMode, discoverVerifier, describeVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand, verifierTimeoutSecs } from "./tester.js";
 import { ENABLE_TOOLS_CAPABILITY, TOOL_GROUPS, groupsTriggeredBy, toolGroupOf } from "./core/tool_groups.js";
 import { isInlineProgramVerifier, snapshotVerifierDefinitionWithReason, judgeWithoutCopy, prepareBaselineTestsCopy, requiresWorkspaceVerifierDefinitionBinding, trustedDeliverablesFromBaseline, testsChangedSince, snapshotTests, snapshotVerifierDefinition, verifierDefinitionChangedSince, verifierDefinitionMatchesSnapshot, tddRedTestsMatchSnapshot, type ChangeBaseline, type Independence } from "./core/independent_check.js";
@@ -5750,6 +5750,10 @@ ${NEXUS_RUNTIME_IDENTITY}`;
 
       this.activity("approval", { tool: toolName, ...(subject ? { subject } : {}) });
       if (verificationEdit?.action === "ask") console.log(`⚠️ ${toolName} changes verification configuration: ${verificationEdit.path} (${verificationEdit.class}).`);
+      if (toolName === "run_command") {
+        const networkNotice = sandboxNetworkNotice(String(args?.command ?? ""), Boolean(this.config.sandbox) && this.config.sandbox !== "none");
+        if (networkNotice) console.log(`⚠️ ${networkNotice}`);
+      }
       const approved = await onConfirm(toolName, args);
       if (verificationEdit?.action === "ask") {
         if (approved) verificationAuthority.approved = { path: verificationEdit.path };
