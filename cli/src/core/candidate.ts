@@ -7,6 +7,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
+import { verifyCheckout } from "./checkout_trust.js";
 import { CandidateMutationEvent, CandidateMutationHook } from "./spine.js";
 import { TOOLCHAIN_PREFIX, UNVERIFIED_UNTRUSTED, defaultVersionProbe, type VersionProbe } from "../material_deps.js";
 
@@ -477,6 +478,10 @@ function computeGitCandidateIdentity(
   includeUntracked: boolean,
   filesystem: typeof fs,
 ): CandidateIdentity {
+  // The agent can write a linked worktree's `.git` pointer; a replaced one or a planted nested repository would have Git
+  // read configuration the agent authored (`core.fsmonitor`). The identity of such a workspace is not computed.
+  const untrusted = verifyCheckout(workspacePath).reason;
+  if (untrusted) throw new Error(`Refusing to compute the candidate identity of ${workspacePath}: ${untrusted}`);
   const entryLimit = configuredEntryLimit(options);
   const byteLimit = configuredByteLimit(options);
   let rootBaseSha = "UNKNOWN_BASE";
@@ -589,7 +594,7 @@ function computeGitCandidateIdentity(
     try {
       diffTokens = decodeGitTokens(execFileSync(
         "git",
-        ["diff", "--name-status", "-z", options.baseRef, "HEAD"],
+        ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "diff", "--name-status", "-z", options.baseRef, "HEAD"],
         {
           cwd: workspacePath,
           stdio: ["ignore", "pipe", "ignore"],
@@ -666,7 +671,7 @@ function computeGitCandidateIdentity(
     // is read exactly as stored (the default quoting turned café.ts into "caf\303\251.ts", a path naming no file).
     const statusTokens = decodeGitTokens(execFileSync(
       "git",
-      ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+      ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
       {
         cwd: workspacePath,
         stdio: ["ignore", "pipe", "ignore"],
