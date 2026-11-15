@@ -14,18 +14,18 @@ Release notes: [`docs/releases/v1.2.0.md`](docs/releases/v1.2.0.md). Candidate: 
 
 - **Breaking validation change:** `nexus operation run` now rejects a spec whose own `policy.maxConcurrentUnits` is above 1 unless it sets `git.isolate: true`, because concurrent units otherwise write the same worktree. Fix: add `"git": { "isolate": true }` or set the limit to 1. Records already on disk are not refused: `nexus operation resume` and `decide` clamp such a record to one unit at a time and warn. The library API `newOperation` is unchanged.
 
-## [v1.1.4] - Unreleased
+## [v1.1.4] - 2026-11-14
 
-Release notes: [`docs/releases/v1.1.4.md`](docs/releases/v1.1.4.md). Candidate notes: [`rc.3`](docs/releases/v1.1.4-rc.3.md), [`rc.2`](docs/releases/v1.1.4-rc.2.md), [`rc.1`](docs/releases/v1.1.4-rc.1.md) (ledger closed except the listed items; external qualification pending).
+Release notes: [`docs/releases/v1.1.4.md`](docs/releases/v1.1.4.md). Candidate notes: [`rc.3`](docs/releases/v1.1.4-rc.3.md), [`rc.2`](docs/releases/v1.1.4-rc.2.md), [`rc.1`](docs/releases/v1.1.4-rc.1.md).
 
 ### Fixed
 
 - A turn suspended while waiting out a provider's Retry-After (429/503) now resumes inside that window correctly: `nexus run --resume`, the TUI (`--resume`) and `nexus operation resume` wait until the recorded eligible time before the first request, shown as the usual provider-wait status, instead of sending it at once. The wait is skipped when you resume against a different endpoint, and bounded by the recovery deadline (`LOCAL_LLM_RECOVERY_DEADLINE_MS`, default 20 min); Ctrl-C during it suspends again with the same eligible time (#471).
 
 
-## [v1.1.3] - Unreleased
+## [v1.1.3] - 2026-11-05
 
-See [`docs/releases/v1.1.3.md`](docs/releases/v1.1.3.md) (and candidate notes [`docs/releases/v1.1.3-rc.1.md`](docs/releases/v1.1.3-rc.1.md)). This release carries the whole v1.1.2 scope unchanged, with the same known limitations. The date is set when the release is tagged.
+See [`docs/releases/v1.1.3.md`](docs/releases/v1.1.3.md) (and candidate notes [`docs/releases/v1.1.3-rc.1.md`](docs/releases/v1.1.3-rc.1.md)). This release carries the whole v1.1.2 scope unchanged, with the same known limitations.
 
 ## [v1.1.2] - Not released (shipped as v1.1.3)
 
