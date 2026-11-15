@@ -88,7 +88,7 @@ Prompts for confirmation unless `--yes` is passed. In non-interactive environmen
 
 To target an explicit release (including prereleases):
 ```bash
-nexus upgrade --version v1.0.0
+nexus upgrade --version <tag>   # a tag from GitHub Releases, for example an rc tag
 ```
 
 #### Recovery, Rollback and Backup Restoration
@@ -487,6 +487,17 @@ Nexus Code provides high-performance tools executed via compiled native 64-bit R
 ---
 
 ## 4. Safety, Compliance & Resilience
+
+### Behaviour changes in v1.2.0
+
+Release notes: `docs/releases/v1.2.0.md`. These changes affect existing workflows.
+
+- **Verification-file edits ask or are denied.** Agent edits to tests, CI, build and verifier files need an operator decision (interactive) or are denied headless (`VERIFICATION_CONFIG_PROTECTED`). `verificationPaths.mode` in `.nexus-security.json` is `approve` (default), `record`, `block` or `off`; see "Verification-configuration guard" under Safety below.
+- **Operations that run units concurrently must isolate them.** `nexus operation run` rejects a spec whose `policy.maxConcurrentUnits` is above 1 unless it sets `"git": { "isolate": true }` (otherwise concurrent units write the same worktree). Fix the spec by adding `git.isolate` or setting the limit to 1. Operation records already on disk are not refused: `nexus operation resume` and `decide` clamp them to one unit at a time and print a warning.
+- **A verifier that cannot be bound no longer blocks completion.** When the verifier definition cannot be snapshotted, tests still run and the task ends `REGRESSION_FREE` with the reason, never `VERIFIED`, with no receipt or worktree merge (see the verification section above).
+- **Type-check evidence.** After the test verifier passes, `tsc --noEmit` or `cargo check` runs through the same approval gate. A type error in a file the task modified blocks `VERIFIED`; errors only in untouched files are recorded as `PREEXISTING` and do not block. `NEXUS_TYPECHECK=off` disables the check and `NEXUS_TYPECHECK=enforce` makes it blocking; without the variable it enforces, except that a project with its own configured verifier records only. Go and Python are not checked, and files changed through shell commands are not counted as modified.
+- **Verifier convergence.** A repeating, alternating or worsening verifier failure ends the turn `BLOCKED` (`VERIFIER_NOT_CONVERGING`). The threshold is `NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS` (default 3); see "Long tasks" above.
+- **Steering conflicts.** Steering that negates a numbered requirement does not replace the requirements. The ledger stays intact and you are asked to decide; headless runs record the conflict as unresolved. A request that would replace a ledger with unmet requirements keeps a `superseded` record. Steering that does not conflict behaves as before.
 
 ### Verifier environment (`NEXUS_VERIFIER_ENV_PASSTHROUGH`)
 
