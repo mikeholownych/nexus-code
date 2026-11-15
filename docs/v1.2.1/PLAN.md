@@ -70,6 +70,7 @@ Dependencies: MQ-1 → MQ-2 → MQ-8. MQ-3 and MQ-4 are independent. Decision D3
 | VC-7 | Convergence on the `run_tests` path and for operator-configured verifiers | a `run_tests`-only loop stops with the history attached | S | P2 |
 | VC-8 | Per-role tool allowlists beyond reviewer and researcher (old backlog REQ:259, accepted 2026-11-15): allowlists for implementer and tester, consistent with SI-2's tester scoping (`roleToolAllowList`, `cli/src/agent.ts:5490`) | each role's disallowed tool is refused with a reason; existing flows unchanged | S | P2 (v1.2.2) |
 | VC-9 | Headless needs-input audit (Anthropic 2026 trends report, trend 4: agents that learn when to ask for help): list every path where a headless run needs an operator decision (steering that negates a requirement, a requirement marked blocked, a denied approval, a verification-file edit) and give each the same resumable outcome, a stable `needs_input` reason carrying the question and resumable with the answer; build only the missing glue | each path ends BLOCKED with a machine-readable question and resumes with an answer; no path guesses | S | P2 |
+| VC-10 | Steering semantic judge (optional; evidence in `docs/research/steering-judgment/`): a judge provider interface (none by default, the configured gateway, or an explicit opt-in third party) asked, for each live requirement, whether the steering message withdraws, defers or changes it; conflict (the existing operator decision) if the regex hits or `withdraws` >= 0.7 whatever `defers` says, advisory note between 0.3 and 0.7, `defers` and `changes` informational only; an unavailable judge records `semanticJudge: unavailable` and keeps the regex decision; the steer stays held from the model until the operator decides and no text goes to a third party unless opted in | **gated**: build only after a larger evaluation (at least 100 judgments from real steering messages, with the owner's consent, labelled blind, on a fresh held-out split) shows union recall of at least 0.8 with at most 5% false positives on the non-withdrawals, and after the synchronous path can hold a steer while a judge answers (the pilot gateway judge took a median of about 17 s per message) | M | P2 (v1.2.2, gated) |
 
 ### CS: containment and security
 
@@ -152,6 +153,7 @@ Order: PR-1, PR-2, PR-3, PR-9, PR-11 first; then PR-4, PR-5, PR-12; then the nat
 | PC-4 | Cross-runner reproducibility (22.04 vs 24.04) as a scheduled job, not a manual dispatch | job green; alert on drift | S | P2 |
 | PC-5 | Opt-in crash and error reporting: confirm what OTLP does today (opt-in status unverified), document it, add a local crash report file under `~/.nexus/` | doc plus a test that nothing leaves the host without opt-in | S | P2 (settled by v1.3 GV-4; see docs/v1.3.0/PLAN.md) |
 | PC-6 | Dependency hygiene: `commander` major bump if safe, review the two Dependabot PRs, keep the no-deprecated gate | gate green | S | P2 |
+| PC-7 | Flaky `eval_integrity` scanner test: `Python black-box oracle uses only pinned offline Go and Rust toolchains, or fails preflight` (the "more than 128 disjoint system roots" case) failed once on a loaded runner with `inventory enumeration_exit_batch_1_signal_sigterm` and passed on re-run; find what ends the enumeration (a time bound, a runner limit) and make the test independent of load, or give it a justified bound | passes 10 consecutive runs under artificial CPU load; any bound is documented in the test | S | P2 |
 
 ### MT: maintainability
 
@@ -180,9 +182,9 @@ Phase 0 (immediately after v1.2.0 ships): MQ-0, DH-1, DH-2, DH-5, PC-2, PC-1. Th
 
 Phase 1 (independent, parallelisable): MQ-3, MQ-5, MQ-6, MQ-1, then MQ-2 (needs MQ-5/MQ-6 to be called certifying); PR-1, PR-2, PR-3, PR-9, PR-11; CS-3, CS-4, WM-1, WM-2, CX-1, CX-5, VC-5.
 
-Phase 2: PR-4, PR-5, PR-12; CS-7, CS-8 (D5); MQ-7 slices B and C; CS-1 and CS-2 (defaults per D1 and D2: CS-1 stays opt-in unless the default is changed by a later decision); CX-2, CX-3, VC-1, RD-3, RD-4, MT-3, WM-3, MQ-4, PC-3, DH-3, DH-4, DH-6, CX-7, CS-11, VC-9.
+Phase 2: PR-4, PR-5, PR-12; CS-7, CS-8 (D5); MQ-7 slices B and C; CS-1 and CS-2 (defaults per D1 and D2: CS-1 stays opt-in unless the default is changed by a later decision); CX-2, CX-3, VC-1, RD-3, RD-4, MT-3, WM-3, MQ-4, PC-3, DH-3, DH-4, DH-6, CX-7, CS-11, VC-9, PC-7.
 
-Phase 3 (v1.2.2): native protocols PR-6 (Gemini), PR-7 (Bedrock), PR-8 (Vertex), PR-10; CS-9, CS-10, VC-8, RD-7 (added 2026-11-15 from the old-backlog review); MQ-7 slices D, E, F, G; RD-1 (macOS arm64; D6 default is Linux x86_64 only, so this waits for a decision), MT-1, MT-2, VC-2, VC-3, VC-6, VC-7, CX-4, CX-6, RD-2, RD-5, RD-6, CS-5, CS-6, PC-4, PC-5, PC-6, MQ-8 (needs MQ-1 and MQ-2).
+Phase 3 (v1.2.2): native protocols PR-6 (Gemini), PR-7 (Bedrock), PR-8 (Vertex), PR-10; CS-9, CS-10, VC-8, RD-7 (added 2026-11-15 from the old-backlog review); MQ-7 slices D, E, F, G; RD-1 (macOS arm64; D6 default is Linux x86_64 only, so this waits for a decision), MT-1, MT-2, VC-2, VC-3, VC-6, VC-7, CX-4, CX-6, RD-2, RD-5, RD-6, CS-5, CS-6, PC-4, PC-5, PC-6, MQ-8 (needs MQ-1 and MQ-2), VC-10 (gated on a larger evaluation).
 
 D9 note: "every cloud provider configurable" is delivered in v1.2.1 for every OpenAI-compatible provider and for Azure OpenAI, Gemini's compatible endpoint and Bedrock's OpenAI-compatible endpoint (PR-2, PR-3, PR-5), which is most of the 334 providers in models.dev. The three native protocols (Gemini, Bedrock Converse with SigV4, Vertex with ADC) are the largest pieces and ship in v1.2.2 unless you move them up.
 
