@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01G3LJXRbQejkfAZPy4GosFB",
+  "agent_id": "a87b295d2820a9861",
+  "subagent_type": "general-purpose",
+  "task_description": "v1.2.1 PC-2 leak and hang guard",
+  "token_usage": {
+    "input_tokens": 166,
+    "cache_creation_tokens": 159781,
+    "cache_read_tokens": 10289273,
+    "output_tokens": 50393,
+    "api_call_count": 83
+  },
+  "started_at": "2026-11-15T03:22:48.538460083Z",
+  "completed_at": "2026-11-15T03:57:25.377612337Z"
+}
