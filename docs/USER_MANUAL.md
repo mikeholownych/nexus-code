@@ -488,6 +488,12 @@ Nexus Code provides high-performance tools executed via compiled native 64-bit R
 
 ## 4. Safety, Compliance & Resilience
 
+### Verifier environment (`NEXUS_VERIFIER_ENV_PASSTHROUGH`)
+
+The operation runner re-runs a unit's approved verifier on the merged tree in a child whose inherited **environment variables** are scrubbed: the MCP allowlist (`PATH`, `HOME`, `LANG`, proxy and CA settings, ...) plus common toolchain variables (`CARGO_HOME`, `RUSTUP_*`, `GOPATH`, `GOCACHE`, `GOFLAGS`, `NODE_OPTIONS`, `NVM_DIR`, `VOLTA_HOME`, `PYENV_ROOT`, `VIRTUAL_ENV`, `PYTHONPATH`, `JAVA_HOME`, `CI`, `XDG_CACHE_HOME`, `LD_LIBRARY_PATH`, `UV_*`, `GRADLE_*`, `MAVEN_*`, `DOTNET_*`). Any name containing `KEY`, `TOKEN`, `SECRET`, `PASSWORD` or `CREDENTIAL` is never passed by default, and no `NEXUS_*` variable is.
+
+To pass more, set `NEXUS_VERIFIER_ENV_PASSTHROUGH` to a comma-separated list of names (a trailing `*` is a prefix), for example `NEXUS_EVAL_TEST_*,ANSIBLE_CONFIG,VIRTUAL_ENV`. Names you list are passed even if they look secret. The setting is read from the operator environment or `~/.config/nexus/config.env` only; a project `.env` cannot set it. This scrubs inherited variables only: files under `HOME` (`~/.config/nexus/config.env`, `~/.ssh`, `~/.aws`, `.npmrc`, `.netrc`, `~/.cargo/credentials.toml`) remain readable by the verifier. A verifier that exits 126/127 is reported as an environment problem (naming this setting), not as a candidate failure. `nexus doctor` shows the current value.
+
 ### Durable operation scheduling policy
 
 Operation defaults can be set in the operator-owned `~/.config/nexus/config.json`, the legacy `~/.config/nexus/config.env`, or the operator's shell environment. The initial structured config schema supports `operationPolicy`:

@@ -22,7 +22,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import { parse as parseDotenv } from "dotenv";
-import { LocalLlmClient, credentialStorageHome } from "./client.js";
+import { LocalLlmClient, credentialStorageHome, operatorSetting } from "./client.js";
 import { credentialsPath } from "./credentials.js";
 import { mcpConfigFiles } from "./mcp.js";
 import { pluginDirs } from "./plugins.js";
@@ -287,6 +287,7 @@ const CONFIG_KEYS: Array<{ key: string; flag?: string; field: keyof HarnessConfi
   { key: "NEXUS_REPEATED_CALL_SOFT", field: (c) => String(c.repeatedCalls?.soft ?? DEFAULT_REPEATED_CALL_SOFT), fallback: "3" },
   { key: "NEXUS_REPEATED_CALL_HARD", field: (c) => String(c.repeatedCalls?.hard ?? DEFAULT_REPEATED_CALL_HARD), fallback: "5" },
   { key: "NEXUS_VERIFIER_TIMEOUT_SECS", field: (c) => String(c.verifierTimeoutSecs ?? 300), fallback: "300" },
+  { key: "NEXUS_VERIFIER_ENV_PASSTHROUGH", field: () => operatorSetting("NEXUS_VERIFIER_ENV_PASSTHROUGH"), fallback: "none (toolchain defaults only)" },
   { key: "PLANNER_LLM_MODEL", flag: "plannerModel", field: (c) => c.plannerModel },
   { key: "CODER_LLM_MODEL", flag: "coderModel", field: (c) => c.coderModel },
 ];
