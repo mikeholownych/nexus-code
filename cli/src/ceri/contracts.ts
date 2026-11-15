@@ -122,6 +122,17 @@ export type ComparativeOutcome =
   | "CANCELLED"
   | "INCOMPARABLE";
 
+export interface BaselineIdentity {
+  manifestSha256: string;
+  model: { name: string; digest?: string; quantization?: string };
+  sampling: ModelMetadata["parameters"];
+  configurationSha256: string;
+  evaluatorVersion: string;
+  toolchainVersions: Record<string, string>;
+}
+
+export type CertificationStatus = "CERTIFYING" | "NON_CERTIFYING";
+
 export interface BaselineSpecification {
   baselineId: string;
   evaluationId: string;
@@ -133,6 +144,7 @@ export interface BaselineSpecification {
   manifestSha256: string;
   establishedAt: string;
   assertions?: Record<string, boolean>;
+  identity?: BaselineIdentity;
 }
 
 export interface BaselineComparisonResult {
@@ -149,6 +161,12 @@ export interface BaselineComparisonResult {
   }>;
   confidence: number;
   explanation: string;
+  certification?: {
+    status: CertificationStatus;
+    reasons: string[];
+    baselineIdentity?: BaselineIdentity;
+    currentIdentity: BaselineIdentity;
+  };
 }
 
 export type EpistemologicalType =

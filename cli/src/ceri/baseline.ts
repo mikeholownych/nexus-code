@@ -1,11 +1,99 @@
+import { createHash } from "node:crypto";
 import type {
   RunManifest,
+  BaselineIdentity,
   BaselineSpecification,
   BaselineComparisonResult,
   ComparativeOutcome,
 } from "./contracts.js";
 
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : 1));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function sha256(value: unknown): string {
+  return createHash("sha256").update(canonicalJson(value)).digest("hex");
+}
+
 export class CeriBaselineComparator {
+  static manifestSha256(manifest: RunManifest): string {
+    return sha256(manifest);
+  }
+
+  /** The identity a run's manifest binds: model, sampling, configuration, evaluator and tool versions. */
+  static identityOf(manifest: RunManifest): BaselineIdentity {
+    return {
+      manifestSha256: this.manifestSha256(manifest),
+      model: { name: manifest.model.name, digest: manifest.model.digest, quantization: manifest.model.quantization },
+      sampling: manifest.model.parameters,
+      configurationSha256: sha256({ routingConfig: manifest.routingConfig, agentProfileVersion: manifest.agentProfileVersion }),
+      evaluatorVersion: manifest.harnessVersion,
+      toolchainVersions: manifest.toolchainVersions,
+    };
+  }
+
+  /** Builds a baseline specification whose identity and manifest hash are taken from the baseline run's own manifest. */
+  static bindBaseline(
+    manifest: RunManifest,
+    fields: { baselineId: string; selectionRationale: string; establishedAt: string; assertions?: Record<string, boolean> }
+  ): BaselineSpecification {
+    const identity = this.identityOf(manifest);
+    return {
+      ...fields,
+      evaluationId: manifest.evaluationId,
+      evaluationVersion: manifest.evaluationVersion,
+      sourceCommit: manifest.sourceCommit,
+      modelName: manifest.model.name,
+      modelQuantization: manifest.model.quantization,
+      manifestSha256: identity.manifestSha256,
+      identity,
+    };
+  }
+
+  /**
+   * Certifying only when both identities are bound (baseline manifest supplied, hash and identity verified, model
+   * digest recorded on both sides) and equal on digest, sampling, configuration, evaluator and tool versions.
+   * Never an external qualification.
+   */
+  private static certify(
+    manifest: RunManifest,
+    baseline: BaselineSpecification,
+    baselineManifest: RunManifest | undefined
+  ): NonNullable<BaselineComparisonResult["certification"]> {
+    const currentIdentity = this.identityOf(manifest);
+    const reasons: string[] = [];
+    const bound = baseline.identity;
+    if (!bound) reasons.push("baseline identity not recorded");
+    else if (!baselineManifest) reasons.push("baseline manifest not supplied; baseline identity unverified");
+    if (bound) {
+      if (!bound.model.digest) reasons.push("baseline model digest not recorded");
+      if (!currentIdentity.model.digest) reasons.push("current model digest not recorded");
+      const diffs: Array<[string, unknown, unknown]> = [
+        ["model digest", bound.model.digest, currentIdentity.model.digest],
+        ["sampling parameters", bound.sampling, currentIdentity.sampling],
+        ["configuration", bound.configurationSha256, currentIdentity.configurationSha256],
+        ["evaluator version", bound.evaluatorVersion, currentIdentity.evaluatorVersion],
+        ["toolchain versions", bound.toolchainVersions, currentIdentity.toolchainVersions],
+      ];
+      for (const [name, b, c] of diffs) {
+        if (canonicalJson(b) !== canonicalJson(c)) reasons.push(`${name} differ between baseline and current run`);
+      }
+    }
+    return {
+      status: reasons.length === 0 ? "CERTIFYING" : "NON_CERTIFYING",
+      reasons,
+      baselineIdentity: bound,
+      currentIdentity,
+    };
+  }
+
   /**
    * Checks whether a run is eligible for direct comparison against a designated baseline.
    */
@@ -62,6 +150,40 @@ export class CeriBaselineComparator {
     baseline: BaselineSpecification,
     baselineAssertions: Record<string, boolean>,
     isRepeatReproduction = false,
+    options?: { isPriorRegressionCandidate?: boolean; isKnownFlaky?: boolean; baselineManifest?: RunManifest }
+  ): BaselineComparisonResult {
+    const certification = this.certify(manifest, baseline, options?.baselineManifest);
+    const tampered: string[] = [];
+    if (options?.baselineManifest) {
+      if (this.manifestSha256(options.baselineManifest) !== baseline.manifestSha256) {
+        tampered.push("BASELINE_MANIFEST_MISMATCH: the supplied baseline manifest does not match the recorded manifestSha256");
+      }
+      if (baseline.identity && canonicalJson(baseline.identity) !== canonicalJson(this.identityOf(options.baselineManifest))) {
+        tampered.push("BASELINE_IDENTITY_MISMATCH: the recorded baseline identity does not match the baseline manifest");
+      }
+    }
+    if (tampered.length > 0) {
+      return {
+        baselineId: baseline.baselineId,
+        currentRunId: manifest.runId,
+        isEligibleForComparison: false,
+        incomparabilityReasons: tampered,
+        outcome: "INCOMPARABLE",
+        divergences: [],
+        confidence: 0.0,
+        explanation: `Baseline is not the one that was recorded: ${tampered.join("; ")}`,
+        certification: { ...certification, status: "NON_CERTIFYING", reasons: [...tampered, ...certification.reasons] },
+      };
+    }
+    return { ...this.classifyRuns(manifest, currentAssertions, baseline, baselineAssertions, isRepeatReproduction, options), certification };
+  }
+
+  private static classifyRuns(
+    manifest: RunManifest,
+    currentAssertions: Record<string, boolean>,
+    baseline: BaselineSpecification,
+    baselineAssertions: Record<string, boolean>,
+    isRepeatReproduction: boolean,
     options?: { isPriorRegressionCandidate?: boolean; isKnownFlaky?: boolean }
   ): BaselineComparisonResult {
     // 1. Check basic execution statuses and failure types

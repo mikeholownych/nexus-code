@@ -22,6 +22,7 @@ export interface EvaluationRunnerOptions {
   evidenceStore: CeriEvidenceStore;
   baseline?: BaselineSpecification;
   baselineAssertions?: Record<string, boolean>;
+  baselineManifest?: RunManifest;
   isRepeatReproduction?: boolean;
 }
 
@@ -207,7 +208,12 @@ export class CeriEvaluationRunner {
           assertionResults,
           options.baseline,
           loadedBaselineAssertions,
-          options.isRepeatReproduction ?? false
+          options.isRepeatReproduction ?? false,
+          {
+            baselineManifest:
+              options.baselineManifest ??
+              options.evidenceStore.loadManifest(options.baseline.evaluationId, options.baseline.baselineId),
+          }
         );
       }
     }
