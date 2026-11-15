@@ -172,3 +172,25 @@ rather than guessed). These are budgets, not a guarantee of the provider's invoi
 - Provider-hosted tools (web search, code execution) are not enabled; all tools run through Nexus authorization.
 - Opaque reasoning state is replayed only to the exact provider+model that produced it and only if unaltered;
   persistence redaction can alter it, in which case it is dropped (not forwarded) after a restore.
+
+## models.dev snapshot
+
+`cli/src/providers.generated.ts` is a dated snapshot of [models.dev](https://github.com/sst/models.dev) (MIT): per
+provider the id, display name, credential variable names, base URL template (`${VAR}` kept verbatim), and wire-protocol
+class (`openai-chat`, `openai-responses`, `anthropic-messages`, or `native:<npm package>`); per model the context,
+output and input limits, tool-call support, accepted `tool_choice` modes, reasoning effort levels, and input/output
+price per million tokens. Only chat models that support tool calls are kept; deprecated, alpha and websocket-only
+entries are dropped. `cli/src/core/models_snapshot.ts` reads it (`snapshotDate`, `snapshotProvider`, `snapshotModel`,
+`resolveContext`, `acceptsToolChoice`, which answers `"unknown"` when the snapshot has no data).
+
+Nothing is fetched at runtime or in CI. To regenerate, fetch the data by hand, then run the offline generator:
+
+```bash
+curl -fsS https://models.dev/api.json -o /tmp/api.json
+git clone --depth 1 https://github.com/sst/models.dev /tmp/models.dev   # optional: supplies tool_choice modes
+node scripts/gen_models_snapshot.mjs /tmp/api.json --date YYYY-MM-DD --commit <sha> --tools-from /tmp/models.dev
+```
+
+`api.json` has no tool-choice data, so `--tools-from` reads it as text from the clone's TOML files; without it the
+`toolChoice` field is absent and lookups answer `"unknown"`. The output is deterministic and schema-validated before it
+is written.
