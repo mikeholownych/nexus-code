@@ -4,7 +4,8 @@
  * ledger, so "Permitted next actions" must not point the agent at them. Checked on both renderings: the pinned ledger
  * sent with every request and the context built for the constrained note.
  */
-import { test } from "node:test";
+import { test, after } from "node:test";
+import "./helpers/leak_guard.js";
 import * as assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -15,6 +16,8 @@ import { createLedger, renderRecoveryContext } from "../src/core/objective.js";
 import { createTracking, ExecutionTracker } from "../src/core/execution_tracking.js";
 
 const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-recovery-roles-"));
+const agents: AutonomousAgent[] = [];
+after(() => agents.forEach((a) => a.shutdown()));
 const OBJECTIVE = "Fix add so it returns the sum.";
 
 function constrainedAgent(o: { role?: string; depth?: number; readOnly?: boolean }) {
@@ -22,6 +25,7 @@ function constrainedAgent(o: { role?: string; depth?: number; readOnly?: boolean
     { endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 2, temperature: 0, workspace, shell: "bash", role: o.role, readOnly: o.readOnly } as any,
     o.depth ?? 0,
   );
+  agents.push(agent);
   const ledger = createLedger(OBJECTIVE);
   ledger.execution = createTracking();
   ledger.execution.recovery.stage = "constrained";

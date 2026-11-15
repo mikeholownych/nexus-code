@@ -1,4 +1,5 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
+import "./helpers/leak_guard.js";
 import assert from "node:assert";
 import * as fs from "node:fs";
 import fsDefault from "node:fs";
@@ -750,7 +751,7 @@ describe("WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PE
     assert.deepStrictEqual(loaded.milestones, []);
   });
 
-  test("AutonomousAgent integration: Milestones, in-flight operations, and task recovery", async () => {
+  test("AutonomousAgent integration: Milestones, in-flight operations, and task recovery", async (t) => {
     const config: HarnessConfig = {
       endpoint: "http://localhost:1234/v1",
       model: "test-model",
@@ -761,6 +762,7 @@ describe("WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PE
     };
 
     const agent = new AutonomousAgent(config);
+    t.after(() => agent.shutdown());
     const stateManager = agent.getStateManager();
     const taskId = agent.getTaskId();
 

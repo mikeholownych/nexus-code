@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execSync, spawnSync } from "node:child_process";
+import { trackResource } from "./leak_registry.js";
 
 export type Reply =
   /** `truncated`: the reply hits the output limit (finish_reason=length) partway through its tool calls' arguments. */
@@ -145,6 +146,11 @@ export async function startGateway(script: (n: number, body?: any) => Reply, opt
   server.on("connection", (s) => { sockets.add(s); s.on("close", () => sockets.delete(s)); });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
   const port = (server.address() as any).port;
+  trackResource("gateway", `scripted gateway on port ${port} not closed`, () => server.listening, () => close());
+  const close = async () => {
+    for (const s of sockets) s.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  };
   return {
     url: `http://127.0.0.1:${port}/v1`,
     requests,
@@ -153,10 +159,7 @@ export async function startGateway(script: (n: number, body?: any) => Reply, opt
       return modelRequests;
     },
     authSeen,
-    close: async () => {
-      for (const s of sockets) s.destroy();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    },
+    close,
   };
 }
 
