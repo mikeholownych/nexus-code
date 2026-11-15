@@ -47,6 +47,56 @@ fn default_timeout() -> u64 {
     60
 }
 
+/// True when an environment variable name looks like a credential or points at one. This is the second layer behind
+/// the TypeScript `buildCommandEnvironment` (cli/src/command_env.ts, `isCredentialName`), which already starts the
+/// engine with a scrubbed environment: it keeps a command from seeing the operator's keys even when the engine is
+/// started some other way (`cargo run`, the `call` subcommand, a future caller that forgets to scrub). Keep the two
+/// rules in step.
+fn is_credential_name(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    const EXACT: &[&str] = &[
+        "GOOGLE_APPLICATION_CREDENTIALS", "KUBECONFIG", "NETRC", "SSH_AUTH_SOCK", "DOCKER_CONFIG",
+        "NPM_CONFIG_USERCONFIG", "GH_TOKEN", "GITHUB_TOKEN", "NPM_TOKEN", "CARGO_REGISTRY_TOKEN", "PGPASSFILE",
+        "PGPASSWORD",
+    ];
+    const PREFIXES: &[&str] = &["AWS_", "AZURE_", "NEXUS_GATEWAY_TOKEN"];
+    const STEMS: &[&str] = &[
+        "API_KEY", "APIKEY", "ACCESS_KEY", "SECRET_KEY", "PRIVATE_KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD",
+        "CREDENTIAL", "CREDENTIALS",
+    ];
+    if EXACT.contains(&upper.as_str()) || PREFIXES.iter().any(|p| upper.starts_with(p)) {
+        return true;
+    }
+    // `*_API_KEY`, `*_TOKEN`, ... optionally followed by `_FILE` / `_PATH` / `_ID` (a pointer to one).
+    let base = ["_FILE", "_PATH", "_ID"]
+        .iter()
+        .find_map(|suffix| upper.strip_suffix(suffix))
+        .unwrap_or(&upper);
+    STEMS.iter().any(|stem| base == *stem || base.ends_with(&format!("_{stem}")))
+}
+
+/// Names the operator opted in with `NEXUS_COMMAND_ENV_PASSTHROUGH` (comma-separated, trailing `*` for a prefix).
+fn command_env_allowed(name: &str, optin: &[String]) -> bool {
+    optin.iter().any(|p| match p.strip_suffix('*') {
+        Some(prefix) => name.starts_with(prefix),
+        None => name == p,
+    })
+}
+
+/// Inherited variables a spawned command must not see: credential-looking names that the operator did not opt in.
+fn credential_env_to_remove() -> Vec<String> {
+    let optin: Vec<String> = std::env::var("NEXUS_COMMAND_ENV_PASSTHROUGH")
+        .unwrap_or_default()
+        .split(',')
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .collect();
+    std::env::vars()
+        .map(|(name, _)| name)
+        .filter(|name| is_credential_name(name) && !command_env_allowed(name, &optin))
+        .collect()
+}
+
 fn default_shell() -> String {
     #[cfg(windows)]
     return "powershell.exe".to_string();
@@ -606,6 +656,9 @@ pub fn run_command_tracked(args: RunCommandArgs, base_dir: &Path, key: Option<&s
         c
     };
 
+    for name in credential_env_to_remove() {
+        cmd.env_remove(name);
+    }
     cmd.current_dir(&working_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -865,6 +918,9 @@ pub fn run_command_pty(
         c
     };
 
+    for name in credential_env_to_remove() {
+        cmd.env_remove(name);
+    }
     cmd.cwd(working_dir);
 
     let mut child = pair.slave.spawn_command(cmd)
@@ -958,8 +1014,52 @@ pub fn run_command_pty(
 #[cfg(test)]
 mod tests {
     use super::*;
-
     static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn credential_names_match_the_typescript_rules() {
+        for name in [
+            "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "LOCAL_LLM_API_KEY", "NEXUS_GATEWAY_TOKEN", "NEXUS_GATEWAY_TOKEN_FILE",
+            "GH_TOKEN", "GITHUB_TOKEN", "NPM_TOKEN", "CARGO_REGISTRY_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_PROFILE",
+            "GOOGLE_APPLICATION_CREDENTIALS", "DB_PASSWORD", "client_secret", "SERVICE_TOKEN_FILE", "SSH_AUTH_SOCK",
+        ] {
+            assert!(is_credential_name(name), "{name} should be treated as a credential");
+        }
+        for name in [
+            "PATH", "HOME", "LANG", "LC_ALL", "TERM", "USER", "SHELL", "TMPDIR", "CARGO_HOME", "GOPATH", "NODE_OPTIONS",
+            "NEXUS_MAX_TOOL_TIMEOUT_SECS", "MAX_TOKENS", "KEYBOARD", "COMMAND_ENV_ORDINARY",
+        ] {
+            assert!(!is_credential_name(name), "{name} should be kept");
+        }
+    }
+
+    #[test]
+    fn passthrough_matches_names_and_prefixes() {
+        let optin = vec!["GH_TOKEN".to_string(), "MY_*".to_string()];
+        assert!(command_env_allowed("GH_TOKEN", &optin));
+        assert!(command_env_allowed("MY_API_KEY", &optin));
+        assert!(!command_env_allowed("OPENAI_API_KEY", &optin));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_command_does_not_inherit_credentials() {
+        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::set_var("NEXUS_TEST_RUNNER_API_KEY", "sk-runner-sentinel");
+            std::env::set_var("NEXUS_TEST_RUNNER_PLAIN", "plain-visible");
+        }
+        let cwd = std::env::current_dir().unwrap();
+        let res = run_command(RunCommandArgs { command: "env".to_string(), ..Default::default() }, &cwd);
+        unsafe {
+            std::env::remove_var("NEXUS_TEST_RUNNER_API_KEY");
+            std::env::remove_var("NEXUS_TEST_RUNNER_PLAIN");
+        }
+        let res = res.expect("env runs");
+        assert!(!res.stdout.contains("sk-runner-sentinel"), "credential leaked: {}", res.stdout);
+        assert!(res.stdout.contains("NEXUS_TEST_RUNNER_PLAIN=plain-visible"));
+    }
+
 
     #[test]
     #[cfg(unix)]
