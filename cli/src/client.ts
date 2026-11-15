@@ -31,8 +31,8 @@ import { redactSecrets } from "./ui.js";
 import { classifyLocality, setLocalityAuthorityResolver } from "./core/egress.js";
 import { connectionFor, disclosureClass, operatorSettingKeyForAuth, type ResolvedConnection } from "./providers.js";
 import { ProviderStreamError, readSse, type NativeRequestInput, type NativeResult } from "./protocols/common.js";
-import { anthropicStreamParser, buildAnthropicRequest, parseAnthropicResponse } from "./protocols/anthropic.js";
-import { buildResponsesRequest, parseResponsesResponse, responsesStreamParser } from "./protocols/openai_responses.js";
+import { WIRE_PROTOCOLS } from "./protocols/index.js";
+import { buildChatRequest, chatStreamParser, chatUsage, ChatErrorFrame, parseChatResponse, readChatStream } from "./protocols/openai_chat.js";
 import { UsageLedger, type UsageReport } from "./usage.js";
 import { localEndpointCredential, localEndpointCredentials, resolveCredential, saveCredential, type StoredCredential } from "./credentials.js";
 import { COPILOT_HEADERS, copilotToken, refreshOAuth } from "./oauth.js";
@@ -252,19 +252,6 @@ const DEFAULT_CLASSIFICATION: Record<InferenceFailureKind, ProviderClassificatio
   policy_denied: { condition: "REQUEST_REJECTED", execution: "NOT_EXECUTED" },
   configuration_error: { condition: "REQUEST_REJECTED", execution: "NOT_EXECUTED" },
 };
-
-/** Chat Completions usage (OpenRouter adds `cost`). */
-function chatUsage(u: any): UsageReport | undefined {
-  if (!u || typeof u !== "object") return undefined;
-  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
-  const r: UsageReport = {};
-  if (n(u.prompt_tokens) !== undefined) r.inputTokens = u.prompt_tokens;
-  if (n(u.completion_tokens) !== undefined) r.outputTokens = u.completion_tokens;
-  if (n(u.prompt_tokens_details?.cached_tokens) !== undefined) r.cachedInputTokens = u.prompt_tokens_details.cached_tokens;
-  if (n(u.completion_tokens_details?.reasoning_tokens) !== undefined) r.reasoningTokens = u.completion_tokens_details.reasoning_tokens;
-  if (n(u.cost) !== undefined) r.costUsd = u.cost;
-  return r;
-}
 
 /** The sum of what several requests of one logical call reported; a field none of them reported stays absent. */
 function sumUsage(reports: ReadonlyArray<UsageReport | undefined>): UsageReport | undefined {
@@ -773,9 +760,7 @@ export class LocalLlmClient {
 
   /** Whether the connection supports native tool calling (Responses, Anthropic, or OpenAI-compatible accepting tools). */
   public supportsNativeTools(): boolean {
-    if (this.conn.protocol === "openai-responses" || this.conn.protocol === "anthropic-messages") {
-      return true;
-    }
+    if (WIRE_PROTOCOLS[this.conn.protocol].nativeTools) return true;
     return !this.unsupportedParams.has("tools");
   }
 
@@ -1725,7 +1710,7 @@ export class LocalLlmClient {
    * Token usage and cost of every request are summed into the last-usage report.
    */
   private async askAgainForNativeCall(response: ChatMessage, messages: ChatMessage[], tools: ToolDefinition[], signal?: AbortSignal, onToken?: StreamTokenCallback): Promise<ChatMessage> {
-    if (this.conn.protocol !== "openai-chat" || this.conn.streamOnly || this.askedAgain.has(response) || !isContentCallReply(response, tools, messages)) return response;
+    if (WIRE_PROTOCOLS[this.conn.protocol].native || this.conn.streamOnly || this.askedAgain.has(response) || !isContentCallReply(response, tools, messages)) return response;
     this.askedAgain.add(response);
     const corrected: ChatMessage[] = [...messages, { role: "assistant", content: response.content }, { role: "user", content: CONTENT_CALL_NOTE }];
     const usages = [this.lastUsageReport];
@@ -1762,7 +1747,7 @@ export class LocalLlmClient {
   }
 
   private async chatCompletionOnce(messages: ChatMessage[], tools: ToolDefinition[], requestId: string, signal?: AbortSignal, toolChoice: "auto" | "required" = "auto"): Promise<ChatMessage> {
-    if (this.conn.protocol !== "openai-chat") return this.nativeCompletion(messages, tools, undefined, requestId, signal, this.conn.streamOnly);
+    if (WIRE_PROTOCOLS[this.conn.protocol].native) return this.nativeCompletion(messages, tools, undefined, requestId, signal, this.conn.streamOnly);
     if (this.conn.streamOnly) return this.chatCompletionStreamOnce(messages, tools, undefined, requestId, signal);
     return this.executeWithFailover("chatCompletion", async (currentEp) => {
       if (signal?.aborted) throw abortedError(requestId);
@@ -1809,31 +1794,13 @@ export class LocalLlmClient {
       }
       outboundTools = adaptToolDefinitionsForServer(LocalLlmClient.serverKindCache.get(this.kindKey(currentEp)) ?? "unknown", outboundTools);
 
-      const payload: any = {
-        model: this.model,
-        messages: outboundMessages.map((m) => ({
-          role: m.role,
-          content: m.content ?? null,
-          ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
-          ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
-          ...(m.name ? { name: m.name } : {}),
-        })),
-        temperature: this.temperature,
-      };
-      // The same output allowance as a streamed request (PRV-09: the empty-stream re-request used to be uncapped).
-      if (!this.conn.providerId) payload.max_tokens = this.maxOutputTokens;
-
-      if (outboundTools.length > 0) {
-        payload.tools = outboundTools;
-        payload.tool_choice = toolChoice;
-      }
-      if (this.conn.usage === "openrouter") payload.usage = { include: true };
+      const payload: any = this.chatBody(false, outboundMessages, outboundTools, toolChoice).body;
       this.omitUnsupported(payload);
       this.applyToolGrammar(currentEp, requestId, payload, outboundTools);
 
       const watchdog = this.createWatchdog(signal, currentEp);
       let res: Response;
-      let data: ChatCompletionResponse;
+      let data: any;
       try {
         res = await this.fetchResendingStale(url, {
           method: "POST",
@@ -1859,7 +1826,7 @@ export class LocalLlmClient {
           const errText = await res.text();
           throw this.httpError(res.status, errText, requestId, res.headers);
         }
-        data = (await res.json()) as ChatCompletionResponse;
+        data = await res.json();
       } catch (err: any) {
         watchdog.done();
         throw classifyTransportError(err, signal, requestId, "connect");
@@ -1878,28 +1845,43 @@ export class LocalLlmClient {
         throw new InferenceError("protocol_error", "provider", "Model returned empty choices array", { requestId, failoverEligible: false });
       }
 
-      const choice = data.choices[0] as { message: ChatMessage; finish_reason?: string };
-      if (choice.message?.tool_calls && Array.isArray(choice.message.tool_calls)) {
-        for (const tc of choice.message.tool_calls) {
-          if (tc.function && typeof tc.function.arguments === "object" && tc.function.arguments !== null) {
-            tc.function.arguments = JSON.stringify(tc.function.arguments);
-          }
-        }
-      }
-      if (this.conn.providerId && choice.finish_reason === "error") {
-        throw new InferenceError("provider_error_frame", "provider", "Provider ended the response with finish_reason=error.", { requestId, partialText: typeof choice.message?.content === "string" ? choice.message.content : "" });
-      }
-      if (choice.finish_reason === "length") {
-        throw new InferenceError(
-          "output_truncated",
-          "client",
-          choice.message.tool_calls?.length
-            ? "Model output was truncated (finish_reason=length) inside a tool call; refusing to run partial arguments."
-            : "Model output was truncated (finish_reason=length); refusing to treat it as a complete answer.",
-          { requestId, partialText: typeof choice.message.content === "string" ? choice.message.content : "", failoverEligible: false, truncatedCalls: truncatedCalls(choice.message.tool_calls ?? []) },
-        );
-      }
-      return choice.message;
+      const result = parseChatResponse(data);
+      this.refuseChatFinish(result, requestId);
+      return result.message;
+    });
+  }
+
+  /** A chat answer that is not a complete one: a provider error finish or a cut-off at the output limit. */
+  private refuseChatFinish(result: NativeResult, requestId: string, streamed = false): void {
+    if (this.conn.providerId && result.finishReason === "error") {
+      throw new InferenceError("provider_error_frame", "provider", `Provider ended the ${streamed ? "stream" : "response"} with finish_reason=error.`, { requestId, partialText: result.text });
+    }
+    if (streamed && result.finish === "incomplete") {
+      throw new InferenceError("stream_incomplete", "transport", "Inference stream ended without a finish_reason or [DONE]; response is incomplete.", { requestId, partialText: result.text });
+    }
+    if (result.finish === "length") {
+      throw new InferenceError(
+        "output_truncated",
+        "client",
+        result.message.tool_calls?.length
+          ? "Model output was truncated (finish_reason=length) inside a tool call; refusing to run partial arguments."
+          : "Model output was truncated (finish_reason=length); refusing to treat it as a complete answer.",
+        { requestId, partialText: result.text, failoverEligible: false, truncatedCalls: truncatedCalls(result.message.tool_calls ?? []) },
+      );
+    }
+  }
+
+  /** The chat request body for already egress-checked messages and tools (client-side params applied by the caller). */
+  private chatBody(stream: boolean, messages: ChatMessage[], tools: ToolDefinition[], toolChoice: "auto" | "required") {
+    return buildChatRequest({
+      model: this.model,
+      messages,
+      tools,
+      temperature: this.temperature,
+      maxOutputTokens: this.maxOutputTokens,
+      stream,
+      owner: `${this.conn.providerId}:${this.model}`,
+      chat: { toolChoice, capOutput: !this.conn.providerId, usage: this.conn.usage },
     });
   }
 
@@ -1968,28 +1950,7 @@ export class LocalLlmClient {
     }
     outboundTools = adaptToolDefinitionsForServer(LocalLlmClient.serverKindCache.get(this.kindKey(currentEp)) ?? "unknown", outboundTools);
 
-    const payload: any = {
-      model: this.model,
-      messages: outboundMessages.map((m) => ({
-        role: m.role,
-        content: m.content ?? null,
-        ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
-        ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
-        ...(m.name ? { name: m.name } : {}),
-      })),
-      temperature: this.temperature,
-      stream: true,
-    };
-
-    if (outboundTools.length > 0) {
-      payload.tools = outboundTools;
-      payload.tool_choice = "auto";
-    }
-    // Local endpoints: cap a reply at the completion reserve the context budget already assumes, so a runaway
-    // generation cannot run for minutes. (Cloud providers differ on the parameter name and are left to their limits.)
-    if (!this.conn.providerId) payload.max_tokens = this.maxOutputTokens;
-    if (this.conn.usage === "openrouter") payload.usage = { include: true };
-    if (this.conn.usage === "openrouter" || this.conn.usage === "stream-options") payload.stream_options = { include_usage: true };
+    const payload: any = this.chatBody(true, outboundMessages, outboundTools, "auto").body;
     this.omitUnsupported(payload);
     this.applyToolGrammar(currentEp, requestId, payload, outboundTools);
     return payload;
@@ -2002,7 +1963,7 @@ export class LocalLlmClient {
     requestId: string,
     signal?: AbortSignal,
   ): Promise<ChatMessage> {
-    if (this.conn.protocol !== "openai-chat") return this.nativeCompletion(messages, tools, onToken, requestId, signal, true);
+    if (WIRE_PROTOCOLS[this.conn.protocol].native) return this.nativeCompletion(messages, tools, onToken, requestId, signal, true);
     return this.executeWithFailover("chatCompletionStream", async (currentEp) => {
       if (signal?.aborted) throw abortedError(requestId);
       const url = `${currentEp}/chat/completions`;
@@ -2053,179 +2014,38 @@ export class LocalLlmClient {
       }
 
       this.lastAdmission = parseAdmissionHeaders((name) => res.headers.get(name));
-      let fullContent = "";
-      let reasoningContent = "";
-      let hasOutput = false;
-      let finishReason: string | undefined;
-      let sawDone = false;
       this.pending = { endpoint: currentEp, executions: this.pending?.executions };
-      const toolCallsMap: Map<number, { id: string; name: string; args: string }> = new Map();
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder("utf-8");
-      let buffer = "";
-
-      // Positive completion evidence for this protocol: a chunk carrying a non-null finish_reason, or the
-      // terminal `data: [DONE]` event. Absence of both means the stream ended early.
-      const handleLine = (line: string): void => {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith(":")) return;
-        if (trimmed === "data: [DONE]" || trimmed === "data:[DONE]") {
-          sawDone = true;
-          return;
-        }
-        if (!trimmed.startsWith("data:") && !trimmed.startsWith("data: ")) return;
-        const payload = trimmed.startsWith("data: ") ? trimmed.slice(6) : trimmed.slice(5);
-        let chunk: any;
-        try {
-          chunk = JSON.parse(payload);
-        } catch {
-          throw new InferenceError("malformed_event", "provider", `Malformed stream event: ${trimmed.slice(0, 120)}`, {
-            requestId,
-            partialText: fullContent,
-            failoverEligible: false,
-          });
-        }
-        if (chunk && typeof chunk === "object" && chunk.error) {
-          const em = typeof chunk.error === "string" ? chunk.error : chunk.error.message || JSON.stringify(chunk.error);
-          const hints = providerHints(undefined, JSON.stringify({ error: chunk.error }));
-          // The request was admitted. Only an explicit pre-generation code proves the model never ran it.
-          if (hints.errorCode === "pre_generation") {
-            throw new InferenceError("provider_error_frame", "provider", `Provider error frame mid-stream: ${boundedProviderText(em)}`, {
-              requestId,
-              partialText: fullContent,
-              hints,
-              condition: "TEMPORARILY_UNAVAILABLE",
-              execution: hasOutput ? "UNKNOWN" : "NOT_EXECUTED",
-            });
-          }
-          const classifiedCode = hints.errorCode && CLASSIFIED_STREAM_ERRORS.has(hints.errorCode);
-          throw this.fromStreamError(new ProviderStreamError(em, classifiedCode ? hints.errorCode : hints.errorType ?? hints.errorCode, fullContent), requestId, hints, hasOutput);
-        }
-        if (this.pending && chunk && typeof chunk === "object") {
-          if (chunk.usage) this.pending.usage = chatUsage(chunk.usage);
-          if (typeof chunk.id === "string") this.pending.providerRequestId ??= chunk.id;
-          if (typeof chunk.model === "string") this.pending.effectiveModel ??= chunk.model;
-        }
-        if (chunk.choices?.[0]?.finish_reason) finishReason = chunk.choices[0].finish_reason;
-        const delta = chunk.choices?.[0]?.delta;
-        if (!delta) return;
-
-        // 1. Text token chunk
-        if (delta.content) {
-          hasOutput = true;
-          fullContent += delta.content;
-          if (onToken) {
-            onToken(delta.content);
-          }
-        }
-        const reasoningDelta = delta.reasoning_content ?? delta.reasoning;
-        if (typeof reasoningDelta === "string") {
-          if (reasoningDelta) hasOutput = true;
-          reasoningContent += reasoningDelta;
-        }
-
-        // 2. Tool call chunks
-        if (delta.tool_calls && Array.isArray(delta.tool_calls)) {
-          if (delta.tool_calls.length > 0) hasOutput = true;
-          for (const tc of delta.tool_calls) {
-            // Spec streams give every fragment an index. Some servers (and re-streamed non-streaming
-            // responses) omit it; then a fragment that carries an id or a name starts a NEW call, and
-            // one with neither continues the latest call. Never fold distinct calls into index 0.
-            let idx: number;
-            if (typeof tc.index === "number") {
-              idx = tc.index;
-            } else if (tc.id || tc.function?.name) {
-              idx = toolCallsMap.size === 0 ? 0 : Math.max(...toolCallsMap.keys()) + 1;
-            } else {
-              idx = toolCallsMap.size === 0 ? 0 : Math.max(...toolCallsMap.keys());
-            }
-            const current = toolCallsMap.get(idx) || { id: "", name: "", args: "" };
-
-            if (tc.id) current.id = tc.id;
-            // The name arrives once in spec streams. Some servers repeat it in later deltas, or send it cumulatively;
-            // only a genuinely new fragment is appended (PRV-04: a repeated name became "read_fileread_file").
-            const fragment = tc.function?.name;
-            if (fragment) {
-              if (!current.name) current.name = fragment;
-              else if (fragment !== current.name) current.name = fragment.startsWith(current.name) ? fragment : current.name + fragment;
-            }
-            const rawArgs = tc.function?.arguments;
-            if (rawArgs !== undefined && rawArgs !== null) {
-              if (typeof rawArgs === "object") {
-                current.args = JSON.stringify(rawArgs);
-              } else {
-                current.args += String(rawArgs);
-              }
-            }
-
-            toolCallsMap.set(idx, current);
-          }
+      const parser = chatStreamParser(onToken);
+      const syncReported = () => {
+        const r = parser.reported();
+        if (this.pending) {
+          if (r.usage) this.pending.usage = r.usage;
+          if (r.id) this.pending.providerRequestId ??= r.id;
+          if (r.model) this.pending.effectiveModel ??= r.model;
         }
       };
 
       try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          watchdog.onChunk();
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-          for (const line of lines) handleLine(line);
-        }
-        if (buffer.trim()) handleLine(buffer);
+        await readChatStream(res.body, parser, () => watchdog.onChunk());
       } catch (streamErr: any) {
-        try { await reader.cancel(); } catch {}
-        const classified = classifyTransportError(streamErr, signal, requestId, "stream", fullContent);
+        syncReported();
+        if (streamErr instanceof ChatErrorFrame) throw this.fromChatErrorFrame(streamErr, requestId);
+        if (streamErr instanceof ProviderStreamError) throw this.fromStreamError(streamErr, requestId);
+        const classified = classifyTransportError(streamErr, signal, requestId, "stream", parser.text());
         // A transport error after the terminal event cannot change the (already complete) response.
-        const postCompletionTransportError = (finishReason || sawDone) && !(streamErr instanceof InferenceError) && classified.kind !== "aborted";
+        const postCompletionTransportError = parser.complete() && !(streamErr instanceof InferenceError) && classified.kind !== "aborted";
         if (!postCompletionTransportError) throw classified;
       } finally {
         watchdog.done();
       }
+      syncReported();
 
-      if (this.conn.providerId && finishReason === "error") {
-        throw new InferenceError("provider_error_frame", "provider", "Provider ended the stream with finish_reason=error.", { requestId, partialText: fullContent });
-      }
-      if (!finishReason && !sawDone) {
-        throw new InferenceError(
-          "stream_incomplete",
-          "transport",
-          "Inference stream ended without a finish_reason or [DONE]; response is incomplete.",
-          { requestId, partialText: fullContent },
-        );
-      }
-
-      const assembledToolCalls: ToolCall[] = [];
-      for (const [_, tc] of toolCallsMap.entries()) {
-        if (tc.name) {
-          assembledToolCalls.push({
-            id: tc.id || `call_${Math.random().toString(36).substring(2, 9)}`,
-            type: "function",
-            function: {
-              name: tc.name,
-              arguments: tc.args,
-            },
-          });
-        }
-      }
-
-      if (finishReason === "length") {
-        throw new InferenceError(
-          "output_truncated",
-          "client",
-          assembledToolCalls.length > 0
-            ? "Model output was truncated (finish_reason=length) inside a tool call; refusing to run partial arguments."
-            : "Model output was truncated (finish_reason=length); refusing to treat it as a complete answer.",
-          { requestId, partialText: fullContent, failoverEligible: false, truncatedCalls: truncatedCalls(assembledToolCalls) },
-        );
-      }
+      const result = parser.result();
+      this.refuseChatFinish(result, requestId, true);
 
       // The stream completed with nothing in it; the non-streaming re-request is a new operation with its own
       // X-Request-ID so the provider's records never show two executions under one request ID.
-      if (!fullContent && !reasoningContent && assembledToolCalls.length === 0) {
+      if (!result.text && !(result.message as any).reasoning_content && !result.message.tool_calls?.length) {
         if (this.pending) this.pending.executions = 2;
         else this.pending = { endpoint: currentEp, executions: 2 };
         this.emitDiagnostic("error", pc.dim(`[nexus] Empty stream from ${this.conn.label}; re-requesting non-streaming completion (executions: 2).`));
@@ -2235,13 +2055,24 @@ export class LocalLlmClient {
         return res;
       }
 
-      return {
-        role: "assistant",
-        content: fullContent || null,
-        ...(assembledToolCalls.length > 0 ? { tool_calls: assembledToolCalls } : {}),
-        ...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
-      };
+      return result.message;
     });
+  }
+
+  /** A `{error}` chunk inside a chat stream: only an explicit pre-generation code proves the model never ran the request. */
+  private fromChatErrorFrame(e: ChatErrorFrame, requestId: string): InferenceError {
+    const hints = providerHints(undefined, JSON.stringify({ error: e.error }));
+    if (hints.errorCode === "pre_generation") {
+      return new InferenceError("provider_error_frame", "provider", `Provider error frame mid-stream: ${boundedProviderText(e.message)}`, {
+        requestId,
+        partialText: e.partialText,
+        hints,
+        condition: "TEMPORARILY_UNAVAILABLE",
+        execution: e.hasOutput ? "UNKNOWN" : "NOT_EXECUTED",
+      });
+    }
+    const classifiedCode = hints.errorCode && CLASSIFIED_STREAM_ERRORS.has(hints.errorCode);
+    return this.fromStreamError(new ProviderStreamError(e.message, classifiedCode ? hints.errorCode : hints.errorType ?? hints.errorCode, e.partialText), requestId, hints, e.hasOutput);
   }
 
   /** Egress interception (DISC-001..003, CTX-006, FAIL-003) of messages and tools bound for `currentEp`. */
@@ -2295,7 +2126,7 @@ export class LocalLlmClient {
       await this.prepareCredential(currentEp, requestId);
       this.preflight(currentEp, requestId, JSON.stringify(messages).length + JSON.stringify(tools).length);
       const outbound = this.egress(messages, tools, currentEp);
-      const anthropic = this.conn.protocol === "anthropic-messages";
+      const wire = WIRE_PROTOCOLS[this.conn.protocol];
       const owner = `${this.conn.providerId}:${this.model}`;
       const input: NativeRequestInput = {
         model: this.model,
@@ -2308,7 +2139,7 @@ export class LocalLlmClient {
         reasoningEffort: this.reasoningEffort,
         thinkingBudget: this.thinkingBudget,
       };
-      const req = anthropic ? buildAnthropicRequest(input) : buildResponsesRequest(input);
+      const req = wire.build(input);
       this.omitUnsupported(req.body);
       if (req.droppedState) {
         this.emitDiagnostic("error", pc.dim(`[nexus] ${req.droppedState} earlier assistant turn(s) carry reasoning state owned by another provider/model or altered since capture; it is not replayed to ${owner} (visible text and tool calls are kept).`));
@@ -2353,12 +2184,12 @@ export class LocalLlmClient {
           watchdog.done();
         }
         try {
-          result = anthropic ? parseAnthropicResponse(data, owner) : parseResponsesResponse(data, owner, keepReasoning);
+          result = wire.parse(data, owner, keepReasoning);
         } catch (e) {
           throw e instanceof ProviderStreamError ? this.fromStreamError(e, requestId) : e;
         }
       } else {
-        const parser = anthropic ? anthropicStreamParser(owner, onToken) : responsesStreamParser(owner, keepReasoning, onToken);
+        const parser = wire.stream(owner, keepReasoning, onToken);
         try {
           await readSse(
             res.body!,
