@@ -56,6 +56,7 @@ jobs:
           test "$(/usr/bin/node --version)" = "$(node --version)"
           test "$(env PATH=/usr/bin:/bin /usr/bin/npm --version)" = "$(npm --version)"
       - run: node scripts/sync-version.mjs --check
+      - run: node scripts/check_doc_versions.mjs
       - run: node scripts/check_requirements.mjs
       - name: Reject deprecated packages in supported npm lockfiles
         run: |
