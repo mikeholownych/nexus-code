@@ -72,6 +72,8 @@ export interface HarnessConfig {
    * `maxSteps` ends the turn (LIMIT_REACHED), the legacy single-segment behaviour.
    */
   continuation?: ContinuationBudget;
+  /** Identical-tool-call thresholds (soft: corrective note; hard: TOOL_CALL_LOOP for an observer, scaled for commands and polls). Independent of `continuation`. */
+  repeatedCalls?: { soft: number; hard: number };
   temperature: number;       // Default 0.2 for precise coding
   workspace: string;         // Working directory for tools
   shell: string;             // Linux shell: "bash", "zsh", "sh" (default: "bash")
