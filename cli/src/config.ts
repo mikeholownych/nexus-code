@@ -9,7 +9,7 @@ import { providerApiKey } from "./credentials.js";
 import { validateBranchName } from "./worktrunk/paths.js";
 import { DEFAULT_OPERATION_POLICY } from "./core/operation.js";
 import { readSmallFile } from "./core/checkout_trust.js";
-import { DEFAULT_REPEATED_CALL_HARD, DEFAULT_REPEATED_CALL_SOFT } from "./core/repeated_calls.js";
+import { resolveRepeatedCallSettings } from "./core/repeated_calls.js";
 import { ContinuationBudget, DEFAULT_CONTINUATION, DEFAULT_CONVERGENCE_ATTEMPTS, HarnessConfig, ApprovalMode } from "./types.js";
 
 /** A project `.env` larger than this is ignored (it is repository-controlled). */
@@ -407,6 +407,7 @@ export function buildConfig(options: any): HarnessConfig {
   const workspace = options.workspace ? path.resolve(options.workspace) : process.cwd();
   const maxSteps = options.maxSteps ? parseInt(options.maxSteps, 10) : 30;
   const continuation = continuationBudget(options);
+  const repeatedCalls = repeatedCallSettings();
   const temperature = options.temperature ? parseFloat(options.temperature) : 0.2;
   const shell = options.shell || operatorSetting("LOCAL_HARNESS_SHELL") || process.env.LOCAL_HARNESS_SHELL || "bash";
   const dryRun = Boolean(options.dryRun);
@@ -497,6 +498,7 @@ export function buildConfig(options: any): HarnessConfig {
     workspace,
     maxSteps,
     ...(continuation ? { continuation } : {}),
+    repeatedCalls: { soft: repeatedCalls.soft, hard: repeatedCalls.hard },
     temperature,
     shell,
     dryRun,
@@ -730,9 +732,15 @@ export function continuationBudget(options: any): ContinuationBudget | undefined
     maxTurnMinutes: positive(options.maxTurnMinutes, effectiveSetting("NEXUS_MAX_TURN_MINUTES"), DEFAULT_CONTINUATION.maxTurnMinutes),
     stagnationSteps: Math.floor(positive(options.stagnationSteps, effectiveSetting("NEXUS_STAGNATION_STEPS"), DEFAULT_CONTINUATION.stagnationSteps)),
     verifierConvergenceAttempts: Math.floor(positive(undefined, effectiveSetting("NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS"), DEFAULT_CONVERGENCE_ATTEMPTS)),
-    repeatedCallSoft: Math.floor(positive(undefined, effectiveSetting("NEXUS_REPEATED_CALL_SOFT"), DEFAULT_REPEATED_CALL_SOFT)),
-    repeatedCallHard: Math.floor(positive(undefined, effectiveSetting("NEXUS_REPEATED_CALL_HARD"), DEFAULT_REPEATED_CALL_HARD)),
   };
+}
+
+/** Repeated-call thresholds: the operator's values, which a project `.env` may only lower. */
+export function repeatedCallSettings() {
+  return resolveRepeatedCallSettings(
+    { soft: operatorSetting("NEXUS_REPEATED_CALL_SOFT"), hard: operatorSetting("NEXUS_REPEATED_CALL_HARD") },
+    { soft: projectSetting("NEXUS_REPEATED_CALL_SOFT"), hard: projectSetting("NEXUS_REPEATED_CALL_HARD") },
+  );
 }
 
 /** Replaces the "local-model" placeholder with the first model the gateway lists; unchanged if the gateway is unreachable or the start is a resume. */

@@ -4,12 +4,24 @@ import { normalizeOutcomeText } from "./execution_tracking.js";
 
 export const DEFAULT_REPEATED_CALL_SOFT = 3;
 export const DEFAULT_REPEATED_CALL_HARD = 5;
-export const REPEATED_CALL_WINDOW = 12;
+export const REPEATED_CALL_WINDOW = 64;
 
-export interface ToolCallRecord {
+/**
+ * observer: reads the workspace, so a repeat counts only while the workspace is unchanged. command: runs or writes
+ * (twice the observer's hard threshold, since a rerun between edits is legitimate). poll: an unchanged external
+ * result the tracker already spaces with backoff (four times the observer's hard threshold).
+ */
+export type CallClass = "observer" | "command" | "poll";
+const HARD_FACTOR: Record<CallClass, number> = { observer: 1, command: 2, poll: 4 };
+
+/** A call as the detector keeps it: hashes and the state it ran in, never the result text. */
+export interface CallRecord {
   name: string;
   args: string;
-  result: string;
+  key: string;
+  digest: string;
+  kind: CallClass;
+  state: string;
 }
 
 export interface RepeatedCallHistoryEntry {
@@ -39,36 +51,80 @@ export function callKey(name: string, args: string): string {
   return `${name}\u0000${text}`;
 }
 
-/** Hash of a result with timing, ids and temporary paths normalized away, so a rerun that differs only in duration is the same result. */
+/** Hash of a result with timing, ids and temporary paths normalized away: a rerun differing only in duration is the same result. */
 const digest = (text: string): string => createHash("sha256").update(normalizeOutcomeText(text)).digest("hex");
 
+export function makeCallRecord(name: string, args: string, result: string, kind: CallClass = "command", state = ""): CallRecord {
+  return { name, args, key: callKey(name, args), digest: digest(result), kind, state };
+}
+
+/** Appends to a bounded ring: only the last `window` records are ever consulted. */
+export function pushCall(ring: CallRecord[], record: CallRecord, window = REPEATED_CALL_WINDOW): void {
+  ring.push(record);
+  if (ring.length > window) ring.splice(0, ring.length - window);
+}
+
 /**
- * Judges the latest call against the last `window` calls: identical arguments that returned an identical result are a
- * loop, whatever the timing and whatever else was interleaved. A changed result is progress and is not counted.
+ * Judges the latest call against the ring: identical arguments that returned an identical result are a loop, whatever
+ * the timing and whatever else was interleaved. A changed result is progress. An observer's repeats count only while
+ * the workspace identity is unchanged (an edit in between ends the run); an unknown identity never reaches the hard
+ * threshold. The hard threshold scales with the call class (see CallClass).
  */
-export function judgeRepeatedCalls(
-  calls: readonly ToolCallRecord[],
-  soft = DEFAULT_REPEATED_CALL_SOFT,
-  hard = DEFAULT_REPEATED_CALL_HARD,
-  window = REPEATED_CALL_WINDOW,
-): RepeatedCallVerdict {
-  const latest = calls.at(-1);
+export function judgeRepeatedCalls(ring: readonly CallRecord[], soft = DEFAULT_REPEATED_CALL_SOFT, hard = DEFAULT_REPEATED_CALL_HARD): RepeatedCallVerdict {
+  const latest = ring.at(-1);
   if (!latest) return { level: "none", count: 0 };
-  const key = callKey(latest.name, latest.args);
-  const result = digest(latest.result);
-  const count = calls.slice(-window).filter((c) => callKey(c.name, c.args) === key && digest(c.result) === result).length;
-  const level = count >= hard ? "hard" : count >= soft ? "soft" : "none";
+  let count = 0;
+  for (let i = ring.length - 1; i >= 0; i--) {
+    const r = ring[i];
+    if (latest.kind === "observer" && r.state !== latest.state) break;
+    if (r.key === latest.key && r.digest === latest.digest) count++;
+  }
+  const limit = hard * HARD_FACTOR[latest.kind];
+  const level = count >= limit && !(latest.kind === "observer" && latest.state === "unknown") ? "hard" : count >= soft ? "soft" : "none";
   return level === "none" ? { level, count } : { level, count, tool: latest.name, arguments: latest.args };
 }
 
-/** The repeated call with its counts, arguments redacted and clipped, for the turn result. */
-export function repeatedCallHistory(calls: readonly ToolCallRecord[], window = REPEATED_CALL_WINDOW): RepeatedCallHistoryEntry[] {
+/** The repeated calls with their counts, arguments redacted and clipped, for the turn result. */
+export function repeatedCallHistory(ring: readonly CallRecord[]): RepeatedCallHistoryEntry[] {
   const seen = new Map<string, RepeatedCallHistoryEntry>();
-  for (const c of calls.slice(-window)) {
-    const key = `${callKey(c.name, c.args)}\u0000${digest(c.result)}`;
+  for (const c of ring) {
+    const key = `${c.key}\u0000${c.digest}`;
     const entry = seen.get(key) ?? { tool: c.name, arguments: safeTerminal(c.args).slice(0, 200), count: 0 };
     entry.count++;
     seen.set(key, entry);
   }
   return [...seen.values()].sort((a, b) => b.count - a.count).slice(0, 5);
+}
+
+export interface RepeatedCallSettings {
+  soft: number;
+  hard: number;
+  warnings: string[];
+}
+
+const whole = (raw: string | undefined): number | undefined => (raw !== undefined && /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : undefined);
+
+/**
+ * The effective thresholds. The operator's values (shell, user config) must be whole numbers with soft >= 2 and
+ * hard > soft; anything else is ignored with a warning. A repository's `.env` may only lower them, never raise them.
+ */
+export function resolveRepeatedCallSettings(operator: { soft?: string; hard?: string }, project: { soft?: string; hard?: string } = {}): RepeatedCallSettings {
+  const warnings: string[] = [];
+  const read = (label: string, raw: string | undefined, min: number): number | undefined => {
+    if (raw === undefined || raw.trim() === "") return undefined;
+    const n = whole(raw);
+    if (n === undefined || n < min) {
+      warnings.push(`${label}=${JSON.stringify(raw)} ignored: expected a whole number >= ${min}`);
+      return undefined;
+    }
+    return n;
+  };
+  let soft = read("NEXUS_REPEATED_CALL_SOFT", operator.soft, 2) ?? DEFAULT_REPEATED_CALL_SOFT;
+  let hard = read("NEXUS_REPEATED_CALL_HARD", operator.hard, soft + 1) ?? Math.max(DEFAULT_REPEATED_CALL_HARD, soft + 1);
+  const projectSoft = read("project NEXUS_REPEATED_CALL_SOFT", project.soft, 2);
+  const projectHard = read("project NEXUS_REPEATED_CALL_HARD", project.hard, 3);
+  if (projectSoft !== undefined) soft = Math.min(soft, projectSoft);
+  if (projectHard !== undefined) hard = Math.min(hard, projectHard);
+  hard = Math.max(hard, soft + 1);
+  return { soft, hard, warnings };
 }

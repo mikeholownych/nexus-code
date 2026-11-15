@@ -178,7 +178,7 @@ import {
 } from "./core/findings.js";
 import { FILE_EDIT_TOOLS, FileChange, describeChange, editTarget, snapshot } from "./file_diff.js";
 import type { TurnEvidence, TurnReason } from "./core/turn.js";
-import { DEFAULT_REPEATED_CALL_SOFT, judgeRepeatedCalls, repeatedCallHistory, type ToolCallRecord } from "./core/repeated_calls.js";
+import { DEFAULT_REPEATED_CALL_HARD, DEFAULT_REPEATED_CALL_SOFT, judgeRepeatedCalls, makeCallRecord, pushCall, repeatedCallHistory, type CallClass, type CallRecord } from "./core/repeated_calls.js";
 import { isReadOnlyRole, isSpecialistRole, ROLE_PROFILES, roleToolAllowList, type AgentRole } from "./core/roles.js";
 import pc from "picocolors";
 import { untrustedWorkspaceExtensions } from "./workspace_trust.js";
@@ -6591,7 +6591,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       const noticedPolls = new Set<string>();
       const noticedThrash = new Set<string>();
       let stateUnknownNoted = false;
-      const callRecords: ToolCallRecord[] = [];
+      const callRing: CallRecord[] = [];
       let repeatedCallNote: string | undefined;
       let loopedCall: { name: string; count: number; arguments: string; history: NonNullable<TurnResult["repeatedCall"]>["history"] } | undefined;
 
@@ -6708,13 +6708,14 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           tracker.intervention(cumulativeStep, "backoff", `waited ${wait} ms before re-running ${prior.action} (${prior.outcomeClass === "transient_failure" ? "transient failure" : "unchanged result"} ×${prior.count} on an unchanged workspace)`);
           await this.backoffSleep(wait, signal);
         };
-        const trackCall = (call: ToolCall, result: string) => {
+        const trackCall = (call: ToolCall, result: string, kind: CallClass, state: string) => {
           const name = call.function.name;
-          callRecords.push({ name, args: call.function.arguments, result });
-          const looped = judgeRepeatedCalls(callRecords, this.config.continuation?.repeatedCallSoft, this.config.continuation?.repeatedCallHard);
+          const soft = this.config.repeatedCalls?.soft ?? DEFAULT_REPEATED_CALL_SOFT;
+          pushCall(callRing, makeCallRecord(name, call.function.arguments, result, kind, state));
+          const looped = judgeRepeatedCalls(callRing, soft, this.config.repeatedCalls?.hard ?? DEFAULT_REPEATED_CALL_HARD);
           if (looped.level === "hard") {
-            loopedCall = { name, count: looped.count, arguments: safeTerminal(looped.arguments), history: repeatedCallHistory(callRecords) };
-          } else if (looped.level === "soft" && looped.count === (this.config.continuation?.repeatedCallSoft ?? DEFAULT_REPEATED_CALL_SOFT)) {
+            loopedCall = { name, count: looped.count, arguments: safeTerminal(looped.arguments), history: repeatedCallHistory(callRing) };
+          } else if (looped.level === "soft" && looped.count === soft) {
             repeatedCallNote = `[Nexus] You have called ${name} with the same arguments ${looped.count} times and got the same result each time (${safeTerminal(looped.arguments).slice(0, 120)}). Repeating it will not change the outcome; use the result you have or change approach.`;
           }
         };
@@ -6740,7 +6741,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
             present: presence(),
           });
           verdicts.push(verdict);
-          trackCall(call, `${receipt.success}\n${receipt.output ?? ""}\n${receipt.error ?? ""}`);
+          trackCall(call, `${receipt.success}\n${receipt.output ?? ""}\n${receipt.error ?? ""}`, verdict.poll ? "poll" : shellRead || actionKind(name) === "observe_workspace" ? "observer" : "command", inputState);
           if (verdict.thrash && !noticedThrash.has(verdict.key)) {
             // Not task repetition: compaction keeps removing what the work needs (context thrash), reported as such.
             noticedThrash.add(verdict.key);
@@ -6821,10 +6822,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           if (pendingRecoveryNote) {
             this.messages.push(harnessNoteMessage(pendingRecoveryNote));
           }
-          if (repeatedCallNote) {
-            this.messages.push(harnessNoteMessage(repeatedCallNote));
-            repeatedCallNote = undefined;
-          }
+          if (repeatedCallNote && !pendingRecoveryNote) this.messages.push(harnessNoteMessage(repeatedCallNote));
+          repeatedCallNote = undefined;
           const stateAfter = this.workspaceStateIdentity();
           const evaluation = tracker.evaluateStep(cumulativeStep, {
             stateBefore: stepStateBefore,
@@ -6835,7 +6834,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           });
           stateNow = stateAfter;
           // A step that changed the workspace is not a loop: the hard stop waits for a step that did not.
-          if (loopedCall && stateAfter === stepStateBefore && !operatorInputApplied && !stopReason) {
+          if (loopedCall && stateAfter === stepStateBefore && stateAfter !== "unknown" && !operatorInputApplied && !stopReason) {
             stopReason = "TOOL_CALL_LOOP";
             stopDetail = `${loopedCall.name} called ${loopedCall.count} times with identical arguments and an identical result (${loopedCall.arguments.slice(0, 120)})`;
             this.turnRepeatedCall = { tool: loopedCall.name, arguments: loopedCall.arguments.slice(0, 200), count: loopedCall.count, history: loopedCall.history };

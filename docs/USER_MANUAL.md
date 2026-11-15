@@ -353,12 +353,22 @@ and runs skipped on unchanged inputs are ignored, and a changing failure set nev
 is covered: a loop of `run_tests` calls alone is bounded by `--stagnation-steps` (`STAGNATION_DETECTED`) instead.
 
 A third brake counts identical tool calls regardless of timing: a call with the same tool name and the same arguments
-(compared as stable JSON) that returns the same result, seen in the last 12 calls even with other calls between them.
-At `NEXUS_REPEATED_CALL_SOFT` repeats (default 3) the model gets a corrective note naming the call; at
-`NEXUS_REPEATED_CALL_HARD` (default 5), in a step that changed nothing in the workspace, the turn ends `BLOCKED` / `NOT_ESTABLISHED` with reason `TOOL_CALL_LOOP` and the
-repeated call and recent call history (arguments redacted) attached. A repeat whose result changed (a file that was
-edited, command output that differs) is progress and is not counted. Both are also settable as
-`continuation.repeatedCallSoft` / `continuation.repeatedCallHard`.
+(compared as stable JSON) that returns the same result (timings and ids ignored), seen in the last 64 calls even with
+other calls between them. At `NEXUS_REPEATED_CALL_SOFT` repeats (default 3) the model gets a corrective note naming the
+call. At the hard threshold, in a step that changed nothing in the workspace, the turn ends `BLOCKED` /
+`NOT_ESTABLISHED` with reason `TOOL_CALL_LOOP` and the repeated call and recent call history (arguments redacted)
+attached. The hard threshold depends on the call, with `NEXUS_REPEATED_CALL_HARD` (default 5) as the base:
+
+| Call | Soft | Hard |
+|---|---|---|
+| Workspace reads (`read_file`, `list_dir`, `search_code`, `git_status`, ...): counted only while the workspace is unchanged | 3 | 5 |
+| `run_command`, writes and other tools: a failing rerun between edits with identical output is a loop | 3 | 10 |
+| An unchanged successful external poll (`tail build.log`, `docker ps`), which Nexus already spaces with backoff | 3 | 20 |
+
+A repeat whose result changed, a read after an edit, and a turn whose workspace state cannot be established are never
+stopped (the note still appears). Both settings are whole numbers (soft at least 2, hard above soft); other values are
+ignored and `nexus doctor` warns. They work with `--no-continuation`. A project `.env` can only lower them: the
+effective value is the smaller of the project's and your own.
 
 The operator's objective and its
 numbered requirements are pinned for the model on every request (never summarised away); the agent records

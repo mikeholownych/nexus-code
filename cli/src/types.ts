@@ -72,6 +72,8 @@ export interface HarnessConfig {
    * `maxSteps` ends the turn (LIMIT_REACHED), the legacy single-segment behaviour.
    */
   continuation?: ContinuationBudget;
+  /** Identical-tool-call thresholds (soft: corrective note; hard: TOOL_CALL_LOOP for an observer, scaled for commands and polls). Independent of `continuation`. */
+  repeatedCalls?: { soft: number; hard: number };
   temperature: number;       // Default 0.2 for precise coding
   workspace: string;         // Working directory for tools
   shell: string;             // Linux shell: "bash", "zsh", "sh" (default: "bash")
@@ -172,10 +174,6 @@ export interface ContinuationBudget {
    * show the same failure, an A/B alternation or a rising failing-test count (default 3, NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS).
    */
   verifierConvergenceAttempts?: number;
-  /** Identical tool calls with an identical result in the recent window: the soft threshold adds a corrective note (default 3, NEXUS_REPEATED_CALL_SOFT). */
-  repeatedCallSoft?: number;
-  /** The hard threshold ends the turn BLOCKED as TOOL_CALL_LOOP (default 5, NEXUS_REPEATED_CALL_HARD). */
-  repeatedCallHard?: number;
 }
 
 /** Failed verifier attempts on changing candidates that show no convergence before the turn stops (see ContinuationBudget). */
