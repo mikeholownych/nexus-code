@@ -9,16 +9,11 @@ TypeScript CLI (`cli/`), Rust core (`core/`), eval harness (`eval/`). Current pl
 - Test-runner or process-handling changes run on Node 22 and 24: the two emit different `node:test` events.
 - Rust builds use an isolated `CARGO_TARGET_DIR` per worktree.
 - Preserve existing comments and unrelated changes.
+- Entire CLI: export `ENTIRE_TOKEN_STORE=file` before any `entire` command. The Entire gate no longer counts toward merging.
 
 ## Reference coding with XERJ (required)
-- Before non-trivial code with a peer-project analogue (feature, protocol, parser, worktree or provider handling, tool, test harness), query the local XERJ node and record what you took, borrowed or rejected in the PR's "Reference coding" section. Exempt: trivial edits, doc-only changes, fixes fully specified by a failing test.
-- XERJ is an owner-host tool, not a project dependency (`docs/v1.1.0/DECISIONS.md` §1). Where it is unavailable (contributor machine, CI), write "XERJ unavailable: <reason>" in that section and use `git grep` plus the peer's public source.
-- The node is the user service `xerj` on `http://localhost:9200`; confirm with `systemctl --user is-active xerj` and use that node. Stop a hub with `xerj hub stop`.
-- Corpora: `xerj corpus list`. Retrieval is lexical (BM25), so query with identifiers and words from the code: `xerj code <corpus> "<words>" -k 4 --full 600`, `xerj search --prefix <index-prefix> "<words>" -k 4`, `xerj def --prefix <prefix> "<symbol>"`. The first query can take over a minute; set a timeout.
-- `nexus-cli`, `nexus-core`, `nexus-test`, `nexus-docs` index `origin/main` only (hourly), so open PRs are absent: use `git grep` on your branch.
-- Reference code is read-only inspiration. Follow each result's licence tag; copy verbatim only permissively licensed code, with a citation. Keep XERJ and reference corpora away from held-out evaluation tasks (`docs/v1.0.0/CONCURRENCY.md`). Keep document text local (`rerank` sends it to a third party). Leave indices you did not create alone.
-- After real use: `xerj feedback --dry-run`, then `xerj feedback --submit --agent "<model>" --used-for "<task>" --verdict "<what worked and what did not>"`, with secrets and private data left out.
-- Entire CLI: export `ENTIRE_TOKEN_STORE=file` before any `entire` command. The Entire gate no longer counts toward merging.
+- Before writing non-trivial code that has a peer-project analogue (feature, protocol, parser, worktree or provider handling, tool, test harness), read what mature projects do: query the local XERJ node, then record what you took, borrowed or rejected in the PR's "Reference coding" section. Exempt: trivial edits, doc-only changes, fixes fully specified by a failing test.
+- Node, commands, corpora, licence and privacy rules, the field report, and the fallback when XERJ is unavailable ("XERJ unavailable: <reason>" plus `git grep`): `docs/XERJ_REFERENCE_CODING.md`. Read it when you start that first query.
 
 ## Concurrency, claims and release authority
 - Several agents can work here: follow `docs/v1.0.0/CONCURRENCY.md`. Claim a slice or hot file under `$(git rev-parse --git-common-dir)/nexus-claims/` before editing; one worktree and branch per slice (`~/nexus-wt/`), never `~/nexus-code` itself; isolate `HOME` for every test or probe; stop a process by its own pid, never `pkill -f`; check `git log` for foreign commits before each commit.
@@ -26,7 +21,9 @@ TypeScript CLI (`cli/`), Rust core (`core/`), eval harness (`eval/`). Current pl
 - Push, tag and publish only on an explicit owner instruction; release authority is the owner's.
 
 ## Merging and releasing
-- Required checks: `test-matrix (22)`, `test-matrix (24)`, `linux-x86_64`. Merge with a merge commit: `gh pr merge <n> --merge --match-head-commit <full-sha>`, after reading each check's conclusion (empty or in-progress is not success). Merge PRs that touch one subsystem one at a time and wait for the CI run on `main` after each; two PRs green alone can break `main` together.
-- PR checks run on GitHub's merge commit. After `main` moves, confirm the run checked out the current `merge_commit_sha` (`gh api repos/<owner>/<repo>/pulls/<n> --jq .merge_commit_sha`); a stale one tests old content.
-- Stable release: a version-only commit directly on the accepted RC (`node scripts/check-version-only-diff.mjs <rc-ref> <stable-ref>`), landed on `main` through a merge-commit PR, and only then tagged (`release.yml` requires the tagged commit to be an ancestor of `main`). Version tags are immutable: a failed run is re-run, or the release moves to the next RC or patch. After the tag, follow `docs/RELEASE_PROCESS.md`.
-- Claims match the evidence: gates stay as measured ("ledger closed, qualification pending"), failed runs are recorded unaltered, and no frontier-grade claim appears without external qualification.
+Bias to correct: a green PR is not a green `main`, and a pushed tag cannot be taken back.
+- When merging: required checks are `test-matrix (22)`, `test-matrix (24)`, `linux-x86_64`; read each check's conclusion (empty or in-progress is not success). Merge with a merge commit, `gh pr merge <n> --merge --match-head-commit <full-sha>`. PRs that touch one subsystem merge one at a time, each followed by the CI run on `main`: two PRs green alone can break `main` together.
+- When a PR's checks look wrong after `main` moved: PR checks run on GitHub's merge commit, so confirm the run checked out the current `merge_commit_sha` (`gh api repos/<owner>/<repo>/pulls/<n> --jq .merge_commit_sha`); a stale one tests old content.
+- When cutting a stable release: make a version-only commit directly on the accepted RC (`node scripts/check-version-only-diff.mjs <rc-ref> <stable-ref>`), land it on `main` through a merge-commit PR, and only then tag, because `release.yml` requires the tagged commit to be an ancestor of `main`. Version tags are immutable: re-run a failed run, or move to the next RC or patch. Then follow `docs/RELEASE_PROCESS.md`.
+- When reporting a gate or a result: state it as measured ("ledger closed, qualification pending"), record failed runs unaltered, and make no frontier-grade claim without external qualification.
+- Before tagging or merging, check: required checks green at the exact head? CI on `main` green after the previous merge? Tagged commit an ancestor of `main`? Claims match the evidence?
