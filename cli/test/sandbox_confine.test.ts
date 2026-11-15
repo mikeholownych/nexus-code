@@ -125,13 +125,13 @@ PY`;
     assert.match(sandboxNetworkNotice("ls", true) ?? "", /WITH network access/);
   });
 
-  test("both bwrap branches carry --die-with-parent and --new-session", () => {
+  test("both bwrap branches carry --die-with-parent and --unshare-pid, and neither --new-session (it defeats the runner's killpg)", () => {
     const { workspace } = throwawayHome();
     const write = wrapSandboxedCommand("true", workspace, { mode: "bwrap" });
     const read = wrapSandboxedCommand("true", workspace, { mode: "bwrap", readOnlyHost: true, workspaceFd: 3, network: false });
     for (const w of [write, read]) {
       assert.ok(w.argv!.includes("--die-with-parent"));
-      assert.ok(w.argv!.includes("--new-session"));
+      assert.ok(!w.argv!.includes("--new-session"));
       assert.ok(w.argv!.includes("--unshare-pid"));
     }
   });
@@ -188,7 +188,7 @@ PY`;
     assert.ok(Number(procs) < 10, `host processes are visible in the sandbox (${procs})`);
   });
 
-  test("a command gets no controlling terminal (TIOCSTI) but still runs", () => {
+  test("a command keeps its controlling terminal semantics unchanged and still runs", () => {
     const { workspace } = throwawayHome();
     const r = sandboxRun("tty; echo done", workspace);
     assert.match(r.stdout, /done/);

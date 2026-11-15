@@ -514,10 +514,14 @@ export function wrapSandboxedCommand(
       }
     }
 
-    // --die-with-parent: every descendant dies with the runner. --new-session: setsid, so the command has no
-    // controlling terminal and cannot inject keystrokes into the operator's (TIOCSTI). --unshare-pid plus the fresh
-    // /proc mounted above keep host processes, and their /proc/<pid>/environ, out of sight.
-    bwrapArgs.push("--chdir", absWorkspace, "--unshare-pid", "--die-with-parent", "--new-session");
+    // --die-with-parent: every descendant dies with the runner. --unshare-pid plus the fresh /proc mounted above
+    // keep host processes, and their /proc/<pid>/environ, out of sight.
+    // Deliberately NOT --new-session: it makes bwrap its own session leader (pgid = sid = pid), so the runner's
+    // killpg on cancel or deadline (REQ-AGT-109, REQ-SEC-106) no longer reaches the sandboxed command, which then
+    // survives cancellation. What it would add, blocking TIOCSTI keystroke injection, is already closed by the
+    // kernel default since 6.2 (dev.tty.legacy_tiocsti=0). The command keeps its controlling terminal, so
+    // /dev/tty works as before.
+    bwrapArgs.push("--chdir", absWorkspace, "--unshare-pid", "--die-with-parent");
 
     // No network unless the operator opted in explicitly (read-only mode always passes network: false).
     if (!networkAllowed) {
