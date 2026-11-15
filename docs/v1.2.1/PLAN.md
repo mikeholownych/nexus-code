@@ -132,7 +132,7 @@ Order: PR-1, PR-2, PR-3, PR-9, PR-11 first; then PR-4, PR-5, PR-12; then the nat
 | RD-2 | Linux arm64 and musl artifacts | same acceptance as RD-1 | M | P2 |
 | RD-3 | `nexus run --output stream-json` (NDJSON events) | schema documented; one consumer test | S | P1 |
 | RD-4 | GitHub Action wrapper around `nexus run` with a verification-gated exit code | decision D11; example workflow in `examples/` | M | P1 |
-| RD-5 | ACP server mode for IDE hosts (references: Goose `crates/goose/src/acp`, Cline `apps/cli/src/acp`) | decision D11; a protocol conformance test | L | P2 |
+| RD-5 | ACP server mode for IDE hosts (references: Goose `crates/goose/src/acp`, Cline `apps/cli/src/acp`) | decision D11; a protocol conformance test | L | P2 (superseded by v1.3 AC-1; see docs/v1.3.0/PLAN.md) |
 | RD-6 | Session fork (reference: Cline `core/src/session/fork-metadata.ts`) | fork test: two divergent continuations, both resumable | M | P2 |
 | RD-7 | `nexus uninstall` (old backlog REQ-REL-106, accepted 2026-11-15): removes the install and optionally state, verifies what it removes against the install manifest, never touches the workspace or `~/.config/nexus` without `--purge` | uninstall test on a throwaway prefix; refuses a path outside the manifest | S | P2 (v1.2.2) |
 
@@ -144,7 +144,7 @@ Order: PR-1, PR-2, PR-3, PR-9, PR-11 first; then PR-4, PR-5, PR-12; then the nat
 | PC-2 | Leak and hang guard: a shared test helper that registers bridges, agents, gateways and child processes and fails the file at teardown if any survive; a per-file timeout in `run_tests.mjs`; a rule that lists test files constructing a bridge or agent without it (2 found, names to be captured first); also re-verify the stale/corrupt lock race and EXECUTION_CONVERGENCE I3/I4 from the old backlog and fix any defect found (accepted 2026-11-15) | the SI-2-style leak fails in 1 minute with the file name, not in 45 minutes; the re-verification result is recorded and any defect it shows is fixed with a regression test | M | P0 |
 | PC-3 | Flake budget: record rerun-on-failure events, report weekly, fail when a test needs reruns twice in 20 runs | report committed as an artifact | S | P1 |
 | PC-4 | Cross-runner reproducibility (22.04 vs 24.04) as a scheduled job, not a manual dispatch | job green; alert on drift | S | P2 |
-| PC-5 | Opt-in crash and error reporting: confirm what OTLP does today (opt-in status unverified), document it, add a local crash report file under `~/.nexus/` | doc plus a test that nothing leaves the host without opt-in | S | P2 |
+| PC-5 | Opt-in crash and error reporting: confirm what OTLP does today (opt-in status unverified), document it, add a local crash report file under `~/.nexus/` | doc plus a test that nothing leaves the host without opt-in | S | P2 (settled by v1.3 GV-4; see docs/v1.3.0/PLAN.md) |
 | PC-6 | Dependency hygiene: `commander` major bump if safe, review the two Dependabot PRs, keep the no-deprecated gate | gate green | S | P2 |
 
 ### MT: maintainability
