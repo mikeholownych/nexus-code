@@ -1,36 +1,29 @@
-# Project Guidelines & Agent Instructions
+# nexus-code agent guide
 
-## Commands
-- Build: `make build` or `cargo build` or `npm run build`
-- Test: `make test` or `cargo test` or `npm test`
-- Lint: `cargo clippy` or `npm run lint`
+TypeScript CLI (`cli/`), Rust core (`core/`), eval harness (`eval/`). Current plans: `docs/v1.2.1/PLAN.md`, then `docs/v1.3.0/PLAN.md`. Per-release records live in `docs/releases/` and `docs/evidence/`.
 
-## Code Conventions
-- Maintain documentation integrity and keep existing comments.
-- Always run tests after making changes to verify correctness.
-- Keep functions modular and clearly typed.
-
-## Entire CLI
-- Set `ENTIRE_TOKEN_STORE=file` in the environment before running any `entire` command (for example, `export ENTIRE_TOKEN_STORE=file`).
+## Build and test
+- Build: `make build` (core, then `tsc` in `cli/`). Everything: `make test`; the CI-equivalent run: `make test-ci`. Lint the core with `cargo clippy`; `cli/` has no lint script, `npm --prefix cli run build` type-checks it.
+- One TypeScript test file: `cd cli && HOME=$(mktemp -d) node --import tsx --test test/<name>.test.ts`. A throwaway `HOME` is mandatory: a test that touched the real `HOME` once overwrote `~/.config/nexus/config.env`.
+- Done = the affected test files pass, plus `tsc` for TypeScript changes. CI is the arbiter; a failure that appears only locally comes from host state first (an unbuilt `cli/dist` or Rust core, a stray `/tmp/.git`), so rule that out before calling it a defect.
+- Test-runner or process-handling changes run on Node 22 and 24: the two emit different `node:test` events.
+- Rust builds use an isolated `CARGO_TARGET_DIR` per worktree.
+- Preserve existing comments and unrelated changes.
+- Entire CLI: export `ENTIRE_TOKEN_STORE=file` before any `entire` command. The Entire gate no longer counts toward merging.
 
 ## Reference coding with XERJ (required)
-- Before writing or changing non-trivial code that has a peer-project analogue (a new feature, protocol, parser, worktree or provider handling, a tool, a test harness), query the local XERJ node and read what mature projects do. Record the queries and what you took, borrowed or rejected in the PR body ("Reference coding" section of the PR template). Trivial edits, doc-only changes and fixes fully specified by a failing test are exempt.
-- XERJ is an operator-level tool installed on the owner's host (`docs/v1.1.0/DECISIONS.md` §1), not a project dependency. Where the node or binary is unavailable (a contributor machine, CI), the requirement is met by writing "XERJ unavailable: <reason>" in that PR section and using `git grep` plus the peer project's public source instead; never block a change on it.
-- The node runs as the user service `xerj` on `http://localhost:9200` (no `XERJ_URL` needed). Check it with `systemctl --user is-active xerj`; do not start a second node.
-- Reference corpora: `xerj corpus list`. Retrieval: `xerj code <corpus> "<words that appear in the code>" -k 4 --full 600` (for example `xerj code opencode "git worktree add remove list branch"`). Cross-index search: `xerj search --prefix <index-prefix> "<words>" -k 4` and `xerj def --prefix <prefix> "<symbol>"`. Other indices exist for goose, kilocode, codex, hermes and claudecode. Ranking is lexical (BM25), so phrase queries with identifiers and words from the code. The first query can take over a minute: use a timeout.
-- `nexus-cli`, `nexus-core`, `nexus-test` and `nexus-docs` index committed `origin/main` only, refreshed hourly, so they do not contain open PRs. For code on your branch use `git grep`.
-- Reference code is read-only inspiration. Respect each result's licence tag; copy no code verbatim unless it is permissively licensed and you cite it. Never use XERJ or reference corpora on held-out evaluation tasks (see held-out isolation in `docs/v1.0.0/CONCURRENCY.md`).
-- Do not use `rerank` (it sends document text to a third party). Never delete indices you did not create, and stop a hub node with `xerj hub stop`, never `pkill`.
-- After real use, send a field report: preview with `xerj feedback --dry-run`, then `xerj feedback --submit --agent "<model>" --used-for "<task>" --verdict "<what worked and what did not>"`. Keep secrets and private data out of it.
+- Before writing non-trivial code that has a peer-project analogue (feature, protocol, parser, worktree or provider handling, tool, test harness), read what mature projects do: query the local XERJ node, then record what you took, borrowed or rejected in the PR's "Reference coding" section. Exempt: trivial edits, doc-only changes, fixes fully specified by a failing test.
+- Node, commands, corpora, licence and privacy rules, the field report, and the fallback when XERJ is unavailable ("XERJ unavailable: <reason>" plus `git grep`): `docs/XERJ_REFERENCE_CODING.md`. Read it when you start that first query.
 
-## v1.0.0 work and concurrent agents
-- The v1.0.0 plan is in `docs/v1.0.0/` (start at `docs/v1.0.0/README.md`). Implement one claimed PR slice at a time, within the safe change boundary in its plan.
-- When more than one agent may be working, follow `docs/v1.0.0/CONCURRENCY.md`. In short:
-  - Claim the slice atomically under `$(git rev-parse --git-common-dir)/nexus-claims/`.
-  - Use one worktree and branch per slice; never edit `~/nexus-code` directly.
-  - Isolate `HOME` for every test or probe run.
-  - Claim hot files before editing them.
-  - Take the `GATEWAY` claim for any inference run.
-  - Never use `pkill -f`.
-  - Check `git log` for foreign commits before every commit.
-  - Leave push, tag and publish to the owner.
+## Concurrency, claims and release authority
+- Several agents can work here: follow `docs/v1.0.0/CONCURRENCY.md`. Claim a slice or hot file under `$(git rev-parse --git-common-dir)/nexus-claims/` before editing; one worktree and branch per slice (`~/nexus-wt/`), never `~/nexus-code` itself; isolate `HOME` for every test or probe; stop a process by its own pid, never `pkill -f`; check `git log` for foreign commits before each commit.
+- Take the `GATEWAY` claim for any inference run; the key comes from the environment (`~/.config/nexus/config.env`) and is never printed. The gateway is the only live provider.
+- Push, tag and publish only on an explicit owner instruction; release authority is the owner's.
+
+## Merging and releasing
+Bias to correct: a green PR is not a green `main`, and a pushed tag cannot be taken back.
+- When merging: required checks are `test-matrix (22)`, `test-matrix (24)`, `linux-x86_64`; read each check's conclusion (empty or in-progress is not success). Merge with a merge commit, `gh pr merge <n> --merge --match-head-commit <full-sha>`. PRs that touch one subsystem merge one at a time, each followed by the CI run on `main`: two PRs green alone can break `main` together.
+- When a PR's checks look wrong after `main` moved: PR checks run on GitHub's merge commit, so confirm the run checked out the current `merge_commit_sha` (`gh api repos/<owner>/<repo>/pulls/<n> --jq .merge_commit_sha`); a stale one tests old content.
+- When cutting a stable release: make a version-only commit directly on the accepted RC (`node scripts/check-version-only-diff.mjs <rc-ref> <stable-ref>`), land it on `main` through a merge-commit PR, and only then tag, because `release.yml` requires the tagged commit to be an ancestor of `main`. Version tags are immutable: re-run a failed run, or move to the next RC or patch. Then follow `docs/RELEASE_PROCESS.md`.
+- When reporting a gate or a result: state it as measured ("ledger closed, qualification pending"), record failed runs unaltered, and make no frontier-grade claim without external qualification.
+- Before tagging or merging, check: required checks green at the exact head? CI on `main` green after the previous merge? Tagged commit an ancestor of `main`? Claims match the evidence?
