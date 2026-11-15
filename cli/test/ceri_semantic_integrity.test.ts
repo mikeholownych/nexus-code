@@ -22,6 +22,7 @@ import {
   gatingRequirements,
   hasOpenRequirements,
   invalidateVerified,
+  missingGatingRequirements,
   PINNED_LEDGER_PREFIX,
   openRequirements,
   priorAttempt,
@@ -261,6 +262,24 @@ const drivers: Record<string, () => unknown | Promise<unknown>> = {
       missingFromRequirementList: gating.filter((r) => !out.includes(`- ${r.id} [`)).map((r) => r.id),
     };
   },
+  "compaction-03": async () => {
+    const root = makeRepo();
+    const gw = await startGateway((n) => (n <= 3 ? writeFile(`w${n}.txt`, `${n}\n`) : text("paused")));
+    const agent = quiet(new AutonomousAgent(cfg(gw.url, root)));
+    try {
+      await agent.runTurn("1. Add the maxLength option\n2. Keep every file under 10 bytes\n3. Write w1..w3");
+      await agent.compactNow(false);
+      const a = agent as any;
+      // The request the model would be sent with the second requirement's row removed from the pinned block.
+      const sent = a.requestMessages(agent.getMessages()).map((m: any) => String(m.content)).filter((c: string) => c.startsWith(PINNED_LEDGER_PREFIX)).join("\n").replace(/^- R2 .*$/m, "");
+      const reported = missingGatingRequirements(agent.getObjective()!, sent);
+      return { droppedRequirementReported: reported.join() === "R2" && a.ledgerMissingFrom(agent.getMessages()).length === 0 };
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  },
   "conflicting-specs-01": () => {
     const ledger = createLedger(NUMBERED);
     const snapshot = () => JSON.stringify(ledger.requirements);
@@ -380,10 +399,9 @@ test("the frozen scenario file is the one the manifest pins, in a registered CER
 });
 
 const PENDING_FROZEN: Record<string, string> = {
-  "compaction-03": "unassigned (Codex row 'SI-6 / compaction': post-compaction check)",
   "cumulative-change-03": "SI-5",
 };
-const ACTIVE_FROZEN = 23;
+const ACTIVE_FROZEN = 24;
 
 test("the scenario set cannot shrink or be reclassified without changing this file too", () => {
   const pending = Object.fromEntries(frozen.scenarios.filter((s) => s.status === "pending").map((s) => [s.id, s.pendingUnit]));

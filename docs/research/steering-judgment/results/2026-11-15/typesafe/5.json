@@ -1,0 +1,48 @@
+{
+  "status": 200,
+  "body": {
+    "model": "jev-1.14.0",
+    "answers": {
+      "r1.withdraws": {
+        "type": "noul",
+        "noul": 0.01
+      },
+      "r1.defers": {
+        "type": "noul",
+        "noul": 0.02
+      },
+      "r1.changes": {
+        "type": "noul",
+        "noul": 0.03
+      },
+      "r2.withdraws": {
+        "type": "noul",
+        "noul": 0.94
+      },
+      "r2.defers": {
+        "type": "noul",
+        "noul": 0.02
+      },
+      "r2.changes": {
+        "type": "noul",
+        "noul": 0.13
+      },
+      "r3.withdraws": {
+        "type": "noul",
+        "noul": 0.01
+      },
+      "r3.defers": {
+        "type": "noul",
+        "noul": 0.01
+      },
+      "r3.changes": {
+        "type": "noul",
+        "noul": 0.03
+      }
+    },
+    "usage": {
+      "input_tokens": 1339,
+      "output_tokens": 181
+    }
+  }
+}

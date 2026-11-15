@@ -143,6 +143,8 @@ Disposition: **P0** must-have for v1.2.1; **P1** should-have; **P2** stretch, ma
 | GA-38 | Loop patterns not audited against peers: A/B ping-pong and consecutive no-progress messages (OpenHands thresholds 4/3/3/6) | research 2026-11-15 (OpenHands docs) | P2 | CS-11 |
 | GA-39 | Headless "needs an operator decision" paths are not confirmed to share one resumable outcome | research 2026-11-15 (Anthropic trends report, trend 4) | P2 | VC-9 |
 | GA-40 | No measurement that instruction files or context clearing change outcomes; no multi-hour run with a resume | research 2026-11-15 (trends report, context-management post, agent-rules-books) | P2 | MQ-8 |
+| GA-41 | The steering-conflict check is a regex that returns nothing on paraphrases (3 of 12 withdrawals caught in the 2026-11-15 pilot); a judge closes it in the pilot but the evidence is 12 positives and the gateway judge is too slow for the synchronous path | pilot `docs/research/steering-judgment/` | P2 (gated) | VC-10 |
+| GA-42 | `eval_integrity` scanner test failed once under runner load (SIGTERM during enumeration) | CI, 2026-11-15 (#542 first run) | P2 | PC-7 |
 
 ## 6. What not to copy
 
