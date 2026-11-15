@@ -18,7 +18,7 @@ import * as path from "node:path";
 import { trustedGitArgs } from "../git.js";
 import { ensureGitExclude } from "./git_exclude.js";
 import { GIT_SAFE, attributesTree, driverRefusal, safeGitEnv, snapshotSupport } from "./specialist_inputs.js";
-import { runVerifierShell, verifierTimeoutSecs } from "../tester.js";
+import { environmentHint, runVerifierShell, verifierTimeoutSecs } from "../tester.js";
 import type {
   IntegrationReceipt,
   OperationGitState,
@@ -629,6 +629,12 @@ export class OperationGit {
     const ran = runVerifierShell(command, this.plan.integrationWorktree, deadlineMs);
     if (ran.success) return { ok: true };
     const tail = ran.output.trim().split("\n").slice(-6).join("\n");
+    if (ran.exitCode === 126 || ran.exitCode === 127) {
+      return {
+        ok: false,
+        reason: `integration verification could not run on the merged tree (exit ${ran.exitCode}): ${command}\n${environmentHint()}` + (tail ? `\n${tail}` : ""),
+      };
+    }
     return {
       ok: false,
       reason:

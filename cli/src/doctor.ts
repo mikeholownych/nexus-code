@@ -22,7 +22,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import { parse as parseDotenv } from "dotenv";
-import { LocalLlmClient, credentialStorageHome } from "./client.js";
+import { LocalLlmClient, credentialStorageHome, operatorSetting } from "./client.js";
 import { credentialsPath } from "./credentials.js";
 import { mcpConfigFiles } from "./mcp.js";
 import { pluginDirs } from "./plugins.js";
@@ -284,6 +284,7 @@ const CONFIG_KEYS: Array<{ key: string; flag?: string; field: keyof HarnessConfi
   { key: "NEXUS_STAGNATION_STEPS", flag: "stagnationSteps", field: (c) => (c.continuation ? String(c.continuation.stagnationSteps) : "continuation off"), fallback: "12" },
   { key: "NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS", field: (c) => String(c.continuation?.verifierConvergenceAttempts ?? DEFAULT_CONVERGENCE_ATTEMPTS), fallback: "3" },
   { key: "NEXUS_VERIFIER_TIMEOUT_SECS", field: (c) => String(c.verifierTimeoutSecs ?? 300), fallback: "300" },
+  { key: "NEXUS_VERIFIER_ENV_PASSTHROUGH", field: () => operatorSetting("NEXUS_VERIFIER_ENV_PASSTHROUGH"), fallback: "none (toolchain defaults only)" },
   { key: "PLANNER_LLM_MODEL", flag: "plannerModel", field: (c) => c.plannerModel },
   { key: "CODER_LLM_MODEL", flag: "coderModel", field: (c) => c.coderModel },
 ];
