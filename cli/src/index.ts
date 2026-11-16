@@ -320,6 +320,11 @@ const program = new Command();
 // subcommand's own (`nexus providers verify --provider openrouter` reported --provider missing).
 program.enablePositionalOptions();
 
+// Commander 13 made extra positional arguments an error. Nexus has always ignored them (`nexus doctor extra` runs
+// doctor), and a dependency bump should not change the CLI contract, so keep that. Set before any subcommand is
+// created: subcommands copy this setting when they are added.
+program.allowExcessArguments(true);
+
 program
   .name("nexus")
   .description("Nexus Code - Custom Autonomous Coding Harness for Local AI (LM Studio / vLLM)")
