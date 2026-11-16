@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01VgUuRvW4LLG9qAy92GNxCh",
+  "agent_id": "a991572b5d4694f75",
+  "subagent_type": "Explore",
+  "task_description": "Map provider registry consumers",
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 60153,
+    "cache_read_tokens": 281881,
+    "output_tokens": 6977,
+    "api_call_count": 7
+  },
+  "started_at": "2026-11-16T16:50:43.074903644Z",
+  "completed_at": "2026-11-16T16:51:41.961669588Z"
+}
