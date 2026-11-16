@@ -112,8 +112,8 @@ from what the agent said about its own work.
 - **`json_repair_rate.mjs`**
   - Scores the agent's own tool-call syntax telemetry: the `toolCallSyntax` counts on each turn result
     (`nexus run --json` → `turn.toolCallSyntax`).
-  - Scoring: native JSON is 1, JSON recovered by a trailing or structural repair is 0.5, and arguments that did not
-    parse are 0.
+  - Scoring: native JSON is 1, JSON recovered by a trailing or structural repair, or valid JSON whose values were
+    converted to the schema's types (`schema`, WM-1), is 0.5, and arguments that did not parse are 0.
   - Any invalid call fails the result. So does having no tool calls recorded, since there is nothing to score.
   - The counts come from the parser and cover every tool call it recognizes: native `tool_calls`, `<tool_call>` tags, a
     reply that is solely one fenced JSON call, and, under `NEXUS_TEXT_TOOL_PARSING=legacy`, fenced code blocks and

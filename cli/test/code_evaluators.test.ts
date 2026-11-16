@@ -369,9 +369,9 @@ test("json_repair_rate scores the agent's tool-call syntax counts and fails clos
 
 test("the parser counts each recognized tool call as native, repaired or invalid", () => {
   const native = (args: string) => parseModelResponse({ role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "read_file", arguments: args } }] } as any, { nativeTools: true });
-  assert.deepEqual(native('{"path":"a.txt"}').toolCallSyntax, { native: 1, trailing: 0, structural: 0, invalid: 0 });
-  assert.deepEqual(native('{"path":"a.txt",}').toolCallSyntax, { native: 0, trailing: 1, structural: 0, invalid: 0 });
-  assert.deepEqual(native('{"path":"a.txt"').toolCallSyntax, { native: 0, trailing: 0, structural: 1, invalid: 0 });
+  assert.deepEqual(native('{"path":"a.txt"}').toolCallSyntax, { native: 1, trailing: 0, structural: 0, invalid: 0, schema: 0 });
+  assert.deepEqual(native('{"path":"a.txt",}').toolCallSyntax, { native: 0, trailing: 1, structural: 0, invalid: 0, schema: 0 });
+  assert.deepEqual(native('{"path":"a.txt"').toolCallSyntax, { native: 0, trailing: 0, structural: 1, invalid: 0, schema: 0 });
   // A structurally repaired write is rejected, and still counted.
   const write = parseModelResponse({ role: "assistant", content: null, tool_calls: [{ id: "w", type: "function", function: { name: "write_file", arguments: '{"path":"a","content":"x' } }] } as any, { nativeTools: true });
   assert.equal(write.toolCalls.length, 0);
@@ -379,11 +379,11 @@ test("the parser counts each recognized tool call as native, repaired or invalid
   // Text tool calls: a trailing repair, and a tool_call tag whose JSON does not parse.
   const text = parseModelResponse({ role: "assistant", content: '<tool_call>{"name":"read_file","arguments":{"path":"a.txt",},}</tool_call><tool_call>{name: read_file ((</tool_call>' }, { nativeTools: false });
   assert.equal(text.toolCalls.length, 1);
-  assert.deepEqual(text.toolCallSyntax, { native: 0, trailing: 1, structural: 0, invalid: 1 });
+  assert.deepEqual(text.toolCallSyntax, { native: 0, trailing: 1, structural: 0, invalid: 1, schema: 0 });
   // A reply consisting solely of one fenced JSON call is counted like a tag.
   const fenced = parseModelResponse({ role: "assistant", content: '```json\n{"name":"read_file","arguments":{"path":"a.txt"}}\n```' }, { nativeTools: false });
   assert.equal(fenced.toolCalls.length, 1);
-  assert.deepEqual(fenced.toolCallSyntax, { native: 1, trailing: 0, structural: 0, invalid: 0 });
+  assert.deepEqual(fenced.toolCallSyntax, { native: 1, trailing: 0, structural: 0, invalid: 0, schema: 0 });
   assert.equal(parseModelResponse({ role: "assistant", content: "no tools here" }).toolCallSyntax, undefined);
 });
 
@@ -406,7 +406,7 @@ test("a real agent turn reports its tool-call syntax on the turn result", { time
   try {
     const turn = await agent.runTurn("What does a.txt say?");
     assert.ok(turn.toolCallSyntax, JSON.stringify(turn));
-    assert.deepEqual(turn.toolCallSyntax, { native: 1, trailing: 1, structural: 0, invalid: 0 });
+    assert.deepEqual(turn.toolCallSyntax, { native: 1, trailing: 1, structural: 0, invalid: 0, schema: 0 });
     assert.equal(ev.evaluateJsonRepairRate(turn.toolCallSyntax).details.total, 2);
   } finally {
     agent.shutdown();
@@ -447,7 +447,7 @@ test("a delegated subagent's tool calls are counted on the parent turn", { timeo
   try {
     const turn = await agent.runTurn("Use a subagent to read a.txt.");
     assert.ok((gw.requests as any[]).some(isSubagent), "the subagent ran");
-    assert.deepEqual(turn.toolCallSyntax, { native: 1, trailing: 1, structural: 0, invalid: 0 }, JSON.stringify(turn.toolCallSyntax));
+    assert.deepEqual(turn.toolCallSyntax, { native: 1, trailing: 1, structural: 0, invalid: 0, schema: 0 }, JSON.stringify(turn.toolCallSyntax));
   } finally {
     console.log = log;
     agent.shutdown();

@@ -60,3 +60,66 @@ export function normalizeToolArguments(toolName: string, rawArgs: unknown, tools
   const unwrapped = unwrapSingleKeyWrapper(first, declared);
   return unwrapped === first ? first : normalizeNullableOptionalToolArguments(toolName, unwrapped, tools);
 }
+
+const INTEGER_TEXT = /^[+-]?\d+$/;
+const NUMBER_TEXT = /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i;
+
+function declaredType(schema: unknown): string | undefined {
+  if (!schema || typeof schema !== "object") return undefined;
+  const s = schema as Record<string, unknown>;
+  // A union, enum, reference or combinator is ambiguous: only a plain single type is repaired.
+  if (typeof s.type !== "string" || s.enum !== undefined || s.anyOf !== undefined || s.oneOf !== undefined || s.allOf !== undefined || s.$ref !== undefined) return undefined;
+  return s.type;
+}
+
+function coerceValue(value: unknown, type: string): { value: unknown } | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.trim();
+  if (type === "integer" && INTEGER_TEXT.test(text)) {
+    const n = Number(text);
+    return Number.isSafeInteger(n) ? { value: n } : undefined;
+  }
+  if (type === "number" && NUMBER_TEXT.test(text)) {
+    const n = Number(text);
+    return Number.isFinite(n) ? { value: n } : undefined;
+  }
+  if (type === "boolean") {
+    const lower = text.toLowerCase();
+    if (lower === "true") return { value: true };
+    if (lower === "false") return { value: false };
+    return undefined;
+  }
+  if ((type === "array" && text.startsWith("[")) || (type === "object" && text.startsWith("{"))) {
+    try {
+      const parsed: unknown = JSON.parse(text);
+      const ok = type === "array" ? Array.isArray(parsed) : Boolean(parsed) && typeof parsed === "object" && !Array.isArray(parsed);
+      return ok ? { value: parsed } : undefined;
+    } catch { return undefined; }
+  }
+  return undefined;
+}
+
+/**
+ * Schema-driven argument repair (WM-1). A weak model sends `"20"` for an integer, `"true"` for a boolean, or a JSON
+ * string for an array or object. Where the tool's declared top-level property has one plain type and the value is
+ * unambiguously that type written as text, the value is converted; nothing else is touched (no unions, enums,
+ * references, nested properties, or guesses such as wrapping a scalar in an array). `repairs` names each converted
+ * argument so the caller can record that the call was not valid as sent.
+ */
+export function coerceToolArgumentTypes(toolName: string, rawArgs: unknown, tools: readonly ToolDefinition[]): { args: unknown; repairs: string[] } {
+  const tool = tools.find((candidate) => candidate.type === "function" && candidate.function.name === toolName);
+  const properties = tool?.function.parameters?.properties;
+  if (!properties || !rawArgs || typeof rawArgs !== "object" || Array.isArray(rawArgs)) return { args: rawArgs, repairs: [] };
+  const repairs: string[] = [];
+  let out: Record<string, unknown> | undefined;
+  for (const [name, value] of Object.entries(rawArgs as Record<string, unknown>)) {
+    const type = declaredType(properties[name]);
+    if (!type) continue;
+    const coerced = coerceValue(value, type);
+    if (!coerced) continue;
+    out ??= { ...(rawArgs as Record<string, unknown>) };
+    out[name] = coerced.value;
+    repairs.push(name);
+  }
+  return { args: out ?? rawArgs, repairs };
+}

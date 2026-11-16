@@ -991,11 +991,11 @@ export class AutonomousAgent {
   private verificationEvidenceRawOutput: string = "";
   private turnMutations: number = 0;
   /** Argument syntax of this turn's tool calls, as parsed (reported on the turn result for evaluation). */
-  private turnToolCallSyntax: ToolCallSyntaxCounts = { native: 0, trailing: 0, structural: 0, invalid: 0 };
+  private turnToolCallSyntax: ToolCallSyntaxCounts = { native: 0, trailing: 0, structural: 0, invalid: 0, schema: 0 };
 
   private addToolCallSyntax(counts?: ToolCallSyntaxCounts): void {
     if (!counts) return;
-    for (const key of ["native", "trailing", "structural", "invalid"] as const) this.turnToolCallSyntax[key] += counts[key];
+    for (const key of ["native", "trailing", "structural", "invalid", "schema"] as const) this.turnToolCallSyntax[key] += counts[key] ?? 0;
   }
   /** The turn started with unverified changes from earlier work (an earlier turn, attempt, or process). */
   private turnCarriedChanges = false;
@@ -2036,8 +2036,8 @@ export class AutonomousAgent {
    * them. Dispatch repeats it idempotently only for callers that do not come through a model response.
    */
   private parseNormalizedResponse(message: ChatMessage, nativeTools: boolean | undefined): ReturnType<typeof parseModelResponse> {
-    const parsed = parseModelResponse(message, { nativeTools });
     const tools = this.getEffectiveTools();
+    const parsed = parseModelResponse(message, { nativeTools, tools });
     parsed.toolCalls = parsed.toolCalls.map((call) => {
       const raw = call.function.arguments;
       let value: unknown;
@@ -6503,7 +6503,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     this.completionSummary = undefined;
     this.turnPersistenceFailures = this.initialStatePersistenceFailure ? [this.initialStatePersistenceFailure] : [];
     this.turnMutations = 0;
-    this.turnToolCallSyntax = { native: 0, trailing: 0, structural: 0, invalid: 0 };
+    this.turnToolCallSyntax = { native: 0, trailing: 0, structural: 0, invalid: 0, schema: 0 };
     this.turnConfiguredVerifier = "NOT_RUN";
     this.turnConvergence = undefined;
     this.turnConvergenceUpTo = undefined;
