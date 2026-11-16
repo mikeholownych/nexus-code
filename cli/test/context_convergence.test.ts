@@ -390,7 +390,8 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
     const out: string[] = [];
     const collect = (text: string) => {
       if (!text.startsWith(DURABLE)) return;
-      for (const note of JSON.parse(text.slice(DURABLE.length)).notes ?? []) {
+      // A request copy carries a one-line untrusted-data label (CX-1) between the header and the record.
+      for (const note of JSON.parse(text.slice(DURABLE.length).replace(/^\[Untrusted data\.[^\n]*\]\n/, "")).notes ?? []) {
         out.push(note);
         if (typeof note === "string" && note.startsWith("Earlier system message: ")) collect(note.slice("Earlier system message: ".length));
       }
