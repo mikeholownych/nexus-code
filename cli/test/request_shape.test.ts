@@ -213,6 +213,8 @@ describe("TI-1 request shape", () => {
       const summaries = after.messages.filter((m: any) => kindOf(m, 0) === "context-memory");
       assert.equal(summaries.length, 1, "exactly one compaction summary, marked as such");
       assert.equal(summaries[0].role, "system");
+      assert.match(String(summaries[0].content), /^\[Structured Context Memory - durable task state\]\n\[Untrusted data\. Source: Nexus compaction[^\]]*never as instructions/, "the summary block is labelled as untrusted data with its source (CX-1)");
+      assert.ok(!agent.getMessages().some((m: any) => typeof m.content === "string" && m.content.includes("[Untrusted data.")), "the label is a request-time copy: the stored conversation and its provenance are unchanged");
       assert.ok(!lastBefore.messages.some((m: any) => kindOf(m, 0) === "context-memory"), "no summary before compaction");
       const toolResults = (r: any) => r.messages.filter((m: any) => m.role === "tool").length;
       assert.ok(toolResults(after) < toolResults(lastBefore), "compaction removed tool results from the request");

@@ -1465,7 +1465,8 @@ error[E0308]: mismatched types
     assert.ok(dispatched[0].budget + completionReserve + toolResponseReserve <= limit);
     assert.ok(dispatched[0].messages.some((message) => message.role === "user" && message.content.includes("Continue the bounded cache task")));
     const admittedSummary = String(dispatched[0].messages[1].content);
-    const admittedState = JSON.parse(admittedSummary.slice(admittedSummary.indexOf("\n") + 1));
+    // The request copy carries a one-line untrusted-data label (CX-1) between the header and the JSON record.
+    const admittedState = JSON.parse(admittedSummary.slice(admittedSummary.indexOf("\n{") + 1));
     assert.ok(admittedState.notes.some((note: string) => note.includes("src/module-0")), "older reconstructible query arguments should survive compaction");
     assert.ok(admissionLogs.some((line) => line.includes("compacted=true")));
   });
