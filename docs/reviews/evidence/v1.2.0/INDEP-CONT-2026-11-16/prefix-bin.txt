@@ -1,0 +1,1 @@
+lrwxrwxrwx - mike 16 Nov 20:30 nexus -> /tmp/nexus-issue6-prefix/lib/nexus/v1.2.0/bin/nexus

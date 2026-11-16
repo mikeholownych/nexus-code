@@ -1,0 +1,16 @@
+{
+  "taskId": "task-da97eb59",
+  "status": "in_progress",
+  "cumulativeSteps": 69,
+  "totalSteps": 69,
+  "segments": 1,
+  "uniqueCompactions": 20,
+  "objectiveSha256": "f72401f6af81f8b995bb2154d2de1fe1412a0bb454f4581ce7854b97f7adf76a",
+  "requirementIds": [
+    "R1",
+    "R2",
+    "R3",
+    "R4",
+    "R5"
+  ]
+}

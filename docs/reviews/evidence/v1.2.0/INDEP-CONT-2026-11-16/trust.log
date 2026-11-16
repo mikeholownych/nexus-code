@@ -1,0 +1,2 @@
+Trusted: /tmp/nexus-issue6-live-ws.Sv1GkB
+Its .mcp.json servers and plugins will be loaded (they run code from this workspace). Undo with `nexus trust --remove`.

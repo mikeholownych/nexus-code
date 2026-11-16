@@ -1,0 +1,78 @@
+Nexus doctor 1.2.0 — fresh CLI configuration (deep)
+mode: review · sandbox: off · workspace: trusted
+18 pass · 3 warn · 0 fail · 3 skipped · 637 ms
+
+WARN state.sessions: The saved sessions directory does not exist yet; Nexus creates it on first save.
+       · /tmp/nexus-issue6-live-home.dpFCxJ/.nexus/sessions
+       ⚒ supported repair: Create /tmp/nexus-issue6-live-home.dpFCxJ/.nexus/sessions with mode 0700 (doctor --fix)
+WARN state.tasks: The durable task state directory does not exist yet; Nexus creates it on first save.
+       · /tmp/nexus-issue6-live-home.dpFCxJ/.nexus/tasks
+       ⚒ supported repair: Create /tmp/nexus-issue6-live-home.dpFCxJ/.nexus/tasks with mode 0700 (doctor --fix)
+WARN state.permissions: The ~/.nexus directory is readable by other users (mode 775).
+       · /tmp/nexus-issue6-live-home.dpFCxJ/.nexus
+       ⚒ supported repair: chmod /tmp/nexus-issue6-live-home.dpFCxJ/.nexus from 775 to 700 (doctor --fix)
+PASS install.build: The CLI build is present and not older than its source.
+       · version 1.2.0
+       · built from f1ad33b9d6c8
+       · install root /tmp/nexus-issue6-prefix/lib/nexus/v1.2.0
+PASS tui.launch: The live TUI is launchable and its sidecar resolves.
+       · /tmp/nexus-issue6-prefix/lib/nexus/v1.2.0/lib/core/nexus-tui
+       · /tmp/nexus-issue6-prefix/lib/nexus/v1.2.0/lib/cli/dist/sidecar.js
+PASS runtime.node: Node.js 24.11.1 (supported).
+       · /home/mike/.local/node-v24.11.1-linux-x64/bin/node
+PASS runtime.launcher: The `nexus` launcher on PATH is this packaged installation.
+       · The nexus launcher resolves to this packaged installation.
+PASS config.valid: The configuration builds with the same rules a session uses.
+       · provider (appliance / OpenAI-compatible endpoint)
+       · model engineering/b0
+PASS endpoint.configured: An inference endpoint is configured.
+       · https://10.0.8.5:8443/v1
+       · locality LOCAL_APPLIANCE (private_ip)
+       · credential none configured; stored gateway credentials are attached per origin by the client
+PASS endpoint.reachable: The endpoint answered GET /models with HTTP 200.
+       · https://10.0.8.5:8443/v1/models
+PASS endpoint.authenticated: The endpoint accepted the request with the credential Nexus would send.
+       · https://10.0.8.5:8443/v1
+PASS model.available: The configured model engineering/b0 is listed by the endpoint.
+       · 5 models listed
+       · context 65536 via aihost_gateway
+PASS inference.verified: One inference request completed (costed model work: one short prompt and reply).
+       · model engineering/b0
+       · 245 ms
+       · reply "OK"
+PASS shell.executable: The shell bash runs commands.
+       · /usr/bin/bash
+PASS engine.binary: The Rust engine binary runs and matches the CLI version.
+       · /tmp/nexus-issue6-prefix/lib/nexus/v1.2.0/lib/core/harness-core
+       · harness-core 1.2.0
+PASS engine.tool: The engine executed a read-only tool (list_dir) in the workspace.
+       · /tmp/nexus-issue6-live-ws.Sv1GkB
+PASS workspace.access: The workspace is readable and writable and is a git repository (checkpoints and /undo available).
+       · /tmp/nexus-issue6-live-ws.Sv1GkB
+PASS state.integrity: No saved sessions or task state yet.
+PASS credentials.store: Nexus's own credential store is not in use (credentials come from the environment or other clients).
+       · /tmp/nexus-issue6-live-home.dpFCxJ/.config/nexus/credentials.json
+PASS config.env: No ~/.config/nexus/config.env file present (optional configuration).
+       · /tmp/nexus-issue6-live-home.dpFCxJ/.config/nexus/config.env
+PASS config.custom_ca: The custom CA bundle (/home/mike/.config/nexus/t5820-gateway-ca.crt) exists and contains 1 valid X.509 certificate(s).
+       · /home/mike/.config/nexus/t5820-gateway-ca.crt
+SKIP config.project_env_ignored: The workspace has no .env.
+       · /tmp/nexus-issue6-live-ws.Sv1GkB/.env
+SKIP mcp.config: No MCP servers are configured (optional).
+SKIP plugins.config: No plugins are installed (optional).
+
+Effective configuration (value ← source):
+  NEXUS_PROVIDER               (not set)  ← default
+  LOCAL_LLM_ENDPOINT           https://10.0.8.5:8443/v1  ← command-line flag
+  LOCAL_LLM_MODEL              engineering/b0  ← command-line flag
+  LOCAL_LLM_API_KEY            not set  ← derived
+  LOCAL_HARNESS_SHELL          bash  ← command-line flag
+  workspace                    /tmp/nexus-issue6-live-ws.Sv1GkB  ← current directory
+  max steps per segment        30 (checkpoint interval, not a limit)  ← derived
+  NEXUS_MAX_TOTAL_STEPS        none  ← default
+  NEXUS_MAX_TURN_MINUTES       none  ← default
+  NEXUS_STAGNATION_STEPS       12  ← default
+  NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS 3  ← default
+  NEXUS_VERIFIER_TIMEOUT_SECS  300  ← default
+  PLANNER_LLM_MODEL            (not set)  ← default
+  CODER_LLM_MODEL              (not set)  ← default

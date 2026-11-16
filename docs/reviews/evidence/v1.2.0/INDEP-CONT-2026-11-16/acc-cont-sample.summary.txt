@@ -1,0 +1,2 @@
+ACC-CONT sample: 144 tests, 144 pass, 0 fail (node test runner).
+Named PASS: ACC-CONT-01..07, ACC-CONT-09 (see acc-cont-sample.log).
