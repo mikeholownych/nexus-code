@@ -8,6 +8,7 @@ import pc from "picocolors";
 import { InferenceError, LocalLlmClient, operatorSetting } from "./client.js";
 import { buildConfig } from "./config.js";
 import { baseUrlSetting, allProviders, disclosureClass, providerDefinition, providerIds, providerSource } from "./providers.js";
+import { snapshotCacheDate, snapshotDate } from "./core/models_snapshot.js";
 import type { ChatMessage, HarnessConfig, ToolDefinition } from "./types.js";
 import { UsageLedger } from "./usage.js";
 import { resolveCredential } from "./credentials.js";
@@ -391,6 +392,8 @@ export function registerProviderCommands(program: Command, prompts?: ProviderCli
         process.exitCode = 2;
         return;
       }
+      const cacheDate = snapshotCacheDate();
+      console.log(pc.dim(`\nModel data: models.dev ${cacheDate ? `cache ${cacheDate} (nexus models refresh)` : `snapshot ${snapshotDate()} (bundled)`}`));
       console.log(`\n${describeTarget(config)}`);
       const authorized = config.authorizedDisclosureOrigins ?? [];
       console.log(pc.dim(`Authorized cloud destinations: ${authorized.length ? authorized.map((origin) => safeOriginOf(origin) ?? "(invalid endpoint)").join(", ") : "none"}`));

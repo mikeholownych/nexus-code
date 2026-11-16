@@ -238,7 +238,12 @@ Base URL semantics: `hostFromEnv: true` means the host (or the whole URL) comes 
 snowflake-cortex), so PR-2 and PR-5 must validate it after substitution. An absent `baseUrl` means unresolvable from
 the snapshot: a native protocol, or `needsBaseUrl: true` (perplexity), which the operator must supply.
 
-Nothing is fetched at runtime or in CI. To regenerate, fetch the data by hand, then run the offline generator:
+Nothing is fetched at runtime or in CI. The one exception is the operator's explicit `nexus models refresh`, which
+fetches `https://models.dev/api.json` (no redirects, 30 MiB and 30 s limits), validates every provider with the rules
+above, and writes `~/.cache/nexus/models-snapshot.json` (mode 600). The cache exists only after the operator ran
+refresh. When present it overrides the bundled snapshot per provider; a refreshed model keeps the bundled model's
+tool-choice modes (`api.json` carries none), and a failed refresh changes nothing. An unreadable cache is ignored.
+`nexus providers` shows whether the bundled snapshot or a cache is in use, with its date. To regenerate the bundled file, fetch the data by hand, then run the offline generator:
 
 ```bash
 curl -fsS https://models.dev/api.json -o /tmp/api.json

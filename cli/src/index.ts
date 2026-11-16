@@ -566,7 +566,7 @@ program
     }
   });
 
-program
+const modelsCommand = program
   .command("models")
   .description("List loaded models from your local LM Studio or vLLM server")
   .option("-e, --endpoint <url>", "Local LLM endpoint (default: $LOCAL_LLM_ENDPOINT)")
@@ -592,6 +592,24 @@ program
       console.error(pc.red(`Error: ${formatDiagnosticForOutput(err)}`));
     }
     console.log();
+  });
+
+modelsCommand
+  .command("refresh")
+  .description("Fetch current model data from models.dev into a local cache that overrides the bundled snapshot (the only command that contacts models.dev)")
+  .action(async () => {
+    const [{ refreshModelsCache }, { resetSnapshotCache }, fs] = await Promise.all([import("./core/models_refresh.js"), import("./core/models_snapshot.js"), import("node:fs")]);
+    const pins = JSON.parse(fs.readFileSync(new URL("./providers.pins.json", import.meta.url), "utf8"));
+    try {
+      const result = await refreshModelsCache({ pins });
+      resetSnapshotCache();
+      console.log(pc.green(`Model data refreshed (${result.date}): ${result.providers} providers, ${result.models} models.`));
+      console.log(pc.dim(`Cache: ${result.file}`));
+      if (result.rejected.length) console.log(pc.yellow(`${result.rejected.length} provider entries failed validation and were left out: ${result.rejected.slice(0, 5).join(" | ")}`));
+    } catch (err: any) {
+      console.error(pc.red(`Refresh failed; nothing was changed: ${formatDiagnosticForOutput(err)}`));
+      process.exitCode = 1;
+    }
   });
 
 /** Shared by `doctor` and its compatibility alias `check`. */
