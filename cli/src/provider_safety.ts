@@ -81,6 +81,15 @@ export function validateExtraHeaders(headers: unknown, field = "headers"): Recor
   return out;
 }
 
+/** The header that carries a provider's key: any valid name except routing/framing headers and the two built-in styles. */
+export function validateAuthHeaderName(name: unknown, field = "authHeader"): string {
+  if (typeof name !== "string" || !HEADER_NAME.test(name)) throw new Error(`${field}: not a valid header name`);
+  const lower = name.toLowerCase();
+  if (lower === "authorization" || lower === "x-api-key") throw new Error(`${field}: use auth "bearer" or "x-api-key" for ${name}`);
+  if (FORBIDDEN_HEADERS.has(lower)) throw new Error(`${field}: this header cannot be set by a provider`);
+  return name;
+}
+
 /** Header names an operator-declared provider adds, for the redaction list (keys never reach logs). */
 export function redactableHeaderNames(authHeader: string | undefined, extra: Readonly<Record<string, string>>): string[] {
   return [...new Set([...(authHeader ? [authHeader.toLowerCase()] : []), ...Object.keys(extra).map((n) => n.toLowerCase())])];

@@ -4,7 +4,9 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config as loadDotenv, parse as parseDotenv } from "dotenv";
 import { credentialOriginOf, credentialStorageHome, environmentCredential, LocalLlmClient, operatorSetting, setCredentialAuthority } from "./client.js";
-import { baseUrlSetting, originOf, parseOriginList, providerDefinition, providerIds } from "./providers.js";
+import { baseUrlSetting, originOf, parseOriginList, providerDefinition, providerIds, setOperatorProviders } from "./providers.js";
+import { readProvidersFile } from "./provider_file.js";
+import { parseLocalOrigins } from "./core/egress.js";
 import { providerApiKey } from "./credentials.js";
 import { validateBranchName } from "./worktrunk/paths.js";
 import { DEFAULT_OPERATION_POLICY } from "./core/operation.js";
@@ -106,6 +108,14 @@ export function loadEnvironment(): void {
     // Preserve the invalid policy for buildConfig to reject. Deferring only the throw lets `nexus doctor`
     // report a structured config.valid finding; no execution path may proceed with policy defaults instead.
     operatorJsonOperationPolicyError = error instanceof Error ? error : new Error("Unable to read operator config.json.");
+  }
+  // The operator's own providers (~/.config/nexus/providers.json): operator home only, never a project file. An invalid
+  // file is reported like an invalid config.json, and no provider is registered from it.
+  try {
+    setOperatorProviders(readProvidersFile(path.join(operatorHome, ".config/nexus/providers.json"), parseLocalOrigins(process.env.NEXUS_LOCAL_ORIGINS)));
+  } catch (error) {
+    setOperatorProviders([]);
+    operatorJsonOperationPolicyError ??= error instanceof Error ? error : new Error("Unable to read operator providers.json.");
   }
   // A provenance setting chosen in the operator's shell outranks config.env, which was applied with override above:
   // config.env NEXUS_VERIFY_ATTESTATION=0 must not defeat an explicit NEXUS_VERIFY_ATTESTATION=1 for this run.

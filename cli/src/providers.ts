@@ -49,6 +49,8 @@ export interface ProviderDefinition {
   protocolRules?: ProtocolRule[];
   /** Headers this provider requires on every request. */
   staticHeaders?: Record<string, string>;
+  /** Query parameters added to every request URL (for example Azure OpenAI's `api-version`). */
+  query?: Record<string, string>;
   /** Ask the provider to report usage (and, where offered, cost) on streamed responses. */
   usage: "openrouter" | "stream-options" | "native";
 }
@@ -127,9 +129,21 @@ export const PROVIDERS: Readonly<Record<string, ProviderDefinition>> = Object.fr
   },
 });
 
-/** Every known provider, in declaration order. The one place callers enumerate providers. */
+/** Providers the operator declared in ~/.config/nexus/providers.json; built-in ids can never be replaced. */
+let operatorProviders: Readonly<Record<string, ProviderDefinition>> = Object.freeze({});
+
+export function setOperatorProviders(defs: readonly ProviderDefinition[]): void {
+  const next: Record<string, ProviderDefinition> = {};
+  for (const def of defs) {
+    if (Object.prototype.hasOwnProperty.call(PROVIDERS, def.id)) throw new Error(`providers.${def.id}: a built-in provider id cannot be redefined`);
+    next[def.id] = def;
+  }
+  operatorProviders = Object.freeze(next);
+}
+
+/** Every known provider: the built-ins, then the operator's own, in declaration order. The one place callers enumerate providers. */
 export function allProviders(): ProviderDefinition[] {
-  return Object.values(PROVIDERS);
+  return [...Object.values(PROVIDERS), ...Object.values(operatorProviders)];
 }
 
 export function providerIds(): string[] {
@@ -137,12 +151,14 @@ export function providerIds(): string[] {
 }
 
 export function providerDefinition(id: string | undefined): ProviderDefinition | undefined {
-  return id && Object.prototype.hasOwnProperty.call(PROVIDERS, id) ? PROVIDERS[id] : undefined;
+  if (!id) return undefined;
+  if (Object.prototype.hasOwnProperty.call(PROVIDERS, id)) return PROVIDERS[id];
+  return Object.prototype.hasOwnProperty.call(operatorProviders, id) ? operatorProviders[id] : undefined;
 }
 
 /** `NEXUS_<ID>_BASE_URL`: the operator's override of a provider's base URL. */
 export function baseUrlSetting(id: string): string {
-  return `NEXUS_${id.toUpperCase()}_BASE_URL`;
+  return `NEXUS_${id.toUpperCase().replace(/-/g, "_")}_BASE_URL`;
 }
 
 export function originOf(url: string | undefined): string | undefined {
@@ -162,6 +178,7 @@ export interface ResolvedConnection {
   auth: AuthStyle;
   authHeader?: string;
   staticHeaders: Record<string, string>;
+  query: Record<string, string>;
   usage: ProviderDefinition["usage"] | "none";
   /** Whether requests carry the appliance's X-Task-Class routing hint. */
   sendTaskClass: boolean;
@@ -179,7 +196,7 @@ export function connectionFor(providerId: string | undefined, model = ""): Resol
   if (!def) {
     // Usage is requested (OpenAI-compatible servers such as llama.cpp, vLLM and the appliance gateway report it, with
     // cached-token counts); a server that rejects stream_options has it dropped and the request retried.
-    return { label: "endpoint", protocol: "openai-chat", auth: "bearer", staticHeaders: {}, usage: "stream-options", sendTaskClass: true, streamOnly: false, omitParams: [] };
+    return { label: "endpoint", protocol: "openai-chat", auth: "bearer", staticHeaders: {}, query: {}, usage: "stream-options", sendTaskClass: true, streamOnly: false, omitParams: [] };
   }
   return {
     providerId: def.id,
@@ -188,6 +205,7 @@ export function connectionFor(providerId: string | undefined, model = ""): Resol
     auth: def.auth,
     ...(def.authHeader ? { authHeader: def.authHeader } : {}),
     staticHeaders: { ...(def.staticHeaders ?? {}) },
+    query: { ...(def.query ?? {}) },
     usage: def.usage,
     sendTaskClass: false,
     streamOnly: Boolean(def.streamOnly),

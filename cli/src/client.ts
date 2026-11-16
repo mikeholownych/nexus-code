@@ -1263,11 +1263,20 @@ export class LocalLlmClient {
     );
   }
 
+  /** An operation URL on an endpoint, carrying the provider's fixed query parameters (such as Azure's `api-version`). */
+  private endpointUrl(endpoint: string, pathAndQuery: string): string {
+    const entries = Object.entries(this.conn.query);
+    if (!entries.length) return `${endpoint}${pathAndQuery}`;
+    const url = new URL(`${endpoint}${pathAndQuery}`);
+    for (const [k, v] of entries) if (!url.searchParams.has(k)) url.searchParams.set(k, v);
+    return url.toString();
+  }
+
   async listModels(signal?: AbortSignal): Promise<string[]> {
     return this.executeWithFailover("listModels", async (currentEp) => {
       await this.prepareCredential(currentEp);
       const query = this.conn.protocol === "anthropic-messages" ? "?limit=1000" : this.conn.providerId === "chatgpt" ? "?client_version=1.0.0" : "";
-      const url = `${currentEp}/models${query}`;
+      const url = this.endpointUrl(currentEp, `/models${query}`);
       const res = await fetch(url, {
         headers: this.authorization(url),
         signal: metadataSignal(signal),
@@ -1295,7 +1304,7 @@ export class LocalLlmClient {
   /** Raw `/models` entries. Providers that publish capability metadata let the scheduler qualify resources. */
   async listModelCatalog(signal?: AbortSignal): Promise<Array<Record<string, any>>> {
     return this.executeWithFailover("listModelCatalog", async (currentEp) => {
-      const res = await fetch(`${currentEp}/models`, { headers: this.authorization(currentEp), signal: metadataSignal(signal), ...this.fetchPolicy() });
+      const res = await fetch(this.endpointUrl(currentEp, "/models"), { headers: this.authorization(currentEp), signal: metadataSignal(signal), ...this.fetchPolicy() });
       if (!res.ok) {
         const text = await res.text().catch(() => "");
         throw new Error(`Server returned HTTP ${res.status}: ${boundedProviderText(text || res.statusText)}`);
@@ -1337,7 +1346,7 @@ export class LocalLlmClient {
       LocalLlmClient.serverKindCache.set(this.kindKey(ep), kind);
     };
     if (this.conn.protocol !== "openai-chat") return { state: "unsupported", detail: `${this.conn.protocol} connection` };
-    const url = `${ep}/models`;
+    const url = this.endpointUrl(ep, "/models");
     try {
       await this.prepareCredential(ep);
       const res = await fetch(url, {
@@ -1651,7 +1660,7 @@ export class LocalLlmClient {
   private async probeEndpointAt(idx: number, signal: AbortSignal | undefined, timeoutMs: number | undefined): Promise<ProbeResult> {
     const timeout = AbortSignal.timeout(timeoutMs ?? 5_000);
     try {
-      const res = await this.fetchResendingStale(`${this.endpoints[idx]}/models`, {
+      const res = await this.fetchResendingStale(this.endpointUrl(this.endpoints[idx], "/models"), {
         headers: this.authorization(this.endpoints[idx]),
         signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
         ...this.fetchPolicy(),
@@ -1737,7 +1746,7 @@ export class LocalLlmClient {
     if (this.conn.streamOnly) return this.chatCompletionStreamOnce(messages, tools, undefined, requestId, signal);
     return this.executeWithFailover("chatCompletion", async (currentEp) => {
       if (signal?.aborted) throw abortedError(requestId);
-      const url = `${currentEp}/chat/completions`;
+      const url = this.endpointUrl(currentEp, "/chat/completions");
       await this.prepareCredential(currentEp, requestId);
       this.preflight(currentEp, requestId, JSON.stringify(messages).length + JSON.stringify(tools).length);
 
@@ -1952,7 +1961,7 @@ export class LocalLlmClient {
     if (wireProtocol(this.conn.protocol).native) return this.nativeCompletion(messages, tools, onToken, requestId, signal, true);
     return this.executeWithFailover("chatCompletionStream", async (currentEp) => {
       if (signal?.aborted) throw abortedError(requestId);
-      const url = `${currentEp}/chat/completions`;
+      const url = this.endpointUrl(currentEp, "/chat/completions");
       await this.prepareCredential(currentEp, requestId);
       this.preflight(currentEp, requestId, JSON.stringify(messages).length + JSON.stringify(tools).length);
 
@@ -2130,7 +2139,7 @@ export class LocalLlmClient {
       if (req.droppedState) {
         this.emitDiagnostic("error", pc.dim(`[nexus] ${req.droppedState} earlier assistant turn(s) carry reasoning state owned by another provider/model or altered since capture; it is not replayed to ${owner} (visible text and tool calls are kept).`));
       }
-      const url = `${currentEp}${req.path}`;
+      const url = this.endpointUrl(currentEp, req.path);
       this.pending = { endpoint: currentEp };
       const watchdog = this.createWatchdog(signal, currentEp, stream);
       let res: Response;
@@ -2250,7 +2259,7 @@ export class LocalLlmClient {
     }
     if (this.embeddingsUnsupported) throw new Error(this.embeddingsUnsupported);
     return this.executeWithFailover("generateEmbedding", async (currentEp) => {
-      const url = `${currentEp}/embeddings`;
+      const url = this.endpointUrl(currentEp, "/embeddings");
 
       // 1. Egress Interception & Quarantine (DISC-001..003, CTX-006, FAIL-003)
       const egressEvaluation = this.boundary.evaluateEgress(
