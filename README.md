@@ -169,8 +169,9 @@ Approval prompts still apply unless you choose `--mode auto` or `--yes`; see the
 
 ### Defense-in-Depth Sandboxing
 - **Workspace path jail:** the Rust file tools reject paths outside the workspace, including `..` and symlink escapes.
-- **Opt-in command sandbox:** `--sandbox` runs commands under Bubblewrap (`bwrap`) or Docker. Without it, host commands have your filesystem access; `--read-only` masks `$HOME` when `bwrap` is available.
-- **Egress approval:** network access asks on first use of each origin, except under `--yes`.
+- **Opt-in command sandbox:** `--sandbox` runs commands under Bubblewrap (`bwrap`) or Docker. Write-mode `bwrap` masks `$HOME` (`~/.ssh`, `~/.aws`, `~/.config/nexus`), binds only toolchain directories read-only (extend with `NEXUS_SANDBOX_HOME_READONLY`), has no network unless you pass `--sandbox-network` (`--yes` does not enable it) and kills commands with the runner. Docker runs a digest-pinned image as your uid with all capabilities dropped, a read-only root and no network by default. Files outside `$HOME` stay readable under the sandbox. Without `--sandbox`, host commands run as your user with your filesystem access; `--read-only` masks `$HOME` when `bwrap` is available.
+- **Scrubbed command environment:** `run_command` does not inherit provider keys, tokens or `config.env` values. Pass a named variable through with `NEXUS_COMMAND_ENV_PASSTHROUGH` (operator only). Without `--sandbox` a command can still read your files and its parent processes' environment.
+- **Egress approval:** the network tools (`fetch_web`, `search_web`, `browser_*`) ask on first use of each origin, except under `--yes`. Shell commands are not covered; the sandbox's network setting is what limits them.
 
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) lists each guarantee and its limits.
 
@@ -184,7 +185,7 @@ Eliminate uncommitted workspace pollution with native named worktrees (see [docs
 ### Human-in-the-Loop (HITL) Approvals
 Stay in complete control of changes:
 - **`review` mode (default):** Prompts for confirmation before file writes, shell commands, or network calls. `--yes` bypasses all prompts.
-- **`auto` mode (`--mode auto`):** Writes and commands run without approval; network egress still asks on first use of each origin.
+- **`auto` mode (`--mode auto`):** Writes and commands run without approval; the network tools still ask on first use of each origin (shell commands are not subject to egress approval).
 - **`read-only` mode (`--read-only`):** Explores code without permitting modifications or non-read commands.
 
 ### Context Budgeting & Cost Governance
