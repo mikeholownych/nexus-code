@@ -330,6 +330,8 @@ export function providerBaseUrl(id: string, flag?: string): string {
   if (!url || !originOf(url)) {
     throw new Error(`Provider '${id}' needs a base URL: pass --base-url or set ${baseUrlSetting(id)} in ~/.config/nexus/config.env.`);
   }
+  const parsed = new URL(url.trim());
+  if (parsed.username || parsed.password) throw new Error(`Provider '${id}' base URL must not contain credentials; the key is sent as a header.`);
   return url.trim().replace(/\/+$/, "");
 }
 

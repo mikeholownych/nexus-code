@@ -18,6 +18,7 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 ### Changed
 
+- Added `provider_safety` validation for operator-declared providers (id grammar, https-only unless local, no URL credentials, validated template variables, forbidden and auth headers refused); a provider base URL containing credentials is now refused (PR-9, groundwork for the operator providers file).
 - Provider enumeration goes through one accessor (`allProviders()`/`providerIds()`), and a provider id that matches an inherited object key (`constructor`) is no longer treated as known (PR-2 slice 2).
 - Provider definitions now carry per-model protocol rules (`protocolRules`) and a header-name auth style (`auth: "header"` with `authHeader`), replacing the hard-coded Copilot gpt-5 check. Built-in providers behave identically (PR-2 slice 1).
 
