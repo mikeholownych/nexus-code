@@ -25,6 +25,7 @@ import { parse as parseDotenv } from "dotenv";
 import { LocalLlmClient, credentialStorageHome, operatorSetting } from "./client.js";
 import { credentialsPath } from "./credentials.js";
 import { mcpConfigFiles } from "./mcp.js";
+import { isBwrapAvailable, sandboxHomeMounts, sandboxNetworkEnabled, sandboxWorkspaceOverlays } from "./sandbox.js";
 import { pluginDirs } from "./plugins.js";
 import { untrustedWorkspaceExtensions, WORKSPACE_MCP_FILES, isWorkspaceTrusted } from "./workspace_trust.js";
 import { BuildIdentity, getBuildIdentity } from "./build_identity.js";
@@ -555,6 +556,34 @@ const shellCheck: Check = async (ctx, signal) => {
   const res = await run(resolved, ["-c", "printf nexus-doctor"], { timeoutMs: ctx.timeoutMs, signal });
   if (res.stdout === "nexus-doctor" && res.code === 0) return f("shell.executable", "runtime", "pass", `The shell ${shell} runs commands.`, [resolved]);
   return f("shell.executable", "runtime", "fail", `The shell ${shell} did not run a test command.`, [resolved, res.timedOut ? "timed out" : `exit ${res.code} ${res.error ?? res.stderr.trim()}`.trim()], "Check the shell installation and its startup files.");
+};
+
+/** What a write-mode `--sandbox` command can reach: the masked HOME, the read-only toolchain mounts, the network. */
+const sandboxCheck: Check = async (ctx) => {
+  const sandbox = ctx.config?.sandbox ?? ctx.flags.sandbox;
+  if (!sandbox || sandbox === "none") {
+    return f("sandbox.confinement", "runtime", "skip", "No --sandbox is configured; run_command runs on the host with the scrubbed environment only.", []);
+  }
+  if (sandbox !== "docker" && !isBwrapAvailable()) {
+    return f("sandbox.confinement", "runtime", "warn", "--sandbox is configured but bubblewrap (bwrap) is not available.", [], "Install bubblewrap, or run without --sandbox.");
+  }
+  const m = sandboxHomeMounts();
+  const evidence = [
+    `network: ${sandboxNetworkEnabled() ? "ON (--sandbox-network / NEXUS_SANDBOX_NETWORK)" : "off (default)"}`,
+    `HOME ${m.home} is masked with an empty tmpfs; read-only mounts back under it:`,
+    ...(m.mounts.length ? m.mounts.map((x) => `  ${x.path}  (${x.source})`) : ["  (none)"]),
+    ...m.masked.map((x) => `  hidden file: ${x}`),
+    ...m.refused.map((x) => `  refused: ${x.path} (${x.reason})`),
+  ];
+  const workspace = ctx.config?.workspace;
+  if (workspace) {
+    const o = sandboxWorkspaceOverlays(workspace);
+    // Non-empty only when the workspace is, contains or sits above HOME.
+    if (o.dirs.length || o.files.length) {
+      evidence.push("the workspace holds credential paths; they are emptied inside the sandbox:", ...o.dirs.map((x) => `  masked dir: ${x}`), ...o.files.map((x) => `  masked file: ${x}`));
+    }
+  }
+  return f("sandbox.confinement", "runtime", "pass", "Write-mode --sandbox masks HOME, binds only the listed toolchain directories read-only, and has no network unless opted in.", evidence, "Extend the mounts with NEXUS_SANDBOX_HOME_READONLY (comma-separated paths; operator environment or config.env only).");
 };
 
 const engineCheck: Check = async (ctx, signal) => {
@@ -1140,6 +1169,7 @@ const CHECKS: Array<[string, Check]> = [
   ["endpoint", endpointChecks],
   ["inference", inferenceCheck],
   ["shell", shellCheck],
+  ["sandbox", sandboxCheck],
   ["engine", engineCheck],
   ["workspace", workspaceCheck],
   ["state", stateDirCheck],

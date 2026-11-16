@@ -8,6 +8,7 @@ import { baseUrlSetting, originOf, parseOriginList, PROVIDERS, providerDefinitio
 import { providerApiKey } from "./credentials.js";
 import { validateBranchName } from "./worktrunk/paths.js";
 import { DEFAULT_OPERATION_POLICY } from "./core/operation.js";
+import { setSandboxNetworkFlag } from "./sandbox_network.js";
 import { readSmallFile } from "./core/checkout_trust.js";
 import { resolveRepeatedCallSettings } from "./core/repeated_calls.js";
 import { ContinuationBudget, DEFAULT_CONTINUATION, DEFAULT_CONVERGENCE_ATTEMPTS, HarnessConfig, ApprovalMode } from "./types.js";
@@ -447,6 +448,11 @@ export function buildConfig(options: any): HarnessConfig {
   }
 
   const sandbox = options.sandbox ? (typeof options.sandbox === "string" ? options.sandbox : true) : undefined;
+  // Network inside --sandbox is an explicit operator choice; --yes never implies it.
+  if (options.sandboxNetwork) {
+    if (sandbox) setSandboxNetworkFlag(true);
+    else warnOnce("--sandbox-network has no effect without --sandbox.");
+  }
   if (provider && options.fallback) warnOnce(`--fallback is ignored for provider '${provider}': a provider connection is pinned to its own endpoint.`);
   const fallbackEndpoints = options.fallback && !provider ? options.fallback.split(",").map((s: string) => s.trim()) : undefined;
   const contextLimit = options.contextLimit ? parseInt(options.contextLimit, 10) : (effectiveSetting("NEXUS_CONTEXT_LIMIT") ? parseInt(effectiveSetting("NEXUS_CONTEXT_LIMIT")!, 10) : undefined);

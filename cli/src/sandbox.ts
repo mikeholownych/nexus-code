@@ -3,6 +3,8 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { buildCommandEnvironment } from "./command_env.js";
+import { operatorSetting } from "./client.js";
+import { sandboxNetworkFlagSet, setSandboxNetworkFlag } from "./sandbox_network.js";
 
 export type SandboxMode = "auto" | "bwrap" | "docker" | "none";
 
@@ -22,6 +24,164 @@ export interface SandboxedCommandResult {
   sandboxed: boolean;
   engine: "bwrap" | "docker" | "none";
   warning?: string;
+}
+
+/**
+ * Write-mode `--sandbox` masks $HOME with an empty tmpfs and binds back, read-only, only the toolchain directories a
+ * build needs. Credential locations are never bound, whatever the PATH or the operator's list says.
+ */
+const HOME_TOOLCHAIN_DEFAULTS = [
+  ".cargo", ".rustup", ".nvm", ".local/bin", ".npm", ".cache/pip", "go/pkg",
+];
+/** Under HOME. A candidate that is one of these, inside one, or the parent of one is refused. */
+const HOME_DENIED = [
+  ".ssh", ".gnupg", ".aws", ".config/nexus", ".config/gh", ".netrc", ".docker", ".kube", ".azure", ".npmrc",
+  ".pypirc", ".gitconfig", ".git-credentials", ".config/gcloud", ".config/google-chrome", ".config/chromium",
+  ".config/BraveSoftware", ".config/microsoft-edge", ".mozilla", ".config/mozilla",
+  ".config", ".local/share", ".local", ".cache",
+];
+/** Allowed roots may contain these files (cargo keeps its registry token in ~/.cargo); they are masked. */
+const HOME_MASKED_FILES = [".cargo/credentials", ".cargo/credentials.toml"];
+/** Broad directories: refused as a whole (or as a parent), while a specific safe child such as ~/.cache/pip is allowed. */
+const BROAD_DENIED = new Set([".config", ".local/share", ".local", ".cache"]);
+export const SANDBOX_HOME_READONLY_SETTING = "NEXUS_SANDBOX_HOME_READONLY";
+export const SANDBOX_NETWORK_SETTING = "NEXUS_SANDBOX_NETWORK";
+
+export interface SandboxHomeMount {
+  path: string;
+  source: "default" | "PATH" | "operator";
+}
+export interface SandboxHomeMounts {
+  home: string;
+  mounts: SandboxHomeMount[];
+  masked: string[];
+  refused: Array<{ path: string; reason: string }>;
+}
+
+function deniedReason(candidate: string, home: string): string | undefined {
+  for (const entry of HOME_DENIED) {
+    const denied = path.join(home, entry);
+    if (BROAD_DENIED.has(entry)) {
+      // A broad directory is refused only as a whole (or a parent); its safe children are allowed.
+      if (candidate === denied || isPathWithin(denied, candidate)) return `covers ${entry}`;
+      continue;
+    }
+    if (isPathWithin(candidate, denied)) return `inside ${entry}`;
+    if (isPathWithin(denied, candidate)) return `contains ${entry}`;
+  }
+  return undefined;
+}
+
+/** The directories under HOME a write-mode sandbox binds back read-only. Pure function of HOME, PATH and the operator setting. */
+export function sandboxHomeMounts(env: NodeJS.ProcessEnv = process.env): SandboxHomeMounts {
+  const home = path.resolve(env.HOME || os.homedir());
+  const result: SandboxHomeMounts = { home, mounts: [], masked: [], refused: [] };
+  if (home === "/") return result;
+  const seen = new Set<string>();
+  const consider = (raw: string, source: SandboxHomeMount["source"]): void => {
+    const candidate = path.resolve(raw.startsWith("~/") ? path.join(home, raw.slice(2)) : raw);
+    if (!isPathWithin(candidate, home) || candidate === home || seen.has(candidate)) return;
+    seen.add(candidate);
+    const refusal = deniedReason(candidate, home);
+    if (refusal) {
+      if (source !== "default") result.refused.push({ path: candidate, reason: refusal });
+      return;
+    }
+    let real: string;
+    try {
+      real = fs.realpathSync(candidate);
+      if (!fs.statSync(real).isDirectory()) return;
+    } catch {
+      return;
+    }
+    // A symlink must not lead into a credential directory.
+    const realHome = (() => { try { return fs.realpathSync(home); } catch { return home; } })();
+    if (isPathWithin(real, realHome)) {
+      const viaLink = deniedReason(real, realHome);
+      if (viaLink) {
+        result.refused.push({ path: candidate, reason: `resolves to a path ${viaLink}` });
+        return;
+      }
+    }
+    result.mounts.push({ path: candidate, source });
+  };
+  for (const entry of HOME_TOOLCHAIN_DEFAULTS) consider(path.join(home, entry), "default");
+  for (const dir of (env.PATH || "").split(path.delimiter).filter(Boolean)) {
+    const resolved = path.resolve(dir);
+    if (!isPathWithin(resolved, home)) continue;
+    // `<prefix>/bin` needs its prefix for lib/ (npm, node_modules); prefix must itself be a safe directory.
+    const prefix = path.basename(resolved) === "bin" ? path.dirname(resolved) : resolved;
+    if (prefix !== resolved && prefix !== home && !deniedReason(prefix, home)) consider(prefix, "PATH");
+    else consider(resolved, "PATH");
+  }
+  for (const raw of (operatorSetting(SANDBOX_HOME_READONLY_SETTING) ?? "").split(",").map((v) => v.trim()).filter(Boolean)) {
+    consider(raw, "operator");
+  }
+  // Drop mounts nested inside another mount (the outer one already provides them).
+  result.mounts = result.mounts.filter((m) => !result.mounts.some((o) => o !== m && o.path !== m.path && isPathWithin(m.path, o.path)));
+  for (const rel of HOME_MASKED_FILES) {
+    const file = path.join(home, rel);
+    if (result.mounts.some((m) => isPathWithin(file, m.path)) && fs.existsSync(file)) result.masked.push(file);
+  }
+  return result;
+}
+
+export interface SandboxWorkspaceOverlays {
+  dirs: string[];
+  files: string[];
+}
+
+/**
+ * The writable workspace bind is applied on top of the masked HOME, so when the workspace is HOME, sits above it, or
+ * contains a credential directory, it would bring that directory back. These are the existing credential paths
+ * (the specific HOME_DENIED entries and the masked files) that lie inside the workspace: a directory gets an empty
+ * tmpfs and a file /dev/null mounted over it, after the workspace bind. Pure function of HOME, the workspace and the
+ * file system.
+ */
+export function sandboxWorkspaceOverlays(workspace: string, env: NodeJS.ProcessEnv = process.env): SandboxWorkspaceOverlays {
+  const home = path.resolve(env.HOME || os.homedir());
+  const root = path.resolve(workspace);
+  const out: SandboxWorkspaceOverlays = { dirs: [], files: [] };
+  if (home === "/") return out;
+  const candidates = [...HOME_DENIED.filter((entry) => !BROAD_DENIED.has(entry)), ...HOME_MASKED_FILES].map((rel) => path.join(home, rel));
+  for (const candidate of candidates) {
+    if (!isPathWithin(candidate, root)) continue;
+    // A symlink is overlaid at its target when that lies inside the workspace; the link then reads the overlay.
+    let target = candidate;
+    try {
+      if (fs.lstatSync(candidate).isSymbolicLink()) target = fs.realpathSync(candidate);
+    } catch {
+      continue;
+    }
+    if (!isPathWithin(target, root)) continue;
+    try {
+      const stat = fs.statSync(target);
+      const list = stat.isDirectory() ? out.dirs : stat.isFile() ? out.files : undefined;
+      if (list && !list.includes(target)) list.push(target);
+    } catch {
+      // Dangling link or vanished path: nothing to hide.
+    }
+  }
+  return out;
+}
+
+export { setSandboxNetworkFlag };
+/** Whether write-mode sandboxed commands may use the network: only on an explicit operator opt-in. */
+export function sandboxNetworkEnabled(): boolean {
+  if (sandboxNetworkFlagSet()) return true;
+  return /^(1|true|yes|on)$/i.test((operatorSetting(SANDBOX_NETWORK_SETTING) ?? "").trim());
+}
+
+const NETWORK_COMMAND = /(^|[\s;&|(`])(curl|wget|nc|ncat|ssh|scp|sftp|rsync|ftp|telnet|ping|dig|nslookup|git\s+(clone|fetch|pull|push|ls-remote|submodule)|npm\s+(install|i|ci|publish|view|update)|npx|pnpm\s+(install|add|i)|yarn(\s+(install|add))?|pip3?\s+(install|download)|uv\s+(pip|sync|add)|cargo\s+(install|fetch|publish|update)|go\s+(get|mod\s+download)|apt(-get)?\s+(install|update)|docker\s+(pull|push))(\s|$)/;
+
+/** Approval-prompt text about the network for a sandboxed run_command, or undefined when there is nothing to say. */
+export function sandboxNetworkNotice(command: string, sandboxed: boolean): string | undefined {
+  if (!sandboxed) return undefined;
+  if (sandboxNetworkEnabled()) return "this command runs in the sandbox WITH network access (--sandbox-network / NEXUS_SANDBOX_NETWORK).";
+  if (NETWORK_COMMAND.test(command)) {
+    return "this command looks like it needs the network, but the sandbox has no network by default; it will fail unless the operator restarts with --sandbox-network.";
+  }
+  return undefined;
 }
 
 export function quoteForShell(arg: string): string {
@@ -247,6 +407,7 @@ export function wrapSandboxedCommand(
 
     const userHome = path.resolve(process.env.HOME || os.homedir());
     const bwrapArgs: string[] = ["bwrap"];
+    const networkAllowed = !options.readOnlyHost && options.network !== false && (options.network === true || sandboxNetworkEnabled());
 
     if (options.readOnlyHost) {
       if (!Number.isInteger(options.workspaceFd) || options.workspaceFd! < 3) {
@@ -319,7 +480,31 @@ export function wrapSandboxedCommand(
         "--proc", "/proc",
         "--tmpfs", "/tmp",
       );
+      // Mask $HOME (~/.ssh, ~/.aws, ~/.gnupg, ~/.config/nexus, browser profiles ...) the way the read-only branch does,
+      // then bind back only the toolchain directories builds need. The tmpfs comes before the workspace bind, so a
+      // workspace under $HOME is still bound writable on top of it.
+      const home = sandboxHomeMounts();
+      if (home.home !== "/" && home.home !== "/tmp") {
+        bwrapArgs.push("--tmpfs", home.home);
+        for (const mount of home.mounts) bwrapArgs.push("--ro-bind", mount.path, mount.path);
+        for (const file of home.masked) bwrapArgs.push("--ro-bind", "/dev/null", file);
+      }
+      // Credential-bearing sockets (ssh/gpg agents, the user bus) and the container engine's control socket.
+      if (typeof process.getuid === "function" && fs.existsSync(`/run/user/${process.getuid()}`)) {
+        bwrapArgs.push("--tmpfs", `/run/user/${process.getuid()}`);
+      }
+      for (const socket of ["/run/docker.sock", "/var/run/docker.sock"]) {
+        try {
+          if (fs.lstatSync(socket).isSocket()) bwrapArgs.push("--ro-bind", "/dev/null", socket);
+        } catch {
+          // Not present.
+        }
+      }
       bwrapArgs.push("--bind", absWorkspace, absWorkspace);
+      // The workspace bind above would re-expose credential paths when the workspace is, or contains, $HOME.
+      const overlays = sandboxWorkspaceOverlays(absWorkspace);
+      for (const dir of overlays.dirs) bwrapArgs.push("--tmpfs", dir);
+      for (const file of overlays.files) bwrapArgs.push("--ro-bind", "/dev/null", file);
       // bwrap passes its own environment to the command. Start empty and set back only the scrubbed command
       // environment, so a sandboxed command cannot see the operator's credentials either (read-only branch above
       // already starts from --clearenv with a fixed PATH/HOME).
@@ -329,9 +514,17 @@ export function wrapSandboxedCommand(
       }
     }
 
-    bwrapArgs.push("--chdir", absWorkspace, "--unshare-pid");
+    // --die-with-parent: every descendant dies with the runner. --unshare-pid plus the fresh /proc mounted above
+    // keep host processes, and their /proc/<pid>/environ, out of sight.
+    // Deliberately NOT --new-session: it makes bwrap its own session leader (pgid = sid = pid), so the runner's
+    // killpg on cancel or deadline (REQ-AGT-109, REQ-SEC-106) no longer reaches the sandboxed command, which then
+    // survives cancellation. What it would add, blocking TIOCSTI keystroke injection, is already closed by the
+    // kernel default since 6.2 (dev.tty.legacy_tiocsti=0). The command keeps its controlling terminal, so
+    // /dev/tty works as before.
+    bwrapArgs.push("--chdir", absWorkspace, "--unshare-pid", "--die-with-parent");
 
-    if (options.network === false) {
+    // No network unless the operator opted in explicitly (read-only mode always passes network: false).
+    if (!networkAllowed) {
       bwrapArgs.push("--unshare-net");
     }
 
@@ -374,7 +567,7 @@ export function wrapSandboxedCommand(
       "docker",
       "run",
       "--rm",
-      ...(options.network === false ? ["--network", "none"] : []),
+      ...(options.network === false || !(options.network === true || sandboxNetworkEnabled()) ? ["--network", "none"] : []),
       "-v",
       `${absWorkspace}:${absWorkspace}${mountMode}`,
       "-w",
