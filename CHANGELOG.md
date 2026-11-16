@@ -17,7 +17,7 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 ### Changed
 
-- The CLI parser moved to commander 15 (from 12), which is ESM-only and needs Node.js 22.12.0 or newer; `engines.node` is now `>=22.12.0` (it was `>=22`). Commander 13 made extra positional arguments an error; Nexus keeps ignoring them as before (`nexus doctor extra` still runs doctor), so command-line behaviour is unchanged.
+- The CLI parser moved to commander 14 (from 12). Commander 13 made extra positional arguments an error; Nexus keeps ignoring them as before (`nexus doctor extra` still runs doctor), so command-line behaviour is unchanged. The supported Node.js floor stays 22. Commander 15 needs Node.js 22.12.0 and is deferred until the floor moves.
 
 ### Fixed
 
