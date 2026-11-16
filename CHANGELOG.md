@@ -18,6 +18,7 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 ### Changed
 
+- `nexus providers` marks operator-declared providers, `nexus doctor` gains `config.providers_file` (a declared provider without a credential warns), and `docs/CLOUD_PROVIDERS.md` documents `providers.json` (PR-12).
 - Added a per-provider-definition wire matrix test (PR-11): every key-authenticated definition, built-in and operator-declared, is exercised for a streamed text reply and a tool call against a local mock, asserting path, query, the single credential header, static headers and omitted parameters.
 - Operators can declare their own providers in `~/.config/nexus/providers.json` (operator home only; a project file is never read): id, label, protocol, a base URL template with validated `{variables}`, fixed query parameters, extra headers, and `bearer`, `x-api-key` or custom-header auth, with several named providers instead of one compatible slot. Errors name the field. Example: Azure OpenAI with a deployment path, `api-version` query and `api-key` header (PR-2 slice 3).
 - Added `provider_safety` validation for operator-declared providers (id grammar, https-only unless local, no URL credentials, validated template variables, forbidden and auth headers refused); a provider base URL containing credentials is now refused (PR-9, groundwork for the operator providers file).

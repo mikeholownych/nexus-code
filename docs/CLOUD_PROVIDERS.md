@@ -12,6 +12,45 @@ and use their own credentials. Nothing in this document changes how the applianc
 | `chatgpt` | OpenAI Responses via the ChatGPT Codex backend | `https://chatgpt.com/backend-api/codex` | sign-in only (**unofficial**) |
 | `copilot` | Chat Completions (Responses for `gpt-5*`) | `https://api.githubcopilot.com` | sign-in only (**unofficial**) |
 
+## Your own providers (`~/.config/nexus/providers.json`)
+
+Any service that speaks one of the three wire protocols can be declared without code. The file is read only from the
+operator's home directory; a `providers.json` in a project is never consulted. An invalid file is reported by
+`nexus doctor` (`config.valid`) and no provider is registered from it. Built-in ids cannot be redefined. Every error
+names the field (for example `providers.azure-openai.authHeader`).
+
+```json
+{
+  "providers": {
+    "azure-openai": {
+      "label": "Azure OpenAI",
+      "protocol": "openai-chat",
+      "baseUrl": "https://{resource}.openai.azure.com/openai/deployments/{deployment}",
+      "variables": { "resource": "acme", "deployment": "gpt-4o" },
+      "query": { "api-version": "2024-10-21" },
+      "auth": "header",
+      "authHeader": "api-key",
+      "credentialEnv": "AZURE_OPENAI_API_KEY"
+    }
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| id (the key) | 1-32 characters of `a-z`, `0-9`, `-`, starting with a letter. Its base-URL override setting is `NEXUS_<ID>_BASE_URL` with `-` as `_`. |
+| `label` | Short display name. |
+| `protocol` | `openai-chat` (default), `openai-responses` or `anthropic-messages`. |
+| `baseUrl` | Absolute URL; `{name}` placeholders are filled from `variables` (letters, digits, `.`, `_`, `-` only, so a value cannot change the host or path structure). `https` is required unless the destination is local (loopback, private network, or listed in `NEXUS_LOCAL_ORIGINS`). No credentials, fragment or other scheme. |
+| `query` | Fixed query parameters added to every request URL. |
+| `headers` | Extra static headers. `Host`, framing headers, cookies, forwarding headers and credential headers are refused; values may not contain line breaks. |
+| `auth` | `bearer` (default), `x-api-key`, `header` (with `authHeader`, the header that carries the key) or `none`. |
+| `credentialEnv` | Environment variable holding the key; required unless `auth` is `none`. The key is sent only to this provider's own origin. |
+| `streamOnly`, `omitParams`, `usage` | Backend quirks: streamed requests only, parameters it rejects, how usage is reported. |
+
+A declared provider is a cloud destination for disclosure purposes, like every named provider. `nexus providers` lists it
+with a `providers.json` marker; `nexus doctor` (`config.providers_file`) warns when a declared provider has no credential.
+
 ## Choosing a model and connecting providers in the live view
 
 - `/model` opens the picker: **Recent**, then the appliance and each connected provider with its models (the current
@@ -163,8 +202,9 @@ rather than guessed). These are budgets, not a guarantee of the provider's invoi
 ## Limitations
 
 - Implemented: OpenRouter, OpenAI (Responses), Anthropic (Messages), generic OpenAI-compatible, ChatGPT plan and
-  GitHub Copilot (unofficial sign-ins). Not implemented: Gemini, Azure OpenAI, Bedrock, Vertex, Anthropic
-  Claude Pro/Max sign-in, GitHub Enterprise Copilot.
+  GitHub Copilot (unofficial sign-ins), plus any bearer-, `x-api-key`- or custom-header-authenticated service
+  declared in `providers.json` (Azure OpenAI and other OpenAI-compatible endpoints). Not implemented: native Gemini,
+  Bedrock (SigV4) and Vertex (ADC) protocols, Anthropic Claude Pro/Max sign-in, GitHub Enterprise Copilot.
 - The ChatGPT Codex backend and Copilot request formats follow crush's implementation and are verified against mocks
   only; they can change without notice.
 - No cross-provider model-fallback chain; recovery stays on the selected target.
