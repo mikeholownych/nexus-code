@@ -225,8 +225,9 @@ for (const [name, manifest] of layouts) {
     for (const rel of [...pinned, ...carried]) files[rel] = "good\n";
     const { root, baseline, candidate } = pair(files, (c) => { for (const rel of [...pinned, ...carried]) fs.writeFileSync(path.join(c, rel), "BAD\n"); });
     try {
-      const script = `const fs=require("fs"); const bad=(f)=>fs.readFileSync(f,"utf8").includes("BAD"); process.exit(${JSON.stringify(pinned)}.some(bad) || !${JSON.stringify(carried)}.every(bad) ? 1 : 0)`;
-      const result = await runBuild(baseline, candidate, { command: "/usr/bin/node", args: ["-e", script] });
+      // A fixed script; the two path lists arrive as argv (node -e <script> <pinned> <carried>), never spliced into code.
+      const script = `const fs=require("fs"); const [pinned,carried]=process.argv.slice(1).map((s)=>JSON.parse(s)); const bad=(f)=>fs.readFileSync(f,"utf8").includes("BAD"); process.exit(pinned.some(bad) || !carried.every(bad) ? 1 : 0)`;
+      const result = await runBuild(baseline, candidate, { command: "/usr/bin/node", args: ["-e", script, JSON.stringify(pinned), JSON.stringify(carried)] });
       assert.equal(result.passed, true, JSON.stringify(result.details));
       assert.deepEqual([...result.details.ignoredCandidateChanges].filter((p: string) => p.startsWith("plugins/")).sort(), [...pinned].sort());
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
