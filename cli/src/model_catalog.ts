@@ -10,7 +10,7 @@ import { credentialStorageHome, LocalLlmClient, operatorSetting } from "./client
 import { applianceEndpointSelection, buildConfig, providerBaseUrl, providerKey } from "./config.js";
 import { resolveCredential } from "./credentials.js";
 import { comparableEndpoint, scrubUrls } from "./core/endpoint_identity.js";
-import { originOf, PROVIDERS, providerDefinition, type ConnectMethod } from "./providers.js";
+import { allProviders, originOf, providerDefinition, type ConnectMethod } from "./providers.js";
 import { redactSecrets } from "./ui.js";
 import type { HarnessConfig } from "./types.js";
 
@@ -249,7 +249,7 @@ export async function buildCatalog(config: HarnessConfig, opts: { timeoutMs?: nu
     jobs.push(load(entry, () => ({ endpoint: sessionEndpoint!, list: (signal) => client.listModels(signal) })));
   }
 
-  for (const def of Object.values(PROVIDERS)) {
+  for (const def of allProviders()) {
     const c = connectionOf(def.id);
     if (def.id === "compatible" && !c.connected) continue; // needs a base URL before it is meaningful
     const entry: CatalogProvider = {

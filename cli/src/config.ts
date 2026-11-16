@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config as loadDotenv, parse as parseDotenv } from "dotenv";
 import { credentialOriginOf, credentialStorageHome, environmentCredential, LocalLlmClient, operatorSetting, setCredentialAuthority } from "./client.js";
-import { baseUrlSetting, originOf, parseOriginList, PROVIDERS, providerDefinition } from "./providers.js";
+import { baseUrlSetting, originOf, parseOriginList, providerDefinition, providerIds } from "./providers.js";
 import { providerApiKey } from "./credentials.js";
 import { validateBranchName } from "./worktrunk/paths.js";
 import { DEFAULT_OPERATION_POLICY } from "./core/operation.js";
@@ -319,7 +319,7 @@ function selectProvider(flag: string | undefined, key: string): string | undefin
     warnOnce(`${key}=${projectValue} from a project .env is ignored: cloud provider selection belongs to the operator (command-line flag or ~/.config/nexus/config.env).`);
   }
   if (chosen && !providerDefinition(chosen)) {
-    throw new Error(`Unknown provider '${chosen}' (${key}). Known providers: ${Object.keys(PROVIDERS).join(", ")}.`);
+    throw new Error(`Unknown provider '${chosen}' (${key}). Known providers: ${providerIds().join(", ")}.`);
   }
   return chosen || undefined;
 }

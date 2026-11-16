@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import pc from "picocolors";
 import { InferenceError, LocalLlmClient, operatorSetting } from "./client.js";
 import { buildConfig } from "./config.js";
-import { baseUrlSetting, disclosureClass, PROVIDERS } from "./providers.js";
+import { baseUrlSetting, allProviders, disclosureClass, providerDefinition, providerIds } from "./providers.js";
 import type { ChatMessage, HarnessConfig, ToolDefinition } from "./types.js";
 import { UsageLedger } from "./usage.js";
 import { resolveCredential } from "./credentials.js";
@@ -20,7 +20,7 @@ export function describeTarget(config: HarnessConfig): string {
     // Endpoint paths, userinfo, query strings and model ids are operator-controlled environment/config values.
     // Show only the parsed origin and a model id that passes the display allowlist.
     const origin = safeOriginOf(endpoint);
-    const label = provider ? PROVIDERS[provider]?.label ?? "Cloud provider" : "Local endpoint";
+    const label = provider ? providerDefinition(provider)?.label ?? "Cloud provider" : "Local endpoint";
     const where = origin ? `${label} (${origin})` : `${label} (endpoint unavailable)`;
     return `${where} · ${model ? safeModelId(model) : "no model"} · ${disclosureClass(endpoint, provider, config.cloudRoutedOrigins)}`;
   };
@@ -67,7 +67,7 @@ function safeOriginOf(value: string | undefined): string | undefined {
 }
 
 function safeProviderId(value: string | undefined): string | undefined {
-  return value && Object.prototype.hasOwnProperty.call(PROVIDERS, value) ? value : value ? "(unrecognized provider)" : undefined;
+  return value && providerDefinition(value) ? value : value ? "(unrecognized provider)" : undefined;
 }
 
 function safeConfigurationError(error: unknown): string {
@@ -75,7 +75,7 @@ function safeConfigurationError(error: unknown): string {
   const match = /^Unknown provider '([^'\r\n]{1,128})' \([A-Z0-9_]{1,64}\)\. Known providers: [A-Za-z0-9, ]+\.$/.exec(message);
   if (!match) return "Configuration error: provider configuration is invalid";
   // An unknown provider name comes from user configuration; even identifier-shaped values may be secrets.
-  return `Configuration error: Unknown provider '(unrecognized provider)'. Known providers: ${Object.keys(PROVIDERS).join(", ")}.`;
+  return `Configuration error: Unknown provider '(unrecognized provider)'. Known providers: ${providerIds().join(", ")}.`;
 }
 
 function safeModelId(value: string): string {
@@ -329,9 +329,9 @@ export function registerProviderCommands(program: Command, prompts?: ProviderCli
         process.exitCode = result.ok ? 0 : 1;
         return;
       }
-      const def = PROVIDERS[providerId];
+      const def = providerDefinition(providerId);
       if (!def) {
-        console.error(pc.red(`Unknown provider '${formatDiagnosticForOutput(providerId)}'. Known: ${Object.keys(PROVIDERS).join(", ")}`));
+        console.error(pc.red(`Unknown provider '${formatDiagnosticForOutput(providerId)}'. Known: ${providerIds().join(", ")}`));
         process.exit(2);
       }
       const method = def.methods.find((m) => m.id === (options.method ?? def.methods[0].id));
@@ -374,7 +374,7 @@ export function registerProviderCommands(program: Command, prompts?: ProviderCli
     .description("List cloud inference providers, credential status and the selected destinations")
     .action(() => {
       console.log(pc.bold("\nCloud inference providers\n"));
-      for (const def of Object.values(PROVIDERS)) {
+      for (const def of allProviders()) {
         const configuredBase = operatorSetting(baseUrlSetting(def.id));
         const baseUrl = configuredBase || def.baseUrl;
         const base = baseUrl ? safeOriginOf(baseUrl) ?? "(invalid endpoint)" : "(set --base-url or " + baseUrlSetting(def.id) + ")";

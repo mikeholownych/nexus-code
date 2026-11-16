@@ -127,8 +127,17 @@ export const PROVIDERS: Readonly<Record<string, ProviderDefinition>> = Object.fr
   },
 });
 
+/** Every known provider, in declaration order. The one place callers enumerate providers. */
+export function allProviders(): ProviderDefinition[] {
+  return Object.values(PROVIDERS);
+}
+
+export function providerIds(): string[] {
+  return allProviders().map((d) => d.id);
+}
+
 export function providerDefinition(id: string | undefined): ProviderDefinition | undefined {
-  return id ? PROVIDERS[id] : undefined;
+  return id && Object.prototype.hasOwnProperty.call(PROVIDERS, id) ? PROVIDERS[id] : undefined;
 }
 
 /** `NEXUS_<ID>_BASE_URL`: the operator's override of a provider's base URL. */
