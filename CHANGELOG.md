@@ -18,6 +18,8 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 ### Changed
 
+- Provider definitions now carry per-model protocol rules (`protocolRules`) and a header-name auth style (`auth: "header"` with `authHeader`), replacing the hard-coded Copilot gpt-5 check. Built-in providers behave identically (PR-2 slice 1).
+
 - Tool-call arguments a weak model writes as text are converted when the tool's schema makes the type unambiguous: `"20"` for an integer or number, `"true"`/`"false"` for a boolean, a JSON string for an array or object. Unions, enums, nested properties and guesses (wrapping a scalar in an array) are left alone. Such a call is counted as `schema` in `toolCallSyntax` and scores 0.5 in `json_repair_rate`, never as native valid (plan unit WM-1).
 - The CLI parser moved to commander 14 (from 12). Commander 13 made extra positional arguments an error; Nexus keeps ignoring them as before (`nexus doctor extra` still runs doctor), so command-line behaviour is unchanged. The supported Node.js floor stays 22. Commander 15 needs Node.js 22.12.0 and is deferred until the floor moves.
 
