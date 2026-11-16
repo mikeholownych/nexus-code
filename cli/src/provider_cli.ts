@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import pc from "picocolors";
 import { InferenceError, LocalLlmClient, operatorSetting } from "./client.js";
 import { buildConfig } from "./config.js";
-import { baseUrlSetting, allProviders, disclosureClass, providerDefinition, providerIds } from "./providers.js";
+import { baseUrlSetting, allProviders, disclosureClass, providerDefinition, providerIds, providerSource } from "./providers.js";
 import type { ChatMessage, HarnessConfig, ToolDefinition } from "./types.js";
 import { UsageLedger } from "./usage.js";
 import { resolveCredential } from "./credentials.js";
@@ -380,7 +380,7 @@ export function registerProviderCommands(program: Command, prompts?: ProviderCli
         const base = baseUrl ? safeOriginOf(baseUrl) ?? "(invalid endpoint)" : "(set --base-url or " + baseUrlSetting(def.id) + ")";
         const found = resolveCredential(def.id, def.credentialEnv);
         const key = found ? pc.green(`connected via ${found.source}`) : pc.yellow(`not connected (${def.credentialEnv ? `$${def.credentialEnv} or ` : ""}nexus connect ${def.id})`);
-        console.log(`  ${pc.bold(def.id.padEnd(11))} ${def.protocol.padEnd(19)} ${base}`);
+        console.log(`  ${pc.bold(def.id.padEnd(11))} ${def.protocol.padEnd(19)} ${base}${providerSource(def.id) === "providers.json" ? pc.dim("  · providers.json") : ""}`);
         console.log(`  ${"".padEnd(11)} ${key}${def.methods.some((m) => m.unofficial) ? pc.dim("  · unofficial sign-in") : ""}`);
       }
       let config: HarnessConfig;

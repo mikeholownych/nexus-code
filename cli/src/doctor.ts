@@ -23,7 +23,8 @@ import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import { parse as parseDotenv } from "dotenv";
 import { LocalLlmClient, credentialStorageHome, operatorSetting } from "./client.js";
-import { credentialsPath } from "./credentials.js";
+import { credentialsPath, resolveCredential } from "./credentials.js";
+import { allProviders, providerSource } from "./providers.js";
 import { mcpConfigFiles } from "./mcp.js";
 import { isBwrapAvailable, sandboxHomeMounts, sandboxNetworkEnabled, sandboxWorkspaceOverlays } from "./sandbox.js";
 import { pluginDirs } from "./plugins.js";
@@ -389,6 +390,18 @@ const configCheck: Check = async (ctx) => {
     return f("config.valid", "config", "fail", `Provider ${ctx.config.provider} is selected but no model is named.`, evidence, "Pass -m <model> or set NEXUS_MODEL in ~/.config/nexus/config.env (or pick one with /model).");
   }
   return f("config.valid", "config", "pass", "The configuration builds with the same rules a session uses.", evidence);
+};
+
+/** Providers the operator declared in ~/.config/nexus/providers.json: each needs a credential. An unreadable file is reported by config.valid. */
+const providersFileCheck: Check = async () => {
+  const own = allProviders().filter((d) => providerSource(d.id) === "providers.json");
+  if (!own.length) return f("config.providers_file", "config", "skip", "No operator providers are declared (~/.config/nexus/providers.json).");
+  const missing = own.filter((d) => d.auth !== "none" && !resolveCredential(d.id, d.credentialEnv));
+  const evidence = own.map((d) => `${d.id}: ${d.protocol} ${d.baseUrl ?? ""} ${missing.includes(d) ? "(no credential)" : "(credential found)"}`);
+  if (missing.length) {
+    return f("config.providers_file", "config", "warn", `${missing.length} operator-declared provider(s) have no credential.`, evidence, `Set ${missing.map((d) => (d.credentialEnv ? `$${d.credentialEnv}` : d.id)).join(", ")} or run \`nexus connect <provider>\`.`);
+  }
+  return f("config.providers_file", "config", "pass", `${own.length} operator-declared provider(s) are valid and have credentials.`, evidence);
 };
 
 /** REQ-SEC-110: settings a workspace .env tried to set that Nexus ignores (they belong to the operator). */
@@ -1165,6 +1178,7 @@ const CHECKS: Array<[string, Check]> = [
   ["launcher", launcherCheck],
   ["config", configCheck],
   ["project_env_ignored", projectEnvCheck],
+  ["providers_file", providersFileCheck],
   ["repeated_calls", repeatedCallCheck],
   ["endpoint", endpointChecks],
   ["inference", inferenceCheck],

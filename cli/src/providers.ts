@@ -141,6 +141,12 @@ export function setOperatorProviders(defs: readonly ProviderDefinition[]): void 
   operatorProviders = Object.freeze(next);
 }
 
+/** Where a provider definition comes from. */
+export function providerSource(id: string): "built-in" | "providers.json" | undefined {
+  if (Object.prototype.hasOwnProperty.call(PROVIDERS, id)) return "built-in";
+  return Object.prototype.hasOwnProperty.call(operatorProviders, id) ? "providers.json" : undefined;
+}
+
 /** Every known provider: the built-ins, then the operator's own, in declaration order. The one place callers enumerate providers. */
 export function allProviders(): ProviderDefinition[] {
   return [...Object.values(PROVIDERS), ...Object.values(operatorProviders)];
