@@ -1,7 +1,7 @@
-import { ToolCall, ChatMessage } from "./types.js";
+import { ToolCall, ChatMessage, ToolDefinition } from "./types.js";
 import { HARNESS_TOOLS } from "./tools.js";
 import { defaultRegistry } from "./core/capabilities.js";
-import { unwrapSingleKeyWrapper } from "./core/tool_arguments.js";
+import { unwrapSingleKeyWrapper, normalizeToolArguments, coerceToolArgumentTypes } from "./core/tool_arguments.js";
 
 const KNOWN_TOOLS = new Set<string>(HARNESS_TOOLS.map((t) => t.function.name));
 ["update_requirements", "task_completed", "manage_knowledge", "update_plan", "spawn_subagent"].forEach((t) => KNOWN_TOOLS.add(t));
@@ -34,7 +34,9 @@ export interface ParsedModelOutput {
  * `tool_calls`, `<tool_call>` tags, a reply that is solely one fenced JSON call, and, under
  * `NEXUS_TEXT_TOOL_PARSING=legacy`, fenced code blocks and balanced JSON objects in prose. Each is `native` (valid JSON
  * as sent), `trailing` (parsed after a trailing-class repair, which includes removing a wrapping Markdown fence),
- * `structural` (parsed only after closing truncated brackets or strings) or `invalid` (did not parse). Calls rejected
+ * `structural` (parsed only after closing truncated brackets or strings), `schema` (valid JSON, but an argument value
+ * was converted to the type the tool's schema declares) or `invalid` (did not parse). A call counts once, under its worst
+ * class; only a call that needed nothing is `native`. Calls rejected
  * for needing structural repair are still counted under `structural`. Not counted: tool names that are not offered,
  * malformed native entries dropped for lacking a function name, and responses cut off at the output-token limit.
  */
@@ -43,10 +45,14 @@ export interface ToolCallSyntaxCounts {
   trailing: number;
   structural: number;
   invalid: number;
+  /** Parsed as sent, but an argument value was converted to the type the tool's schema declares (WM-1). */
+  schema: number;
 }
 
 export interface ParseModelResponseOptions {
   offered?: Iterable<string>;
+  /** Declared tool schemas: when given, argument values written as text for a plain typed property are converted (WM-1). */
+  tools?: readonly ToolDefinition[];
   nativeTools?: boolean;
 }
 
@@ -512,9 +518,9 @@ export function parseModelResponse(
   message: ChatMessage,
   optionsOrOffered?: Iterable<string> | ParseModelResponseOptions
 ): ParsedModelOutput {
-  const syntax: ToolCallSyntaxCounts = { native: 0, trailing: 0, structural: 0, invalid: 0 };
+  const syntax: ToolCallSyntaxCounts = { native: 0, trailing: 0, structural: 0, invalid: 0, schema: 0 };
   const parsed = parseModelResponseCounting(message, optionsOrOffered, syntax);
-  return syntax.native + syntax.trailing + syntax.structural + syntax.invalid > 0 ? { ...parsed, toolCallSyntax: syntax } : parsed;
+  return syntax.native + syntax.trailing + syntax.structural + syntax.invalid + syntax.schema > 0 ? { ...parsed, toolCallSyntax: syntax } : parsed;
 }
 
 function parseModelResponseCounting(
@@ -522,15 +528,17 @@ function parseModelResponseCounting(
   optionsOrOffered: Iterable<string> | ParseModelResponseOptions | undefined,
   syntax: ToolCallSyntaxCounts,
 ): ParsedModelOutput {
-  const count = (normalized: { repaired: JsonRepairClass; invalid?: true }, outer: JsonRepairClass = "none") => {
+  const count = (normalized: { repaired: JsonRepairClass; invalid?: true; schema?: true }, outer: JsonRepairClass = "none") => {
     if (normalized.invalid) syntax.invalid += 1;
     else {
       const repaired = mergeRepairClass(outer, normalized.repaired);
-      syntax[repaired === "none" ? "native" : repaired] += 1;
+      // A syntax repair already marks the call as not valid as sent; a schema conversion alone must too.
+      syntax[repaired !== "none" ? repaired : normalized.schema ? "schema" : "native"] += 1;
     }
   };
   let offered: Iterable<string> | undefined;
   let nativeTools: boolean | undefined;
+  let schemaTools: readonly ToolDefinition[] | undefined;
 
   if (optionsOrOffered) {
     if (typeof (optionsOrOffered as any)[Symbol.iterator] === "function" && !(optionsOrOffered as any).offered) {
@@ -539,6 +547,7 @@ function parseModelResponseCounting(
       const opts = optionsOrOffered as ParseModelResponseOptions;
       offered = opts.offered;
       nativeTools = opts.nativeTools;
+      schemaTools = opts.tools;
     }
   }
 
@@ -546,6 +555,15 @@ function parseModelResponseCounting(
   const known = (name: string): boolean => (offeredNames ? offeredNames.has(name) : isKnownToolName(name));
   const toolCalls: ToolCall[] = [];
   const notices: string[] = [];
+  /** Convert schema-typed text values in already-normalised arguments; marks the call when any were converted. */
+  const coerce = <T extends { args: string; invalid?: true }>(name: string, normalized: T): T & { schema?: true } => {
+    if (!schemaTools || normalized.invalid) return normalized;
+    let value: unknown;
+    try { value = JSON.parse(normalized.args); } catch { return normalized; }
+    const prepared = normalizeToolArguments(name, value, schemaTools);
+    const { args, repairs } = coerceToolArgumentTypes(name, prepared, schemaTools);
+    return repairs.length ? { ...normalized, args: JSON.stringify(args), schema: true as const } : normalized;
+  };
 
   const rawContent = typeof message.content === "string"
     ? message.content
@@ -579,7 +597,7 @@ function parseModelResponseCounting(
           notices.push(`Tool "${name}" is not offered on this request and was not executed.`);
           continue;
         }
-        const normalized = normalizeToolArgsWithClass(tc.function.arguments);
+        const normalized = coerce(name, normalizeToolArgsWithClass(tc.function.arguments));
         count(normalized);
         if (normalized.repaired === "structural" && isWriteOrExecTool(name)) {
           notices.push(
@@ -625,7 +643,7 @@ function parseModelResponseCounting(
         notices.push(`Tool "${name}" is not offered on this request and was not executed.`);
         continue;
       }
-      const normalized = normalizeToolArgsWithClass(tc.function.arguments);
+      const normalized = coerce(name, normalizeToolArgsWithClass(tc.function.arguments));
       count(normalized);
       if (normalized.repaired === "structural" && isWriteOrExecTool(name)) {
         notices.push(
@@ -673,7 +691,7 @@ function parseModelResponseCounting(
       const args = parsed.arguments || parsed.parameters || parsed.args || {};
       if (name && typeof name === "string") {
         if (known(name)) {
-          const normalized = normalizeToolArgsWithClass(args);
+          const normalized = coerce(name, normalizeToolArgsWithClass(args));
           count(normalized, outerRepaired);
           const repaired = mergeRepairClass(outerRepaired, normalized.repaired);
           if (repaired === "structural" && isWriteOrExecTool(name)) {
@@ -721,7 +739,7 @@ function parseModelResponseCounting(
         const args = parsed.arguments || parsed.parameters || parsed.args || parsed.input;
         if (name && typeof name === "string") {
           if (known(name)) {
-            const normalized = normalizeToolArgsWithClass(args);
+            const normalized = coerce(name, normalizeToolArgsWithClass(args));
             count(normalized, outerRepaired);
             const repaired = mergeRepairClass(outerRepaired, normalized.repaired);
             if (repaired === "structural" && isWriteOrExecTool(name)) {
@@ -773,7 +791,7 @@ function parseModelResponseCounting(
           const name = parsed.name || parsed.tool || parsed.action;
           const args = parsed.arguments || parsed.parameters || parsed.args || parsed.input;
           if (name && typeof name === "string" && known(name)) {
-            const normalized = normalizeToolArgsWithClass(args);
+            const normalized = coerce(name, normalizeToolArgsWithClass(args));
             count(normalized, (parsed as any).repaired ?? "none");
             toolCalls.push({
               id: `call_${Math.random().toString(36).substring(2, 9)}`,
@@ -804,7 +822,7 @@ function parseModelResponseCounting(
         const name = item.parsed.name || item.parsed.tool || item.parsed.action;
         const args = item.parsed.arguments || item.parsed.parameters || item.parsed.args || item.parsed.input;
         if (name && typeof name === "string" && known(name)) {
-          const normalized = normalizeToolArgsWithClass(args);
+          const normalized = coerce(name, normalizeToolArgsWithClass(args));
           count(normalized, (item.parsed as any).repaired ?? "none");
           toolCalls.push({
             id: `call_${Math.random().toString(36).substring(2, 9)}`,
