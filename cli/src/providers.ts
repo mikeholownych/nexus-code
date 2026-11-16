@@ -12,7 +12,7 @@
 import { classifyDestination } from "./core/egress.js";
 
 export type WireProtocol = "openai-chat" | "openai-responses" | "anthropic-messages";
-export type AuthStyle = "bearer" | "x-api-key" | "none" | "oauth";
+export type AuthStyle = "bearer" | "x-api-key" | "header" | "none" | "oauth";
 
 /** How an operator can connect a provider from the TUI or `nexus connect`. */
 export interface ConnectMethod {
@@ -21,6 +21,12 @@ export interface ConnectMethod {
   kind: "key" | "browser" | "device";
   /** Uses another vendor's client identity; the providers' terms may not permit it. */
   unofficial?: boolean;
+}
+
+/** A model-id pattern (case-insensitive regular expression source) served over another wire protocol. */
+export interface ProtocolRule {
+  modelPattern: string;
+  protocol: WireProtocol;
 }
 
 export interface ProviderDefinition {
@@ -37,6 +43,10 @@ export interface ProviderDefinition {
   /** Request parameters this backend rejects for every model; never sent. */
   omitParams?: string[];
   auth: AuthStyle;
+  /** Header carrying the key when `auth` is "header" (for example Azure OpenAI's `api-key`). */
+  authHeader?: string;
+  /** Models this provider serves over a different wire protocol than `protocol`; first matching pattern wins. */
+  protocolRules?: ProtocolRule[];
   /** Headers this provider requires on every request. */
   staticHeaders?: Record<string, string>;
   /** Ask the provider to report usage (and, where offered, cost) on streamed responses. */
@@ -101,6 +111,8 @@ export const PROVIDERS: Readonly<Record<string, ProviderDefinition>> = Object.fr
     baseUrl: "https://api.githubcopilot.com",
     auth: "oauth",
     usage: "native",
+    // Copilot serves some models through the Responses API only.
+    protocolRules: [{ modelPattern: "^gpt-5", protocol: "openai-responses" }],
     methods: [{ id: "copilot-device", label: "Sign in with GitHub (unofficial)", kind: "device", unofficial: true }],
   },
   /** Any other OpenAI-compatible Chat Completions service; its base URL must be configured by the operator. */
@@ -139,6 +151,7 @@ export interface ResolvedConnection {
   label: string;
   protocol: WireProtocol;
   auth: AuthStyle;
+  authHeader?: string;
   staticHeaders: Record<string, string>;
   usage: ProviderDefinition["usage"] | "none";
   /** Whether requests carry the appliance's X-Task-Class routing hint. */
@@ -147,10 +160,9 @@ export interface ResolvedConnection {
   omitParams: string[];
 }
 
-/** Copilot serves some models through the Responses API only. */
+/** The wire protocol a provider's rules assign to this model, when one applies. */
 export function protocolFor(providerId: string | undefined, model: string): WireProtocol | undefined {
-  if (providerId === "copilot" && /^gpt-5/i.test(model)) return "openai-responses";
-  return undefined;
+  return providerDefinition(providerId)?.protocolRules?.find((r) => new RegExp(r.modelPattern, "i").test(model))?.protocol;
 }
 
 export function connectionFor(providerId: string | undefined, model = ""): ResolvedConnection {
@@ -165,6 +177,7 @@ export function connectionFor(providerId: string | undefined, model = ""): Resol
     label: def.label,
     protocol: protocolFor(def.id, model) ?? def.protocol,
     auth: def.auth,
+    ...(def.authHeader ? { authHeader: def.authHeader } : {}),
     staticHeaders: { ...(def.staticHeaders ?? {}) },
     usage: def.usage,
     sendTaskClass: false,

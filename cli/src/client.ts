@@ -1193,7 +1193,7 @@ export class LocalLlmClient {
   private authorization(url: string): Record<string, string> {
     if (!this.conn.providerId) return { Authorization: `Bearer ${this.credentialFor(url) ?? "not-needed"}` };
     const key = this.credentialFor(url);
-    const auth: Record<string, string> = !key ? {} : this.conn.auth === "x-api-key" ? { "x-api-key": key } : { Authorization: `Bearer ${key}` };
+    const auth: Record<string, string> = !key ? {} : this.conn.auth === "x-api-key" ? { "x-api-key": key } : this.conn.auth === "header" && this.conn.authHeader ? { [this.conn.authHeader]: key } : { Authorization: `Bearer ${key}` };
     if (this.conn.providerId === "copilot") Object.assign(auth, COPILOT_HEADERS);
     return { ...this.conn.staticHeaders, ...auth };
   }
