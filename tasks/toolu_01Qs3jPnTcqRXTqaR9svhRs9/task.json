@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Qs3jPnTcqRXTqaR9svhRs9",
+  "agent_id": "a55740b928b290788",
+  "subagent_type": "general-purpose",
+  "task_description": "DH-5 ledger extraction",
+  "token_usage": {
+    "input_tokens": 76,
+    "cache_creation_tokens": 313847,
+    "cache_read_tokens": 8271584,
+    "output_tokens": 32086,
+    "api_call_count": 38
+  },
+  "started_at": "2026-11-16T14:28:03.284782961Z",
+  "completed_at": "2026-11-16T14:32:34.567919231Z"
+}
