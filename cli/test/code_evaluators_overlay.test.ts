@@ -67,8 +67,8 @@ test("candidate node_modules and in-repo build helpers never reach the pinned wo
     fs.writeFileSync(path.join(c, "node_modules/evil/index.js"), "BAD\n");
   });
   try {
-    const script = `const fs=require("fs"); const bad=${JSON.stringify(["node_modules/dep/index.js", ...helpers])}.some((f)=>fs.readFileSync(f,"utf8").includes("BAD")) || fs.existsSync("node_modules/evil"); process.exit(bad?1:0)`;
-    const result = await runBuild(baseline, candidate, { command: "/usr/bin/node", args: ["-e", script] });
+    const script = `const fs=require("fs"); const bad=JSON.parse(process.argv[1]).some((f)=>fs.readFileSync(f,"utf8").includes("BAD")) || fs.existsSync("node_modules/evil"); process.exit(bad?1:0)`;
+    const result = await runBuild(baseline, candidate, { command: "/usr/bin/node", args: ["-e", script, JSON.stringify(["node_modules/dep/index.js", ...helpers])] });
     assert.equal(result.passed, true, `the pinned workspace must hold the baseline versions: ${JSON.stringify(result.details)}`);
     assert.deepEqual([...result.details.ignoredCandidateChanges].sort(), [...helpers].sort(), "pinned (ignored) candidate edits are reported");
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
@@ -119,8 +119,8 @@ test("scripts and build or checker configuration the build runs are pinned to th
   for (const rel of pinned) files[rel] = "good\n";
   const { root, baseline, candidate } = pair(files, (c) => { for (const rel of pinned) fs.writeFileSync(path.join(c, rel), "BAD\n"); });
   try {
-    const script = `const fs=require("fs"); process.exit(${JSON.stringify(pinned)}.some((f)=>fs.readFileSync(f,"utf8").includes("BAD"))?1:0)`;
-    const result = await runBuild(baseline, candidate, { command: "/usr/bin/node", args: ["-e", script] });
+    const script = `const fs=require("fs"); process.exit(JSON.parse(process.argv[1]).some((f)=>fs.readFileSync(f,"utf8").includes("BAD"))?1:0)`;
+    const result = await runBuild(baseline, candidate, { command: "/usr/bin/node", args: ["-e", script, JSON.stringify(pinned)] });
     assert.equal(result.passed, true, JSON.stringify(result.details));
     assert.deepEqual([...result.details.ignoredCandidateChanges].sort(), [...pinned].sort());
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
@@ -194,8 +194,8 @@ test("ordinary source that only looks like configuration is carried: policy pins
   for (const rel of carried) files[rel] = "good\n";
   const { root, baseline, candidate } = pair(files, (c) => { for (const rel of carried) fs.writeFileSync(path.join(c, rel), "BAD\n"); });
   try {
-    const script = `const fs=require("fs"); process.exit(${JSON.stringify(carried)}.every((f)=>fs.readFileSync(f,"utf8").includes("BAD"))?1:0)`;
-    const result = await runBuild(baseline, candidate, { command: "/usr/bin/node", args: ["-e", script] });
+    const script = `const fs=require("fs"); process.exit(JSON.parse(process.argv[1]).every((f)=>fs.readFileSync(f,"utf8").includes("BAD"))?1:0)`;
+    const result = await runBuild(baseline, candidate, { command: "/usr/bin/node", args: ["-e", script, JSON.stringify(carried)] });
     assert.equal(result.details.status, 1, `every one of these must reach the build: ${JSON.stringify(result.details)}`);
     assert.deepEqual(result.details.ignoredCandidateChanges, []);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
@@ -248,8 +248,8 @@ test("the conventional workspace folders stay package roots without any recognis
   for (const rel of pinned) files[rel] = "good\n";
   const { root, baseline, candidate } = pair(files, (c) => { for (const rel of pinned) fs.writeFileSync(path.join(c, rel), "BAD\n"); });
   try {
-    const script = `process.exit(${JSON.stringify(pinned)}.some((f)=>require("fs").readFileSync(f,"utf8").includes("BAD"))?1:0)`;
-    const result = await runBuild(baseline, candidate, { command: "/usr/bin/node", args: ["-e", script] });
+    const script = `process.exit(JSON.parse(process.argv[1]).some((f)=>require("fs").readFileSync(f,"utf8").includes("BAD"))?1:0)`;
+    const result = await runBuild(baseline, candidate, { command: "/usr/bin/node", args: ["-e", script, JSON.stringify(pinned)] });
     assert.equal(result.passed, true, JSON.stringify(result.details));
     assert.deepEqual([...result.details.ignoredCandidateChanges].sort(), [...pinned].sort());
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
@@ -261,8 +261,8 @@ test("workspace manifests are pinned, so a candidate cannot change the package r
   for (const rel of manifests) files[rel] = "good\n";
   const { root, baseline, candidate } = pair(files, (c) => { for (const rel of manifests) fs.writeFileSync(path.join(c, rel), "BAD\n"); });
   try {
-    const script = `process.exit(${JSON.stringify(manifests)}.some((f)=>require("fs").readFileSync(f,"utf8").includes("BAD"))?1:0)`;
-    const result = await runBuild(baseline, candidate, { command: "/usr/bin/node", args: ["-e", script] });
+    const script = `process.exit(JSON.parse(process.argv[1]).some((f)=>require("fs").readFileSync(f,"utf8").includes("BAD"))?1:0)`;
+    const result = await runBuild(baseline, candidate, { command: "/usr/bin/node", args: ["-e", script, JSON.stringify(manifests)] });
     assert.equal(result.passed, true, JSON.stringify(result.details));
     assert.deepEqual([...result.details.ignoredCandidateChanges].sort(), [...manifests].sort());
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
