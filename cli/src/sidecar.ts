@@ -1355,6 +1355,7 @@ async function main(argv: string[]): Promise<void> {
   };
 
   const program = new Command()
+    .allowExcessArguments(true) // as the nexus CLI: commander 13+ would otherwise reject extra arguments the sidecar always ignored
     .name("nexus-sidecar")
     .option("-e, --endpoint <url>", "Local LLM endpoint")
     .option("-m, --model <name>", "Model name")

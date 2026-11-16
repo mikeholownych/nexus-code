@@ -15,6 +15,10 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 - The legacy task-worktree merge refuses a worktree whose `.git` was replaced, and runs Git with hooks and fsmonitor disabled; a planted `core.fsmonitor` or hook in an agent-writable worktree no longer runs code outside it. The repository's own hooks no longer fire on that commit and merge.
 - The `--sandbox docker` engine runs a digest-pinned image (alpine 3.23) as the invoking uid with all capabilities dropped, `no-new-privileges`, a read-only root plus a tmpfs `/tmp`, a 512-process limit, and no network unless `--sandbox-network` / `NEXUS_SANDBOX_NETWORK=1` is set. Only the scrubbed command environment reaches the container, and credential locations under a workspace that is or contains `$HOME` are masked. `NEXUS_SANDBOX_DOCKER_IMAGE` (operator setting) may substitute another image but it must be digest-pinned, otherwise no container is started. Commands that wrote outside the workspace and `/tmp`, relied on root, or used the network now fail in Docker mode.
 
+### Changed
+
+- The CLI parser moved to commander 15 (from 12), which is ESM-only and needs Node.js 22.12.0 or newer; `engines.node` is now `>=22.12.0` (it was `>=22`). Commander 13 made extra positional arguments an error; Nexus keeps ignoring them as before (`nexus doctor extra` still runs doctor), so command-line behaviour is unchanged.
+
 ### Fixed
 
 - Protected-path matching is relative to the workspace root, so projects under directories such as `~/.env-tools/` are no longer blocked wholesale; symlinks to protected targets are still refused.
