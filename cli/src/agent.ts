@@ -16,6 +16,7 @@ import {
   needsOperatorDecision,
   type EffectClass,
 } from "./core/capabilities.js";
+import { fenceSuspected, scanForInjection } from "./core/injection_scanner.js";
 import { ApprovalPolicy, defaultApprovalPolicy, PolicyContext, ApprovalMode } from "./core/approval_policy.js";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
 import {
@@ -216,6 +217,8 @@ export interface AgentObserver {
   /** `dispatch` is unique per call within this agent; model call ids can repeat, even within one step. */
   onToolStart?(event: { dispatch: number; callId: string; tool: string; args: Record<string, any> }): void;
   onToolEnd?(event: { dispatch: number; callId: string; tool: string; success: boolean; output: string; error?: string; denied?: boolean }): void;
+  /** A tool result was labelled and fenced as suspected prompt injection (CS-7); `signals` are rule ids, never content. */
+  onInjectionSuspected?(event: { tool: string; step: number; signals: string[] }): void;
   /** The loop is waiting out (or has finished waiting out) a provider failure. `discardedPartialOutput`: deltas already sent for the failed submission are void. */
   onProviderRecovery?(event: { record: ProviderRecoveryRecord; discardedPartialOutput: boolean }): void;
   /** The provider's stream went quiet for `silentSecs` (`stalled`), or sent data again. The turn is still running. */
@@ -1099,6 +1102,8 @@ export class AutonomousAgent {
   private stepNoticeStep = 0;
   /** A response of this step was cut off after running this long; its first tool result says so (see submitGuardingLength). */
   private cutResponse: { step: number; seconds: number } | undefined;
+  /** The latest tool result the injection scanner flagged (CS-7); it gates state-changing calls of the next step. */
+  private suspectedInjection: { step: number; tool: string; signals: string[] } | undefined;
   /** Provider recovery bounds; undefined reads LOCAL_LLM_RECOVERY_* at each turn. */
   private recoveryPolicy?: RecoveryPolicy;
   private recoveryClock: RecoveryClock = realRecoveryClock;
@@ -4171,7 +4176,7 @@ export class AutonomousAgent {
    * Notes lead the output so that fitting an oversized result to the context, which keeps its beginning, keeps them.
    */
   private toolResultContent(call: ToolCall, content: string, step: number, maxSteps: number): string {
-    const noted = this.stepNotedContent(call, content, step, maxSteps);
+    const noted = this.stepNotedContent(call, this.screenForInjection(call, content, step), step, maxSteps);
     if (this.cutResponse?.step !== step) return noted;
     const { seconds } = this.cutResponse;
     this.cutResponse = undefined;
@@ -4197,6 +4202,29 @@ export class AutonomousAgent {
       if (ran >= LONG_RESPONSE_MS && err instanceof InferenceError && err.toFailure().execution === "UNKNOWN") guard.cutAfterMs = Math.max(guard.cutAfterMs, ran);
       throw err;
     }
+  }
+
+  /**
+   * CS-7: a result from outside that the scanner suspects of prompt injection is labelled and fenced (content kept), the
+   * suspicion is recorded, and the operator is asked before a state-changing call in the step that follows. Nexus's own
+   * memory and bookkeeping tools are not scanned: their output is not from outside.
+   */
+  private screenForInjection(call: ToolCall, content: string, step: number): string {
+    const tool = call.function.name;
+    if (this.capabilityRegistry.getByToolName(tool)?.effect === "internal" || content.length === 0) return content;
+    const scan = scanForInjection(content);
+    if (!scan.suspected) return content;
+    const signals = [...new Set(scan.findings.map((f) => f.rule))];
+    this.suspectedInjection = { step, tool, signals };
+    this.observer?.onInjectionSuspected?.({ tool, step, signals });
+    return fenceSuspected(tool, content, scan);
+  }
+
+  /** Whether the operator must approve this call because a recent result looked like prompt injection. */
+  private injectionApprovalNeeded(effect: EffectClass, currentStep: number): boolean {
+    const suspect = this.suspectedInjection;
+    if (!suspect || currentStep > suspect.step + 1) return false;
+    return effect !== "read_workspace" && effect !== "internal";
   }
 
   private stepNotedContent(call: ToolCall, content: string, step: number, maxSteps: number): string {
@@ -5810,7 +5838,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         shouldExit: false,
       };
     }
-    const askOperator = this.approvalPolicy.requiresDecision(effect, policyContext) || verificationEdit?.action === "ask";
+    const injectionAsk = Boolean(onConfirm) && this.injectionApprovalNeeded(effect, currentStep);
+    const askOperator = this.approvalPolicy.requiresDecision(effect, policyContext) || verificationEdit?.action === "ask" || injectionAsk;
 
     if (toolName === "activate_skill") {
       const skillName = args?.name;
@@ -5880,6 +5909,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       }
 
       this.activity("approval", { tool: toolName, ...(subject ? { subject } : {}) });
+      if (injectionAsk && this.suspectedInjection) console.log(`⚠️ ${toolName} follows a result from ${this.suspectedInjection.tool} that looks like prompt injection (${this.suspectedInjection.signals.join(", ")}). Approve only what you asked for.`);
       if (verificationEdit?.action === "ask") console.log(`⚠️ ${toolName} changes verification configuration: ${verificationEdit.path} (${verificationEdit.class}).`);
       if (toolName === "run_command") {
         const networkNotice = sandboxNetworkNotice(String(args?.command ?? ""), Boolean(this.config.sandbox) && this.config.sandbox !== "none");
