@@ -160,7 +160,7 @@ Order: PR-1, PR-2, PR-3, PR-9, PR-11 first; then PR-4, PR-5, PR-12; then the nat
 
 | Unit | What | Accept | Size | Pri |
 |---|---|---|---|---|
-| MT-1 | Split `agent.ts` along its seams: extract `setupSpineHandlers` (~1,359 lines), `runTurnImpl` (~1,079) and the completion oracle into modules with the existing tests unchanged; no behaviour change | `agent.ts` under 5,000 lines; the full suite and the CERI scenarios green with no test edits | L | P1 |
+| MT-1 | **Done 2026-11-17** (`cli/src/agent.ts` 8,441 -> 4,614 lines; moved to `cli/src/core/agent_support.ts`, `spine_handlers.ts`, `run_turn.ts`, `dispatch_tool_call.ts`, `completion_oracle.ts`; `AutonomousAgent` keeps same-named delegating methods; no test edits). Split `agent.ts` along its seams: extract `setupSpineHandlers` (~1,359 lines), `runTurnImpl` (~1,079) and the completion oracle into modules with the existing tests unchanged; no behaviour change | `agent.ts` under 5,000 lines; the full suite and the CERI scenarios green with no test edits | L | P1 |
 | MT-2 | Split the two ~5.4k-line TUI files (`live_state.rs`, `live_view.rs`) along view boundaries; no behaviour change | TUI tests and snapshots green with no edits | L | P2 |
 | MT-3 | One redaction table and one terminal-safe helper: collapse the 17 `redact*` and 4 terminal-safe variants; generate the Rust `redact.rs` patterns from the same table or test parity between them | a parity test fails when one side adds a pattern | M | P1 |
 
