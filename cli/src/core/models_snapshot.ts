@@ -211,6 +211,12 @@ export function resolveContext(providerId: string, modelId: string, fallback?: n
   return context && context > 0 ? context : fallback;
 }
 
+/** Reasoning effort levels the model lists, or undefined when the snapshot has none for it (unknown, not "unsupported"). */
+export function effortLevels(providerId: string, modelId: string): readonly string[] | undefined {
+  const levels = snapshotModel(providerId, modelId)?.effort;
+  return levels?.length ? levels : undefined;
+}
+
 /**
  * true: the model lists the mode; false: it lists modes and this is not one of them; "unknown": the snapshot has no
  * tool-choice data for it (unknown provider or model, or no `capabilities.tools.choice`), so the caller must not assume.

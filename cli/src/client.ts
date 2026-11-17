@@ -4,6 +4,7 @@ import * as os from "node:os";
 import { randomUUID } from "node:crypto";
 import { parse as parseDotenv } from "dotenv";
 import { CONTENT_CALL_NOTE, isContentCallReply } from "./core/content_tool_call.js";
+import { acceptsToolChoice } from "./core/models_snapshot.js";
 import { parseAdmissionHeaders, parseAdvertisement, parseOllamaVersion, parseServerContext, parseTokenizeResponse, parseVllmVersion, serverKindOf, type AdmissionReport, type Advertisement, type RequestCount, type ServerKind } from "./core/provider_capabilities.js";
 import { adaptToolDefinitionsForServer, constrainTextModeToolCall, isGrammarRejection, toolGrammarEnabled } from "./core/tool_grammar_provider.js";
 import { ChatMessage, ToolDefinition, HarnessConfig, ToolCall } from "./types.js";
@@ -1735,6 +1736,12 @@ export class LocalLlmClient {
       if (typeof noted.content !== "string" || !noted.content.trim()) return finish(response);
       onToken?.(`\n\n${noted.content}`);
       return finish(noted);
+    }
+    // A model whose listed tool-choice modes exclude `required` would answer a forced request with an error: the
+    // corrective note above was the only re-ask it can take. "unknown" (no data) keeps the forced request.
+    if (this.conn.providerId && acceptsToolChoice(this.conn.providerId, this.model, "required") === false) {
+      this.emitDiagnostic("error", pc.dim(`[nexus] ${this.conn.label} lists no tool_choice=required for ${this.model}; keeping its reply.`));
+      return finish(response);
     }
     this.emitDiagnostic("error", pc.dim(`[nexus] ${this.conn.label} wrote the call as text again; asking once more with tool_choice=required.`));
     const forced = await ask("required");
