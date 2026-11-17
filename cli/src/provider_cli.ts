@@ -73,7 +73,7 @@ function safeProviderId(value: string | undefined): string | undefined {
 
 function safeConfigurationError(error: unknown): string {
   const message = error instanceof Error ? error.message : "";
-  const match = /^Unknown provider '([^'\r\n]{1,128})' \([A-Z0-9_]{1,64}\)\. Known providers: [A-Za-z0-9, ]+\.$/.exec(message);
+  const match = /^Unknown provider '([^'\r\n]{1,128})' \([A-Z0-9_]{1,64}\)\. Known providers: [A-Za-z0-9, -]+\.$/.exec(message);
   if (!match) return "Configuration error: provider configuration is invalid";
   // An unknown provider name comes from user configuration; even identifier-shaped values may be secrets.
   return `Configuration error: Unknown provider '(unrecognized provider)'. Known providers: ${providerIds().join(", ")}.`;
