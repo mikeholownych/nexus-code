@@ -38,7 +38,7 @@ test("stream parser: no finish_reason and no [DONE] is incomplete; fragments wit
 });
 
 test("registry: chat is the client's own pipeline, the other protocols share the native path", () => {
-  assert.deepEqual(Object.entries(WIRE_PROTOCOLS).map(([k, v]) => [k, v.native]), [["openai-chat", false], ["openai-responses", true], ["anthropic-messages", true]]);
+  assert.deepEqual(Object.entries(WIRE_PROTOCOLS).map(([k, v]) => [k, v.native]), [["openai-chat", false], ["openai-responses", true], ["anthropic-messages", true], ["bedrock-converse", true]]);
 });
 
 test("wireProtocol throws a clear error for an unknown protocol", () => {

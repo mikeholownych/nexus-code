@@ -2,6 +2,8 @@
 import type { WireProtocol } from "../providers.js";
 import { anthropicStreamParser, buildAnthropicRequest, parseAnthropicResponse } from "./anthropic.js";
 import type { NativeRequest, NativeRequestInput, NativeResult, StreamParser } from "./common.js";
+import { bedrockStreamParser, buildBedrockRequest, parseBedrockResponse, signBedrockRequest } from "./bedrock_converse.js";
+import { readEventStream } from "./aws_eventstream.js";
 import { buildChatRequest, chatStreamParser, parseChatResponse } from "./openai_chat.js";
 import { buildResponsesRequest, parseResponsesResponse, responsesStreamParser } from "./openai_responses.js";
 
@@ -13,6 +15,10 @@ export interface ProtocolAdapter {
   build(input: NativeRequestInput): NativeRequest;
   parse(data: any, owner: string, keepReasoning: boolean): NativeResult;
   stream(owner: string, keepReasoning: boolean, onToken?: (t: string) => void): StreamParser;
+  /** Signs the final request instead of sending a bearer/key header (SigV4); returns headers to add. */
+  sign?(req: { url: string; method: string; headers: Record<string, string>; body: string }, env: Record<string, string | undefined>): Record<string, string>;
+  /** Streamed bodies are not SSE: reads this framing and calls `onEvent(name, payloadText)`. */
+  readStream?: typeof readEventStream;
 }
 
 export const WIRE_PROTOCOLS: Record<WireProtocol, ProtocolAdapter> = {
@@ -38,6 +44,15 @@ export const WIRE_PROTOCOLS: Record<WireProtocol, ProtocolAdapter> = {
     build: buildAnthropicRequest,
     parse: (data, owner) => parseAnthropicResponse(data, owner),
     stream: (owner, _keepReasoning, onToken) => anthropicStreamParser(owner, onToken),
+  },
+  "bedrock-converse": {
+    native: true,
+    nativeTools: true,
+    build: buildBedrockRequest,
+    parse: (data, owner) => parseBedrockResponse(data, owner),
+    stream: (owner, _keepReasoning, onToken) => bedrockStreamParser(owner, onToken),
+    sign: (req, env) => signBedrockRequest(req, { env }),
+    readStream: readEventStream,
   },
 };
 
