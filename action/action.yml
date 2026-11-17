@@ -1,0 +1,107 @@
+name: Nexus Code run
+description: Run a Nexus Code task in CI. The step fails unless the task completed and verified.
+author: mikeholownych
+
+inputs:
+  prompt:
+    description: The task for Nexus to carry out.
+    required: true
+  version:
+    description: Nexus release to install (a tag such as v1.2.1). Pin one for reproducible runs; "latest" is the newest stable release.
+    default: latest
+  workspace:
+    description: Directory to work in, relative to the repository root.
+    default: "."
+  authoritative-verifier:
+    description: Trusted command that must pass before the task can complete (for example "npm test"). Strongly recommended.
+    default: ""
+  deliverable-files:
+    description: Workspace-relative files the task is meant to change, one per line. Declare them when the verifier reads them, so editing them does not void the verification.
+    default: ""
+  provider:
+    description: Cloud inference provider id (see `nexus providers`). Empty uses the endpoint in the environment.
+    default: ""
+  model:
+    description: Model id for the selected provider or endpoint.
+    default: ""
+  extra-args:
+    description: Further `nexus run` options, split on spaces (workflow-author supplied, never from untrusted input).
+    default: ""
+
+outputs:
+  success:
+    description: '"true" when the task completed and verified.'
+    value: ${{ steps.run.outputs.success }}
+  status:
+    description: Task lifecycle status reported by Nexus.
+    value: ${{ steps.run.outputs.status }}
+  task-id:
+    description: The Nexus task id.
+    value: ${{ steps.run.outputs.task-id }}
+  exit-code:
+    description: The exit code of `nexus run`.
+    value: ${{ steps.run.outputs.exit-code }}
+  result-file:
+    description: Path to the JSON result document.
+    value: ${{ steps.run.outputs.result-file }}
+
+# Credentials are passed by the calling step's `env:` (for example OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}),
+# never as inputs. Scripts below contain no `${{ }}` expressions: every input reaches them as an environment variable, so
+# a prompt or option value cannot be interpreted as shell.
+runs:
+  using: composite
+  steps:
+    - name: Install Nexus
+      shell: bash
+      env:
+        NEXUS_VERSION: ${{ inputs.version }}
+        NEXUS_PREFIX: ${{ runner.temp }}/nexus
+        NEXUS_ACTION_TEMP: ${{ runner.temp }}
+      run: |
+        set -euo pipefail
+        sh "$GITHUB_ACTION_PATH/../install.sh"
+        echo "$NEXUS_PREFIX/bin" >> "$GITHUB_PATH"
+
+    - name: Run Nexus
+      id: run
+      shell: bash
+      env:
+        NEXUS_ACTION_PROMPT: ${{ inputs.prompt }}
+        NEXUS_ACTION_WORKSPACE: ${{ inputs.workspace }}
+        NEXUS_ACTION_VERIFIER: ${{ inputs.authoritative-verifier }}
+        NEXUS_ACTION_DELIVERABLES: ${{ inputs.deliverable-files }}
+        NEXUS_ACTION_PROVIDER: ${{ inputs.provider }}
+        NEXUS_ACTION_MODEL: ${{ inputs.model }}
+        NEXUS_ACTION_EXTRA_ARGS: ${{ inputs.extra-args }}
+        NEXUS_ACTION_TEMP: ${{ runner.temp }}
+      run: |
+        set -uo pipefail
+        result="${NEXUS_ACTION_TEMP:-${RUNNER_TEMP:-/tmp}}/nexus-result.json"
+        args=(run -y -w "${NEXUS_ACTION_WORKSPACE:-.}" --json)
+        [ -n "${NEXUS_ACTION_VERIFIER:-}" ] && args+=(--authoritative-verifier "$NEXUS_ACTION_VERIFIER")
+        while IFS= read -r file; do
+          [ -n "$file" ] && args+=(--deliverable-file "$file")
+        done <<< "${NEXUS_ACTION_DELIVERABLES:-}"
+        [ -n "${NEXUS_ACTION_PROVIDER:-}" ] && args+=(--provider "$NEXUS_ACTION_PROVIDER")
+        [ -n "${NEXUS_ACTION_MODEL:-}" ] && args+=(-m "$NEXUS_ACTION_MODEL")
+        if [ -n "${NEXUS_ACTION_EXTRA_ARGS:-}" ]; then
+          read -r -a extra <<< "$NEXUS_ACTION_EXTRA_ARGS"
+          args+=("${extra[@]}")
+        fi
+        "${NEXUS:-nexus}" "${args[@]}" -- "$NEXUS_ACTION_PROMPT" > "$result"
+        code=$?
+        field() { node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const v=JSON.parse(d)[process.argv[1]];process.stdout.write(v===undefined?"":String(v))}catch{}})' "$1" < "$result"; }
+        {
+          echo "success=$(field success)"
+          echo "status=$(field status)"
+          echo "task-id=$(field taskId)"
+          echo "exit-code=$code"
+          echo "result-file=$result"
+        } >> "${GITHUB_OUTPUT:-/dev/null}"
+        {
+          echo "### Nexus: $(field status) (exit $code)"
+          echo
+          echo "success: $(field success), task: $(field taskId)"
+        } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+        # The exit code is the gate: Nexus exits non-zero unless the task completed and verified.
+        exit "$code"

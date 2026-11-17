@@ -1,0 +1,10 @@
+{
+  "id": "example-isolated-operation",
+  "objective": "Add a --verbose flag to the CLI and document it.",
+  "git": { "isolate": true },
+  "policy": { "maxConcurrentUnits": 2 },
+  "units": [
+    { "id": "implement", "title": "Implement --verbose", "prompt": "Add a --verbose flag to the command-line parser and use it to print extra progress lines." },
+    { "id": "document", "title": "Document --verbose", "prompt": "Document the new --verbose flag in the README usage section.", "dependsOn": ["implement"] }
+  ]
+}
