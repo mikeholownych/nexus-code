@@ -102,6 +102,8 @@ import {
 import { InformationFlowBoundary } from "./core/egress.js";
 import { WorkspacePath } from "./core/workspace_path.js";
 import { withDurableSync, type ArchiveRead } from "./core/durable_file.js";
+import { protectArchivedMessages } from "./core/persistence_protection.js";
+import { auditCompaction, buildCompactionRecord, fullTranscript, insertedBlockPresent, isCompactionRecord, type CompactionRecord } from "./core/compaction_record.js";
 import {
   advertisementChanged,
   describeCapabilities,
@@ -898,6 +900,41 @@ function withPersistableEndpoints(turn: TurnResult): TurnResult {
 const RESUMED_WINDOW_REASON = "the provider is still inside the retry window it asked for";
 
 /** What an archive read means for a resumed conversation; undefined when the archive is whole. */
+interface ResumeAudit {
+  /** The archived originals that passed their record (or have none to check against). */
+  trustedArchive: ChatMessage[];
+  /** Set when the conversation is restored from the verified archive instead of the saved compacted one. */
+  fullTranscript?: ChatMessage[];
+  notes: string[];
+}
+
+/** CX-2: audits every committed compaction against its record; see compaction_record.ts. */
+function auditCompactionsOnResume(saved: ChatMessage[], read: ArchiveRead<ChatMessage>, committedIds: string[]): ResumeAudit {
+  const notes: string[] = [];
+  const groups = read.byCompaction;
+  if (!groups || !committedIds.length) return { trustedArchive: read.messages, notes };
+  const audits = committedIds.filter((id) => groups.has(id)).map((id) => {
+    const group = groups.get(id)!;
+    return auditCompaction(id, isCompactionRecord(group.record) ? group.record : undefined, group.messages);
+  });
+  const corrupt = audits.filter((a) => a.status === "corrupt");
+  const corruptMessages = new Set(corrupt.flatMap((a) => groups.get(a.id)!.messages));
+  const trustedArchive = corruptMessages.size ? read.messages.filter((m) => !corruptMessages.has(m)) : read.messages;
+  for (const a of corrupt) {
+    notes.push(`compaction ${a.id} does not match its record (${a.problems.join("; ")}); its archived messages are not used. It covered ${a.coveredIds.length} message id(s): ${a.coveredIds.slice(0, 5).join(", ")}${a.coveredIds.length > 5 ? ", ..." : ""}.`);
+  }
+  // Undo only when everything the compactions replaced can be proven intact and the latest compaction's own output is gone from the saved conversation.
+  const latestId = committedIds[committedIds.length - 1];
+  const latest = groups.get(latestId);
+  const latestRecord = latest && isCompactionRecord(latest.record) ? latest.record : undefined;
+  const everythingVerified = audits.length === committedIds.length && audits.every((a) => a.status === "ok") && !read.unreadableLines && !read.missingCompactions.length;
+  if (everythingVerified && latestRecord && !insertedBlockPresent(latestRecord, saved)) {
+    notes.push(`the saved conversation no longer holds what compaction ${latestId} inserted; resumed from the full transcript restored from the verified archive (${committedIds.length} compaction(s) undone, ${read.messages.length} original message(s) put back).`);
+    return { trustedArchive: [], fullTranscript: fullTranscript(saved, read.messages), notes };
+  }
+  return { trustedArchive, notes };
+}
+
 function describeArchiveRead(read: ArchiveRead<ChatMessage>): string | undefined {
   const notes: string[] = [];
   if (read.uncommittedLines) notes.push(`${read.uncommittedLines} archived message(s) from a compaction that was interrupted before it was committed were set aside; their originals are in the resumed conversation itself`);
@@ -1182,7 +1219,7 @@ export class AutonomousAgent {
   /** Ids of the compactions committed in this conversation; every saved record names them (see commitCompaction). */
   private committedCompactions: string[] = [];
   /** Where compaction archives the originals it replaces: set by the host (the session archive), else beside the task state. */
-  private archiveSink?: (compactionId: string, messages: ChatMessage[]) => void;
+  private archiveSink?: (compactionId: string, messages: ChatMessage[], record?: CompactionRecord) => void;
   /** Compaction admission prepared for this step, committed once by admitWithFindings. */
   private pendingCompaction?: { original: ChatMessage[]; beforeTokens: number; afterTokens: number; pressureOnly: boolean };
   /** Provenance of the newest committed compaction, written with every task-state checkpoint. */
@@ -2926,14 +2963,19 @@ export class AutonomousAgent {
     try {
       this.rememberResumedProviderWait(session.lastTurn);
       this.adoptRecordedModel(session.model, session.endpoint);
-      this.restoreSession(session.messages, session.unverifiedChangesPending, session.objective, session.findings, session);
-      this.restoreHistory(session.history);
+      const committedIds: string[] = Array.isArray(session.history?.committedCompactions) ? session.history.committedCompactions.filter((id: unknown): id is string => typeof id === "string") : [];
+      const committed = Array.isArray(session.history?.committedCompactions) ? new Set<string>(committedIds) : undefined;
+      const read = readArchive(committed);
+      // CX-2: check each compaction against its record; if the latest one's own output is damaged and the archive is
+      // verified, resume from the full transcript instead.
+      const audit = auditCompactionsOnResume(session.messages, read, committedIds);
+      this.restoreSession(audit.fullTranscript ?? session.messages, session.unverifiedChangesPending, session.objective, session.findings, session);
+      this.restoreHistory(audit.fullTranscript ? { ...session.history, compactions: 0, archivedMessages: 0, committedCompactions: [] } : session.history);
       this.bridge.getSecurityManager().restoreVerificationAttempts(session.verificationConfigAttempts);
       this.persistedVerificationAttempts = session.verificationConfigAttempts?.length ?? 0;
-      const committed = Array.isArray(session.history?.committedCompactions) ? new Set<string>(session.history.committedCompactions) : undefined;
-      const read = readArchive(committed);
-      this.restoreArchive(read.messages);
-      return describeArchiveRead(read);
+      this.restoreArchive(audit.trustedArchive);
+      const described = describeArchiveRead(read);
+      return [described, ...audit.notes].filter(Boolean).join(" ") || undefined;
     } finally {
       this.restoringConversation = false;
     }
@@ -2947,7 +2989,7 @@ export class AutonomousAgent {
   }
 
   /** Where compaction archives replaced originals before committing (the host's session archive). */
-  public setArchiveSink(sink: ((compactionId: string, messages: ChatMessage[]) => void) | undefined): void {
+  public setArchiveSink(sink: ((compactionId: string, messages: ChatMessage[], record?: CompactionRecord) => void) | undefined): void {
     this.archiveSink = sink;
   }
 
@@ -4367,8 +4409,19 @@ export class AutonomousAgent {
     }
     if (durableUnit) {
       try {
-        if (this.archiveSink) this.archiveSink(id, replaced);
-        else this.stateManager.appendArchive(this.currentTaskId, id, replaced);
+        // CX-2: the record names what this compaction covered and what it inserted, in the stored (protected) form.
+        const originalSet = new Set(original);
+        const inserted = compacted.filter((message) => !originalSet.has(message));
+        const record = buildCompactionRecord({
+          trigger: meta.trigger,
+          covered: protectArchivedMessages(replaced),
+          inserted: protectArchivedMessages(inserted),
+          insertedAt: Math.max(0, compacted.findIndex((message) => !originalSet.has(message))),
+          beforeTokens: meta.beforeTokens,
+          afterTokens: meta.afterTokens,
+        });
+        if (this.archiveSink) this.archiveSink(id, replaced, record);
+        else this.stateManager.appendArchive(this.currentTaskId, id, replaced, record);
         records.archive = "written";
       } catch (err: any) {
         records.archive = `failed: ${redactSecrets(String(err?.message ?? err)).slice(0, 200)}`;

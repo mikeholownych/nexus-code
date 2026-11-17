@@ -191,6 +191,23 @@ After a crash at any point of a compaction, `/resume` is consistent:
 - **Records disagree** (the task state names a compaction the session does not): each record is consistent with the
   archive by itself.
 
+**The compaction record and resume checks.** The first archive line of each compaction also carries a record: the
+content-addressed id of every message it covered (16 hex characters of the message's SHA-256, in order, listed up to
+4,096 per compaction), one digest over those messages, where its summary block was inserted and what it was, the
+trigger and the token counts before and after. It is an extra key on the line, so builds that predate it read the same
+archive unchanged; a compaction archived without one is simply not auditable. On resume Nexus checks each committed
+compaction's archived messages against its record:
+
+- **A mismatch** (an altered, missing or extra archived message) is reported with the compaction id, what differs and
+  the covered ids; that compaction's archived messages are not served to `read_archive`. The saved conversation is used
+  as it is.
+- **The compaction's own output is gone** from the saved conversation (the summary block it inserted is missing or
+  altered), and every committed compaction verifies, and no archive line is unreadable or missing: Nexus resumes from the
+  **full transcript**, rebuilt from the verified archive (the first system message, the originals in archive order, then
+  what followed the last compaction), and says how many compactions were undone. The undone compactions are no longer
+  counted as committed, so a later compaction does not archive the same messages twice. If any of those conditions
+  does not hold, nothing is undone.
+
 Compaction never replays an action. It only rewrites context, and only at a boundary where every tool call has its
 recorded result. A call whose result was never recorded keeps the existing "outcome unknown" note.
 

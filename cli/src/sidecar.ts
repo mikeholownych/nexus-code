@@ -136,7 +136,7 @@ export class SidecarServer {
     this.resume = options.resume;
     this.sessionId = this.app.getSessionManager().generateSessionId();
     // Compaction archives the originals beside the current session before the session names it as committed.
-    this.app.getAgent().setArchiveSink((compactionId, messages) => this.app.getSessionManager().appendArchivedHistory(this.sessionId, messages, compactionId));
+    this.app.getAgent().setArchiveSink((compactionId, messages, record) => this.app.getSessionManager().appendArchivedHistory(this.sessionId, messages, compactionId, record));
     // Outside a turn (an operator /compact), a commit still writes this session's record.
     this.app.getAgent().setProgressListener(() => this.saveSession(this.sessionTitle));
     this.history = loadPromptHistory(options.historyFile ?? path.join(os.homedir(), ".nexus_history"));
