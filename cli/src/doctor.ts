@@ -588,7 +588,15 @@ const shellCheck: Check = async (ctx, signal) => {
 const sandboxCheck: Check = async (ctx) => {
   const sandbox = ctx.config?.sandbox ?? ctx.flags.sandbox;
   if (!sandbox || sandbox === "none") {
-    return f("sandbox.confinement", "runtime", "skip", "No --sandbox is configured; run_command runs on the host with the scrubbed environment only.", []);
+    const available = isBwrapAvailable();
+    return f(
+      "sandbox.confinement",
+      "runtime",
+      "skip",
+      "Effective containment: none. No --sandbox is configured; run_command runs on the host with the scrubbed environment only.",
+      [`bubblewrap (bwrap): ${available ? "available" : "not available"}`, `workspace: ${ctx.config?.workspace ?? "(none)"}`],
+      available ? "Run with --sandbox bwrap to confine commands (HOME masked, no network unless --sandbox-network)." : "Install bubblewrap and run with --sandbox bwrap to confine commands.",
+    );
   }
   if (sandbox !== "docker" && !isBwrapAvailable()) {
     return f("sandbox.confinement", "runtime", "warn", "--sandbox is configured but bubblewrap (bwrap) is not available.", [], "Install bubblewrap, or run without --sandbox.");
