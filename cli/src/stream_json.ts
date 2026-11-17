@@ -33,6 +33,7 @@ export function streamObserver(emit: StreamEventSink): AgentObserver {
   return {
     onAssistantDelta: (text) => emit("assistant.delta", { text }),
     onToolStart: ({ callId, tool }) => emit("tool.start", { call_id: callId, tool }),
+    onInjectionSuspected: ({ tool, step, signals }) => emit("security.injection_suspected", { tool, step, signals }),
     onToolEnd: ({ callId, tool, success, output, error, denied }) =>
       emit("tool.end", {
         call_id: callId,
