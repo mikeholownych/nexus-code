@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
+import { parseEgressPolicy, type EgressPolicy } from "./core/egress_policy.js";
 import { isTestPath } from "./tester.js";
 import { FILE_EDIT_TOOLS } from "./file_diff.js";
 
@@ -46,6 +47,16 @@ export type VerificationEditDecision = (VerificationClassification & {
 }) | null;
 
 export const VERIFICATION_CONFIG_PROTECTED = "VERIFICATION_CONFIG_PROTECTED";
+export const EGRESS_SECRET_BLOCKED = "EGRESS_SECRET_BLOCKED";
+
+export interface EgressDecision {
+  tool: string;
+  hosts: string[];
+  /** Names of what was found (`DB_PASSWORD`, `GITHUB_TOKEN`, `.env`): never values. */
+  findings: string[];
+  decision: "blocked" | "recorded";
+  at: string;
+}
 
 /** CS-2 scan bounds: entries visited, bytes hashed per file, bytes kept per file so a change can be shown and reverted. */
 const VERIFICATION_SNAPSHOT_MAX_ENTRIES = 20000;
@@ -113,6 +124,8 @@ export interface SecurityPolicy {
   protectedPaths?: string[];
   allowedDomains?: string[];
   verificationPaths?: VerificationPathsPolicy;
+  /** CS-8: the egress inspector's mode and allowed destinations (core/egress_inspector.ts). */
+  egressInspector?: EgressPolicy;
 }
 
 const DEFAULT_BLOCKED_COMMANDS = [
@@ -320,6 +333,7 @@ export class SecurityManager {
           ],
           allowedDomains: Array.isArray(parsed.allowedDomains) ? parsed.allowedDomains : undefined,
           verificationPaths: parseVerificationPolicy(parsed.verificationPaths),
+          egressInspector: parseEgressPolicy(parsed.egressInspector),
         };
       } catch {
         // Fallback to defaults
@@ -331,6 +345,7 @@ export class SecurityManager {
       protectedPaths: [...DEFAULT_PROTECTED_PATHS],
       allowedDomains: undefined,
       verificationPaths: parseVerificationPolicy(undefined),
+      egressInspector: parseEgressPolicy(undefined),
     };
   }
 
@@ -936,6 +951,18 @@ export class SecurityManager {
 
   public getPolicy(): SecurityPolicy {
     return this.policy;
+  }
+
+  private egressDecisions: EgressDecision[] = [];
+
+  /** CS-8: what the egress inspector found in a tool call and what it did (names only, never values). */
+  public recordEgressDecision(decision: Omit<EgressDecision, "at">): void {
+    this.egressDecisions.push({ ...decision, at: new Date().toISOString() });
+    if (this.egressDecisions.length > 200) this.egressDecisions.splice(0, this.egressDecisions.length - 200);
+  }
+
+  public getEgressDecisions(): EgressDecision[] {
+    return this.egressDecisions.map((d) => ({ ...d, findings: [...d.findings], hosts: [...d.hosts] }));
   }
 
   private vault = new SecretsVault();
