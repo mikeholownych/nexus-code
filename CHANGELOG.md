@@ -17,6 +17,10 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 - A compaction summary (including `compact --llm`) is now labelled in every request as untrusted data with its source, under the "Structured Context Memory" header: text from earlier tool output or fetched pages that reached the summary is information about the task, never instructions. The label is added to the request copy only; the stored conversation and its provenance are unchanged (plan unit CX-1).
 - Prompt-injection scanner (CS-7): a tool result that carries instruction-like text aimed at the assistant, hidden or bidirectional Unicode, fake chat or tool-call markup, or an encoded payload of those is labelled and fenced (`<<<UNTRUSTED RESULT BEGIN/END>>>`, content kept, hidden characters shown as `<U+XXXX>`), reported on the `security.injection_suspected` stream event, and gates the next step's state-changing calls on operator approval when an operator is present. A heuristic, not a guarantee: on the labelled corpus it caught 54/64 attacks it was tuned on and 15/30 written after it was frozen (0/12 deliberate evasions) and flagged 5/45 and 2/24 benign samples. See the User Manual for the limits.
 
+### Added
+
+- Amazon Bedrock Converse protocol (`"protocol": "bedrock-converse"`, `"auth": "sigv4"` in `providers.json`): SigV4 signing on `node:crypto` with no new dependency, the AWS event-stream parser for ConverseStream, and a read-only AWS credential chain from the environment and the shared credentials and config files. Credentials are never printed or logged. Verified against AWS's published SigV4 test vectors and recorded fixtures (plan unit PR-7).
+
 ### Changed
 
 - The dependency deprecation check retries a transient npm registry failure (network error, timeout, truncated body, HTTP 429 or 5xx) up to 3 times, 1 s then 3 s apart, before failing closed; a 404 or 403 is a real answer and is not retried. A single registry blip had turned main red.
