@@ -12,7 +12,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(here, "../../scripts/flake_report.mjs");
 
 test("the failing-test summary of a real CI log yields the top-level test names only", () => {
-  const log = fs.readFileSync(path.join(here, "fixtures/flake/ci-failing-tests.log"), "utf8");
+  const log = fs.readFileSync(path.join(here, "fixtures/flake/ci-failing-tests.txt"), "utf8");
   assert.deepEqual(parseFailingTests(log), [
     "a subcommand receives its own --provider and -m",
     "providers list preserves safe unknown-provider diagnostics and redacts credential-shaped IDs",
@@ -70,7 +70,7 @@ test("a job that failed without a named test is still recorded, by job", () => {
 
 test("fetchRuns reads superseded attempts' logs through the API and nothing else", async () => {
   const calls: string[] = [];
-  const log = fs.readFileSync(path.join(here, "fixtures/flake/ci-failing-tests.log"), "utf8");
+  const log = fs.readFileSync(path.join(here, "fixtures/flake/ci-failing-tests.txt"), "utf8");
   const gh = async (args: string[]) => {
     const target = args.at(-1)!;
     calls.push(target);
