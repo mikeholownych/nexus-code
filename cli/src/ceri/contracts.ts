@@ -97,6 +97,8 @@ export interface RunManifest {
   };
   agentProfileVersion: string;
   harnessVersion: string;
+  /** Content hash of the evaluation fixture (`hashFixture`); absent means the fixture identity was not recorded. */
+  fixtureSha256?: string;
   toolchainVersions: Record<string, string>;
   environment: EnvironmentMetadata;
   hardware: HardwareMetadata;
@@ -128,6 +130,7 @@ export interface BaselineIdentity {
   sampling: ModelMetadata["parameters"];
   configurationSha256: string;
   evaluatorVersion: string;
+  fixtureSha256?: string;
   toolchainVersions: Record<string, string>;
 }
 
@@ -167,9 +170,16 @@ export interface BaselineComparisonResult {
   }>;
   confidence: number;
   explanation: string;
+  /**
+   * True only for a comparison against a VerifiedBaseline (evidence loaded through the integrity check) whose identity
+   * is IDENTITY_BOUND. Everything else is non-certifying. Local and unsigned, like the identity binding itself.
+   */
+  certifying?: boolean;
   identityBinding?: {
     status: IdentityBindingStatus;
     reasons: string[];
+    /** Every identity field that differs between baseline and candidate (or is not recorded), e.g. "model.digest". */
+    mismatchedFields?: string[];
     baselineIdentity?: BaselineIdentity;
     currentIdentity: BaselineIdentity;
   };
