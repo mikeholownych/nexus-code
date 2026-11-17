@@ -101,7 +101,8 @@ ptyTest("/model → ctrl+p → paste a key → pick the provider's model → the
       proc.stdin!.write(bytes);
       await sleep(200);
     };
-    const events = () => read(eventsLog).split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    // The sidecar appends to this log while the test reads it: only newline-terminated lines are complete events.
+    const events = () => read(eventsLog).split("\n").slice(0, -1).filter(Boolean).map((l) => JSON.parse(l));
     const screenSince = (mark: number) => stripCsi(pty.slice(mark));
 
     await waitUntil(() => read(eventsLog).includes('"type":"session.state"') && stripCsi(pty).includes("newline"), 20_000).catch(() => {
