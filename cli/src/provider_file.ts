@@ -14,7 +14,7 @@ import type { AuthStyle, ProviderDefinition, WireProtocol } from "./providers.js
 import { expandUrlTemplate, validateAuthHeaderName, validateBaseUrl, validateExtraHeaders, validateProviderId } from "./provider_safety.js";
 
 const PROTOCOLS: readonly WireProtocol[] = ["openai-chat", "openai-responses", "anthropic-messages", "gemini-generate-content", "bedrock-converse"];
-const AUTHS: readonly AuthStyle[] = ["bearer", "x-api-key", "header", "none", "sigv4"];
+const AUTHS: readonly AuthStyle[] = ["bearer", "x-api-key", "header", "none", "sigv4", "gcp-adc"];
 const USAGES = ["openrouter", "stream-options", "native"] as const;
 const ENV_NAME = /^[A-Z][A-Z0-9_]{0,63}$/;
 const QUERY_NAME = /^[A-Za-z0-9_.-]{1,64}$/;
@@ -39,6 +39,8 @@ function parseProvider(id: string, raw: unknown, localOrigins: readonly string[]
   const protocol = oneOf(raw.protocol ?? "openai-chat", PROTOCOLS, `${f}.protocol`);
   const auth = oneOf(raw.auth ?? "bearer", AUTHS, `${f}.auth`);
 
+  if (auth === "gcp-adc" && protocol !== "gemini-generate-content") throw new Error(`${f}.auth: "gcp-adc" is for protocol "gemini-generate-content" (Vertex AI)`);
+
   let variables: Record<string, string> = {};
   if (raw.variables !== undefined) {
     if (!isObject(raw.variables)) throw new Error(`${f}.variables: must be an object`);
@@ -60,8 +62,8 @@ function parseProvider(id: string, raw: unknown, localOrigins: readonly string[]
   if (raw.credentialEnv !== undefined) {
     if (typeof raw.credentialEnv !== "string" || !ENV_NAME.test(raw.credentialEnv)) throw new Error(`${f}.credentialEnv: must be an environment variable name (A-Z, 0-9, _)`);
     credentialEnv = raw.credentialEnv;
-  } else if (auth !== "none" && auth !== "sigv4") {
-    throw new Error(`${f}.credentialEnv: required unless auth is "none" or "sigv4"`);
+  } else if (auth !== "none" && auth !== "sigv4" && auth !== "gcp-adc") {
+    throw new Error(`${f}.credentialEnv: required unless auth is "none", "sigv4" or "gcp-adc"`);
   }
 
   let query: Record<string, string> | undefined;
@@ -96,7 +98,7 @@ function parseProvider(id: string, raw: unknown, localOrigins: readonly string[]
     ...(raw.streamOnly ? { streamOnly: true } : {}),
     ...(omitParams?.length ? { omitParams } : {}),
     usage: raw.usage === undefined ? (protocol === "openai-chat" ? "stream-options" : "native") : oneOf(raw.usage, USAGES, `${f}.usage`),
-    methods: auth === "none" ? [] : [{ id: "api-key", label: "API key", kind: "key" }],
+    methods: auth === "none" || auth === "gcp-adc" ? [] : [{ id: "api-key", label: "API key", kind: "key" }],
   };
 }
 

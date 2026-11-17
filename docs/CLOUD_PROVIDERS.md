@@ -256,12 +256,38 @@ Credential values are never printed, logged or put in error messages. Not suppor
 `credential_process`, instance or container metadata, and Bedrock API keys; use the OpenAI-compatible `bedrock-openai`
 catalog entry for the last. Verified against recorded fixtures and the published SigV4 test vectors only; no live call.
 
+## Google Vertex AI (Gemini protocol, application default credentials)
+
+Declare a provider in `~/.config/nexus/providers.json` with `"protocol": "gemini-generate-content"` and
+`"auth": "gcp-adc"`; no `credentialEnv` and no `baseUrl` are needed:
+
+```json
+{ "providers": { "vertex": { "label": "Vertex AI", "protocol": "gemini-generate-content", "auth": "gcp-adc" } } }
+```
+
+Set `GOOGLE_CLOUD_LOCATION` (for example `us-central1`, or `global`) and `GOOGLE_CLOUD_PROJECT` (else the key file's
+`project_id` is used). The default base URL is `https://<location>-aiplatform.googleapis.com` (`global` uses
+`https://aiplatform.googleapis.com`); `--base-url` or `NEXUS_<ID>_BASE_URL` (for example `NEXUS_VERTEX_BASE_URL`) overrides the host only. Requests go to
+`/v1/projects/<project>/locations/<location>/publishers/google/models/<model>:generateContent` or
+`:streamGenerateContent?alt=sse`. Location must match `^[a-z0-9-]+$` and project `^[a-z][a-z0-9-]{4,28}[a-z0-9]$`, so
+neither can change the host or path. The request and response mapping is the Gemini one (see above).
+
+Authentication, in this order: `GOOGLE_APPLICATION_CREDENTIALS` naming a service-account JSON key file (an RS256 JWT
+assertion, scope `https://www.googleapis.com/auth/cloud-platform`, signed with `node:crypto` and exchanged at
+`https://oauth2.googleapis.com/token`); otherwise the output of `gcloud auth print-access-token`, run without a shell
+and killed after 15 s. Tokens are cached and refreshed one minute before expiry; concurrent requests share one refresh;
+a gcloud token, whose expiry is unknown, is trusted for 30 minutes. A key file that is set but unreadable is an error,
+never a silent fall back to gcloud. The private key, the assertion and the tokens are never printed, logged or put in an
+error message; errors name only the variable, the file or Google's error code. Not supported: authorized-user ADC files,
+workload identity federation, the metadata server, and Anthropic models on Vertex. Verified against fixtures and a local
+mock only; no live call.
+
 ## Limitations
 
 - Implemented: OpenRouter, OpenAI (Responses), Anthropic (Messages), generic OpenAI-compatible, ChatGPT plan and
   GitHub Copilot (unofficial sign-ins), plus any bearer-, `x-api-key`- or custom-header-authenticated service
   declared in `providers.json` (Azure OpenAI and other OpenAI-compatible endpoints), and Amazon Bedrock over the native
-  Converse protocol (see below). Not implemented: native Gemini and Vertex (ADC) protocols, Anthropic Claude Pro/Max sign-in, GitHub Enterprise Copilot.
+  Converse protocol and Google Vertex AI over the Gemini protocol (see below). Not implemented: Anthropic Claude Pro/Max sign-in, GitHub Enterprise Copilot.
 - The ChatGPT Codex backend and Copilot request formats follow crush's implementation and are verified against mocks
   only; they can change without notice.
 - No cross-provider model-fallback chain; recovery stays on the selected target.
