@@ -9,7 +9,9 @@
  * - Model: the provider's model id, passed verbatim (ids may contain "/" and ":").
  * - Role binding: main, planner and coder each name their own provider; subagents and auxiliary calls inherit main.
  */
+import fs from "node:fs";
 import { classifyDestination } from "./core/egress.js";
+import { parseProvidersDocument } from "./provider_file.js";
 
 export type WireProtocol = "openai-chat" | "openai-responses" | "anthropic-messages";
 export type AuthStyle = "bearer" | "x-api-key" | "header" | "none" | "oauth";
@@ -132,6 +134,19 @@ export const PROVIDERS: Readonly<Record<string, ProviderDefinition>> = Object.fr
 /** Providers the operator declared in ~/.config/nexus/providers.json; built-in ids can never be replaced. */
 let operatorProviders: Readonly<Record<string, ProviderDefinition>> = Object.freeze({});
 
+/**
+ * Providers shipped as data (src/providers.catalog.json, the same schema as the operator's file): the OpenAI-compatible
+ * long tail. Operator definitions of the same id take precedence; built-ins are never replaced. Read on first use.
+ */
+let catalogProviders: readonly ProviderDefinition[] | undefined;
+function catalog(): readonly ProviderDefinition[] {
+  if (!catalogProviders) {
+    const raw = JSON.parse(fs.readFileSync(new URL("./providers.catalog.json", import.meta.url), "utf8"));
+    catalogProviders = parseProvidersDocument(raw).filter((d) => !Object.prototype.hasOwnProperty.call(PROVIDERS, d.id));
+  }
+  return catalogProviders;
+}
+
 export function setOperatorProviders(defs: readonly ProviderDefinition[]): void {
   const next: Record<string, ProviderDefinition> = {};
   for (const def of defs) {
@@ -142,14 +157,15 @@ export function setOperatorProviders(defs: readonly ProviderDefinition[]): void 
 }
 
 /** Where a provider definition comes from. */
-export function providerSource(id: string): "built-in" | "providers.json" | undefined {
+export function providerSource(id: string): "built-in" | "catalog" | "providers.json" | undefined {
   if (Object.prototype.hasOwnProperty.call(PROVIDERS, id)) return "built-in";
-  return Object.prototype.hasOwnProperty.call(operatorProviders, id) ? "providers.json" : undefined;
+  if (Object.prototype.hasOwnProperty.call(operatorProviders, id)) return "providers.json";
+  return catalog().some((d) => d.id === id) ? "catalog" : undefined;
 }
 
 /** Every known provider: the built-ins, then the operator's own, in declaration order. The one place callers enumerate providers. */
 export function allProviders(): ProviderDefinition[] {
-  return [...Object.values(PROVIDERS), ...Object.values(operatorProviders)];
+  return [...Object.values(PROVIDERS), ...catalog().filter((d) => !Object.prototype.hasOwnProperty.call(operatorProviders, d.id)), ...Object.values(operatorProviders)];
 }
 
 export function providerIds(): string[] {
@@ -159,7 +175,8 @@ export function providerIds(): string[] {
 export function providerDefinition(id: string | undefined): ProviderDefinition | undefined {
   if (!id) return undefined;
   if (Object.prototype.hasOwnProperty.call(PROVIDERS, id)) return PROVIDERS[id];
-  return Object.prototype.hasOwnProperty.call(operatorProviders, id) ? operatorProviders[id] : undefined;
+  if (Object.prototype.hasOwnProperty.call(operatorProviders, id)) return operatorProviders[id];
+  return catalog().find((d) => d.id === id);
 }
 
 /** `NEXUS_<ID>_BASE_URL`: the operator's override of a provider's base URL. */

@@ -12,6 +12,31 @@ and use their own credentials. Nothing in this document changes how the applianc
 | `chatgpt` | OpenAI Responses via the ChatGPT Codex backend | `https://chatgpt.com/backend-api/codex` | sign-in only (**unofficial**) |
 | `copilot` | Chat Completions (Responses for `gpt-5*`) | `https://api.githubcopilot.com` | sign-in only (**unofficial**) |
 
+## Catalog providers (OpenAI-compatible, shipped as data)
+
+`cli/src/providers.catalog.json` declares these in the same schema as `providers.json`; select one with
+`--provider <id>` and give its key in the listed variable. `nexus providers` marks them `catalog`.
+
+| Provider id | Base URL | Key variable |
+|---|---|---|
+| `mistral` | `https://api.mistral.ai/v1` | `MISTRAL_API_KEY` |
+| `groq` | `https://api.groq.com/openai/v1` | `GROQ_API_KEY` |
+| `togetherai` | `https://api.together.ai/v1` | `TOGETHER_API_KEY` |
+| `deepseek` | `https://api.deepseek.com` | `DEEPSEEK_API_KEY` |
+| `xai` | `https://api.x.ai/v1` | `XAI_API_KEY` |
+| `fireworks-ai` | `https://api.fireworks.ai/inference/v1` | `FIREWORKS_API_KEY` |
+| `cerebras` | `https://api.cerebras.ai/v1` | `CEREBRAS_API_KEY` |
+| `perplexity` | `https://api.perplexity.ai` | `PERPLEXITY_API_KEY` |
+| `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai` | `GEMINI_API_KEY` |
+| `cloudflare-workers-ai` | yours: `https://api.cloudflare.com/client/v4/accounts/<account id>/ai/v1` | `CLOUDFLARE_API_KEY` |
+| `azure-openai` | yours: `https://<resource>.openai.azure.com/openai/deployments/<deployment>` (sends `api-key`, `api-version=2024-10-21`) | `AZURE_OPENAI_API_KEY` |
+| `bedrock-openai` | yours: `https://bedrock-runtime.<region>.amazonaws.com/openai/v1` (bearer API key) | `AWS_BEARER_TOKEN_BEDROCK` |
+
+Providers marked "yours" depend on an account, resource or region: set `NEXUS_<ID>_BASE_URL` (the id in upper case, `-` as
+`_`, for example `NEXUS_AZURE_OPENAI_BASE_URL`) or pass `--base-url`. A definition of the same id in your own
+`providers.json` replaces the catalog entry. Each entry has a recorded-fixture test (text, tool call, reasoning,
+truncation, error) against a local mock; none was exercised against the live service.
+
 ## Your own providers (`~/.config/nexus/providers.json`)
 
 Any service that speaks one of the three wire protocols can be declared without code. The file is read only from the
@@ -41,7 +66,7 @@ names the field (for example `providers.azure-openai.authHeader`).
 | id (the key) | 1-32 characters of `a-z`, `0-9`, `-`, starting with a letter. Its base-URL override setting is `NEXUS_<ID>_BASE_URL` with `-` as `_`. |
 | `label` | Short display name. |
 | `protocol` | `openai-chat` (default), `openai-responses` or `anthropic-messages`. |
-| `baseUrl` | Absolute URL; `{name}` placeholders are filled from `variables` (letters, digits, `.`, `_`, `-` only, so a value cannot change the host or path structure). `https` is required unless the destination is local (loopback, private network, or listed in `NEXUS_LOCAL_ORIGINS`). No credentials, fragment or other scheme. |
+| `baseUrl` | Optional (when omitted the operator supplies it through `NEXUS_<ID>_BASE_URL` or `--base-url`). Absolute URL; `{name}` placeholders are filled from `variables` (letters, digits, `.`, `_`, `-` only, so a value cannot change the host or path structure). `https` is required unless the destination is local (loopback, private network, or listed in `NEXUS_LOCAL_ORIGINS`). No credentials, fragment or other scheme. |
 | `query` | Fixed query parameters added to every request URL. |
 | `headers` | Extra static headers. `Host`, framing headers, cookies, forwarding headers and credential headers are refused; values may not contain line breaks. |
 | `auth` | `bearer` (default), `x-api-key`, `header` (with `authHeader`, the header that carries the key) or `none`. |

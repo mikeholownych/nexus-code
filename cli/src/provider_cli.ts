@@ -73,7 +73,7 @@ function safeProviderId(value: string | undefined): string | undefined {
 
 function safeConfigurationError(error: unknown): string {
   const message = error instanceof Error ? error.message : "";
-  const match = /^Unknown provider '([^'\r\n]{1,128})' \([A-Z0-9_]{1,64}\)\. Known providers: [A-Za-z0-9, ]+\.$/.exec(message);
+  const match = /^Unknown provider '([^'\r\n]{1,128})' \([A-Z0-9_]{1,64}\)\. Known providers: [A-Za-z0-9, -]+\.$/.exec(message);
   if (!match) return "Configuration error: provider configuration is invalid";
   // An unknown provider name comes from user configuration; even identifier-shaped values may be secrets.
   return `Configuration error: Unknown provider '(unrecognized provider)'. Known providers: ${providerIds().join(", ")}.`;
@@ -381,7 +381,7 @@ export function registerProviderCommands(program: Command, prompts?: ProviderCli
         const base = baseUrl ? safeOriginOf(baseUrl) ?? "(invalid endpoint)" : "(set --base-url or " + baseUrlSetting(def.id) + ")";
         const found = resolveCredential(def.id, def.credentialEnv);
         const key = found ? pc.green(`connected via ${found.source}`) : pc.yellow(`not connected (${def.credentialEnv ? `$${def.credentialEnv} or ` : ""}nexus connect ${def.id})`);
-        console.log(`  ${pc.bold(def.id.padEnd(11))} ${def.protocol.padEnd(19)} ${base}${providerSource(def.id) === "providers.json" ? pc.dim("  · providers.json") : ""}`);
+        console.log(`  ${pc.bold(def.id.padEnd(11))} ${def.protocol.padEnd(19)} ${base}${providerSource(def.id) === "providers.json" ? pc.dim("  · providers.json") : providerSource(def.id) === "catalog" ? pc.dim("  · catalog") : ""}`);
         console.log(`  ${"".padEnd(11)} ${key}${def.methods.some((m) => m.unofficial) ? pc.dim("  · unofficial sign-in") : ""}`);
       }
       let config: HarnessConfig;

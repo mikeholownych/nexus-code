@@ -120,7 +120,8 @@ ptyTest("a pasted multiline objective reaches the agent intact as exactly one pr
       await sleep(150);
     };
     const commandLines = () => read(commandsLog).split("\n").slice(0, -1);
-    const events = () => read(eventsLog).split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    // The sidecar appends to this log while the test reads it: only newline-terminated lines are complete events.
+    const events = () => read(eventsLog).split("\n").slice(0, -1).filter(Boolean).map((l) => JSON.parse(l));
 
     await waitUntil(() => read(eventsLog).includes('"type":"session.state"') && stripCsi(pty).includes("newline"), 20_000).catch(() => {
       throw new Error(`the live TUI never became ready${diag()}`);
