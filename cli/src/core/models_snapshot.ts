@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 export interface SnapshotModel {
   id: string;
@@ -125,13 +127,59 @@ function readJson(name: string): unknown {
   return JSON.parse(fs.readFileSync(new URL(`../${name}`, import.meta.url), "utf8"));
 }
 
+const MAX_CACHE_BYTES = 30 * 1024 * 1024;
+
+/**
+ * The operator's refreshed cache (`nexus models refresh`), validated like the bundled snapshot. It exists only after the
+ * operator ran refresh; an unreadable or invalid cache is ignored. A refreshed provider replaces the bundled one, and a
+ * refreshed model keeps the bundled model's tool-choice modes (models.dev's api.json carries none).
+ */
+function readCache(pins: Record<string, ProviderPin>): ModelsSnapshot | undefined {
+  try {
+    const file = path.join(process.env.HOME || os.homedir(), ".cache/nexus/models-snapshot.json");
+    const stat = fs.statSync(file);
+    if (!stat.isFile() || stat.size > MAX_CACHE_BYTES) return undefined;
+    return parseSnapshot(JSON.parse(fs.readFileSync(file, "utf8")), pins).snapshot;
+  } catch {
+    return undefined;
+  }
+}
+
+function mergeCache(bundled: ModelsSnapshot, cache: ModelsSnapshot): ModelsSnapshot {
+  const byId = new Map(bundled.providers.map((p) => [p.id, p]));
+  for (const p of cache.providers) {
+    const old = byId.get(p.id);
+    const modes = new Map((old?.models ?? []).map((m) => [m.id, m.toolChoice]));
+    byId.set(p.id, { ...p, models: p.models.map((m) => (m.toolChoice || !modes.get(m.id) ? m : { ...m, toolChoice: modes.get(m.id) })) });
+  }
+  return { ...cache, providers: [...byId.values()] };
+}
+
+let cacheDateValue: string | undefined;
+
 /** Reads the snapshot on first use only; importing this module costs nothing. */
 function data(): Loaded {
   if (!loaded) {
-    const { snapshot } = parseSnapshot(readJson("providers.generated.json"), readJson("providers.pins.json") as Record<string, ProviderPin>);
+    const pins = readJson("providers.pins.json") as Record<string, ProviderPin>;
+    const { snapshot: bundled } = parseSnapshot(readJson("providers.generated.json"), pins);
+    const cache = readCache(pins);
+    const snapshot = cache ? mergeCache(bundled, cache) : bundled;
+    cacheDateValue = cache?.date;
     loaded = { snapshot, byId: new Map(snapshot.providers.map((p) => [p.id, p])) };
   }
   return loaded;
+}
+
+/** Date of the operator's refreshed cache when one is in use, else undefined (the bundled snapshot is in use). */
+export function snapshotCacheDate(): string | undefined {
+  data();
+  return cacheDateValue;
+}
+
+/** Forget what was read, so the next lookup re-reads the files (after a refresh, and in tests). */
+export function resetSnapshotCache(): void {
+  loaded = undefined;
+  cacheDateValue = undefined;
 }
 
 export function snapshotDate(): string {
