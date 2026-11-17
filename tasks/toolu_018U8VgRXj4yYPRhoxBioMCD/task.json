@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_018U8VgRXj4yYPRhoxBioMCD",
+  "agent_id": "a4d6991027fd6b13f",
+  "subagent_type": "reviewer",
+  "task_description": "Code review of release diff",
+  "token_usage": {
+    "input_tokens": 118,
+    "cache_creation_tokens": 293879,
+    "cache_read_tokens": 10653243,
+    "output_tokens": 38717,
+    "api_call_count": 59
+  },
+  "started_at": "2026-11-17T21:08:22.005093812Z",
+  "completed_at": "2026-11-17T21:14:48.828233494Z"
+}

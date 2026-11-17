@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01GCcwgdtBMs1u6h4DmiGWYp",
+  "agent_id": "a8b260987f27f4818",
+  "subagent_type": "security-auditor",
+  "task_description": "Security review of release diff",
+  "token_usage": {
+    "input_tokens": 42,
+    "cache_creation_tokens": 125346,
+    "cache_read_tokens": 1571426,
+    "output_tokens": 12776,
+    "api_call_count": 21
+  },
+  "started_at": "2026-11-17T21:08:27.043070542Z",
+  "completed_at": "2026-11-17T21:10:50.316450044Z"
+}

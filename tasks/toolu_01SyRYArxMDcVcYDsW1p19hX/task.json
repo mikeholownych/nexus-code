@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01SyRYArxMDcVcYDsW1p19hX",
+  "agent_id": "a7a8706dd753c0a7e",
+  "subagent_type": "reviewer",
+  "task_description": "Slop review of release diff",
+  "token_usage": {
+    "input_tokens": 34,
+    "cache_creation_tokens": 106738,
+    "cache_read_tokens": 1064135,
+    "output_tokens": 11021,
+    "api_call_count": 17
+  },
+  "started_at": "2026-11-17T21:08:33.609968185Z",
+  "completed_at": "2026-11-17T21:10:26.396190222Z"
+}
