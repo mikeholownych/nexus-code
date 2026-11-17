@@ -22,6 +22,11 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 - Amazon Bedrock Converse protocol (`"protocol": "bedrock-converse"`, `"auth": "sigv4"` in `providers.json`): SigV4 signing on `node:crypto` with no new dependency, the AWS event-stream parser for ConverseStream, and a read-only AWS credential chain from the environment and the shared credentials and config files. Credentials are never printed or logged. Verified against AWS's published SigV4 test vectors and recorded fixtures (plan unit PR-7).
 
+### Added
+
+- Gemini native wire protocol (`gemini-generate-content`, plan unit PR-6): `generateContent` and `streamGenerateContent` with `functionCall` parts (parallel calls included) mapped to tool calls, thought summaries kept out of the answer, and `thoughtSignature` parts replayed only to the model that produced them. Declare a provider with `"protocol": "gemini-generate-content"`, `"auth": "header"` and `"authHeader": "x-goog-api-key"` in `~/.config/nexus/providers.json`; the key travels in the header, never the URL. No built-in provider uses it yet (Gemini's OpenAI-compatible endpoint stays as shipped).
+- `nexus` model listing understands Gemini's `models/<id>` catalog and offers only models that support `generateContent`.
+
 ### Changed
 
 - The dependency deprecation check retries a transient npm registry failure (network error, timeout, truncated body, HTTP 429 or 5xx) up to 3 times, 1 s then 3 s apart, before failing closed; a 404 or 403 is a real answer and is not retried. A single registry blip had turned main red.
