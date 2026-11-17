@@ -26,6 +26,14 @@ describe("PR-10 per-provider limits", () => {
     assert.equal(l.admit("b1", 10, true, "openrouter", "m"), undefined, "another provider is not limited");
   });
 
+  test("another provider's recorded usage never counts against this provider's limits", () => {
+    const l = ledger({ groq: { maxRequests: 2, maxTokens: 100, maxCostUsd: 1 } });
+    for (let i = 0; i < 5; i++) l.record(receipt("openrouter", "m", { inputTokens: 500, outputTokens: 500, costUsd: 9 }, true, `o${i}`));
+    assert.equal(l.admit("g1", 10, true, "groq", "m"), undefined);
+    l.record(receipt("groq", "m", { inputTokens: 1, outputTokens: 1, costUsd: 0.1 }, true, "g1"));
+    assert.equal(l.admit("g2", 10, true, "groq", "m"), undefined, "only groq's one request and 2 tokens count");
+  });
+
   test("a token limit counts reservations of that provider", () => {
     const l = ledger({ groq: { maxTokens: 100 } });
     assert.equal(l.admit("a", 60, true, "groq", "m"), undefined);
