@@ -1,4 +1,5 @@
 /** RD-3: `nexus run --output stream-json` writes NDJSON events and nothing else on stdout (docs/STREAM_JSON.md). */
+import "./helpers/leak_guard.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
