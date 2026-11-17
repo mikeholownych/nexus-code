@@ -1,0 +1,41 @@
+name: Real-project smoke
+
+# Nightly run of the built CLI on pinned synthetic copies of representative repositories (a JS project with node_modules,
+# a Makefile project with a large reference graph, a deeply nested tree, a Python project with pytest config) against a
+# scripted local gateway (MQ-3). It is red when a completion errors, hangs or ends in anything but REGRESSION_FREE or
+# VERIFIED. It is not a required check: it is the alarm for a defect like the v1.1.4 "verifier cannot be bound blocks every
+# completion". See docs/REAL_PROJECT_SMOKE.md for what it does not cover.
+on:
+  schedule:
+    - cron: "43 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.22.1
+      - run: sudo apt-get update && sudo apt-get install --yes make build-essential pkg-config libcap-dev
+      - run: python3 -m pip install --user pytest==9.0.3
+      - run: npm ci --prefix cli
+      - run: npm --prefix cli run build
+      - run: cargo build --locked --release --manifest-path core/Cargo.toml --bin harness-core --bin nexus-tui
+      - name: Run the smoke
+        run: |
+          set -o pipefail
+          node scripts/real_project_smoke.mjs --require-all --json | tee real-project-smoke.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: real-project-smoke
+          path: real-project-smoke.json
+          if-no-files-found: ignore
