@@ -103,6 +103,7 @@ import { InformationFlowBoundary } from "./core/egress.js";
 import { WorkspacePath } from "./core/workspace_path.js";
 import { withDurableSync, type ArchiveRead } from "./core/durable_file.js";
 import { protectArchivedMessages } from "./core/persistence_protection.js";
+import { buildProbePrompt, describeRejection, parseProbeAnswer, PROBE_TIMEOUT_MS, type ProbeRequirement, type ProbeVerdict } from "./core/compaction_probe.js";
 import { auditCompaction, buildCompactionRecord, fullTranscript, insertedBlockPresent, isCompactionRecord, type CompactionRecord } from "./core/compaction_record.js";
 import {
   advertisementChanged,
@@ -4546,6 +4547,27 @@ export class AutonomousAgent {
     }
   }
 
+  /**
+   * CX-3: asks the model whether `summary` still carries every pinned gating requirement (core/compaction_probe.ts).
+   * Without gating requirements there is nothing to check and no call is made. A failed or unreadable check is not a
+   * pass; only an operator cancellation propagates.
+   */
+  private async probeCompactionSummary(summary: string, signal?: AbortSignal): Promise<ProbeVerdict> {
+    const ledger = this.objective;
+    const requirements: ProbeRequirement[] = ledger && this.pinsLedger() ? gatingRequirements(ledger).map(({ id, text }) => ({ id, text })) : [];
+    if (!requirements.length) return { ok: true };
+    const probeSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(PROBE_TIMEOUT_MS)]) : AbortSignal.timeout(PROBE_TIMEOUT_MS);
+    try {
+      const requestId = randomUUID();
+      const prompt = buildProbePrompt(requirements, summary);
+      const answer = await this.submitGenAiRequest(this.client, () => this.client.chatCompletion(prompt, [], requestId, probeSignal, "compaction"));
+      return parseProbeAnswer(answer.content, requirements);
+    } catch (err: any) {
+      if (signal?.aborted) throw err;
+      return { ok: false, reason: "unverifiable", detail: `the check failed: ${redactSecrets(String(err?.message ?? err)).slice(0, 120)}` };
+    }
+  }
+
   private async compactNowImpl(useLlm: boolean, signal?: AbortSignal, step = 0): Promise<{ ok: boolean; durable: boolean; message: string; outcome?: CompactionOutcome }> {
     if (this.messages.length <= 2) {
       return { ok: true, durable: true, message: "Conversation is already compact." };
@@ -4579,7 +4601,10 @@ export class AutonomousAgent {
         }
         const res = await this.submitGenAiRequest(this.client, () => this.client.chatCompletion(admittedPrompt, [], requestId, signal, "compaction"));
         if (typeof res.content === "string" && res.content.trim()) {
-          summaryText += `\nExecutive Summary:\n${res.content.trim()}\n`;
+          // CX-3: a second bounded call checks the model's summary against the gating requirements before it is used.
+          const verdict = await this.probeCompactionSummary(res.content.trim(), signal);
+          if (verdict.ok) summaryText += `\nExecutive Summary:\n${res.content.trim()}\n`;
+          else llmNote = ` ${describeRejection(verdict)}`;
         } else {
           llmNote = " The model returned no summary; the deterministic summary was used.";
         }
