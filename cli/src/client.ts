@@ -33,6 +33,7 @@ import { classifyLocality, setLocalityAuthorityResolver } from "./core/egress.js
 import { connectionFor, disclosureClass, operatorSettingKeyForAuth, type ResolvedConnection } from "./providers.js";
 import { ProviderStreamError, readSse, type NativeRequestInput, type NativeResult } from "./protocols/common.js";
 import { wireProtocol } from "./protocols/index.js";
+import { GcpAuthError, gcpTokenSource, resolveVertexTarget, vertexPath } from "./protocols/gcp_adc.js";
 import { buildChatRequest, chatStreamParser, chatUsage, ChatErrorFrame, parseChatResponse, readChatStream } from "./protocols/openai_chat.js";
 import { UsageLedger, type UsageReport } from "./usage.js";
 import { localEndpointCredential, localEndpointCredentials, resolveCredential, saveCredential, type StoredCredential } from "./credentials.js";
@@ -1044,6 +1045,17 @@ export class LocalLlmClient {
    * exchanged for a Copilot API token in memory, which rotates nothing.
    */
   private async prepareCredential(url: string, requestId?: string, force = false): Promise<void> {
+    if (this.conn.auth === "gcp-adc" && this.conn.providerId) {
+      // Google ADC: a cached bearer token, refreshed shortly before it expires; the token is held like an explicit key.
+      try {
+        this.explicitKey = await gcpTokenSource().token();
+      } catch (err: any) {
+        throw new InferenceError("configuration_error", "client", `Cannot authenticate to ${this.conn.label}: ${err instanceof GcpAuthError ? err.message : "Google credential lookup failed"}`, { requestId, failoverEligible: false, condition: "AUTH_FAILURE" });
+      }
+      this.explicitOrigin = originOf(url);
+      this.rotated.delete(this.explicitOrigin ?? "");
+      return;
+    }
     if (this.conn.auth !== "oauth" || !this.conn.providerId) return;
     const id = this.conn.providerId;
     const label = providerDefinition(id)?.label ?? id;
@@ -2151,6 +2163,13 @@ export class LocalLlmClient {
       this.omitUnsupported(req.body);
       if (req.droppedState) {
         this.emitDiagnostic("error", pc.dim(`[nexus] ${req.droppedState} earlier assistant turn(s) carry reasoning state owned by another provider/model or altered since capture; it is not replayed to ${owner} (visible text and tool calls are kept).`));
+      }
+      if (this.conn.auth === "gcp-adc") {
+        try {
+          req.path = vertexPath(req.path, resolveVertexTarget(process.env));
+        } catch (err: any) {
+          throw new InferenceError("configuration_error", "client", `Cannot build the ${this.conn.label} URL: ${err?.message ?? "invalid project or location"}`, { requestId, failoverEligible: false });
+        }
       }
       const url = this.endpointUrl(currentEp, req.path);
       this.pending = { endpoint: currentEp };

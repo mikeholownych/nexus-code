@@ -409,7 +409,7 @@ const reasoningEffortCheck: Check = async (ctx) => {
 const providersFileCheck: Check = async () => {
   const own = allProviders().filter((d) => providerSource(d.id) === "providers.json");
   if (!own.length) return f("config.providers_file", "config", "skip", "No operator providers are declared (~/.config/nexus/providers.json).");
-  const missing = own.filter((d) => d.auth !== "none" && !resolveCredential(d.id, d.credentialEnv));
+  const missing = own.filter((d) => d.auth !== "none" && d.auth !== "sigv4" && d.auth !== "gcp-adc" && !resolveCredential(d.id, d.credentialEnv));
   const evidence = own.map((d) => `${d.id}: ${d.protocol} ${d.baseUrl ?? ""} ${missing.includes(d) ? "(no credential)" : "(credential found)"}`);
   if (missing.length) {
     return f("config.providers_file", "config", "warn", `${missing.length} operator-declared provider(s) have no credential.`, evidence, `Set ${missing.map((d) => (d.credentialEnv ? `$${d.credentialEnv}` : d.id)).join(", ")} or run \`nexus connect <provider>\`.`);

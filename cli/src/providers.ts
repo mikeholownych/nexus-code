@@ -15,7 +15,8 @@ import { parseProvidersDocument } from "./provider_file.js";
 
 export type WireProtocol = "openai-chat" | "openai-responses" | "anthropic-messages" | "gemini-generate-content" | "bedrock-converse";
 /** "sigv4": requests are signed from the AWS credential chain (environment and shared files), not a key. */
-export type AuthStyle = "bearer" | "x-api-key" | "header" | "none" | "oauth" | "sigv4";
+/** "gcp-adc": a bearer token from Google Application Default Credentials (service-account key file or gcloud), for Vertex AI. */
+export type AuthStyle = "bearer" | "x-api-key" | "header" | "none" | "oauth" | "sigv4" | "gcp-adc";
 
 /** How an operator can connect a provider from the TUI or `nexus connect`. */
 export interface ConnectMethod {

@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config as loadDotenv, parse as parseDotenv } from "dotenv";
 import { credentialOriginOf, credentialStorageHome, environmentCredential, LocalLlmClient, operatorSetting, setCredentialAuthority } from "./client.js";
+import { vertexOrigin } from "./protocols/gcp_adc.js";
 import { baseUrlSetting, originOf, parseOriginList, providerDefinition, providerIds, setOperatorProviders } from "./providers.js";
 import { readProvidersFile } from "./provider_file.js";
 import { parseLocalOrigins } from "./core/egress.js";
@@ -336,9 +337,11 @@ function selectProvider(flag: string | undefined, key: string): string | undefin
 
 /** Base URL of a provider connection: the operator's override (flag or NEXUS_<ID>_BASE_URL), else the provider default. */
 export function providerBaseUrl(id: string, flag?: string): string {
-  const url = flag?.trim() || operatorSetting(baseUrlSetting(id)) || providerDefinition(id)?.baseUrl;
+  const def = providerDefinition(id);
+  // Vertex: with no base URL given, the regional host comes from GOOGLE_CLOUD_LOCATION.
+  const url = flag?.trim() || operatorSetting(baseUrlSetting(id)) || def?.baseUrl || (def?.auth === "gcp-adc" && process.env.GOOGLE_CLOUD_LOCATION?.trim() ? vertexOrigin(process.env.GOOGLE_CLOUD_LOCATION.trim()) : undefined);
   if (!url || !originOf(url)) {
-    throw new Error(`Provider '${id}' needs a base URL: pass --base-url or set ${baseUrlSetting(id)} in ~/.config/nexus/config.env.`);
+    throw new Error(`Provider '${id}' needs a base URL: pass --base-url or set ${baseUrlSetting(id)} in ~/.config/nexus/config.env${def?.auth === "gcp-adc" ? " (or set GOOGLE_CLOUD_LOCATION)" : ""}.`);
   }
   const parsed = new URL(url.trim());
   if (parsed.username || parsed.password) throw new Error(`Provider '${id}' base URL must not contain credentials; the key is sent as a header.`);
