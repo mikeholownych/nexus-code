@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { registryPackageName } from "./registry-package-name.mjs";
+import { fetchRegistryJson } from "./registry-fetch.mjs";
 
 const lockPath = process.argv[2];
 if (!lockPath) {
@@ -48,13 +49,8 @@ async function worker() {
     if (index >= packages.length) return;
     const { name, version } = packages[index];
     const registryName = registryPackageName(name);
-    let response;
     try {
-      response = await fetch(`https://registry.npmjs.org/${registryName}/${encodeURIComponent(version)}`, {
-        signal: AbortSignal.timeout(20_000),
-      });
-      if (!response.ok) throw new Error(`registry returned HTTP ${response.status}`);
-      const metadata = await response.json();
+      const metadata = await fetchRegistryJson(`https://registry.npmjs.org/${registryName}/${encodeURIComponent(version)}`);
       if (metadata.deprecated) deprecated.push(`${name}@${version}: ${metadata.deprecated}`);
     } catch (error) {
       failed = `could not verify ${name}@${version}: ${error instanceof Error ? error.message : String(error)}`;
