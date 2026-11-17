@@ -285,3 +285,19 @@ The qualification evidence from 2026-10-12 and the v1.0.0 readiness document wer
 ## Release review follow-ups (2026-11-17)
 
 The Code, Security and Slop reviews of the v1.2.1 diff (prompts as the Entire agents ran them) found two medium security issues, one low gate defect and a handful of slop items; those are fixed in the release-review PR. Findings accepted as work for the next release, not done here because they change no behaviour and each touches working code: the `openai-chat` entry in `WIRE_PROTOCOLS` has dead `build`/`parse`/`stream` members; `readChatStream` is a third SSE reader beside `readSse` and `readEventStream`; generated tool-call ids in `openai_chat.ts` use `Math.random`; `encodeFrame` is production code used only by tests; `usage.ts` keeps `reserved` and `reservedBy` as two maps; `boundary_rules.ts` rebuilds glob regexes per call and labels any added `NOT NULL` column as breaking; the CERI library has no shipped consumer; `agent.ts` still lists the external-tool names in four places; `models_snapshot.ts` computes the cache path itself instead of sharing `modelsCachePath`; the injection gate covers only the step after a flagged result and scans the first 200,000 characters of a result.
+
+## Release disposition (2026-11-17)
+
+Status of every unit that is not marked done above, decided under the owner's standing delegation (D1 to D12) when the release candidate was cut. A unit that is not here is either done (see its row) or a P2 unit that rolls to the next release without ceremony (section 5). Each deferral names its reason so it can be reopened.
+
+| Unit | Disposition | Reason |
+|---|---|---|
+| MQ-1, MQ-2 | **Deferred to v1.2.2.** No external benchmark result is published for v1.2.1 (G-4 allows saying so in the notes, and the notes do). | Needs a Harbor/Terminal-Bench runner, containers and a model-cost budget (D3, D4) that this release did not have. Nothing was run, so nothing is claimed. |
+| MQ-4 | **Deferred to v1.2.2.** | The gateway (10.0.8.5) is not reachable from GitHub-hosted runners; a scheduled conformance run needs a local or self-hosted scheduler and a claim protocol. |
+| MQ-7 D to G | **Deferred to v1.2.2** (D7). B and C are done. | |
+| RD-1, RD-2 | **Deferred.** The release ships Linux x86_64 only. | No macOS or arm64/musl runner (D6, runner cost). |
+| PC-1 | **Not met; deferred to v1.2.2.** Measured: the required checks of this release's PRs took about 37 to 45 minutes. | Test sharding and toolchain caching were not done; the parallel `linux-x86_64` job is in place. |
+| MT-3 | **Part done** (one pattern table with a Rust parity test). The remaining collapse of the `redact*` and terminal-safe variants is deferred to v1.2.2. | The layering works and is tested; collapsing it is a no-behaviour-change refactor that adds release risk. |
+| WM-3 | **Partial.** Only `engineering/deep` and `engineering/lead-reasoning` are measured (on the release candidate, see `docs/evidence/v1.2.1/`). A per-alias table for every alias the gateway serves is deferred. | Needs gateway time per alias. |
+| WM-4, G-3 | The code and mock-gateway test are merged. The live matrix on the v1.2.1 release candidate is recorded in `docs/evidence/v1.2.1/`, as measured, whatever it shows. | A measurement is valid only for the archive it was taken on. |
+| CS-9, CS-10, VC-8, VC-10, RD-5, RD-7, MT-2, PC-5 | Already deferred in their rows (v1.2.2 or superseded by v1.3). | |
