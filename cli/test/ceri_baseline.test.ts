@@ -99,15 +99,16 @@ test("CeriBaselineComparator distinguishes REGRESSION_CANDIDATE vs CONFIRMED_REG
   assert.equal(resCandidate.divergences.length, 1);
   assert.equal(resCandidate.divergences[0].assertionId, "assert-2");
 
-  // Repeat reproduction -> CONFIRMED_REGRESSION
-  const resConfirmed = CeriBaselineComparator.compareRuns(
+  // MQ-7C: a caller-supplied reproduction flag is not evidence; it no longer yields CONFIRMED_REGRESSION.
+  // (Confirmation through a verified baseline and a verified prior run is tested in ceri_mq7bc.test.ts.)
+  const resFlagged = CeriBaselineComparator.compareRuns(
     m,
     currentAssertions,
     sampleBaseline,
     baselineAssertions,
     true // isRepeatReproduction = true
   );
-  assert.equal(resConfirmed.outcome, "CONFIRMED_REGRESSION");
+  assert.equal(resFlagged.outcome, "REGRESSION_CANDIDATE");
 });
 
 test("CeriBaselineComparator classifies IMPROVEMENT_CANDIDATE", () => {

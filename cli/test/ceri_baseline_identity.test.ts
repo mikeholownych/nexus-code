@@ -29,6 +29,8 @@ function manifest(overrides: Partial<RunManifest> = {}): RunManifest {
     hardware: { cpuModel: "Intel", totalMemoryBytes: 1 },
     startedAt: "2026-11-15T00:00:00.000Z",
     status: "COMPLETED",
+    // MQ-7C: fixture identity is part of the bound identity, so a bound manifest records it.
+    fixtureSha256: "1".repeat(64),
     mandatoryComparabilityKeys: [],
     ...overrides,
   };
@@ -179,13 +181,17 @@ test("MQ-5: the report shows the identity label and reasons beside the non-quali
   assert.match(md, /local, unsigned identity binding; not external qualification; an attacker who edits manifest, hash and identity together passes/);
 });
 
+const FIXTURE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "ceri-fixture-"));
+fs.writeFileSync(path.join(FIXTURE_DIR, "f.txt"), "fixture");
+
 function runnerDef() {
   return {
     id: "eval-rt",
     version: "1.0.0",
     domain: "code_comprehension" as const,
     objective: "runner integration",
-    fixturePath: "eval/fixtures",
+    // MQ-7C: a real fixture, so the run records a fixture identity.
+    fixturePath: FIXTURE_DIR,
     expectedOutputs: [],
     authorizedTools: [],
     executionBudget: { maxSteps: 5, timeoutSeconds: 30 },

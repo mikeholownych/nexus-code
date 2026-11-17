@@ -14,7 +14,7 @@ const FORBIDDEN_HEADERS = new Set([
   "x-forwarded-proto", "x-real-ip", "x-task-class",
 ]);
 
-const AUTH_HEADERS = new Set(["authorization", "x-api-key", "api-key"]);
+const AUTH_HEADERS = new Set(["authorization", "x-api-key", "x-goog-api-key", "api-key"]);
 const HEADER_NAME = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
 /** Visible ASCII plus space and tab; no CR, LF or other control characters. */
 const HEADER_VALUE = /^[\t\x20-\x7e]{0,512}$/;

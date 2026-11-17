@@ -96,7 +96,7 @@ afterEach(() => {
 });
 
 const keyed = () => allProviders().filter((d) => d.auth !== "oauth");
-const OPERATION: Record<ProviderDefinition["protocol"], string> = { "openai-chat": "/chat/completions", "openai-responses": "/responses", "anthropic-messages": "/messages" };
+const OPERATION: Record<ProviderDefinition["protocol"], string> = { "openai-chat": "/chat/completions", "openai-responses": "/responses", "anthropic-messages": "/messages", "gemini-generate-content": "/models/model-x:streamGenerateContent" };
 /** The path part of a definition's base URL; definitions with no URL (the operator supplies it) use a stand-in. */
 const basePathOf = (def: ProviderDefinition) => (def.baseUrl ? new URL(def.baseUrl).pathname.replace(/\/+$/, "") : "/custom/v1");
 

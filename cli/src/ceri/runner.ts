@@ -12,7 +12,8 @@ import {
   validateEvaluationDefinition,
 } from "./contracts.js";
 import { CeriEvidenceStore } from "./evidence_store.js";
-import { CeriBaselineComparator } from "./baseline.js";
+import { CeriBaselineComparator, type PriorRun } from "./baseline.js";
+import { hashFixture } from "./fixture_identity.js";
 
 export interface EvaluationRunnerOptions {
   model: ModelMetadata;
@@ -24,7 +25,11 @@ export interface EvaluationRunnerOptions {
   baseline?: BaselineSpecification;
   baselineAssertions?: Record<string, boolean>;
   baselineManifest?: RunManifest;
-  isRepeatReproduction?: boolean;
+  /**
+   * Id of an earlier run of the same evaluation in the evidence store. When it, too, regressed against the verified
+   * baseline, a regression is CONFIRMED_REGRESSION; there is no caller flag for that.
+   */
+  priorRunId?: string;
 }
 
 export interface EvaluationExecutionResult {
@@ -100,6 +105,7 @@ export class CeriEvaluationRunner {
       },
       agentProfileVersion: "1.1.2",
       harnessVersion: getBuildIdentity().version,
+      fixtureSha256: hashFixture(definition.fixturePath),
       toolchainVersions: { node: process.version },
       environment: CeriEvaluationRunner.getEnvironmentMetadata(),
       hardware: CeriEvaluationRunner.getHardwareMetadata(),
@@ -181,51 +187,53 @@ export class CeriEvaluationRunner {
     // 4. Perform baseline comparison if baseline specification is present
     let comparison: BaselineComparisonResult | undefined;
     if (options.baseline) {
-      let loadedBaselineAssertions = options.baselineAssertions ?? options.baseline.assertions;
-      let baselineManifest = options.baselineManifest;
-      let integrityFailure: string | undefined;
-      try {
-        loadedBaselineAssertions ??= options.evidenceStore.loadAssertions(options.baseline.evaluationId, options.baseline.baselineId);
-        baselineManifest ??= options.evidenceStore.loadManifest(options.baseline.evaluationId, options.baseline.baselineId);
-      } catch (err) {
-        if (!(err instanceof Error) || err.name !== "CeriEvidenceIntegrityError") throw err;
-        integrityFailure = err.message;
-      }
-
-      if (integrityFailure) {
-        comparison = {
-          baselineId: options.baseline.baselineId,
-          currentRunId: manifest.runId,
-          isEligibleForComparison: false,
-          incomparabilityReasons: [integrityFailure],
-          outcome: "INCOMPARABLE",
-          divergences: [],
-          confidence: 0.0,
-          explanation: `Baseline evidence failed its integrity check: ${integrityFailure}`,
-        };
-      } else if (!loadedBaselineAssertions) {
-        comparison = {
-          baselineId: options.baseline.baselineId,
-          currentRunId: manifest.runId,
-          isEligibleForComparison: false,
-          incomparabilityReasons: [
-            `Baseline assertion records not found for baseline ID '${options.baseline.baselineId}'`,
-          ],
-          outcome: "INCOMPARABLE",
-          divergences: [],
-          confidence: 0.0,
-          explanation:
-            "Missing baseline assertion evidence: cannot verify comparative behavior without baseline assertions.",
-        };
+      const incomparable = (reason: string, explanation: string): BaselineComparisonResult => ({
+        baselineId: options.baseline!.baselineId,
+        currentRunId: manifest.runId,
+        isEligibleForComparison: false,
+        incomparabilityReasons: [reason],
+        outcome: "INCOMPARABLE",
+        divergences: [],
+        confidence: 0.0,
+        explanation,
+        certifying: false,
+      });
+      // Evidence the caller hands over is not bound to the store, so it can only give a non-certifying comparison.
+      const callerSupplied = Boolean(options.baselineAssertions ?? options.baselineManifest ?? options.baseline.assertions);
+      const verified = callerSupplied ? undefined : CeriBaselineComparator.loadVerifiedBaseline(options.evidenceStore, options.baseline);
+      if (verified?.ok) {
+        let priorRun: PriorRun | undefined;
+        if (options.priorRunId && options.priorRunId !== manifest.runId) {
+          try {
+            const pm = options.evidenceStore.loadManifest(manifest.evaluationId, options.priorRunId);
+            const pa = options.evidenceStore.loadAssertions(manifest.evaluationId, options.priorRunId);
+            if (pm && pa) priorRun = { manifest: pm, assertions: pa };
+          } catch {
+            // An unreadable or unverified prior run cannot confirm anything.
+          }
+        }
+        comparison = CeriBaselineComparator.compareToVerifiedBaseline(manifest, assertionResults, verified.baseline, { priorRun });
       } else {
-        comparison = CeriBaselineComparator.compareRuns(
-          manifest,
-          assertionResults,
-          options.baseline,
-          loadedBaselineAssertions,
-          options.isRepeatReproduction ?? false,
-          { baselineManifest }
-        );
+        let loadedAssertions = options.baselineAssertions ?? options.baseline.assertions;
+        let baselineManifest = options.baselineManifest;
+        let integrityFailure: string | undefined;
+        try {
+          loadedAssertions ??= options.evidenceStore.loadAssertions(options.baseline.evaluationId, options.baseline.baselineId);
+          baselineManifest ??= options.evidenceStore.loadManifest(options.baseline.evaluationId, options.baseline.baselineId);
+        } catch (err) {
+          if (!(err instanceof Error) || err.name !== "CeriEvidenceIntegrityError") throw err;
+          integrityFailure = err.message;
+        }
+        if (integrityFailure) {
+          comparison = incomparable(integrityFailure, `Baseline evidence failed its integrity check: ${integrityFailure}`);
+        } else if (!loadedAssertions) {
+          comparison = incomparable(
+            `Baseline assertion records not found for baseline ID '${options.baseline.baselineId}'`,
+            "Missing baseline assertion evidence: cannot verify comparative behavior without baseline assertions.",
+          );
+        } else {
+          comparison = CeriBaselineComparator.compareRuns(manifest, assertionResults, options.baseline, loadedAssertions, false, { baselineManifest });
+        }
       }
     }
 

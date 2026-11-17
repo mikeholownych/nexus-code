@@ -42,13 +42,9 @@ export function sanitizeIdentifier(id: string, name: string): string {
     throw new Error(`Invalid ${name}: must be a non-empty string`);
   }
   const trimmed = id.trim();
-  if (
-    trimmed === "." ||
-    trimmed.includes("..") ||
-    trimmed.includes("/") ||
-    trimmed.includes("\\") ||
-    !/^[a-zA-Z0-9_.-]+$/.test(trimmed)
-  ) {
+  // Ids are names, not paths: a letter or digit first (no dot-files, no `.tmp` scratch names), at most 128 characters of
+  // [A-Za-z0-9_.-], no `..`, and never the `.abandoned-` marker that abandonRun gives to quarantined directories.
+  if (trimmed.includes("..") || trimmed.includes(".abandoned-") || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(trimmed)) {
     throw new Error(
       `Invalid ${name} "${id}": contains invalid characters or path traversal elements`
     );
@@ -124,8 +120,15 @@ function redactedJson(data: unknown, space?: number): string {
   );
 }
 
+/** Whether `child` is `parent` or inside it, by path segments (not by string prefix). */
+function isInside(parent: string, child: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === "" || (!path.isAbsolute(rel) && rel.split(path.sep)[0] !== "..");
+}
+
 export class CeriEvidenceStore {
   private readonly baseDir: string;
+  private readonly realBaseDir: string;
   private currentRunDir?: string;
   private currentManifest?: RunManifest;
 
@@ -134,6 +137,30 @@ export class CeriEvidenceStore {
     if (!fs.existsSync(this.baseDir)) {
       fs.mkdirSync(this.baseDir, { recursive: true });
     }
+    this.realBaseDir = fs.realpathSync(this.baseDir);
+  }
+
+  /**
+   * Resolved containment: the evaluation directory and the run directory, where they exist, must be real directories
+   * (not symlinks) whose real paths sit inside the real store root. A lexical prefix check cannot see a symlink.
+   */
+  private assertContained(evalDir: string, runDir?: string): void {
+    const check = (dir: string, expectedParent: string) => {
+      let st: fs.Stats;
+      try {
+        st = fs.lstatSync(dir);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+        throw err;
+      }
+      if (st.isSymbolicLink() || !st.isDirectory()) throw new Error(`Evidence path ${dir} is a symlink or not a directory; refusing to follow it outside the store`);
+      const real = fs.realpathSync(dir);
+      if (!isInside(this.realBaseDir, real) || path.dirname(real) !== expectedParent) {
+        throw new Error(`Path traversal detected: ${dir} resolves outside the evidence store ${this.realBaseDir}`);
+      }
+    };
+    check(evalDir, this.realBaseDir);
+    if (runDir && fs.existsSync(evalDir)) check(runDir, fs.realpathSync(evalDir));
   }
 
   /**
@@ -143,11 +170,16 @@ export class CeriEvidenceStore {
     const sEvalId = sanitizeIdentifier(manifest.evaluationId, "evaluationId");
     const sRunId = sanitizeIdentifier(manifest.runId, "runId");
     const runDir = path.resolve(this.baseDir, sEvalId, sRunId);
-    if (!runDir.startsWith(this.baseDir + path.sep)) {
+    if (!isInside(this.baseDir, runDir)) {
       throw new Error(`Path traversal detected: ${runDir} is outside baseDir ${this.baseDir}`);
     }
 
     fs.mkdirSync(path.dirname(runDir), { recursive: true });
+    this.assertContained(path.dirname(runDir));
+    const sibling = fs.readdirSync(path.dirname(runDir)).find((n) => n !== sRunId && n.toLowerCase() === sRunId.toLowerCase());
+    if (sibling) {
+      throw new Error(`Run "${sRunId}" differs only by case from existing run "${sibling}" for evaluation "${sEvalId}"; run ids must be unique on a case-insensitive filesystem too.`);
+    }
     try {
       fs.mkdirSync(runDir);
     } catch (err) {
@@ -235,9 +267,10 @@ export class CeriEvidenceStore {
     const sEvalId = sanitizeIdentifier(evaluationId, "evaluationId");
     const sRunId = sanitizeIdentifier(runId, "runId");
     const runDir = path.resolve(this.baseDir, sEvalId, sRunId);
-    if (!runDir.startsWith(this.baseDir + path.sep)) {
+    if (!isInside(this.baseDir, runDir)) {
       throw new Error(`Path traversal detected: ${runDir} is outside baseDir ${this.baseDir}`);
     }
+    this.assertContained(path.dirname(runDir), runDir);
     return { sEvalId, sRunId, runDir };
   }
 
