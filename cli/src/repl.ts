@@ -148,7 +148,7 @@ export class InteractiveRepl {
     this.agent.setSurface("repl");
     this.agent.setApprovalMode(this.approvalMode);
     // Compaction archives the originals beside the current session before the session names it as committed.
-    this.agent.setArchiveSink((compactionId, messages) => this.sessionManager.appendArchivedHistory(this.currentSessionId, messages, compactionId));
+    this.agent.setArchiveSink((compactionId, messages, record) => this.sessionManager.appendArchivedHistory(this.currentSessionId, messages, compactionId, record));
     this.historyFile = path.join(os.homedir(), ".nexus_history");
     this.loadHistory();
 

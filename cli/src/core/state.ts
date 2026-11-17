@@ -481,10 +481,10 @@ export class DurableStateManager {
   }
 
   /** Appends one compaction's originals, durably, before any record names that compaction as committed. */
-  public appendArchive(taskId: string, compactionId: string, messages: ChatMessage[]): void {
+  public appendArchive(taskId: string, compactionId: string, messages: ChatMessage[], record?: unknown): void {
     withStateStoreGuard(this.baseDir, () => {
       const at = new Date().toISOString();
-      appendLinesDurably(this.archivePath(taskId), protectArchivedMessages(messages).map((message) => JSON.stringify({ archivedAt: at, compactionId, message })));
+      appendLinesDurably(this.archivePath(taskId), protectArchivedMessages(messages).map((message, index) => JSON.stringify({ archivedAt: at, compactionId, ...(index === 0 && record !== undefined ? { record } : {}), message })));
     });
   }
 

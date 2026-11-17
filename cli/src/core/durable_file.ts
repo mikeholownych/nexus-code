@@ -230,6 +230,8 @@ export interface ArchiveLine<M> {
   archivedAt: string;
   /** The compaction that wrote this line; absent on lines written before compactions had ids (treated as committed). */
   compactionId?: string;
+  /** CX-2: the compaction's record, on its first line only (extra key: builds that predate it ignore it). */
+  record?: unknown;
   message: M;
 }
 
@@ -241,6 +243,8 @@ export interface ArchiveRead<M> {
   uncommittedLines: number;
   /** Compactions the reader expected (committed by its record) that have no line in the archive. */
   missingCompactions: string[];
+  /** CX-2: each readable compaction's own archived messages (in archive order) and its record, when it has one. */
+  byCompaction?: Map<string, { messages: M[]; record?: unknown }>;
 }
 
 /**
@@ -256,6 +260,7 @@ export function readArchiveLines<M>(file: string, committed?: ReadonlySet<string
   }
   const messages: M[] = [];
   const seen = new Set<string>();
+  const byCompaction = new Map<string, { messages: M[]; record?: unknown }>();
   let unreadableLines = 0;
   let uncommittedLines = 0;
   for (const line of raw.split("\n")) {
@@ -273,9 +278,13 @@ export function readArchiveLines<M>(file: string, committed?: ReadonlySet<string
         continue;
       }
       seen.add(parsed.compactionId);
+      const group = byCompaction.get(parsed.compactionId) ?? { messages: [] as M[] };
+      group.messages.push(parsed.message);
+      if (parsed.record !== undefined && group.record === undefined) group.record = parsed.record;
+      byCompaction.set(parsed.compactionId, group);
     }
     messages.push(parsed.message);
   }
   const missingCompactions = committed ? [...committed].filter((id) => !seen.has(id)) : [];
-  return { messages, unreadableLines, uncommittedLines, missingCompactions };
+  return { messages, unreadableLines, uncommittedLines, missingCompactions, byCompaction };
 }

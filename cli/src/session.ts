@@ -328,11 +328,11 @@ export class SessionManager {
    * Appends the originals one compaction replaced, durably (fsync), tagged with the compaction's id. Written before any
    * record names the compaction as committed (see core/durable_file.ts).
    */
-  public appendArchivedHistory(sessionId: string, messages: ChatMessage[], compactionId?: string): void {
+  public appendArchivedHistory(sessionId: string, messages: ChatMessage[], compactionId?: string, record?: unknown): void {
     if (!messages.length) return;
     withStateStoreGuard(this.sessionsDir, () => {
       const at = new Date().toISOString();
-      const lines = protectArchivedMessages(messages).map((message) => JSON.stringify({ archivedAt: at, ...(compactionId ? { compactionId } : {}), message }));
+      const lines = protectArchivedMessages(messages).map((message, index) => JSON.stringify({ archivedAt: at, ...(compactionId ? { compactionId } : {}), ...(index === 0 && record !== undefined ? { record } : {}), message }));
       appendLinesDurably(this.archivedHistoryPath(sessionId), lines);
     });
   }
