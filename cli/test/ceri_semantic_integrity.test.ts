@@ -280,6 +280,17 @@ const drivers: Record<string, () => unknown | Promise<unknown>> = {
       fs.rmSync(root, { recursive: true, force: true });
     }
   },
+  "cumulative-change-03": () => {
+    // Two successive changes: each alone breaches nothing; together they close an import cycle, which the operator's
+    // acyclic rule forbids. The review gate checks the cumulative diff and rejects even a model ACCEPT.
+    const rules = { acyclic: ["src/**"] };
+    const diff = (file: string, line: string) => `diff --git a/${file} b/${file}\n--- a/${file}\n+++ b/${file}\n@@ -1,1 +1,2 @@\n keep\n+${line}\n`;
+    const first = diff("src/a.ts", "import { b } from './b';");
+    const second = diff("src/b.ts", "import { a } from './a';");
+    const accept = '```json\n{"verdict":"ACCEPT","verifiedObservations":["ok"],"suspectedDefects":[],"unprovenCriteria":[],"scopeViolations":[],"reviewerConfidenceNote":"high"}\n```';
+    const verdictOf = (unifiedDiff: string) => parseIndependentReviewVerdict(accept, buildReviewEvidencePackage({ unitId: "rev", objective: "o", baselineCommit: "base", unifiedDiff, verifierExitCode: 0, boundaries: rules })).verdict;
+    return { cumulativeBreachRejected: verdictOf(first) === "ACCEPT" && verdictOf(second) === "ACCEPT" && verdictOf(first + second) === "REJECT" };
+  },
   "conflicting-specs-01": () => {
     const ledger = createLedger(NUMBERED);
     const snapshot = () => JSON.stringify(ledger.requirements);
@@ -398,10 +409,8 @@ test("the frozen scenario file is the one the manifest pins, in a registered CER
   assert.equal(new Set(ids).size, ids.length, "scenario ids are unique");
 });
 
-const PENDING_FROZEN: Record<string, string> = {
-  "cumulative-change-03": "SI-5",
-};
-const ACTIVE_FROZEN = 24;
+const PENDING_FROZEN: Record<string, string> = {};
+const ACTIVE_FROZEN = 25;
 
 test("the scenario set cannot shrink or be reclassified without changing this file too", () => {
   const pending = Object.fromEntries(frozen.scenarios.filter((s) => s.status === "pending").map((s) => [s.id, s.pendingUnit]));

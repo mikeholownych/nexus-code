@@ -174,8 +174,7 @@
     {
       "id": "cumulative-change-03",
       "category": "cumulative_change",
-      "status": "pending",
-      "pendingUnit": "SI-5",
+      "status": "active",
       "description": "A boundary rule declared by the operator is checked against the cumulative diff of successive operations, so changes that are each compatible but together breach it are rejected.",
       "expected": { "cumulativeBreachRejected": true }
     }

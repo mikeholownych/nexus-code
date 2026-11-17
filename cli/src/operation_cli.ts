@@ -16,6 +16,7 @@ import type { Command } from "commander";
 import pc from "picocolors";
 import { buildConfig, mergeOperationPolicy } from "./config.js";
 import { ConvergenceScheduler, DecisionRejected, newOperation, type DurableOperationState, type OperationEvent, type OperationPolicy, type WorkUnitSpec } from "./core/operation.js";
+import { BoundaryRules, parseBoundaryRules } from "./core/boundary_rules.js";
 import { UnsupportedOperationSchemaError, clampUnisolatedConcurrency, concurrencyIsolationProblem, validateOperationPolicy, validateResourceSlots } from "./core/operation_schema.js";
 import { MessageRejected, publishMessage } from "./core/operation_messages.js";
 import { ROLE_PROFILES, specialistInputsProblem } from "./core/roles.js";
@@ -40,6 +41,8 @@ interface OperationSpec {
   policy?: Partial<OperationPolicy>;
   /** Opt-in Git isolation: each unit runs on its own worktree/branch; completions merge into an operation branch. */
   git?: { isolate?: boolean; baseRef?: string };
+  /** SI-5: boundary rules the review gate enforces on each candidate diff (core/boundary_rules.ts). */
+  boundaries?: BoundaryRules;
 }
 
 /**
@@ -56,7 +59,7 @@ export class OperationSpecError extends Error {
 // The spec is untrusted operator input. Unknown keys are rejected rather than ignored: a silently ignored
 // `git.publish` would leave the operator believing a PR will be opened, and a typo such as `depends` would drop a
 // dependency and run work out of order.
-const SPEC_KEYS = ["id", "objective", "units", "resources", "discoverCatalog", "policy", "git"] as const;
+const SPEC_KEYS = ["id", "objective", "units", "resources", "discoverCatalog", "policy", "git", "boundaries"] as const;
 const UNIT_KEYS = ["id", "title", "role", "prompt", "dependsOn", "requires", "required", "taskClass", "contextBudget", "inputs", "authorizedScope"] as const;
 const POLICY_KEYS = ["maxWaitMs", "unknownResumeBudget", "maxRunsPerUnit", "minWaitMs", "maxConcurrentUnits"] as const;
 const GIT_KEYS = ["isolate", "baseRef"] as const;
@@ -99,6 +102,13 @@ export function validateOperationSpec(spec: unknown): asserts spec is OperationS
     rejectUnknown("git", s.git, GIT_KEYS);
     if (s.git.isolate !== undefined && typeof s.git.isolate !== "boolean") throw new OperationSpecError("operation spec 'git.isolate' must be true or false");
     if (s.git.baseRef !== undefined && typeof s.git.baseRef !== "string") throw new OperationSpecError("operation spec 'git.baseRef' must be a string");
+  }
+  if (s.boundaries !== undefined) {
+    try {
+      parseBoundaryRules(s.boundaries);
+    } catch (error) {
+      throw new OperationSpecError(`operation spec ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
   if (s.policy !== undefined) {
     if (!s.policy || typeof s.policy !== "object" || Array.isArray(s.policy)) throw new OperationSpecError("operation spec 'policy' must be an object");
@@ -268,6 +278,7 @@ export function registerOperationCommands(program: Command): void {
       const identity = createOperationAccountIdentity(credentialStorageHome());
       const policy = mergeOperationPolicy(config.operationPolicy, spec.policy);
       const state = newOperation(id, spec.objective, spec.units, normalizeResources(spec, config, identity), createdAt, policy);
+      if (spec.boundaries) state.boundaries = parseBoundaryRules(spec.boundaries);
       if (spec.git?.isolate) {
         try {
           const plan = planOperationGit(config.workspace, state.id, spec.git.baseRef);

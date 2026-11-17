@@ -15,6 +15,8 @@
  * gates remain the authoritative ground truth for completion.
  */
 
+import { checkBoundaries, describeBoundaryReport, type BoundaryReport, type BoundaryRules } from "./boundary_rules.js";
+
 export interface ReviewEvidencePackage {
   operationId?: string;
   unitId: string;
@@ -24,6 +26,8 @@ export interface ReviewEvidencePackage {
   baselineCommit: string;
   candidateCommit?: string;
   unifiedDiff: string;
+  /** SI-5: operator-declared boundary rules checked on the diff (core/boundary_rules.ts). Absent: no boundary check. */
+  boundaries?: BoundaryRules;
   /** Why the candidate diff could not be collected. A package with no diff is not evidence: no ACCEPT survives it. */
   diffError?: string;
   verifierCommand?: string;
@@ -44,157 +48,13 @@ export interface IndependentReviewVerdict {
   suspectedDefects: ReviewDefect[];
   unprovenCriteria: string[];
   scopeViolations: string[];
+  /** SI-5: the boundary check's report when the package declared rules (violations force REJECT; advisories and coverage are information). */
+  boundaryReport?: BoundaryReport;
   reviewerConfidenceNote: string;
 }
 
-/**
- * Reads one path token as Git writes it: either bare, or C-quoted ("a/\303\251.ts", with \t, \", \\ and octal
- * byte escapes) when the path contains non-ASCII bytes, tabs, quotes or backslashes. Returns the decoded path and
- * the text after the token.
- */
-function readGitPath(text: string): { path: string; rest: string } | undefined {
-  if (!text.startsWith('"')) return undefined;
-  const bytes: number[] = [];
-  const named: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 };
-  for (let i = 1; i < text.length; i++) {
-    const ch = text[i];
-    if (ch === '"') {
-      return { path: Buffer.from(bytes).toString("utf-8"), rest: text.slice(i + 1) };
-    }
-    if (ch !== "\\") {
-      bytes.push(...Buffer.from(ch, "utf-8"));
-      continue;
-    }
-    const next = text[++i];
-    if (next === undefined) return undefined;
-    if (/[0-7]/.test(next)) {
-      const octal = text.slice(i, i + 3);
-      if (!/^[0-7]{3}$/.test(octal)) return undefined;
-      bytes.push(parseInt(octal, 8));
-      i += 2;
-    } else if (next in named) {
-      bytes.push(named[next]);
-    } else {
-      return undefined;
-    }
-  }
-  return undefined; // unterminated quote
-}
-
-/** Strips the a/ or b/ prefix Git adds; /dev/null means "no file on this side". */
-function diffSidePath(raw: string, prefix: "a/" | "b/"): string | undefined {
-  const path = raw.startsWith(prefix) ? raw.slice(prefix.length) : raw;
-  return path === "/dev/null" || path === "dev/null" || raw === "/dev/null" ? undefined : path;
-}
-
-/** Parses the path written after `---`/`+++`/`rename from`/`rename to`, quoted or bare (bare runs to end of line). */
-function headerPath(text: string): string | undefined {
-  if (text.startsWith('"')) return readGitPath(text)?.path;
-  const bare = text.replace(/\t.*$/, ""); // GNU diff may append a tab and timestamp
-  return bare || undefined;
-}
-
-/**
- * Lists every file a unified diff touches, on both sides of renames, from `diff --git`, `---`/`+++` and
- * `rename from`/`rename to` headers. Handles Git's C-quoted paths and bare paths containing spaces.
- * A header that cannot be parsed yields a sentinel entry so the scope check fails closed instead of skipping it.
- */
-export function extractModifiedFilesFromDiff(diff: string): string[] {
-  const modified = new Set<string>();
-  const add = (p: string | undefined) => {
-    if (p) modified.add(p);
-  };
-  // File headers (---/+++/rename) only appear outside a hunk. A hunk's `@@ -a,b +c,d @@` line says exactly how many
-  // old and new lines follow, so those lines are consumed by count: a removed line "-- note" is written "--- note"
-  // and an added "++ note" is written "+++ note", and neither is a path. A count that is omitted means 1.
-  let inHeader = true;
-  let oldLeft = 0;
-  let newLeft = 0;
-  const lines = diff.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (oldLeft > 0 || newLeft > 0) {
-      // A file header pair followed by a hunk header cannot be hunk content (a body line never starts with "@@"), so a
-      // hunk whose counts overstate its body must not swallow the next file's headers.
-      if (line.startsWith("--- ") && lines[i + 1]?.startsWith("+++ ") && lines[i + 2]?.startsWith("@@")) {
-        oldLeft = 0;
-        newLeft = 0;
-      } else if (line.startsWith("\\")) continue; // "\ No newline at end of file"
-      if (line.startsWith(" ") || line === "") {
-        oldLeft = Math.max(0, oldLeft - 1);
-        newLeft = Math.max(0, newLeft - 1);
-        continue;
-      }
-      if (line.startsWith("-") && oldLeft > 0) {
-        oldLeft--;
-        continue;
-      }
-      if (line.startsWith("+") && newLeft > 0) {
-        newLeft--;
-        continue;
-      }
-      // The hunk ended earlier than its header promised: read this line as structure, not content.
-      oldLeft = 0;
-      newLeft = 0;
-    }
-    // A plain unified diff (no "diff --git" lines) starts each later file with a "---"/"+++" pair.
-    if (!inHeader && line.startsWith("--- ") && lines[i + 1]?.startsWith("+++ ")) inHeader = true;
-    if (line.startsWith("@@")) {
-      inHeader = false;
-      const counts = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/.exec(line);
-      if (counts) {
-        oldLeft = counts[1] === undefined ? 1 : Number(counts[1]);
-        newLeft = counts[2] === undefined ? 1 : Number(counts[2]);
-      }
-      continue;
-    }
-    if (line.startsWith("diff --git ")) {
-      inHeader = true;
-      const rest = line.slice("diff --git ".length);
-      if (rest.startsWith('"')) {
-        const first = readGitPath(rest);
-        const second = first && first.rest.startsWith(" ") ? first.rest.slice(1) : undefined;
-        const b = second?.startsWith('"') ? readGitPath(second)?.path : second;
-        if (!first || b === undefined) {
-          add(`<unparseable diff header: ${line}>`);
-          continue;
-        }
-        add(diffSidePath(first.path, "a/"));
-        add(diffSidePath(b, "b/"));
-      } else {
-        // Bare: "a/<path> b/<path>". With identical sides the split point is the midpoint; otherwise the
-        // ---/+++ or rename headers that follow carry the exact paths.
-        const half = (rest.length - 1) / 2;
-        if (Number.isInteger(half) && rest[half] === " " && rest.slice(2, half) === rest.slice(half + 3)) {
-          add(diffSidePath(rest.slice(0, half), "a/"));
-        } else {
-          const quotedB = rest.indexOf(' "b/');
-          const bareB = rest.lastIndexOf(" b/");
-          const cut = quotedB >= 0 ? quotedB : bareB;
-          if (cut < 0) {
-            add(`<unparseable diff header: ${line}>`);
-            continue;
-          }
-          add(diffSidePath(rest.slice(0, cut), "a/"));
-          const bSide = rest.slice(cut + 1);
-          add(diffSidePath(bSide.startsWith('"') ? readGitPath(bSide)?.path ?? `<unparseable diff header: ${line}>` : bSide, "b/"));
-        }
-      }
-    } else if (!inHeader) {
-      continue;
-    } else if (line.startsWith("--- ")) {
-      const p = headerPath(line.slice(4));
-      add(p === undefined ? `<unparseable diff header: ${line}>` : diffSidePath(p, "a/"));
-    } else if (line.startsWith("+++ ")) {
-      const p = headerPath(line.slice(4));
-      add(p === undefined ? `<unparseable diff header: ${line}>` : diffSidePath(p, "b/"));
-    } else if (line.startsWith("rename from ") || line.startsWith("rename to ")) {
-      const p = headerPath(line.replace(/^rename (?:from|to) /, ""));
-      add(p ?? `<unparseable diff header: ${line}>`);
-    }
-  }
-  return Array.from(modified);
-}
+export { extractModifiedFilesFromDiff, diffSidePath, headerPath } from "./unified_diff.js";
+import { extractModifiedFilesFromDiff } from "./unified_diff.js";
 
 /**
  * Checks whether any modified file is outside the authorized change boundary.
@@ -229,6 +89,7 @@ export function buildReviewEvidencePackage(params: {
   baselineCommit: string;
   candidateCommit?: string;
   unifiedDiff: string;
+  boundaries?: BoundaryRules;
   diffError?: string;
   verifierCommand?: string;
   verifierOutput?: string;
@@ -243,6 +104,7 @@ export function buildReviewEvidencePackage(params: {
     baselineCommit: params.baselineCommit.trim(),
     candidateCommit: params.candidateCommit?.trim(),
     unifiedDiff: params.unifiedDiff,
+    ...(params.boundaries ? { boundaries: params.boundaries } : {}),
     ...(params.diffError ? { diffError: params.diffError } : {}),
     verifierCommand: params.verifierCommand?.trim(),
     verifierOutput: params.verifierOutput,
@@ -280,6 +142,12 @@ export function formatIndependentReviewPrompt(
     ? `\n[AUTOMATED SCOPE WARNING] The diff touches files outside authorizedScope: [${scopeViolations.join(", ")}]\n`
     : "";
 
+  const boundary = checkBoundaries(pkg.unifiedDiff, pkg.boundaries, { authorizedScope: pkg.authorizedScope });
+  const boundaryLines = boundary ? describeBoundaryReport(boundary) : [];
+  const boundaryWarning = boundaryLines.length
+    ? `\n[AUTOMATED BOUNDARY CHECK] Rules the operator declared were checked on the diff. A VIOLATION is rejected regardless of your verdict:\n${boundaryLines.map((l) => `- ${l}`).join("\n")}\n`
+    : "";
+
   const isDiffTruncated = pkg.unifiedDiff.length > 20000;
   const diffContent = pkg.diffError
     ? `[Nexus could not collect the candidate diff: ${pkg.diffError}. A review cannot be accepted without it.]`
@@ -296,7 +164,7 @@ export function formatIndependentReviewPrompt(
 Objective Requirements:
 ${pkg.objective}
 
-${scopeSection}${scopeWarning}${diffWarning}
+${scopeSection}${scopeWarning}${boundaryWarning}${diffWarning}
 Repository Baseline:
 - Base Commit: ${pkg.baselineCommit}${pkg.candidateCommit ? `\n- Candidate Commit: ${pkg.candidateCommit}` : ""}
 
@@ -389,6 +257,7 @@ export function parseIndependentReviewVerdict(
     // Deterministic gate enforcement: If verifier explicitly failed (exitCode !== 0)
     // or deterministic scope violations exist, model ACCEPT cannot override objective failure.
     let finalVerdict = verdict;
+    let boundaryReport: BoundaryReport | undefined;
     if (pkg) {
       const autoViolations = detectScopeViolations(pkg.unifiedDiff, pkg.authorizedScope);
       for (const v of autoViolations) {
@@ -408,6 +277,11 @@ export function parseIndependentReviewVerdict(
       }
       if (scopeViolations.length > 0) {
         finalVerdict = "REJECT";
+      }
+      boundaryReport = checkBoundaries(pkg.unifiedDiff, pkg.boundaries, { authorizedScope: pkg.authorizedScope });
+      if (boundaryReport?.violations.length) {
+        finalVerdict = "REJECT";
+        for (const v of boundaryReport.violations) unprovenCriteria.push(`Boundary rule violated [${v.rule}] ${v.path}: ${v.detail}`);
       }
       if (pkg.unifiedDiff.length > 20000 && pkg.verifierExitCode !== 0) {
         finalVerdict = "REJECT";
@@ -430,6 +304,7 @@ export function parseIndependentReviewVerdict(
       suspectedDefects,
       unprovenCriteria,
       scopeViolations,
+      ...(boundaryReport ? { boundaryReport } : {}),
       reviewerConfidenceNote: parsed.reviewerConfidenceNote,
     };
   } catch (err) {
