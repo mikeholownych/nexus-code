@@ -1,0 +1,3 @@
+Installed Nexus Code v1.2.0 in /tmp/nexus-issue6-prefix/lib/nexus/v1.2.0
+Add this to your shell profile if needed: export PATH="/tmp/nexus-issue6-prefix/bin:$PATH"
+1.2.0 (f1ad33b9d6c8)

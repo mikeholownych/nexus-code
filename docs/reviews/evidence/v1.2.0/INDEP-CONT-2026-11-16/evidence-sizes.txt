@@ -1,0 +1,5 @@
+    79 /home/mike/nexus-wt/issue-6-indep-cont/docs/reviews/evidence/v1.2.0/INDEP-CONT-2026-11-16/progress.log
+    41 /home/mike/nexus-wt/issue-6-indep-cont/docs/reviews/evidence/v1.2.0/INDEP-CONT-2026-11-16/task-da97eb59/messages.head-tail.jsonl
+   206 /home/mike/nexus-wt/issue-6-indep-cont/docs/reviews/evidence/v1.2.0/INDEP-CONT-2026-11-16/task-da97eb59/task-da97eb59.history.jsonl
+  3473 /home/mike/nexus-wt/issue-6-indep-cont/docs/reviews/evidence/v1.2.0/INDEP-CONT-2026-11-16/task-da97eb59/task-da97eb59.json
+  3799 total

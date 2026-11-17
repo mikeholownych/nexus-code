@@ -15,7 +15,7 @@ This is the authoritative v1 ledger (REQ-OPS-101). It supersedes the Issue #12 m
 | `implemented` | Present in source. Not proven by an automated test of this requirement. |
 | `tested` | An automated test exercises it and passes at the tested revision (baseline: 905/905 CLI, 266/266 Rust). |
 | `visually-accepted` | A human or independent PTY review accepted the rendered behaviour. |
-| `product-qualified` | Passed the v1 qualification in ACCEPTANCE.md on the RC. **No requirement holds this status today.** |
+| `product-qualified` | Passed the v1 qualification in ACCEPTANCE.md on the RC (or the mapped installed-RC independent-acceptance gate for that row). |
 
 Independent acceptance is recorded separately in the "Indep." column: **Y** = an independent review accepted it; **N** = self-assessed only; **—** = not applicable.
 
@@ -160,7 +160,7 @@ Every row has status **open** at `db1ca55` unless stated otherwise. In the "Evid
 | REQ-AGT-106 | EVID-004 (carried) | An escaping exception gives a truthful UNHANDLED_ERROR result with the real obligation. Durable-write failures are reported. | honesty / failure | `agent.ts:4254-4995`; `turn.ts:444-460` | TEST (ACC-CONT-06; test:cli/test/durable_continuity.test.ts) | tested | ACC-CONT-06 | RR | AGT-08, AGT-14, VER-11 | SPEC-04 / PLAN-04 |
 | REQ-AGT-107 | Audit | Implementer and tester units cannot be COMPLETE with no change. | honesty | `operation_runner.ts:651-663` | SRC (AGT-11; test:cli/test/team_convergence.test.ts) | tested | ACC-CONT-07 | RR | AGT-11, AGT-12 | SPEC-04 / PLAN-04 |
 | REQ-AGT-108 | Audit | No false stagnation when state identity is unknown. | workflow | `execution_tracking.ts` | TEST (ACC-CONT-09; test:cli/test/execution_tracking.test.ts) | tested | ACC-CONT-09 | RR | AGT-09 | SPEC-04 / PLAN-04 |
-| REQ-AGT-110 | HIST-09 | Independent acceptance of continuity, compaction and truncation recovery. | qualification | — | DOC ("pending") | open | ACC-CONT-10, ACC-GOV-06 | RR | HIST-09 | SPEC-04 / PLAN-09 |
+| REQ-AGT-110 | HIST-09 | Independent acceptance of continuity, compaction and truncation recovery. | qualification | — | DOC (`docs/reviews/2026-11-16-v1.2.0-continuity-independent-acceptance.md`; evidence `docs/reviews/evidence/v1.2.0/INDEP-CONT-2026-11-16/`; owner accepted 2026-11-16 ACCEPT WITH DEFECTS, zero blockers; continuity suite sample 144/144; live long-task ≥60 steps / ≥2 durable compactions + SIGKILL resume on installed `v1.2.0` `f1ad33b9` / artifact sha256 `e5dbb315…`) | product-qualified | ACC-CONT-10, ACC-GOV-06 | RR | HIST-09 | SPEC-04 / PLAN-09 |
 | REQ-AGT-111 | EXECUTION_CONVERGENCE §10 | A single step implementation for the main and subagent loops. | maintainability | `agent.ts:5298-5431` | SRC (AGT-05) | open | — | P (v1: document and add `measureAdmission`) | AGT-05 | SPEC-04 / PLAN-04 |
 
 ### 3.3 Local inference and providers
@@ -277,4 +277,4 @@ Counts are from the tables above.
 | Carried rows (§2.1) | 29 | 14 tested and unchanged (Keep). 1 visually-accepted (REQ-TUI-001). The rest are partial, or have open items mapped to §3. |
 | Contest rows (§4) | 7 | Separate product. |
 
-**No requirement is `product-qualified`.**
+**REQ-AGT-110 is `product-qualified`** (owner-accepted independent continuity report on installed `v1.2.0`, 2026-11-16). Other qualification-only rows remain below that status until their own exact-RC evidence lands.

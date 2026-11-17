@@ -1,0 +1,7 @@
+started_at=2026-11-16T20:53:01Z
+nexus=1.2.0 (f1ad33b9d6c8)
+endpoint=https://10.0.8.5:8443/v1
+model=engineering/b0
+workspace=/tmp/nexus-issue6-live-ws.Sv1GkB
+home=/tmp/nexus-issue6-live-home.dpFCxJ
+context-limit=18000

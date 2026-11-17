@@ -1,0 +1,107 @@
+{
+  "taskId": "task-da97eb59",
+  "status": "in_progress",
+  "cumulativeSteps": 72,
+  "totalSteps": 72,
+  "segments": 1,
+  "uniqueCompactions": 20,
+  "archiveLines": 206,
+  "compactionHistogram": [
+    [
+      "c18-b52a8cbf",
+      72
+    ],
+    [
+      "c11-7459d11b",
+      27
+    ],
+    [
+      "c4-5509b50a",
+      13
+    ],
+    [
+      "c7-14a2d50c",
+      11
+    ],
+    [
+      "c13-8c0f82bd",
+      11
+    ],
+    [
+      "c15-6ff75862",
+      11
+    ],
+    [
+      "c16-658d5012",
+      10
+    ],
+    [
+      "c19-abe1df3b",
+      9
+    ],
+    [
+      "c3-e96c40d4",
+      8
+    ],
+    [
+      "c6-3780d12e",
+      7
+    ],
+    [
+      "c5-40b6deb0",
+      6
+    ],
+    [
+      "c8-0608c62e",
+      6
+    ],
+    [
+      "c10-ba4e576a",
+      3
+    ],
+    [
+      "c9-b8d34c98",
+      2
+    ],
+    [
+      "c12-1969cb60",
+      2
+    ],
+    [
+      "c14-887d0758",
+      2
+    ],
+    [
+      "c17-bcc1e028",
+      2
+    ],
+    [
+      "c20-f10504d4",
+      2
+    ],
+    [
+      "c1-832e4ac2",
+      1
+    ],
+    [
+      "c2-94788145",
+      1
+    ]
+  ],
+  "objectiveSha256": "f72401f6af81f8b995bb2154d2de1fe1412a0bb454f4581ce7854b97f7adf76a",
+  "objectivePrefix": "ACC-CONT-10 live continuity stress. Keep REQUIREMENTS.md intact.\n1) Read every notes/note_*.md file one at a time; after each read append \"read <path>\" to progress.log.\n2) Implemen",
+  "requirementIds": [
+    "R1",
+    "R2",
+    "R3",
+    "R4",
+    "R5"
+  ],
+  "requirementStatuses": {
+    "R1": "open",
+    "R2": "open",
+    "R3": "open",
+    "R4": "open",
+    "R5": "open"
+  }
+}

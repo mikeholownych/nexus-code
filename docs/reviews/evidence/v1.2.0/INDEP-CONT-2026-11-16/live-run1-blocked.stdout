@@ -1,0 +1,31 @@
+
+ NEXUS  local engineering agent
+Understand the work. Inspect the evidence. Keep the decision yours.
+
+your Nexus state is readable by other users; run `nexus doctor --fix`
+
+🎯 Task: You are running an ACC-CONT-10 continuity stress task. Work ONLY in this workspace.
+
+Mandatory sequence (do not skip; do not finish early):
+1. Read REQUIREMENTS.md and keep every numbered requirement intact for the whole run.
+2. Read every file under notes/ (there are 40). After each read, append one line to progress.log: "read notes/note_XX.md".
+3. Create src/counter.py with increment(n)->n+1 and a __main__ that prints 0..20 inclusive, one per line.
+4. Create tests/test_counter.py that asserts increment(0)==1 and increment(41)==42.
+5. Run the tests with: python3 -m unittest tests.test_counter
+6. Then make 25 successive edits to progress.log, each adding a unique line "step edit N" for N=1..25, reading progress.log before each edit.
+7. After edit 10, rewrite README.md to mention "continuity checkpoint A".
+8. After edit 20, rewrite README.md to mention "continuity checkpoint B".
+9. Only after all of the above, call task_completed with a short summary that lists how many notes were read and that tests passed.
+
+Do not stop for approval. Prefer many small tool calls over combined ones. Never omit REQUIREMENTS.md content.
+
+📁 Workspace: /tmp/nexus-issue6-live-ws.Sv1GkB
+🐚 Shell: bash
+🤖 Model: engineering/b0 (https://10.0.8.5:8443/v1)
+
+[provider_capabilities] reason=step model=engineering/b0 context 12000 (operator); output allowance 6000 (advertised); discovery supported; token counting supported; limits_version baf252a4827ca0d4; workers b0-live-llama-worker1
+[context_admission] step=1 request_id=7467f331-8c73-453a-8da6-535455713b7a state=compaction_insufficient attempts=1 estimated_tokens=5611 completion_reserve=6000 tool_response_reserve=1500 limit=12000
+[context_admission] step=1 request_id=7467f331-8c73-453a-8da6-535455713b7a state=blocked estimated_tokens=5611 completion_reserve=6000 tool_response_reserve=1500 limit=12000 compacted=true messages=2
+
+× TURN BLOCKED - CONTEXT FULL  execution=BLOCKED outcome=NOT_ESTABLISHED (CONTEXT_CAPACITY_EXCEEDED: 5611 prompt (client_estimate) + 6000 completion + 1500 tool reserve > 12000 limit). No request was sent; your message was not added to the conversation. Raise --context-limit, run /clear, or ask for something narrower; /compact may not help if one retained result is itself too large.
+
