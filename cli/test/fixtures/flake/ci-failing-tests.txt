@@ -1,0 +1,25 @@
+2026-11-17T01:56:06.7967516Z ℹ duration_ms 1249633.38719
+2026-11-17T01:56:06.7967632Z 
+2026-11-17T01:56:06.7967744Z ✖ failing tests:
+2026-11-17T01:56:06.7967856Z 
+2026-11-17T01:56:06.7968026Z test at test/cli_option_scope.test.ts:1:685
+2026-11-17T01:56:06.7968530Z ✖ a subcommand receives its own --provider and -m (135.452362ms)
+2026-11-17T01:56:06.7969337Z   AssertionError [ERR_ASSERTION]: Configuration error: provider configuration is invalid
+2026-11-17T01:56:06.7969762Z   
+2026-11-17T01:56:06.7970411Z       at TestContext.<anonymous> (/home/runner/work/nexus-code/nexus-code/cli/test/cli_option_scope.test.ts:24:10)
+2026-11-17T01:56:06.7971336Z       at Test.runInAsyncScope (node:async_hooks:214:14)
+2026-11-17T01:56:06.7971784Z       at Test.run (node:internal/test_runner/test:1047:25)
+2026-11-17T01:56:06.7972225Z       at Test.start (node:internal/test_runner/test:944:17)
+2026-11-17T01:56:06.7972889Z       at startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17) {
+2026-11-17T01:56:06.7973304Z     generatedMessage: false,
+2026-11-17T01:56:06.7973574Z     code: 'ERR_ASSERTION',
+2026-11-17T01:56:06.7974048Z     actual: '\x1B[31mConfiguration error: provider configuration is invalid\x1B[39m\n',
+2026-11-17T01:56:06.7974583Z     expected: /Unknown provider '\(unrecognized provider\)'/,
+2026-11-17T01:56:06.7974931Z     operator: 'match',
+2026-11-17T01:56:06.7975144Z     diff: 'simple'
+2026-11-17T01:56:06.7975325Z   }
+2026-11-17T01:56:06.7975425Z 
+2026-11-17T01:56:06.7975584Z test at test/provider_cli.test.ts:10:1861
+2026-11-17T01:56:06.7976296Z ✖ providers list preserves safe unknown-provider diagnostics and redacts credential-shaped IDs (7.700707ms)
+2026-11-17T01:56:06.7976942Z   AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+2026-11-17T01:56:06.7977248Z   
