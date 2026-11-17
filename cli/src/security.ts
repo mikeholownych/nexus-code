@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import { isTestPath } from "./tester.js";
 import { FILE_EDIT_TOOLS } from "./file_diff.js";
 
@@ -45,6 +46,66 @@ export type VerificationEditDecision = (VerificationClassification & {
 }) | null;
 
 export const VERIFICATION_CONFIG_PROTECTED = "VERIFICATION_CONFIG_PROTECTED";
+
+/** CS-2 scan bounds: entries visited, bytes hashed per file, bytes kept per file so a change can be shown and reverted. */
+const VERIFICATION_SNAPSHOT_MAX_ENTRIES = 20000;
+const VERIFICATION_SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024;
+const VERIFICATION_SNAPSHOT_KEEP_BYTES = 64 * 1024;
+
+export interface VerificationFileState {
+  hash: string;
+  /** The file as it was, kept when small enough to show a diff and restore it. */
+  raw?: Buffer;
+}
+export interface VerificationSnapshot {
+  files: Map<string, VerificationFileState>;
+  /** False when the scan limit was reached: files beyond it were not covered. */
+  complete: boolean;
+}
+export interface VerificationShellGuard {
+  before: VerificationSnapshot;
+}
+export interface VerificationShellChange {
+  path: string;
+  class: VerificationClass;
+  kind: "modified" | "removed" | "added";
+  /** A short line summary of what changed (removed lines with `-`, added with `+`), empty when the file is not small text. */
+  diff: string[];
+}
+
+const DIFF_LINES_SHOWN = 12;
+
+/** Removed and added lines of a small text change, bounded. A summary, not a patch. */
+function compactDiff(before: Buffer | undefined, after: Buffer | undefined): string[] {
+  if (!before && !after) return [];
+  const lines = (b: Buffer | undefined) => (b ? b.toString("utf8").split("\n") : []);
+  const was = lines(before);
+  const now = lines(after);
+  const nowSet = new Set(now);
+  const wasSet = new Set(was);
+  const removed = was.filter((l) => !nowSet.has(l)).map((l) => `- ${l}`);
+  const added = now.filter((l) => !wasSet.has(l)).map((l) => `+ ${l}`);
+  const all = [...removed, ...added];
+  return all.length > DIFF_LINES_SHOWN * 2 ? [...removed.slice(0, DIFF_LINES_SHOWN), ...added.slice(0, DIFF_LINES_SHOWN), `... (${all.length - DIFF_LINES_SHOWN * 2} more lines)`] : all;
+}
+
+/** Verification files that differ between two snapshots. A new runnable test file is free to create, as it is for the file tools. */
+export function diffVerificationSnapshots(
+  before: Map<string, VerificationFileState>,
+  after: Map<string, VerificationFileState>,
+  classOf: (rel: string) => VerificationClass | undefined,
+): VerificationShellChange[] {
+  const out: VerificationShellChange[] = [];
+  for (const rel of [...new Set([...before.keys(), ...after.keys()])].sort()) {
+    const was = before.get(rel);
+    const now = after.get(rel);
+    const cls = classOf(rel);
+    if (!cls || (was && now && was.hash === now.hash)) continue;
+    if (!was && cls === "test_file") continue;
+    out.push({ path: rel, class: cls, kind: !was ? "added" : !now ? "removed" : "modified", diff: compactDiff(was?.raw, now?.raw) });
+  }
+  return out;
+}
 
 export interface SecurityPolicy {
   version?: string;
@@ -776,6 +837,100 @@ export class SecurityManager {
       const [head, ...rest] = words;
       if (head === "sed" && rest.some((w) => /^-[a-zA-Z]*i/.test(w) || w.startsWith("--in-place"))) rest.forEach(note);
       else if (["tee", "mv", "cp", "rm", "truncate", "install", "ln"].includes(head ?? "")) rest.forEach(note);
+    }
+  }
+
+  /**
+   * CS-2, opt-in (`verificationPaths.mode: "block"`): a shell command may not change the files that decide how work is
+   * verified. Detection compares file contents before and after the command, so it does not depend on recognising the
+   * command (`sed -i`, `python -c`, `perl -pi`, a build script...). Other modes keep the record-only behaviour of
+   * `recordVerificationCommand` and cost nothing here.
+   */
+  public beginVerificationShellGuard(): VerificationShellGuard | undefined {
+    if ((this.policy.verificationPaths?.mode ?? "approve") !== "block") return undefined;
+    return { before: this.snapshotVerificationFiles() };
+  }
+
+  /** What changed in the verification files since `guard` began. In block mode each change is reverted, recorded as blocked and returned as the refusal. */
+  public finishVerificationShellGuard(guard: VerificationShellGuard, role?: string): { error?: string; note?: string } {
+    const after = this.snapshotVerificationFiles();
+    const note = !guard.before.complete || !after.complete
+      ? `[nexus] Shell-write guard: the workspace is larger than the ${VERIFICATION_SNAPSHOT_MAX_ENTRIES}-entry scan limit, so verification files beyond it were not checked.`
+      : undefined;
+    const changes = diffVerificationSnapshots(guard.before.files, after.files, (rel) => this.classifyVerificationPath(rel)?.class);
+    if (!changes.length) return note ? { note } : {};
+    const lines: string[] = [];
+    for (const change of changes) {
+      this.recordVerificationAttempt(change.path, change.class, "run_command", "blocked", role);
+      const restored = this.restoreVerificationFile(change, guard.before.files.get(change.path));
+      lines.push(`- ${change.path} (${change.class}) ${change.kind}${restored ? ", restored" : ", could not be restored"}`, ...change.diff.map((d) => `    ${d}`));
+    }
+    return {
+      error: `${VERIFICATION_CONFIG_PROTECTED}: the command changed verification configuration, which the policy (verificationPaths.mode "block") does not allow a shell command to do:\n${lines.join("\n")}`,
+      ...(note ? { note } : {}),
+    };
+  }
+
+  private restoreVerificationFile(change: VerificationShellChange, before: VerificationFileState | undefined): boolean {
+    const abs = path.resolve(this.workspace, change.path);
+    if (path.relative(this.workspace, abs).startsWith("..")) return false;
+    try {
+      if (change.kind === "added") {
+        fs.rmSync(abs, { force: true });
+        return true;
+      }
+      if (!before?.raw) return false;
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, before.raw);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** The fingerprint of every verification file in the workspace (bounded walk, heavy directories skipped). Conditional configs fingerprint only the keys and sections that decide how tests run, so a dependency bump is not a change. */
+  private snapshotVerificationFiles(): VerificationSnapshot {
+    const files = new Map<string, VerificationFileState>();
+    let visited = 0;
+    let complete = true;
+    const walk = (dir: string): void => {
+      let entries: fs.Dirent[];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const entry of entries) {
+        if (++visited > VERIFICATION_SNAPSHOT_MAX_ENTRIES) { complete = false; return; }
+        const child = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (!HEAVY_DIRECTORIES.has(entry.name)) walk(child);
+          if (!complete) return;
+        } else if (entry.isFile()) {
+          const rel = path.relative(this.workspace, child).replace(/\\/g, "/");
+          if (this.classifyVerificationPath(rel)) files.set(rel, this.fingerprintVerificationFile(child, rel));
+        }
+      }
+    };
+    walk(this.workspace);
+    return { files, complete };
+  }
+
+  private fingerprintVerificationFile(abs: string, rel: string): VerificationFileState {
+    try {
+      const stat = fs.statSync(abs);
+      if (stat.size > VERIFICATION_SNAPSHOT_MAX_BYTES) return { hash: `large:${stat.size}:${stat.mtimeMs}` };
+      const raw = fs.readFileSync(abs);
+      let subject: Buffer | string = raw;
+      if (isConditionalConfig(rel)) {
+        const text = raw.toString("utf8");
+        try {
+          subject = path.basename(rel).toLowerCase() === "package.json"
+            ? JSON.stringify(PACKAGE_VERIFICATION_KEYS.map((k) => (JSON.parse(text) as Record<string, unknown>)[k] ?? null))
+            : JSON.stringify(verificationSections(text));
+        } catch {
+          subject = raw; // unparseable: any change counts
+        }
+      }
+      return { hash: createHash("sha256").update(subject).digest("hex"), raw: raw.length <= VERIFICATION_SNAPSHOT_KEEP_BYTES ? raw : undefined };
+    } catch {
+      return { hash: "unreadable" };
     }
   }
 

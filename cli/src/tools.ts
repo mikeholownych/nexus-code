@@ -1157,6 +1157,17 @@ export class RustCoreBridge {
    * Execute tool using high-performance persistent JSON-RPC daemon, with automatic spawnSync fallback
    */
   async executeTool(toolName: string, args: Record<string, any>, authority?: VerificationEditContext): Promise<ExecutionResult> {
+    // CS-2: in verificationPaths mode "block" a shell command may not change verification files (reverted and refused).
+    const guard = toolName === "run_command" ? this.securityManager.beginVerificationShellGuard() : undefined;
+    const result = await this.executeToolChecked(toolName, args, authority);
+    if (!guard) return result;
+    const verdict = this.securityManager.finishVerificationShellGuard(guard, authority?.role);
+    const output = verdict.note ? `${result.output ? `${result.output}\n` : ""}${verdict.note}` : result.output;
+    if (verdict.error) return { ...result, success: false, output, error: verdict.error, denialReason: VERIFICATION_CONFIG_PROTECTED };
+    return verdict.note ? { ...result, output } : result;
+  }
+
+  private async executeToolChecked(toolName: string, args: Record<string, any>, authority?: VerificationEditContext): Promise<ExecutionResult> {
     // 1. Security policy verification
     if (FILE_EDIT_TOOLS.has(toolName)) {
       // `authority` is this call's own: a caller that passes none (MCP, slash commands) is headless and unapproved,
