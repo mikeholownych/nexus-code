@@ -1,0 +1,24 @@
+# Copy to .github/workflows/nexus.yml. Runs Nexus on a pull request and fails the job unless the task verified.
+name: nexus
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mikeholownych/nexus-code/action@v1.2.1   # pin a release tag
+        with:
+          prompt: Fix the failing tests without changing the tests.
+          authoritative-verifier: npm test
+          # Files the task is meant to change, when the verifier reads them (one per line):
+          # deliverable-files: |
+          #   src/index.js
+          provider: openrouter
+          model: anthropic/claude-haiku-4.5
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

@@ -163,6 +163,10 @@ nexus run "Add unit tests for the token bucket rate limiter in src/rate_limiter.
 ```
 Approval prompts still apply unless you choose `--mode auto` or `--yes`; see the [User Manual](docs/USER_MANUAL.md). Add `--worktree-branch <name>` to run inside a named worktree that is kept after the run.
 
+For CI, the [`action/`](action/action.yml) wrapper runs a task and fails the job unless it completed and verified, and
+[`examples/`](examples/README.md) has runnable examples (verified completion, worktree, an operation with `git.isolate`,
+a pull-request workflow). `nexus run --output stream-json` streams events instead ([schema](docs/STREAM_JSON.md)).
+
 ---
 
 ## Core Capabilities
