@@ -24,6 +24,8 @@ make test-ci
 
 `make test-ci` runs `scripts/with-ci-fixtures.sh`, which mounts a 128 MiB tmpfs at `/mnt/nexus-eval-ci` (mode 0711), creates `/opt/nexus-eval-ci-runtime` (mode 0711), exports both variables, runs `make test`, and unmounts and removes only what it created, including on failure or interrupt. It refuses to start if either path already exists or the tmpfs is already mounted, so it never touches fixtures it did not create. If you already provisioned those paths, export the two variables yourself and run `make test`. The host also needs the one-time CI setup: `scripts/install-evaluator-toolchains.sh`, `scripts/ensure-ci-bubblewrap.sh` and `scripts/ensure-ci-user-cgroups.sh`. Run the suite alone with `bash scripts/with-ci-fixtures.sh -- npm --prefix cli test`.
 
+A nightly real-project smoke (`.github/workflows/real-project-smoke.yml`, not a required check) runs the built CLI on pinned synthetic repositories; see [the smoke notes](REAL_PROJECT_SMOKE.md).
+
 The Cloudflare service has separate setup and tests; see [the contest entry](CLOUDFLARE_CONTEST.md).
 
 ## Release package
