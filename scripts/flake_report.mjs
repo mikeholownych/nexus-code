@@ -79,6 +79,9 @@ export function analyze(runs, { limit = DEFAULT_LIMIT, window = runs.length, now
   };
 }
 
+/** One Markdown table cell: backslashes first (so an escape we add cannot be cancelled by one already in the text), then the column separator and line breaks. */
+const escapeCell = (text) => String(text).replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/[\r\n]+/g, " ");
+
 export function renderMarkdown(report) {
   const lines = [
     "## Flake budget",
@@ -89,7 +92,7 @@ export function renderMarkdown(report) {
   if (!report.byTest.length) lines.push("No rerun events.");
   else {
     lines.push("| Test | Runs needing a rerun | Status |", "|---|---|---|");
-    for (const e of report.byTest) lines.push(`| ${e.test.replace(/\|/g, "\\|")} | ${e.runs} | ${report.budget.exceeded.includes(e.test) ? "**over budget**" : "within budget"} |`);
+    for (const e of report.byTest) lines.push(`| ${escapeCell(e.test)} | ${e.runs} | ${report.budget.exceeded.includes(e.test) ? "**over budget**" : "within budget"} |`);
   }
   return `${lines.join("\n")}\n`;
 }

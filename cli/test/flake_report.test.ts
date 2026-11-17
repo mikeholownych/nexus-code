@@ -99,3 +99,20 @@ test("the command refuses bad arguments with exit 2 and never reports a budget i
   assert.equal(range.status, 2);
   assert.match(range.stderr, /--runs must be an integer from 1 to 100/);
 });
+
+test("a table cell cannot be broken out of: backslashes, pipes and line breaks in a test name are neutralised", () => {
+  const evil = "ends with backslash \\";
+  const report = analyze([
+    run(1, [[1, "failure", [["a", [evil, "has | pipe", "two\nlines"]]]], [2, "success"]]),
+    run(2, [[1, "failure", [["a", [evil, "has | pipe", "two\nlines"]]]], [2, "success"]]),
+  ], { limit: 2, window: 20 });
+  const rows = renderMarkdown(report).split("\n").filter((l: string) => l.startsWith("| ") && !l.startsWith("| Test") && !l.startsWith("|---"));
+  assert.equal(rows.length, 3, "one row per test, whatever the names contain");
+  for (const row of rows) {
+    // After removing escaped characters, a row has exactly its three cells: four unescaped separators.
+    assert.equal((row.replace(/\\\\|\\\|/g, "").match(/\|/g) ?? []).length, 4, row);
+  }
+  assert.ok(rows.some((r: string) => r.includes("ends with backslash \\\\ |")), "the trailing backslash is doubled, so it cannot cancel the cell's closing pipe");
+  assert.ok(rows.some((r: string) => r.includes("has \\| pipe")));
+  assert.ok(rows.some((r: string) => r.includes("two lines")));
+});
