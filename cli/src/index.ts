@@ -30,6 +30,7 @@ import { promptWorkspaceTrust } from "./startup_trust.js";
 import { isolateEvalCommandHome, runVersionedEvalCommand } from "./eval_cli.js";
 import { redactDiagnosticForOutput } from "./core/persistence_protection.js";
 import { formatDiagnosticForOutput } from "./ui.js";
+import { streamEventSink, streamObserver } from "./stream_json.js";
 
 function collectDeliverableFile(value: string, previous: string[] = []): string[] {
   return [...previous, value];
@@ -453,6 +454,7 @@ program
   .option("--planner-provider <id>", "Cloud provider for the planner model (requires --planner-model)")
   .option("--coder-provider <id>", "Cloud provider for the coder model (requires --coder-model)")
   .option("-j, --json", "Output machine-readable JSON structured result (UI-002, UI-003)")
+  .option("--output <format>", "Output format: text (default), json (same as --json) or stream-json (one JSON event per line, nothing else on stdout; see docs/STREAM_JSON.md)")
   .option("-r, --resume [id]", "Resume previous session or task state")
   .option("--step", "Execute one model/tool cycle and pause deterministically")
   .action(async (promptParts: string[], _options: any, cmd: Command) => {
@@ -460,7 +462,17 @@ program
     let prompt = promptParts.join(" ").trim();
     const config = buildConfig(options);
     config.surface = "headless";
-    const isJson = Boolean(options.json);
+    const outputFormat = String(options.output ?? (options.json ? "json" : "text"));
+    if (!["text", "json", "stream-json"].includes(outputFormat) || (options.json && outputFormat !== "json")) {
+      console.error(options.json && ["text", "stream-json"].includes(outputFormat) ? "error: --json cannot be combined with --output " + outputFormat : "error: --output must be text, json or stream-json");
+      exitAfterFlush(2);
+      return;
+    }
+    const isStream = outputFormat === "stream-json";
+    // The event sink writes through the real stdout.write, captured before runTask intercepts stdout for machine output.
+    const realStdoutWrite = process.stdout.write.bind(process.stdout);
+    const emitEvent = isStream ? streamEventSink((chunk) => realStdoutWrite(chunk)) : undefined;
+    const isJson = outputFormat !== "text";
 
     // Auto-detect loaded model if model is 'local-model' (not on a resume: the task record supplies it, or the first
     // step detects it after the resumed provider wait)
@@ -526,15 +538,19 @@ program
           prompt = options.step ? "" : "continue";
         }
       }
+      emitEvent?.("start", { model: config.model, ...(config.provider ? { provider: config.provider } : {}) });
       const result = await app.runTask(prompt, {
         json: isJson,
+        ...(emitEvent ? { observer: streamObserver(emitEvent) } : {}),
         resumeTaskId,
         signal: abort.signal,
         step: Boolean(options.step),
       });
 
       const cloud = UsageLedger.global().cloudTotals();
-      if (isJson) {
+      if (emitEvent) {
+        emitEvent("result", { ...(cloud.requests ? { ...result, cloudUsage: cloud } : result) });
+      } else if (isJson) {
         console.log(JSON.stringify(cloud.requests ? { ...result, cloudUsage: cloud } : result, null, 2));
       } else if (cloud.requests) {
         console.error(pc.dim(UsageLedger.global().summary()!));
@@ -543,7 +559,9 @@ program
       app.shutdown();
       exitAfterFlush(result.exitCode);
     } catch (err: any) {
-      if (isJson) {
+      if (emitEvent) {
+        emitEvent("error", { taskId: app.getTaskId(), message: redactDiagnosticForOutput(String(err?.message ?? err)) });
+      } else if (isJson) {
         console.log(JSON.stringify({
           taskId: app.getTaskId(),
           success: false,

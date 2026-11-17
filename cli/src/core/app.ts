@@ -9,7 +9,7 @@ import { withDurableSync } from "./durable_file.js";
 import { EventEmitter } from "node:events";
 import * as path from "node:path";
 import * as fs from "node:fs";
-import { AutonomousAgent } from "../agent.js";
+import { AutonomousAgent, type AgentObserver } from "../agent.js";
 import { HarnessConfig, ChatMessage, EvaluationToolReceipt } from "../types.js";
 import { SessionManager, SessionData } from "../session.js";
 import {
@@ -39,6 +39,8 @@ export interface RunTaskOptions {
   signal?: AbortSignal;
   /** Execute one model/tool cycle and pause deterministically (WP-1106). */
   step?: boolean;
+  /** Live events of this task (assistant text, tool start/end, notices); detached when the task ends. */
+  observer?: AgentObserver;
 }
 
 export interface TaskExecutionResult {
@@ -236,6 +238,7 @@ export class ApplicationCore extends EventEmitter {
 
     let taskError: Error | undefined;
     let turn: TurnResult | undefined;
+    if (options.observer) this.agent.setObserver(options.observer);
     try {
       turn = await this.agent.run(prompt, options.onConfirm, {
         signal: options.signal,
@@ -245,6 +248,7 @@ export class ApplicationCore extends EventEmitter {
     } catch (err: any) {
       taskError = err;
     } finally {
+      if (options.observer) this.agent.setObserver(undefined);
       if (shouldCapture) {
         console.log = originalLog;
         console.warn = originalWarn;
