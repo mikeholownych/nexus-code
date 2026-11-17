@@ -6,7 +6,6 @@
   "agt111_subagent_parity.test.ts",
   "approval_policy.test.ts",
   "capability_workspace_effects.test.ts",
-  "ceri_semantic_integrity.test.ts",
   "cg3_diagnostics_evidence.test.ts",
   "cg4_typecheck_evidence.test.ts",
   "cloud_providers.test.ts",
