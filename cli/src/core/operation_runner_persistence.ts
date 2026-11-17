@@ -46,6 +46,10 @@ export class OperationStore {
     }
   }
 
+  has(id: string): boolean {
+    return this.manager.hasTaskState(id);
+  }
+
   save(op: DurableOperationState): void {
     this.preflightFutureVersion(op.id);
     op = migrateLegacyAccountIdentities(op, createOperationAccountIdentity(this.accountIdentityHome));

@@ -20,7 +20,7 @@ import { BoundaryRules, parseBoundaryRules } from "./core/boundary_rules.js";
 import { UnsupportedOperationSchemaError, clampUnisolatedConcurrency, concurrencyIsolationProblem, validateOperationPolicy, validateResourceSlots } from "./core/operation_schema.js";
 import { MessageRejected, publishMessage } from "./core/operation_messages.js";
 import { ROLE_PROFILES, specialistInputsProblem } from "./core/roles.js";
-import { AgentWorkUnitExecutor, applyOperatorDecision, driveOperation, OperationLockedError, OperationStore, resourcesFromConfig } from "./core/operation_runner.js";
+import { AgentWorkUnitExecutor, applyOperatorDecision, driveOperation, OperationExistsError, type DriveOptions, OperationLockedError, OperationStore, resourcesFromConfig } from "./core/operation_runner.js";
 import { buildOperationView, renderOperationView, renderReplay, watchOperation } from "./operation_view.js";
 import { ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "./core/operation_git.js";
 import { ContextCheckpointError, createContextCheckpoint, listContextCheckpoints, restoreContextCheckpoint } from "./core/operation_checkpoints.js";
@@ -212,7 +212,14 @@ function printStatus(op: DurableOperationState): void {
   }
 }
 
-async function drive(op: DurableOperationState, config: HarnessConfig, store: OperationStore, discoverCatalog: boolean, json: boolean): Promise<void> {
+async function drive(
+  op: DurableOperationState,
+  config: HarnessConfig,
+  store: OperationStore,
+  discoverCatalog: boolean,
+  json: boolean,
+  entry: Pick<DriveOptions, "entry" | "prepare"> = {},
+): Promise<void> {
   const clamped = clampUnisolatedConcurrency(op);
   if (clamped && !json) console.error(pc.yellow(`warning: ${safeTerminal(clamped)}`));
   const controller = new AbortController();
@@ -222,6 +229,7 @@ async function drive(op: DurableOperationState, config: HarnessConfig, store: Op
     const out = await driveOperation(op, {
       store,
       signal: controller.signal,
+      ...entry,
       workspace: config.workspace,
       executor: new AgentWorkUnitExecutor({ baseConfig: config, discoverCatalog }),
       ...(json ? {} : { onEvent: printEvent }),
@@ -241,7 +249,7 @@ function operationAction<T extends unknown[]>(action: (...args: T) => void | Pro
     } catch (error: any) {
       console.error(pc.red(safeTerminal(String(error?.message ?? error))));
       // A spec the operator must fix is a usage error, not an internal failure.
-      process.exitCode = error instanceof OperationSpecError || error instanceof MessageRejected || error instanceof UnsupportedOperationSchemaError ? 2 : 1;
+      process.exitCode = error instanceof OperationSpecError || error instanceof OperationExistsError || error instanceof MessageRejected || error instanceof UnsupportedOperationSchemaError ? 2 : 1;
     }
   };
 }
@@ -274,6 +282,8 @@ export function registerOperationCommands(program: Command): void {
       const config = buildConfig(options);
       const store = new OperationStore(config.workspace);
       const id = spec.id ?? `op-${randomUUID().slice(0, 8)}`;
+      // Early refusal, before any worktree is planned; driveOperation re-checks under the driver lock.
+      if (store.has(id)) throw new OperationExistsError(id);
       const createdAt = Date.now();
       const identity = createOperationAccountIdentity(credentialStorageHome());
       const policy = mergeOperationPolicy(config.operationPolicy, spec.policy);
@@ -299,7 +309,7 @@ export function registerOperationCommands(program: Command): void {
           console.log(pc.dim(`  isolated: units run on their own worktrees; integrations land on ${safeTerminal(state.git.integrationBranch)} (${safeTerminal(state.git.integrationWorktree)})`));
         }
       }
-      await drive(state, config, store, Boolean(options.discover || spec.discoverCatalog), Boolean(options.json));
+      await drive(state, config, store, Boolean(options.discover || spec.discoverCatalog), Boolean(options.json), { entry: "new" });
     }));
 
   common(op.command("resume").argument("[id]", "Operation id (default: latest waiting/running operation in this workspace)"))
@@ -309,8 +319,11 @@ export function registerOperationCommands(program: Command): void {
       const store = new OperationStore(config.workspace);
       const state = id ? store.load(id) : store.latestResumable();
       if (!state) throw new Error("No waiting or running operation in this workspace.");
-      if (state.status === "CANCELLED") state.status = "RUNNING";
-      await drive(state, config, store, Boolean(options.discover), Boolean(options.json));
+      // Re-read and adjust under the driver lock: this snapshot may already be stale.
+      await drive(state, config, store, Boolean(options.discover), Boolean(options.json), {
+        entry: "existing",
+        prepare: (fresh) => { if (fresh.status === "CANCELLED") fresh.status = "RUNNING"; },
+      });
     }));
 
   common(op.command("decide").argument("<id>", "Operation id").argument("<decision>", "Decision id (e.g. review#1)").argument("<option>", "Option id"))
@@ -330,7 +343,7 @@ export function registerOperationCommands(program: Command): void {
         return;
       }
       if (options.resume === false) return void printStatus(state);
-      await drive(state, config, store, Boolean(options.discover), Boolean(options.json));
+      await drive(state, config, store, Boolean(options.discover), Boolean(options.json), { entry: "existing" });
     }));
 
   op.command("status")
