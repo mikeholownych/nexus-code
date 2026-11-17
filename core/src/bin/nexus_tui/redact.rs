@@ -1,5 +1,6 @@
-//! Redaction for sidecar stderr, which bypasses the sidecar's own `redactSecrets` (`cli/src/ui.ts`). Keep these
-//! patterns in step with that function.
+//! Redaction for sidecar stderr, which bypasses the sidecar's own `redactSecrets` (`cli/src/ui.ts`). The patterns
+//! mirror `cli/src/redaction_patterns.json`, the one table the TypeScript redactor is built from:
+//! `cli/test/redaction_parity.test.ts` fails when the two differ, and both run `cli/test/fixtures/redaction_corpus.json`.
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -62,12 +63,18 @@ impl StderrRedactor {
             self.in_private_key = !is_key_marker("-----END");
             return Some("[REDACTED_PRIVATE_KEY]".to_string());
         }
-        let mut out = line;
-        for (pattern, replacement) in PATTERNS.iter() {
-            out = pattern.replace_all(&out, *replacement).into_owned();
-        }
-        Some(out)
+        Some(apply_patterns(line))
     }
+}
+
+/// The literal-pattern step, in table order (cli/src/redaction_patterns.json): the part of `StderrRedactor::line` that
+/// the shared corpus (cli/test/fixtures/redaction_corpus.json) exercises on both sides.
+fn apply_patterns(line: String) -> String {
+    let mut out = line;
+    for (pattern, replacement) in PATTERNS.iter() {
+        out = pattern.replace_all(&out, *replacement).into_owned();
+    }
+    out
 }
 
 #[cfg(test)]
@@ -110,6 +117,26 @@ mod tests {
             redactor.line(r#"{"authorization":"Basic dXNlcjpwYXNzd29yZA=="}"#).unwrap(),
             r#"{"authorization":"Basic [REDACTED]"}"#
         );
+    }
+
+    /// The corpus both redactors share. Neither side may drift from it: a pattern added to one redactor only fails
+    /// this test or its TypeScript twin (cli/test/redaction_parity.test.ts).
+    #[test]
+    fn matches_the_shared_redaction_corpus() {
+        let corpus: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../cli/test/fixtures/redaction_corpus.json")).unwrap();
+        let mut checked = 0;
+        for case in corpus["cases"].as_array().unwrap() {
+            if case["multiline"].as_bool().unwrap_or(false) {
+                continue; // line-by-line with state in Rust: see collapses_a_multi_line_private_key_to_one_marker
+            }
+            // `⟦⟧` joins keep key-shaped literals out of the committed corpus.
+            let input = case["input"].as_str().unwrap().replace("⟦⟧", "");
+            let expected = case["expected"].as_str().unwrap();
+            assert_eq!(apply_patterns(input.clone()), expected, "corpus case {:?}", case["name"]);
+            checked += 1;
+        }
+        assert!(checked >= 10, "the corpus is read ({checked} cases)");
     }
 
     #[test]

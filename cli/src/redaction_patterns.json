@@ -1,0 +1,40 @@
+{
+  "comment": "The literal secret patterns shared by the TypeScript redactor (cli/src/ui.ts) and the Rust sidecar-stderr redactor (core/src/bin/nexus_tui/redact.rs). Patterns are JavaScript regular-expression source and are also valid Rust `regex` syntax; the Rust side spells case-insensitivity as `(?i)`. `replacement` uses $1-style groups. Rules run in this order. `scope: all` rules must appear in redact.rs verbatim and in the same order (cli/test/redaction_parity.test.ts fails otherwise); `scope: multiline` is applied to whole text in TypeScript and, line by line with state, by `StderrRedactor` in Rust. Add a pattern here, add it there, and add a case to cli/test/fixtures/redaction_corpus.json.",
+  "rules": [
+    {
+      "name": "bearer-token",
+      "scope": "all",
+      "pattern": "Bearer\\s+[A-Za-z0-9_\\-.]{15,}",
+      "flags": "i",
+      "replacement": "Bearer [REDACTED_TOKEN]"
+    },
+    {
+      "name": "authorization-header",
+      "scope": "all",
+      "pattern": "((?:proxy-)?authorization[\"']?\\s*[:=]\\s*[\"']?(?:basic|bearer|token)\\s+[\"']?)[A-Za-z0-9._~+/=-]{8,}",
+      "flags": "i",
+      "replacement": "$1[REDACTED]"
+    },
+    {
+      "name": "vendor-key-prefix",
+      "scope": "all",
+      "pattern": "(?:sk-|ghp_|gho_|glpat-|xoxb-|xoxp-)[A-Za-z0-9_\\-]{16,}",
+      "flags": "",
+      "replacement": "[REDACTED_KEY]"
+    },
+    {
+      "name": "private-key-block",
+      "scope": "multiline",
+      "pattern": "-----BEGIN[ A-Z0-9_-]*PRIVATE KEY-----[\\s\\S]*?-----END[ A-Z0-9_-]*PRIVATE KEY-----",
+      "flags": "",
+      "replacement": "[REDACTED_PRIVATE_KEY]"
+    },
+    {
+      "name": "secret-assignment",
+      "scope": "all",
+      "pattern": "((?:password|secret|token|api[_-]?key)[\"']?\\s*[:=]\\s*[\"']?)([^\"'\\s]{6,})([\"']?)",
+      "flags": "i",
+      "replacement": "$1[REDACTED]$3"
+    }
+  ]
+}

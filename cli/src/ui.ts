@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import pc from "picocolors";
 import ora, { Ora } from "ora";
 import { TurnResult, summarizeTurn } from "./core/turn.js";
@@ -20,14 +21,24 @@ export function redactSecrets(text: string): string {
   return redactSecretPatterns(result);
 }
 
+interface RedactionRule { name: string; scope: "all" | "multiline"; pattern: string; flags: string; replacement: string }
+
+let redactionRules: Array<{ regex: RegExp; replacement: string }> | undefined;
+
+/** The shared pattern table (redaction_patterns.json), compiled once: the single source for these literal patterns, also mirrored in Rust. */
+function rules(): Array<{ regex: RegExp; replacement: string }> {
+  if (!redactionRules) {
+    const table = JSON.parse(fs.readFileSync(new URL("./redaction_patterns.json", import.meta.url), "utf8")) as { rules: RedactionRule[] };
+    redactionRules = table.rules.map((r) => ({ regex: new RegExp(r.pattern, `${r.flags}g`), replacement: r.replacement }));
+  }
+  return redactionRules;
+}
+
 /** The literal-pattern half of redactSecrets (no classifier call): for text the classifier has already been run over. */
 export function redactSecretPatterns(result: string): string {
-  return result
-    .replace(/Bearer\s+[A-Za-z0-9_\-\.]{15,}/gi, "Bearer [REDACTED_TOKEN]")
-    .replace(/((?:proxy-)?authorization["']?\s*[:=]\s*["']?(?:basic|bearer|token)\s+["']?)[A-Za-z0-9._~+/=-]{8,}/gi, "$1[REDACTED]")
-    .replace(/(?:sk-|ghp_|gho_|glpat-|xoxb-|xoxp-)[A-Za-z0-9_\-]{16,}/g, "[REDACTED_KEY]")
-    .replace(/-----BEGIN[ A-Z0-9_-]*PRIVATE KEY-----[\s\S]*?-----END[ A-Z0-9_-]*PRIVATE KEY-----/g, "[REDACTED_PRIVATE_KEY]")
-    .replace(/((?:password|secret|token|api[_-]?key)["']?\s*[:=]\s*["']?)([^"' \s\n\r]{6,})(["']?)/gi, "$1[REDACTED]$3");
+  let out = result;
+  for (const { regex, replacement } of rules()) out = out.replace(regex, replacement);
+  return out;
 }
 
 /** Text safe to write to a terminal: secrets redacted, then every terminal control/bidi character made visible. */
