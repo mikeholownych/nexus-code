@@ -112,6 +112,7 @@ import {
   type ProviderCapabilities,
   type RequestCount,
 } from "./core/provider_capabilities.js";
+import { snapshotModel } from "./core/models_snapshot.js";
 import {
   ProviderRecoveryController,
   RecoveryCancelled,
@@ -3293,12 +3294,20 @@ export class AutonomousAgent {
     return { completion, toolResponse, total: completion + toolResponse };
   }
 
+  /** The selected model's context and output limits from the models.dev data, for cloud providers only (never the appliance). */
+  private referenceLimits(): { context?: number; output?: number } | undefined {
+    const provider = this.config.provider;
+    if (!provider || !this.config.model) return undefined;
+    const model = snapshotModel(provider, this.config.model);
+    return model ? { context: model.context, output: model.output } : undefined;
+  }
+
   /**
    * The limits in effect, resolved on every read from the last advertisement and the operator's current settings
    * (resolveLimits): a changed `--context-limit` or allowance takes effect at once, without waiting for a refresh.
    */
   private effectiveLimits(): ReturnType<typeof resolveLimits> {
-    const limits = resolveLimits(this.capabilities?.advertised, this.config.contextLimit, this.config.completionReserveTokens);
+    const limits = resolveLimits(this.capabilities?.advertised, this.config.contextLimit, this.config.completionReserveTokens, this.referenceLimits());
     if (this.capabilities) Object.assign(this.capabilities, limits);
     return limits;
   }
@@ -3405,7 +3414,7 @@ export class AutonomousAgent {
     this.capabilitiesCheckedAt = Date.now();
     // A temporarily unreadable catalog keeps the last valid advertisement for the same connection.
     const advertised = found.state === "unavailable" && this.capabilitiesKey === key ? current?.advertised : found.advertised;
-    const limits = resolveLimits(found.state === "supported" || advertised ? advertised : undefined, this.config.contextLimit, this.config.completionReserveTokens);
+    const limits = resolveLimits(found.state === "supported" || advertised ? advertised : undefined, this.config.contextLimit, this.config.completionReserveTokens, this.referenceLimits());
     const tokenCounting = !advertised?.tokenize ? "unsupported" : this.tokenCountingState === "unavailable" && Date.now() < this.tokenCountingCooldownUntil ? "unavailable" : "supported";
     const next: ProviderCapabilities = {
       model: client.getModel(),

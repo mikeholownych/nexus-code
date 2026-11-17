@@ -25,6 +25,7 @@ import { parse as parseDotenv } from "dotenv";
 import { LocalLlmClient, credentialStorageHome, operatorSetting } from "./client.js";
 import { credentialsPath, resolveCredential } from "./credentials.js";
 import { allProviders, providerSource } from "./providers.js";
+import { effortLevels } from "./core/models_snapshot.js";
 import { mcpConfigFiles } from "./mcp.js";
 import { isBwrapAvailable, sandboxHomeMounts, sandboxNetworkEnabled, sandboxWorkspaceOverlays } from "./sandbox.js";
 import { pluginDirs } from "./plugins.js";
@@ -390,6 +391,18 @@ const configCheck: Check = async (ctx) => {
     return f("config.valid", "config", "fail", `Provider ${ctx.config.provider} is selected but no model is named.`, evidence, "Pass -m <model> or set NEXUS_MODEL in ~/.config/nexus/config.env (or pick one with /model).");
   }
   return f("config.valid", "config", "pass", "The configuration builds with the same rules a session uses.", evidence);
+};
+
+/** A configured reasoning effort the selected model does not list (models.dev data); silent when the model has no data. */
+const reasoningEffortCheck: Check = async (ctx) => {
+  const { config } = ctx;
+  if (!config?.reasoningEffort) return f("config.reasoning_effort", "config", "skip", "No reasoning effort is configured.");
+  const levels = config.provider && config.model ? effortLevels(config.provider, config.model) : undefined;
+  if (!levels) return f("config.reasoning_effort", "config", "skip", "The model's reasoning effort levels are not known, so the setting was not checked.", [`effort ${config.reasoningEffort}`]);
+  if (!levels.includes(config.reasoningEffort)) {
+    return f("config.reasoning_effort", "config", "warn", `${config.model} does not list reasoning effort "${config.reasoningEffort}".`, [`listed: ${levels.join(", ")}`], `Set NEXUS_REASONING_EFFORT to one of: ${levels.join(", ")}.`);
+  }
+  return f("config.reasoning_effort", "config", "pass", `Reasoning effort "${config.reasoningEffort}" is one the model lists.`, [`listed: ${levels.join(", ")}`]);
 };
 
 /** Providers the operator declared in ~/.config/nexus/providers.json: each needs a credential. An unreadable file is reported by config.valid. */
@@ -1179,6 +1192,7 @@ const CHECKS: Array<[string, Check]> = [
   ["config", configCheck],
   ["project_env_ignored", projectEnvCheck],
   ["providers_file", providersFileCheck],
+  ["reasoning_effort", reasoningEffortCheck],
   ["repeated_calls", repeatedCallCheck],
   ["endpoint", endpointChecks],
   ["inference", inferenceCheck],

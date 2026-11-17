@@ -18,6 +18,7 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 ### Changed
 
+- Behaviour now follows the selected model's listed capabilities (models.dev data), never assumed when absent: a model that lists no `tool_choice: required` is not sent a forced re-ask after the corrective note; per-model context and output limits sit between the operator/advertised values and the 65,536/8,192 defaults (source `snapshot`); `nexus doctor` warns when the configured reasoning effort is not one the model lists (PR-4).
 - `nexus models refresh` (explicit, the only command that contacts models.dev) validates fresh model data and writes a private local cache that overrides the bundled snapshot; `nexus providers` shows which is in use and its date (PR-3).
 - `nexus providers` marks operator-declared providers, `nexus doctor` gains `config.providers_file` (a declared provider without a credential warns), and `docs/CLOUD_PROVIDERS.md` documents `providers.json` (PR-12).
 - Added a per-provider-definition wire matrix test (PR-11): every key-authenticated definition, built-in and operator-declared, is exercised for a streamed text reply and a tool call against a local mock, asserting path, query, the single credential header, static headers and omitted parameters.

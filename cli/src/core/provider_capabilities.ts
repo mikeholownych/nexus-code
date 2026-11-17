@@ -21,7 +21,7 @@
  * reported separately from the measured prompt and the advertised output allowance.
  */
 
-export type SizingSource = "advertised" | "operator" | "operator_capped_by_advertised" | "client_default";
+export type SizingSource = "advertised" | "operator" | "operator_capped_by_advertised" | "snapshot" | "client_default";
 export type CountSource = "exact_admitted" | "exact_sampled_worker" | "gateway_conservative" | "client_estimate";
 export type CapabilityState = "supported" | "unsupported" | "unavailable" | "unknown";
 
@@ -156,7 +156,13 @@ export function parseServerContext(kind: "llamacpp" | "lmstudio" | "ollama", bod
  * The context and output limits in effect, and where each came from. `operatorContext` / `operatorOutput` are values
  * the operator set explicitly (undefined otherwise).
  */
-export function resolveLimits(advertised: Advertisement | undefined, operatorContext?: number, operatorOutput?: number): Pick<ProviderCapabilities, "contextLimit" | "contextSource" | "outputAllowance" | "outputSource"> {
+export function resolveLimits(
+  advertised: Advertisement | undefined,
+  operatorContext?: number,
+  operatorOutput?: number,
+  /** The bundled or refreshed model data (models.dev): below advertised capacity and the operator's setting, above the client default. */
+  reference?: { context?: number; output?: number },
+): Pick<ProviderCapabilities, "contextLimit" | "contextSource" | "outputAllowance" | "outputSource"> {
   const adCtx = typeof advertised?.contextLength === "number" ? advertised.contextLength : undefined;
   let contextLimit: number;
   let contextSource: SizingSource;
@@ -169,6 +175,9 @@ export function resolveLimits(advertised: Advertisement | undefined, operatorCon
   } else if (operatorContext !== undefined) {
     contextLimit = operatorContext;
     contextSource = "operator";
+  } else if (reference?.context && reference.context > 0) {
+    contextLimit = reference.context;
+    contextSource = "snapshot";
   } else {
     contextLimit = CLIENT_DEFAULT_CONTEXT;
     contextSource = "client_default";
@@ -185,6 +194,9 @@ export function resolveLimits(advertised: Advertisement | undefined, operatorCon
   } else if (operatorOutput !== undefined) {
     outputAllowance = operatorOutput;
     outputSource = "operator";
+  } else if (reference?.output && reference.output > 0) {
+    outputAllowance = reference.output;
+    outputSource = "snapshot";
   } else {
     outputAllowance = Math.min(CLIENT_DEFAULT_OUTPUT, Math.floor(contextLimit / 4));
     outputSource = "client_default";
