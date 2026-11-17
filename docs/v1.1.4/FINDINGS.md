@@ -1,6 +1,6 @@
 # v1.1.4 findings ledger
 
-Every row ends as FIXED (commit and test), WITHDRAWN (evidence) or DEFERRED (owner decision). Updated per closed item. Source of truth for the v1.1.4 release acceptance.
+Every row ends as FIXED (commit and test), WITHDRAWN (evidence) or DEFERRED (owner decision). v1.1.4 shipped, and this ledger is now the frozen record of that release's acceptance, not a live tracker: rows still marked OPEN are accepted limitations or carried work, and where a successor exists it is named in [`docs/v1.2.1/PLAN.md`](../v1.2.1/PLAN.md) (the D8 deferral review) and [`docs/v1.2.1/GAP_ANALYSIS.md`](../v1.2.1/GAP_ANALYSIS.md).
 
 ## Owner decision for the stable v1.1.4 release, 2026-11-14
 

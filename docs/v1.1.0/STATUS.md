@@ -1,5 +1,11 @@
 # v1.1.0 programme status
 
+> **Historical.** This is the frozen record of the v1.1.0 programme and is no longer updated; its "next" and "open"
+> statements are not current. The `v1.1.0` tag exists (2026-10-31) but was never published as a release: `v1.1.1`
+> (2026-11-01) is the first published 1.1.x release (tags are immutable, so a failed release advances to the next
+> version). Current status: [`docs/v1.2.1/PLAN.md`](../v1.2.1/PLAN.md) and [`CHANGELOG.md`](../../CHANGELOG.md). Kept for
+> the evidence trail that `docs/releases/v1.1.0.md` cites (§4).
+
 Durable state of the v1.1.0 programme. A new lead agent can resume from this file alone. Update it at every
 checkpoint; never record a state the evidence does not support.
 
