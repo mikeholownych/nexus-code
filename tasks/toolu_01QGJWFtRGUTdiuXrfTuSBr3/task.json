@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01QGJWFtRGUTdiuXrfTuSBr3",
+  "agent_id": "a56980e40939ee407",
+  "subagent_type": "security-auditor",
+  "task_description": "Security review of Vertex PR #592",
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 31613,
+    "cache_read_tokens": 111413,
+    "output_tokens": 2544,
+    "api_call_count": 6
+  },
+  "started_at": "2026-11-17T21:23:52.475178277Z",
+  "completed_at": "2026-11-17T21:24:49.141507125Z"
+}

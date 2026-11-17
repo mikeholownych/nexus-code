@@ -1,0 +1,7 @@
+{
+  "tool_use_id": "toolu_01KTmbkk2799dpLUNmHqpJf3",
+  "agent_id": "aed4177def05b3b72",
+  "subagent_type": "general-purpose",
+  "task_description": "MQ-3 nightly real-project smoke",
+  "started_at": "2026-11-17T22:41:00.32878522Z"
+}

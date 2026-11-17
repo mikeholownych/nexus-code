@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01EXBwkEVgZqh7vhShxpet19",
+  "agent_id": "a7402b72e56e037ae",
+  "subagent_type": "Explore",
+  "task_description": "Audit v1.2.1 plan status against main",
+  "token_usage": {
+    "input_tokens": 40,
+    "cache_creation_tokens": 112933,
+    "cache_read_tokens": 1552191,
+    "output_tokens": 15465,
+    "api_call_count": 20
+  },
+  "started_at": "2026-11-17T22:38:01.598314351Z",
+  "completed_at": "2026-11-17T22:40:23.140388607Z"
+}
