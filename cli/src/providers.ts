@@ -13,8 +13,9 @@ import fs from "node:fs";
 import { classifyDestination } from "./core/egress.js";
 import { parseProvidersDocument } from "./provider_file.js";
 
-export type WireProtocol = "openai-chat" | "openai-responses" | "anthropic-messages" | "gemini-generate-content";
-export type AuthStyle = "bearer" | "x-api-key" | "header" | "none" | "oauth";
+export type WireProtocol = "openai-chat" | "openai-responses" | "anthropic-messages" | "gemini-generate-content" | "bedrock-converse";
+/** "sigv4": requests are signed from the AWS credential chain (environment and shared files), not a key. */
+export type AuthStyle = "bearer" | "x-api-key" | "header" | "none" | "oauth" | "sigv4";
 
 /** How an operator can connect a provider from the TUI or `nexus connect`. */
 export interface ConnectMethod {

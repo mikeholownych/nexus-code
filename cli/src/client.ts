@@ -795,7 +795,7 @@ export class LocalLlmClient {
       if (!this.model) {
         throw new InferenceError("configuration_error", "client", `Provider '${this.conn.providerId}' needs an explicit model: pass --model or set NEXUS_MODEL.`, { requestId, failoverEligible: false });
       }
-      if (this.conn.auth !== "none" && !this.credentialFor(url) && !this.declaredAuthless()) {
+      if (this.conn.auth !== "none" && this.conn.auth !== "sigv4" && !this.credentialFor(url) && !this.declaredAuthless()) {
         const variable = operatorSettingKeyForAuth(this.conn.providerId);
         throw new InferenceError("configuration_error", "client", `No credential for provider '${this.conn.providerId}': set ${variable}. Nexus never substitutes another provider's or the appliance's credential.`, {
           requestId,
@@ -2156,11 +2156,21 @@ export class LocalLlmClient {
       this.pending = { endpoint: currentEp };
       const watchdog = this.createWatchdog(signal, currentEp, stream);
       let res: Response;
+      const payload = JSON.stringify(req.body);
+      const headers: Record<string, string> = { "Content-Type": "application/json", ...this.authorization(url), ...this.providerHeaders(outbound.messages), "X-Request-ID": requestId };
+      if (wire.sign) {
+        try {
+          Object.assign(headers, wire.sign({ url, method: "POST", headers, body: payload }, process.env));
+        } catch (err: any) {
+          watchdog.done();
+          throw new InferenceError("configuration_error", "client", `Cannot sign the request for provider '${this.conn.providerId}': ${err?.message ?? "signing failed"}`, { requestId, failoverEligible: false, condition: "AUTH_FAILURE" });
+        }
+      }
       try {
         res = await this.fetchResendingStale(url, {
           method: "POST",
-          headers: { "Content-Type": "application/json", ...this.authorization(url), ...this.providerHeaders(outbound.messages), "X-Request-ID": requestId },
-          body: JSON.stringify(req.body),
+          headers,
+          body: payload,
           signal: watchdog.signal,
           ...this.fetchPolicy(),
         });
@@ -2199,7 +2209,7 @@ export class LocalLlmClient {
       } else {
         const parser = wire.stream(owner, keepReasoning, onToken);
         try {
-          await readSse(
+          await (wire.readStream ?? readSse)(
             res.body!,
             (name, raw) => {
               let data: any;
