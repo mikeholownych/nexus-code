@@ -13,7 +13,7 @@ import fs from "node:fs";
 import { classifyDestination } from "./core/egress.js";
 import { parseProvidersDocument } from "./provider_file.js";
 
-export type WireProtocol = "openai-chat" | "openai-responses" | "anthropic-messages";
+export type WireProtocol = "openai-chat" | "openai-responses" | "anthropic-messages" | "gemini-generate-content";
 export type AuthStyle = "bearer" | "x-api-key" | "header" | "none" | "oauth";
 
 /** How an operator can connect a provider from the TUI or `nexus connect`. */

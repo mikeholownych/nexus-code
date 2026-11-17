@@ -13,7 +13,7 @@ import fs from "node:fs";
 import type { AuthStyle, ProviderDefinition, WireProtocol } from "./providers.js";
 import { expandUrlTemplate, validateAuthHeaderName, validateBaseUrl, validateExtraHeaders, validateProviderId } from "./provider_safety.js";
 
-const PROTOCOLS: readonly WireProtocol[] = ["openai-chat", "openai-responses", "anthropic-messages"];
+const PROTOCOLS: readonly WireProtocol[] = ["openai-chat", "openai-responses", "anthropic-messages", "gemini-generate-content"];
 const AUTHS: readonly AuthStyle[] = ["bearer", "x-api-key", "header", "none"];
 const USAGES = ["openrouter", "stream-options", "native"] as const;
 const ENV_NAME = /^[A-Z][A-Z0-9_]{0,63}$/;

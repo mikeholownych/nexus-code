@@ -1,6 +1,7 @@
 /** The wire protocols a connection can speak. Adding one is a module here plus an entry in WIRE_PROTOCOLS. */
 import type { WireProtocol } from "../providers.js";
 import { anthropicStreamParser, buildAnthropicRequest, parseAnthropicResponse } from "./anthropic.js";
+import { buildGeminiRequest, geminiStreamParser, parseGeminiResponse } from "./gemini.js";
 import type { NativeRequest, NativeRequestInput, NativeResult, StreamParser } from "./common.js";
 import { buildChatRequest, chatStreamParser, parseChatResponse } from "./openai_chat.js";
 import { buildResponsesRequest, parseResponsesResponse, responsesStreamParser } from "./openai_responses.js";
@@ -38,6 +39,13 @@ export const WIRE_PROTOCOLS: Record<WireProtocol, ProtocolAdapter> = {
     build: buildAnthropicRequest,
     parse: (data, owner) => parseAnthropicResponse(data, owner),
     stream: (owner, _keepReasoning, onToken) => anthropicStreamParser(owner, onToken),
+  },
+  "gemini-generate-content": {
+    native: true,
+    nativeTools: true,
+    build: buildGeminiRequest,
+    parse: (data, owner) => parseGeminiResponse(data, owner),
+    stream: (owner, _keepReasoning, onToken) => geminiStreamParser(owner, onToken),
   },
 };
 

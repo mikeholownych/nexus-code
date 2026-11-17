@@ -16,6 +16,11 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 - The `--sandbox docker` engine runs a digest-pinned image (alpine 3.23) as the invoking uid with all capabilities dropped, `no-new-privileges`, a read-only root plus a tmpfs `/tmp`, a 512-process limit, and no network unless `--sandbox-network` / `NEXUS_SANDBOX_NETWORK=1` is set. Only the scrubbed command environment reaches the container, and credential locations under a workspace that is or contains `$HOME` are masked. `NEXUS_SANDBOX_DOCKER_IMAGE` (operator setting) may substitute another image but it must be digest-pinned, otherwise no container is started. Commands that wrote outside the workspace and `/tmp`, relied on root, or used the network now fail in Docker mode.
 - A compaction summary (including `compact --llm`) is now labelled in every request as untrusted data with its source, under the "Structured Context Memory" header: text from earlier tool output or fetched pages that reached the summary is information about the task, never instructions. The label is added to the request copy only; the stored conversation and its provenance are unchanged (plan unit CX-1).
 
+### Added
+
+- Gemini native wire protocol (`gemini-generate-content`, plan unit PR-6): `generateContent` and `streamGenerateContent` with `functionCall` parts (parallel calls included) mapped to tool calls, thought summaries kept out of the answer, and `thoughtSignature` parts replayed only to the model that produced them. Declare a provider with `"protocol": "gemini-generate-content"`, `"auth": "header"` and `"authHeader": "x-goog-api-key"` in `~/.config/nexus/providers.json`; the key travels in the header, never the URL. No built-in provider uses it yet (Gemini's OpenAI-compatible endpoint stays as shipped).
+- `nexus` model listing understands Gemini's `models/<id>` catalog and offers only models that support `generateContent`.
+
 ### Changed
 
 - The dependency deprecation check retries a transient npm registry failure (network error, timeout, truncated body, HTTP 429 or 5xx) up to 3 times, 1 s then 3 s apart, before failing closed; a 404 or 403 is a real answer and is not retried. A single registry blip had turned main red.

@@ -258,6 +258,12 @@ interface PendingRequest { usage?: UsageReport; providerRequestId?: string; effe
 /** Model ids from a `/models` answer: OpenAI-style `data[].id`, or the ChatGPT backend's listed `models[].slug`. */
 function modelIds(body: any): string[] {
   if (Array.isArray(body?.data)) return body.data.map((m: any) => m?.id).filter((id: unknown): id is string => typeof id === "string");
+  if (Array.isArray(body?.models) && body.models.some((m: any) => typeof m?.name === "string" && m.name.startsWith("models/"))) {
+    // Gemini: `models/<id>`; only models that can generate content are chat models.
+    return body.models
+      .filter((m: any) => typeof m?.name === "string" && (!Array.isArray(m.supportedGenerationMethods) || m.supportedGenerationMethods.includes("generateContent")))
+      .map((m: any) => (m.name as string).replace(/^models\//, ""));
+  }
   if (Array.isArray(body?.models)) return body.models.filter((m: any) => !m?.visibility || m.visibility === "list").map((m: any) => m?.slug ?? m?.id).filter((id: unknown): id is string => typeof id === "string");
   return [];
 }
@@ -1276,7 +1282,7 @@ export class LocalLlmClient {
   async listModels(signal?: AbortSignal): Promise<string[]> {
     return this.executeWithFailover("listModels", async (currentEp) => {
       await this.prepareCredential(currentEp);
-      const query = this.conn.protocol === "anthropic-messages" ? "?limit=1000" : this.conn.providerId === "chatgpt" ? "?client_version=1.0.0" : "";
+      const query = this.conn.protocol === "anthropic-messages" ? "?limit=1000" : this.conn.protocol === "gemini-generate-content" ? "?pageSize=1000" : this.conn.providerId === "chatgpt" ? "?client_version=1.0.0" : "";
       const url = this.endpointUrl(currentEp, `/models${query}`);
       const res = await fetch(url, {
         headers: this.authorization(url),
