@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01BqmPfo7j7rdTpTUUvtpndL",
+  "agent_id": "aff4a155b00695984",
+  "subagent_type": "general-purpose",
+  "task_description": "Audit abstractions and invariant guards",
+  "token_usage": {
+    "input_tokens": 92,
+    "cache_creation_tokens": 138850,
+    "cache_read_tokens": 5191206,
+    "output_tokens": 21863,
+    "api_call_count": 46
+  },
+  "started_at": "2026-11-17T07:06:24.97996335Z",
+  "completed_at": "2026-11-17T07:10:16.86520339Z"
+}

@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01LLfoDR4v4H121PMDFHzbZT",
+  "agent_id": "a775378eeefda1716",
+  "subagent_type": "general-purpose",
+  "task_description": "Audit lifecycle and authority",
+  "token_usage": {
+    "input_tokens": 98,
+    "cache_creation_tokens": 196103,
+    "cache_read_tokens": 6602674,
+    "output_tokens": 20430,
+    "api_call_count": 49
+  },
+  "started_at": "2026-11-17T05:43:30.197678783Z",
+  "completed_at": "2026-11-17T05:48:35.220786655Z"
+}

@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01HsVfsqPAtvmQsUjMHVneuY",
+  "agent_id": "aca1d9bd4857abb48",
+  "subagent_type": "general-purpose",
+  "task_description": "Audit providers and fallback",
+  "token_usage": {
+    "input_tokens": 86,
+    "cache_creation_tokens": 176585,
+    "cache_read_tokens": 5742780,
+    "output_tokens": 26804,
+    "api_call_count": 43
+  },
+  "started_at": "2026-11-17T05:43:42.20662305Z",
+  "completed_at": "2026-11-17T05:49:18.322996248Z"
+}

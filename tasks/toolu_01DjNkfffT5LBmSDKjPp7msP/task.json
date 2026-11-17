@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01DjNkfffT5LBmSDKjPp7msP",
+  "agent_id": "ad2102601e4ff32d7",
+  "subagent_type": "general-purpose",
+  "task_description": "Audit control flow, dispatch, layers",
+  "token_usage": {
+    "input_tokens": 160,
+    "cache_creation_tokens": 207132,
+    "cache_read_tokens": 10731124,
+    "output_tokens": 37501,
+    "api_call_count": 80
+  },
+  "started_at": "2026-11-17T07:06:18.035929972Z",
+  "completed_at": "2026-11-17T07:16:27.461583724Z"
+}

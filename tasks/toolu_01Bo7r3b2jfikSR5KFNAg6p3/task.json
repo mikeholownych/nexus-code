@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Bo7r3b2jfikSR5KFNAg6p3",
+  "agent_id": "a81a7548e9a79e087",
+  "subagent_type": "general-purpose",
+  "task_description": "Audit eval, docs, roadmap",
+  "token_usage": {
+    "input_tokens": 42,
+    "cache_creation_tokens": 109567,
+    "cache_read_tokens": 1982272,
+    "output_tokens": 12811,
+    "api_call_count": 21
+  },
+  "started_at": "2026-11-17T05:43:47.547492875Z",
+  "completed_at": "2026-11-17T05:46:18.269136312Z"
+}

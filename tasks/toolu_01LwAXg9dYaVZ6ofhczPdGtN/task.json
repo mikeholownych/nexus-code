@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01LwAXg9dYaVZ6ofhczPdGtN",
+  "agent_id": "ad525aaab255d8ac9",
+  "subagent_type": "general-purpose",
+  "task_description": "Audit review, rationale, agent guidance",
+  "token_usage": {
+    "input_tokens": 104,
+    "cache_creation_tokens": 147566,
+    "cache_read_tokens": 6041911,
+    "output_tokens": 23535,
+    "api_call_count": 52
+  },
+  "started_at": "2026-11-17T07:06:35.385417926Z",
+  "completed_at": "2026-11-17T07:10:47.460075416Z"
+}

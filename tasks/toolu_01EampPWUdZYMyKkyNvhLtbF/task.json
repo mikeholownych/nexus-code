@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01EampPWUdZYMyKkyNvhLtbF",
+  "agent_id": "af11e5c8ff4ed10a9",
+  "subagent_type": "general-purpose",
+  "task_description": "Audit side effects and recovery",
+  "token_usage": {
+    "input_tokens": 132,
+    "cache_creation_tokens": 230203,
+    "cache_read_tokens": 10915304,
+    "output_tokens": 32320,
+    "api_call_count": 66
+  },
+  "started_at": "2026-11-17T05:43:35.483917139Z",
+  "completed_at": "2026-11-17T05:50:30.124522765Z"
+}
