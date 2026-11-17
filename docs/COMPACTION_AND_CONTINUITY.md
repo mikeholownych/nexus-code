@@ -158,6 +158,16 @@ Automatic compaction runs when a request would not fit, or proactively at 80% pr
 in a row each free less than 5% of the window (or find nothing to remove), Nexus stops compacting on pressure alone
 and waits until a request would not fit. This *compaction thrash* is recorded separately from task repetition.
 
+`/compact --llm` asks the model for an "Executive Summary" that is added to the deterministic summary. Before it is
+used, a second bounded call checks it against the pinned gating requirements: one small request (the requirements, each
+clipped to 400 characters and at most 40 of them, and the summary clipped to 6,000 characters; no history and no
+tools; 30 seconds) asks which requirements the summary does not carry, and treats the summary as data, not
+instructions. A summary the check says dropped a requirement, and one the check could not verify (no answer, an
+unreadable answer, or a failed call), is not used: the deterministic summary is, and the reply says which and why. With no
+gating requirements, no check is made. This is a second opinion from a model, not proof: the guarantee that no gating
+requirement leaves the request is the post-compaction check on the pinned ledger, which never asks a model. The plain
+`/compact` writes no model summary and makes no check.
+
 `/compact` and `/compact --llm`:
 
 - **No turn running**: runs at once.
