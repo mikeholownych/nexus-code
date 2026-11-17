@@ -8,7 +8,8 @@ import * as tls from "node:tls";
 import * as dns from "node:dns";
 import { URL, fileURLToPath } from "node:url";
 import { ToolDefinition, ExecutionResult } from "./types.js";
-import { SecurityManager, VERIFICATION_CONFIG_PROTECTED, type VerificationEditContext } from "./security.js";
+import { EGRESS_SECRET_BLOCKED, SecurityManager, VERIFICATION_CONFIG_PROTECTED, type VerificationEditContext } from "./security.js";
+import { inspectOutbound, sendsExternally } from "./core/egress_inspector.js";
 import { FILE_EDIT_TOOLS } from "./file_diff.js";
 import { InformationFlowBoundary, matchesLocalOrigins, parseLocalOrigins } from "./core/egress.js";
 import { htmlToReadableText } from "./core/html_text.js";
@@ -1216,6 +1217,15 @@ export class RustCoreBridge {
     }
 
     if (toolName === "run_command") this.securityManager.recordVerificationCommand(String(args.command || ""), authority?.role);
+
+    // CS-8: a call that sends data outside the operator's network is checked for the workspace's own secrets first.
+    if (sendsExternally(toolName)) {
+      const verdict = inspectOutbound(toolName, args, { workspace: this.workspace, policy: this.securityManager.getPolicy().egressInspector });
+      if (verdict.findings.length) {
+        this.securityManager.recordEgressDecision({ tool: toolName, hosts: verdict.hosts, findings: verdict.findings.map((f) => f.name), decision: verdict.allowed ? "recorded" : "blocked" });
+        if (!verdict.allowed) return { success: false, output: "", error: verdict.reason, denialReason: EGRESS_SECRET_BLOCKED };
+      }
+    }
 
     if (toolName === "batch_read" && Array.isArray(args.paths)) {
       for (const p of args.paths) {
