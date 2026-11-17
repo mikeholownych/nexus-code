@@ -5,3 +5,4 @@ export * from "./investigation.js";
 export * from "./remediation.js";
 export * from "./reporting.js";
 export * from "./runner.js";
+export * from "./fixture_identity.js";
