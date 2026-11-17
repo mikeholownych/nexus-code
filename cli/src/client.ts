@@ -808,7 +808,7 @@ export class LocalLlmClient {
     // Spending limits cover provider connections, whose requests are recorded; the legacy endpoint path has no receipts.
     if (this.conn.providerId) {
       this.reservations.push(requestId);
-      const reason = UsageLedger.global().admit(requestId, Math.ceil(payloadChars / 4) + this.maxOutputTokens, this.conn.usage === "openrouter");
+      const reason = UsageLedger.global().admit(requestId, Math.ceil(payloadChars / 4) + this.maxOutputTokens, this.conn.usage === "openrouter", this.conn.providerId, this.model);
       if (reason) throw new InferenceError("policy_denied", "client", `Cloud spending limit: ${reason}.`, { requestId, failoverEligible: false });
     }
     const origin = originOf(url) ?? url;

@@ -212,6 +212,14 @@ Process-wide limits, shared by all roles and subagents and enforced before each 
 `NEXUS_CLOUD_MAX_COST_USD` (only for providers that report cost; with any other provider the request is refused
 rather than guessed). These are budgets, not a guarantee of the provider's invoice.
 
+Per-provider limits (`NEXUS_CLOUD_LIMITS`) are a JSON object keyed by provider id, applied on top of the process-wide limits:
+`NEXUS_CLOUD_LIMITS='{"openrouter":{"maxCostUsd":5,"maxTokens":2000000},"groq":{"maxRequests":200}}'`. Keys per provider are
+`maxRequests`, `maxTokens` and `maxCostUsd`; each counts only that provider's requests. A provider that reports no cost is priced
+from the models snapshot (price per million tokens for the model that ran); the refusal says how many requests were estimated.
+When neither the provider nor the snapshot gives a price (or an earlier request of that provider had none), `maxCostUsd` is
+refused as unenforceable rather than ignored; `maxTokens` still works. A value that does not parse refuses every cloud request
+with the reason, so a mistyped limit never silently disappears.
+
 ## Troubleshooting
 
 | Message | Meaning |
