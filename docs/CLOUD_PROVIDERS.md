@@ -232,12 +232,36 @@ with the reason, so a mistyped limit never silently disappears.
 | `reasoning state owned by another provider/model ... not replayed` | History came from another model; its opaque reasoning is dropped, text and tool calls kept. |
 | `Provider 'x' needs an explicit model` | Pass `--model` or set `NEXUS_MODEL`. |
 
+## Amazon Bedrock (native Converse, SigV4)
+
+Declare a provider in `~/.config/nexus/providers.json` with `"protocol": "bedrock-converse"` and `"auth": "sigv4"`; no
+`credentialEnv` is needed:
+
+```json
+{ "providers": { "bedrock": { "label": "Amazon Bedrock", "protocol": "bedrock-converse", "auth": "sigv4",
+  "baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com" } } }
+```
+
+Use the Bedrock model id (or inference-profile id) as the model. Requests go to `/model/<id>/converse` or
+`/converse-stream` and are signed with AWS Signature Version 4, implemented on `node:crypto` (no AWS SDK). Streamed
+responses use the AWS event-stream framing; every frame's checksums are verified, and a stream that ends before
+`messageStop` is incomplete (no tool call from it runs). `toolUse` and `toolResult` map to Nexus tool calls and results;
+`reasoningContent` is kept as opaque state replayed only to the same provider and model.
+
+Credentials are read, never written, in this order: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and optional
+`AWS_SESSION_TOKEN`; then the profile named by `AWS_PROFILE` (default `default`) in `AWS_SHARED_CREDENTIALS_FILE`
+(default `~/.aws/credentials`), then in `AWS_CONFIG_FILE` (default `~/.aws/config`). The region comes from the
+`bedrock-runtime.<region>.amazonaws.com` host, else `AWS_REGION`, `AWS_DEFAULT_REGION` or the profile's `region`.
+Credential values are never printed, logged or put in error messages. Not supported: SSO, assume-role,
+`credential_process`, instance or container metadata, and Bedrock API keys; use the OpenAI-compatible `bedrock-openai`
+catalog entry for the last. Verified against recorded fixtures and the published SigV4 test vectors only; no live call.
+
 ## Limitations
 
 - Implemented: OpenRouter, OpenAI (Responses), Anthropic (Messages), generic OpenAI-compatible, ChatGPT plan and
   GitHub Copilot (unofficial sign-ins), plus any bearer-, `x-api-key`- or custom-header-authenticated service
-  declared in `providers.json` (Azure OpenAI and other OpenAI-compatible endpoints). Not implemented: native Gemini,
-  Bedrock (SigV4) and Vertex (ADC) protocols, Anthropic Claude Pro/Max sign-in, GitHub Enterprise Copilot.
+  declared in `providers.json` (Azure OpenAI and other OpenAI-compatible endpoints), and Amazon Bedrock over the native
+  Converse protocol (see below). Not implemented: native Gemini and Vertex (ADC) protocols, Anthropic Claude Pro/Max sign-in, GitHub Enterprise Copilot.
 - The ChatGPT Codex backend and Copilot request formats follow crush's implementation and are verified against mocks
   only; they can change without notice.
 - No cross-provider model-fallback chain; recovery stays on the selected target.
