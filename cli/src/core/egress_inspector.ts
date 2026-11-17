@@ -10,8 +10,8 @@
  * The existing InformationFlowBoundary (core/egress.ts) recognises secrets by their shape; this catches values with no
  * recognisable shape, the ones an operator keeps in a `.env`. A finding names the secret and where it was found, never
  * its value. Local, loopback and private-network destinations are not inspected. The operator's policy
- * (`egressInspector` in `.nexus-security.json`) sets the mode (`block` by default, `record`, `off`) and lists destinations
- * that may receive secrets.
+ * (`NEXUS_EGRESS_POLICY` in the operator's environment; never the workspace's `.nexus-security.json`, which a repository
+ * controls) sets the mode (`block` by default, `record`, `off`) and lists destinations that may receive secrets.
  *
  * What it cannot see is stated, not hidden: a command that builds the secret at run time (`$(cat .env | base64)`,
  * a script the model wrote), a secret split across arguments, and any value the model transforms in a way other than
@@ -34,7 +34,12 @@ export interface WorkspaceSecret {
   value: string;
 }
 
-const SECRET_NAME = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|PWD|PASS|CREDENTIAL|PRIVATE|AUTH|SIGNATURE|COOKIE|SESSION|DSN/i;
+const SECRET_SUFFIX = /(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|PRIVATE|SIGNATURE|COOKIE|DSN)$/;
+const SECRET_WORD = new Set(["PASS", "AUTH", "AUTHORIZATION", "SESSION"]);
+/** A secret-named variable: some `_`-separated part ends in a secret word (API_KEY, ACCESSTOKEN) or is one (PASS, AUTH). `PWD`, `BYPASS` and `COMPASS` are not. */
+function isSecretName(name: string): boolean {
+  return name.toUpperCase().split(/[^A-Z0-9]+/).some((part) => SECRET_SUFFIX.test(part) || SECRET_WORD.has(part));
+}
 const TEMPLATE_FILE = /\.(?:example|sample|template|dist|tpl)$/i;
 const PLACEHOLDER = /^(?:changeme|change-me|your[-_ ].*|x{3,}|\*+|<.*>|\$\{.*\}|example|placeholder|todo|null|none|true|false|redacted|secret|password)$/i;
 const MIN_SECRET_LENGTH = 6;
@@ -88,7 +93,7 @@ export function workspaceSecrets(workspace: string): WorkspaceSecret[] {
         cached = {
           stamp,
           secrets: parseDotenv(fs.readFileSync(file, "utf8"))
-            .filter(([key, value]) => SECRET_NAME.test(key) && value.length >= MIN_SECRET_LENGTH && !PLACEHOLDER.test(value))
+            .filter(([key, value]) => isSecretName(key) && value.length >= MIN_SECRET_LENGTH && !PLACEHOLDER.test(value))
             .map(([key, value]) => ({ name: key, file: name, value })),
         };
         secretCache.set(file, cached);
@@ -176,10 +181,60 @@ function hostOfBareWord(word: string): { host: string; hasUser: boolean } | unde
   return /^[A-Za-z]{2,}$/.test(labels[labels.length - 1]) ? { host, hasUser: at !== -1 } : undefined;
 }
 
-/** What the network commands in a shell line target and read. Only subcommands that start with a network tool are examined. */
+/** Words that run the rest of their line as a command; their own options and arguments are skipped to find it. */
+const WRAPPERS: Readonly<Record<string, ReadonlySet<string>>> = {
+  env: new Set(["-u", "-C", "-S"]),
+  sudo: new Set(["-u", "-g", "-h", "-p", "-C", "-D", "-R", "-T", "-U"]),
+  doas: new Set(["-u", "-C"]),
+  nohup: new Set(),
+  nice: new Set(["-n"]),
+  ionice: new Set(["-c", "-n", "-p"]),
+  command: new Set(),
+  exec: new Set(["-a"]),
+  time: new Set(["-f", "-o"]),
+  stdbuf: new Set(),
+  setsid: new Set(),
+  timeout: new Set(["-s", "-k"]),
+  xargs: new Set(["-I", "-n", "-P", "-d", "-L", "-s", "-E", "-a"]),
+  builtin: new Set(),
+};
+const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
+const MAX_UNWRAP = 8;
+
+/**
+ * The command a word list really runs: leading `VAR=value` words and wrapper words (env, sudo, timeout 5, nice -n 5, xargs, ...)
+ * are skipped; `sh -c '...'` and `eval ...` yield the lines they run. Each result is a word list starting at a command.
+ */
+function effectiveCommands(words: string[], depth = 0): string[][] {
+  let rest = words;
+  for (let guard = 0; guard < MAX_UNWRAP; guard++) {
+    while (rest.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(rest[0])) rest = rest.slice(1);
+    const head = path.posix.basename(rest[0] ?? "");
+    const takesArg = WRAPPERS[head];
+    if (takesArg === undefined) break;
+    let i = 1;
+    while (i < rest.length) {
+      const w = rest[i];
+      if (head === "timeout" && /^\d+(?:\.\d+)?[smhd]?$/.test(w)) i++;
+      else if (head === "env" && /^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) i++;
+      else if (w.startsWith("-") && w.length > 1) i += takesArg.has(w) ? 2 : 1;
+      else break;
+    }
+    rest = rest.slice(i);
+  }
+  const head = path.posix.basename(rest[0] ?? "");
+  if (depth < 3 && SHELLS.has(head)) {
+    const c = rest.findIndex((w) => /^-[A-Za-z]*c$/.test(w));
+    if (c !== -1 && rest[c + 1] !== undefined) return splitSubcommands(rest[c + 1]).flatMap((w) => effectiveCommands(w, depth + 1));
+  }
+  if (depth < 3 && head === "eval" && rest.length > 1) return splitSubcommands(rest.slice(1).join(" ")).flatMap((w) => effectiveCommands(w, depth + 1));
+  return rest.length ? [rest] : [];
+}
+
+/** What the network commands in a shell line target and read. Only commands that are (or are wrapped around) a network tool are examined. */
 export function commandNetworkTargets(command: string): CommandNetworkTarget {
   const target: CommandNetworkTarget = { tools: [], hosts: [], credentialFiles: [], variables: [] };
-  for (const words of splitSubcommands(command)) {
+  for (const words of splitSubcommands(command).flatMap((w) => effectiveCommands(w))) {
     const head = path.posix.basename(words[0] ?? "");
     if (!NETWORK_TOOLS.has(head)) continue;
     target.tools.push(head);
@@ -263,7 +318,7 @@ export function inspectOutbound(
     const env = context.env ?? process.env;
     for (const variable of net.variables) {
       const value = env[variable];
-      if (SECRET_NAME.test(variable) && typeof value === "string" && value.length >= MIN_SECRET_LENGTH && !PLACEHOLDER.test(value)) {
+      if (isSecretName(variable) && typeof value === "string" && value.length >= MIN_SECRET_LENGTH && !PLACEHOLDER.test(value)) {
         findings.push({ kind: "secret-variable", name: variable, detail: `a network command expands $${variable}, which is set to a secret` });
       }
     }

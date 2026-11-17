@@ -4093,6 +4093,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       this.activeTraceSpanId = span.spanId;
     }
     if (ownsWorktreeDelegation) this.worktreeDelegatedTurnInProgress = true;
+    // A suspicion is about the step counter of the turn that raised it; a new operator message starts a new turn.
+    if (!delegatedWorktreeCall) this.suspectedInjection = undefined;
     let result: TurnResult | undefined;
     try {
       result = await this.runTurnImpl(taskPrompt, onConfirm, options);

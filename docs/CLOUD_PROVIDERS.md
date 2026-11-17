@@ -39,7 +39,7 @@ truncation, error) against a local mock; none was exercised against the live ser
 
 ## Your own providers (`~/.config/nexus/providers.json`)
 
-Any service that speaks one of the three wire protocols can be declared without code. The file is read only from the
+Any service that speaks one of the supported wire protocols can be declared without code. The file is read only from the
 operator's home directory; a `providers.json` in a project is never consulted. An invalid file is reported by
 `nexus doctor` (`config.valid`) and no provider is registered from it. Built-in ids cannot be redefined. Every error
 names the field (for example `providers.azure-openai.authHeader`).
@@ -65,7 +65,7 @@ names the field (for example `providers.azure-openai.authHeader`).
 |---|---|
 | id (the key) | 1-32 characters of `a-z`, `0-9`, `-`, starting with a letter. Its base-URL override setting is `NEXUS_<ID>_BASE_URL` with `-` as `_`. |
 | `label` | Short display name. |
-| `protocol` | `openai-chat` (default), `openai-responses` or `anthropic-messages`. |
+| `protocol` | `openai-chat` (default), `openai-responses`, `anthropic-messages`, `gemini-generate-content` or `bedrock-converse`. |
 | `baseUrl` | Optional (when omitted the operator supplies it through `NEXUS_<ID>_BASE_URL` or `--base-url`). Absolute URL; `{name}` placeholders are filled from `variables` (letters, digits, `.`, `_`, `-` only, so a value cannot change the host or path structure). `https` is required unless the destination is local (loopback, private network, or listed in `NEXUS_LOCAL_ORIGINS`). No credentials, fragment or other scheme. |
 | `query` | Fixed query parameters added to every request URL. |
 | `headers` | Extra static headers. `Host`, framing headers, cookies, forwarding headers and credential headers are refused; values may not contain line breaks. |

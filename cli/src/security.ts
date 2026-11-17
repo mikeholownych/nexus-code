@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
-import { parseEgressPolicy, type EgressPolicy } from "./core/egress_policy.js";
+import { egressPolicyFromEnv, workspaceRelaxesEgress, type EgressPolicy } from "./core/egress_policy.js";
 import { isTestPath } from "./tester.js";
 import { FILE_EDIT_TOOLS } from "./file_diff.js";
 
@@ -124,7 +124,7 @@ export interface SecurityPolicy {
   protectedPaths?: string[];
   allowedDomains?: string[];
   verificationPaths?: VerificationPathsPolicy;
-  /** CS-8: the egress inspector's mode and allowed destinations (core/egress_inspector.ts). */
+  /** CS-8: the egress inspector's mode and allowed destinations, from the operator's environment (NEXUS_EGRESS_POLICY), never from this file. */
   egressInspector?: EgressPolicy;
 }
 
@@ -322,6 +322,9 @@ export class SecurityManager {
       try {
         const raw = fs.readFileSync(policyPath, "utf-8");
         const parsed = JSON.parse(raw);
+        if (workspaceRelaxesEgress(parsed.egressInspector)) {
+          process.stderr.write("[nexus] .nexus-security.json asks to relax the egress inspector; ignored (a repository cannot relax it). Set NEXUS_EGRESS_POLICY in your own environment instead.\n");
+        }
         return {
           blockedCommands: [
             ...DEFAULT_BLOCKED_COMMANDS,
@@ -333,7 +336,7 @@ export class SecurityManager {
           ],
           allowedDomains: Array.isArray(parsed.allowedDomains) ? parsed.allowedDomains : undefined,
           verificationPaths: parseVerificationPolicy(parsed.verificationPaths),
-          egressInspector: parseEgressPolicy(parsed.egressInspector),
+          egressInspector: egressPolicyFromEnv(),
         };
       } catch {
         // Fallback to defaults
@@ -345,7 +348,7 @@ export class SecurityManager {
       protectedPaths: [...DEFAULT_PROTECTED_PATHS],
       allowedDomains: undefined,
       verificationPaths: parseVerificationPolicy(undefined),
-      egressInspector: parseEgressPolicy(undefined),
+      egressInspector: egressPolicyFromEnv(),
     };
   }
 

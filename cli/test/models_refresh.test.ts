@@ -98,3 +98,29 @@ test("a corrupt cache is ignored", () => {
   assert.equal(snapshotCacheDate(), undefined);
   assert.ok(snapshotProvider("openai"));
 });
+
+test("the 30 MiB cap counts bytes, by declared length and while streaming, and stops reading at the cap", async () => {
+  const cap = 30 * 1024 * 1024;
+  // declared too large: refused before a body is read
+  const declared = async () => new Response("{}", { status: 200, headers: { "content-length": String(cap + 1) } });
+  await assert.rejects(refreshModelsCache({ pins, fetchImpl: declared as unknown as typeof fetch }), /larger than the 30 MiB limit/);
+  // no declared length, body streams past the cap: multi-byte characters would pass a character count (10M x 3 bytes = 30M chars < cap chars is not the case; use 11M x 3 bytes)
+  let pulled = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulled += 1024 * 1024;
+      controller.enqueue(new Uint8Array(1024 * 1024));
+      if (pulled > cap * 3) controller.close();
+    },
+  });
+  const streaming = async () => new Response(stream, { status: 200 });
+  await assert.rejects(refreshModelsCache({ pins, fetchImpl: streaming as unknown as typeof fetch }), /larger than the 30 MiB limit/);
+  assert.ok(pulled <= cap + 4 * 1024 * 1024, `stopped reading near the cap (${pulled} bytes pulled)`);
+});
+
+test("a body of multi-byte characters under the character count but over the byte cap is refused", async () => {
+  const cap = 30 * 1024 * 1024;
+  const body = "€".repeat(Math.floor(cap / 3) + 10); // about 30 MiB of characters /3, bytes just over the cap
+  assert.ok(body.length < cap && Buffer.byteLength(body) > cap);
+  await assert.rejects(refreshModelsCache({ pins, fetchImpl: (async () => ({ ok: true, status: 200, headers: new Headers(), body: null, text: async () => body })) as unknown as typeof fetch }), /larger than the 30 MiB limit/);
+});

@@ -16,7 +16,8 @@
  * wrongly flags, with the measured rates). It never removes content: a flagged result is labelled and fenced by the
  * caller, and the only change made inside the fence is that hidden characters are shown as `<U+XXXX>`.
  *
- * Every pattern starts with a literal and has only bounded runs, so matching is linear-time on any input.
+ * Every repetition in a pattern is bounded and scanning stops at MAX_SCAN_CHARS, so the work per result is bounded; the
+ * timing test in test/injection_scanner.test.ts runs hostile inputs against that bound.
  */
 import { TEMPLATE_TOKEN } from "../skills.js";
 
