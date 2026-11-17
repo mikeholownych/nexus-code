@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Cq4RTNaf1X9iJdLqgyrf1d",
+  "agent_id": "a36013f6442104ce2",
+  "subagent_type": "general-purpose",
+  "task_description": "PR-7 Bedrock Converse protocol",
+  "token_usage": {
+    "input_tokens": 46,
+    "cache_creation_tokens": 102481,
+    "cache_read_tokens": 2117571,
+    "output_tokens": 34453,
+    "api_call_count": 23
+  },
+  "started_at": "2026-11-17T17:38:40.07920599Z",
+  "completed_at": "2026-11-17T17:45:26.647605639Z"
+}

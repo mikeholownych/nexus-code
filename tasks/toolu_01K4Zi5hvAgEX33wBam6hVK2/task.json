@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01K4Zi5hvAgEX33wBam6hVK2",
+  "agent_id": "aca2b84cf47546f4f",
+  "subagent_type": "general-purpose",
+  "task_description": "PR-1 and PR-6 protocols",
+  "token_usage": {
+    "input_tokens": 436,
+    "cache_creation_tokens": 192310,
+    "cache_read_tokens": 24952915,
+    "output_tokens": 47038,
+    "api_call_count": 173
+  },
+  "started_at": "2026-11-17T17:38:35.610611291Z",
+  "completed_at": "2026-11-17T17:50:18.741947139Z"
+}
