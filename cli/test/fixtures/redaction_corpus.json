@@ -1,0 +1,23 @@
+{
+  "comment": "Shared by cli/test/redaction_parity.test.ts and the Rust test in core/src/bin/nexus_tui/redact.rs: both redactors must turn every `input` into `expected`. `⟦⟧` marks a join that is removed before use, so no key-shaped literal is committed. Cases marked `multiline` span lines and are checked on the TypeScript side only (Rust redacts line by line, with state, and has its own test).",
+  "cases": [
+    { "name": "bearer token", "input": "Authorization: Bearer abcdefghijklmnop", "expected": "Authorization: Bearer [REDACTED_TOKEN]" },
+    { "name": "short bearer value is left alone", "input": "Bearer short", "expected": "Bearer short" },
+    { "name": "bearer is case-insensitive", "input": "BEARER abcdefghijklmnopqrstuv", "expected": "Bearer [REDACTED_TOKEN]" },
+    { "name": "basic authorization", "input": "authorization=basic dXNlcjpwYXNzd29yZA==", "expected": "authorization=basic [REDACTED]" },
+    { "name": "proxy authorization", "input": "Proxy-Authorization: Basic abcdefghijkl", "expected": "Proxy-Authorization: Basic [REDACTED]" },
+    { "name": "authorization in JSON", "input": "{\"authorization\":\"Basic dXNlcjpwYXNzd29yZA==\"}", "expected": "{\"authorization\":\"Basic [REDACTED]\"}" },
+    { "name": "sk- key", "input": "key sk-⟦⟧abcdefghijklmnopqrstuvwxyz0123", "expected": "key [REDACTED_KEY]" },
+    { "name": "ghp_ key", "input": "ghp_⟦⟧0123456789abcdef0123456789abcdef0123", "expected": "[REDACTED_KEY]" },
+    { "name": "glpat- key", "input": "glpat-⟦⟧abcdefghij0123456789", "expected": "[REDACTED_KEY]" },
+    { "name": "short sk- value is left alone", "input": "sk-⟦⟧short", "expected": "sk-short" },
+    { "name": "password in JSON", "input": "{\"password\": \"hunter2hunter2\"}", "expected": "{\"password\": \"[REDACTED]\"}" },
+    { "name": "api key assignment", "input": "api_key=hunter2hunter2 next", "expected": "api_key=[REDACTED] next" },
+    { "name": "api-key header style", "input": "API-KEY: abcdefgh", "expected": "API-KEY: [REDACTED]" },
+    { "name": "six characters is the minimum value", "input": "TOKEN=abcdef", "expected": "TOKEN=[REDACTED]" },
+    { "name": "value under six characters is left alone", "input": "api_key=abc", "expected": "api_key=abc" },
+    { "name": "two secrets in one line", "input": "a sk-⟦⟧abcdefghijklmnopqrstuvwxyz0123 b password=hunter2x", "expected": "a [REDACTED_KEY] b password=[REDACTED]" },
+    { "name": "ordinary diagnostic", "input": "plain diagnostic: the secret garden has a token booth", "expected": "plain diagnostic: the secret garden has a token booth" },
+    { "name": "private key block", "multiline": true, "input": "x\n-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAK\n-----END RSA PRIVATE KEY-----\ny", "expected": "x\n[REDACTED_PRIVATE_KEY]\ny" }
+  ]
+}
