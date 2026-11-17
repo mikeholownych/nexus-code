@@ -22,6 +22,10 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 - CERI evidence store (audit F06, MQ-7 slice B): evidence paths are checked by resolved path, not by string prefix. A symlinked evaluation or run directory that leads outside the store is refused. Run ids must start with a letter or digit, be at most 128 characters, and avoid `..` and the `.abandoned-` marker. A run id that differs from an existing one only by case is refused. See `docs/CERI_EVIDENCE.md` for what the integrity record does and does not prove.
 - CERI baseline comparison (audit F02, MQ-7 slice C): a baseline is bound only when manifest hash, model name, digest and quantization, sampling, fixture identity (new `fixtureSha256`, `hashFixture`), evaluator and evaluation versions, configuration and toolchain all match. A mismatch gives a non-certifying result whose `identityBinding.mismatchedFields` names every differing field. `loadVerifiedBaseline` and `compareToVerifiedBaseline` are the certifying path. CONFIRMED_REGRESSION is no longer reachable from the `isRepeatReproduction` / `isPriorRegressionCandidate` flags (they are ignored for confirmation); it needs a verified baseline and a second verified run (`priorRunId`) that regressed the same assertion. The runner option `isRepeatReproduction` is replaced by `priorRunId`.
 
+### Added
+
+- Amazon Bedrock Converse protocol (`"protocol": "bedrock-converse"`, `"auth": "sigv4"` in `providers.json`): SigV4 signing on `node:crypto` with no new dependency, the AWS event-stream parser for ConverseStream, and a read-only AWS credential chain from the environment and the shared credentials and config files. Credentials are never printed or logged. Verified against AWS's published SigV4 test vectors and recorded fixtures (plan unit PR-7).
+
 ### Changed
 
 - The dependency deprecation check retries a transient npm registry failure (network error, timeout, truncated body, HTTP 429 or 5xx) up to 3 times, 1 s then 3 s apart, before failing closed; a 404 or 403 is a real answer and is not retried. A single registry blip had turned main red.
