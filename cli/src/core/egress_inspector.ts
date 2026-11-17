@@ -43,13 +43,25 @@ const MAX_ENV_BYTES = 64 * 1024;
 
 function parseDotenv(text: string): Array<[string, string]> {
   const out: Array<[string, string]> = [];
-  for (const line of text.split("\n")) {
-    const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
-    if (!m || line.trim().startsWith("#")) continue;
-    let value = m[2];
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
-    else value = value.replace(/\s+#.*$/, "");
-    out.push([m[1], value]);
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const body = line.startsWith("export ") ? line.slice(7).trimStart() : line;
+    const eq = body.indexOf("=");
+    if (eq < 1) continue;
+    const key = body.slice(0, eq).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    let value = body.slice(eq + 1).trim();
+    const quote = value[0];
+    const close = quote === '"' || quote === "'" ? value.indexOf(quote, 1) : -1;
+    // A quoted value is what is between the quotes, whatever follows (an inline comment included).
+    if (close > 0) value = value.slice(1, close);
+    else {
+      // An unquoted value ends at a ` #` or tab-`#` comment.
+      const cuts = [value.indexOf(" #"), value.indexOf("\t#")].filter((i) => i >= 0);
+      if (cuts.length) value = value.slice(0, Math.min(...cuts)).trimEnd();
+    }
+    out.push([key, value]);
   }
   return out;
 }
@@ -128,7 +140,41 @@ export interface CommandNetworkTarget {
   variables: string[];
 }
 
-const HOST_IN_URL = /\b(?:[a-z][a-z0-9+.-]*):\/\/(?:[^/\s@]*@)?(\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+)/g;
+/** A word longer than this is not parsed for hosts (still searched for secret values): bounds every scan below. */
+const MAX_WORD = 2048;
+const SCHEME_CHAR = /[a-z0-9+.-]/i;
+
+/** Hosts of every `scheme://...` in a word, found with `indexOf` and `new URL`, not a backtracking pattern. */
+function hostsOfUrls(word: string): string[] {
+  const hosts: string[] = [];
+  if (word.length > MAX_WORD) return hosts;
+  for (let at = word.indexOf("://"); at !== -1; at = word.indexOf("://", at + 3)) {
+    let start = at;
+    while (start > 0 && SCHEME_CHAR.test(word[start - 1])) start--;
+    if (start === at) continue;
+    try {
+      const host = new URL(word.slice(start)).hostname.replace(/^\[|\]$/g, "");
+      if (host) hosts.push(host);
+    } catch {
+      // not a URL: no host from this occurrence
+    }
+  }
+  return hosts;
+}
+
+/** The host a bare word names (`evil.example`, `me@evil.example:/tmp`, `1.2.3.4:80/x`), checked label by label: linear, no backtracking. */
+function hostOfBareWord(word: string): { host: string; hasUser: boolean } | undefined {
+  if (word.length > MAX_WORD || word.startsWith("-")) return undefined;
+  const slash = word.indexOf("/");
+  const authority = slash === -1 ? word : word.slice(0, slash);
+  const at = authority.lastIndexOf("@");
+  const host = (at === -1 ? authority : authority.slice(at + 1)).split(":")[0];
+  if (!host || host.length > 253) return undefined;
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) return { host, hasUser: at !== -1 };
+  const labels = host.split(".");
+  if (labels.length < 2 || labels.some((l) => l.length === 0 || l.length > 63 || !/^[A-Za-z0-9-]+$/.test(l))) return undefined;
+  return /^[A-Za-z]{2,}$/.test(labels[labels.length - 1]) ? { host, hasUser: at !== -1 } : undefined;
+}
 
 /** What the network commands in a shell line target and read. Only subcommands that start with a network tool are examined. */
 export function commandNetworkTargets(command: string): CommandNetworkTarget {
@@ -138,10 +184,9 @@ export function commandNetworkTargets(command: string): CommandNetworkTarget {
     if (!NETWORK_TOOLS.has(head)) continue;
     target.tools.push(head);
     for (const word of words.slice(1)) {
-      for (const m of word.matchAll(HOST_IN_URL)) target.hosts.push(m[1].replace(/^\[|\]$/g, ""));
-      const at = /^(?:[\w.-]+@)?([A-Za-z0-9.-]+\.[A-Za-z]{2,}|\d{1,3}(?:\.\d{1,3}){3}):?/.exec(word);
-      if (at && !word.includes("://") && !word.startsWith("-") && (word.includes("@") || head === "nc" || head === "ncat" || head === "netcat" || head === "telnet")) target.hosts.push(at[1]);
-      if (!word.includes("://") && !word.startsWith("-") && /^[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?:[:/]|$)/.test(word) && (head === "curl" || head === "wget" || head === "http" || head === "https" || head === "xh")) target.hosts.push(word.replace(/[:/].*$/, ""));
+      target.hosts.push(...hostsOfUrls(word));
+      const bare = word.includes("://") ? undefined : hostOfBareWord(word);
+      if (bare && (bare.hasUser || ["nc", "ncat", "netcat", "telnet", "curl", "wget", "http", "https", "xh"].includes(head))) target.hosts.push(bare.host);
       const file = word.replace(/^[^=]*=/, "").replace(/^[@<]/, "").replace(/^~\//, "");
       if (CREDENTIAL_FILE.test(file) && !TEMPLATE_FILE.test(file)) target.credentialFiles.push(file);
       for (const v of word.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g)) target.variables.push(v[1]);
