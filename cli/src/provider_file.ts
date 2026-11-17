@@ -44,8 +44,9 @@ function parseProvider(id: string, raw: unknown, localOrigins: readonly string[]
     if (!isObject(raw.variables)) throw new Error(`${f}.variables: must be an object`);
     variables = Object.fromEntries(Object.entries(raw.variables).map(([k, v]) => [k, typeof v === "string" ? v : ""]));
   }
-  if (typeof raw.baseUrl !== "string") throw new Error(`${f}.baseUrl: a URL is required`);
-  const baseUrl = validateBaseUrl(expandUrlTemplate(raw.baseUrl, variables, `${f}.baseUrl`), `${f}.baseUrl`, localOrigins);
+  // Omitted: the operator supplies the URL (NEXUS_<ID>_BASE_URL or --base-url), as for the generic `compatible` provider.
+  if (raw.baseUrl !== undefined && typeof raw.baseUrl !== "string") throw new Error(`${f}.baseUrl: must be a URL string`);
+  const baseUrl = raw.baseUrl === undefined ? undefined : validateBaseUrl(expandUrlTemplate(raw.baseUrl, variables, `${f}.baseUrl`), `${f}.baseUrl`, localOrigins);
 
   let authHeader: string | undefined;
   if (auth === "header") {
@@ -86,7 +87,7 @@ function parseProvider(id: string, raw: unknown, localOrigins: readonly string[]
     id: validateProviderId(id, `${f} (id)`),
     label,
     protocol,
-    baseUrl,
+    ...(baseUrl ? { baseUrl } : {}),
     ...(credentialEnv ? { credentialEnv } : {}),
     auth,
     ...(authHeader ? { authHeader } : {}),

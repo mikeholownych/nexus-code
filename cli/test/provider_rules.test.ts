@@ -20,7 +20,7 @@ test("built-in connections carry no header-name auth", () => {
 
 test("registry accessors list the built-ins and ignore inherited object keys", async () => {
   const { allProviders, providerIds } = await import("../src/providers.js");
-  assert.deepEqual(providerIds(), ["openrouter", "openai", "anthropic", "chatgpt", "copilot", "compatible"]);
-  assert.equal(allProviders().length, 6);
+  assert.deepEqual(providerIds().slice(0, 6), ["openrouter", "openai", "anthropic", "chatgpt", "copilot", "compatible"], "built-ins come first, in declaration order");
+  assert.ok(allProviders().length >= 6);
   for (const key of ["constructor", "__proto__", "toString"]) assert.equal(providerDefinition(key), undefined);
 });

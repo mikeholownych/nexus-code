@@ -381,7 +381,7 @@ export function registerProviderCommands(program: Command, prompts?: ProviderCli
         const base = baseUrl ? safeOriginOf(baseUrl) ?? "(invalid endpoint)" : "(set --base-url or " + baseUrlSetting(def.id) + ")";
         const found = resolveCredential(def.id, def.credentialEnv);
         const key = found ? pc.green(`connected via ${found.source}`) : pc.yellow(`not connected (${def.credentialEnv ? `$${def.credentialEnv} or ` : ""}nexus connect ${def.id})`);
-        console.log(`  ${pc.bold(def.id.padEnd(11))} ${def.protocol.padEnd(19)} ${base}${providerSource(def.id) === "providers.json" ? pc.dim("  · providers.json") : ""}`);
+        console.log(`  ${pc.bold(def.id.padEnd(11))} ${def.protocol.padEnd(19)} ${base}${providerSource(def.id) === "providers.json" ? pc.dim("  · providers.json") : providerSource(def.id) === "catalog" ? pc.dim("  · catalog") : ""}`);
         console.log(`  ${"".padEnd(11)} ${key}${def.methods.some((m) => m.unofficial) ? pc.dim("  · unofficial sign-in") : ""}`);
       }
       let config: HarnessConfig;

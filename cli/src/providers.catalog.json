@@ -1,0 +1,16 @@
+{
+  "providers": {
+    "mistral": { "label": "Mistral", "baseUrl": "https://api.mistral.ai/v1", "credentialEnv": "MISTRAL_API_KEY" },
+    "groq": { "label": "Groq", "baseUrl": "https://api.groq.com/openai/v1", "credentialEnv": "GROQ_API_KEY" },
+    "togetherai": { "label": "Together AI", "baseUrl": "https://api.together.ai/v1", "credentialEnv": "TOGETHER_API_KEY" },
+    "deepseek": { "label": "DeepSeek", "baseUrl": "https://api.deepseek.com", "credentialEnv": "DEEPSEEK_API_KEY" },
+    "xai": { "label": "xAI", "baseUrl": "https://api.x.ai/v1", "credentialEnv": "XAI_API_KEY" },
+    "fireworks-ai": { "label": "Fireworks AI", "baseUrl": "https://api.fireworks.ai/inference/v1", "credentialEnv": "FIREWORKS_API_KEY" },
+    "cerebras": { "label": "Cerebras", "baseUrl": "https://api.cerebras.ai/v1", "credentialEnv": "CEREBRAS_API_KEY" },
+    "perplexity": { "label": "Perplexity", "baseUrl": "https://api.perplexity.ai", "credentialEnv": "PERPLEXITY_API_KEY" },
+    "gemini": { "label": "Google Gemini (OpenAI-compatible)", "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai", "credentialEnv": "GEMINI_API_KEY" },
+    "cloudflare-workers-ai": { "label": "Cloudflare Workers AI", "credentialEnv": "CLOUDFLARE_API_KEY" },
+    "azure-openai": { "label": "Azure OpenAI", "auth": "header", "authHeader": "api-key", "query": { "api-version": "2024-10-21" }, "credentialEnv": "AZURE_OPENAI_API_KEY" },
+    "bedrock-openai": { "label": "Amazon Bedrock (OpenAI-compatible)", "credentialEnv": "AWS_BEARER_TOKEN_BEDROCK" }
+  }
+}

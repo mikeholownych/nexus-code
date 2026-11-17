@@ -11,7 +11,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
-import { LocalLlmClient, setCredentialAuthority } from "../src/client.js";
+import { InferenceError, LocalLlmClient, setCredentialAuthority } from "../src/client.js";
 import { parseProvidersDocument } from "../src/provider_file.js";
 import { allProviders, connectionFor, setOperatorProviders, type ProviderDefinition } from "../src/providers.js";
 import { UsageLedger } from "../src/usage.js";
@@ -22,11 +22,13 @@ const TOOLS: ToolDefinition[] = [{ type: "function", function: { name: "read_fil
 const msgs: ChatMessage[] = [{ role: "system", content: "sys" }, { role: "user", content: "hi" }];
 const KEY = "sk-matrix-key-0001";
 
-type Scenario = "text" | "tool";
+type Scenario = "text" | "tool" | "reasoning" | "truncated" | "error";
 
 /** The streamed reply a provider of this protocol sends for a scenario. */
 function reply(protocol: ProviderDefinition["protocol"], scenario: Scenario): string {
   if (protocol === "openai-chat") {
+    if (scenario === "reasoning") return sse({ id: "c1", choices: [{ index: 0, delta: { reasoning_content: "thinking it over" } }] }) + sse({ id: "c1", choices: [{ index: 0, delta: { content: "hello" }, finish_reason: "stop" }] }) + "data: [DONE]\n\n";
+    if (scenario === "truncated") return sse({ id: "c1", choices: [{ index: 0, delta: { content: "he" }, finish_reason: "length" }] }) + "data: [DONE]\n\n";
     return scenario === "text"
       ? sse({ id: "c1", choices: [{ index: 0, delta: { content: "hello" }, finish_reason: "stop" }] }) + "data: [DONE]\n\n"
       : sse({ id: "c1", choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call_1", type: "function", function: { name: "read_file", arguments: '{"path":"a.txt"}' } }] }, finish_reason: "tool_calls" }] }) + "data: [DONE]\n\n";
@@ -57,6 +59,10 @@ async function mock(protocol: ProviderDefinition["protocol"], scenario: Scenario
       let body: any;
       try { body = raw ? JSON.parse(raw) : undefined; } catch { body = raw; }
       seen.push({ method: req.method!, url: req.url!, headers: req.headers, body });
+      if (scenario === "error") {
+        res.writeHead(429, { "Content-Type": "application/json", "retry-after": "1" });
+        return res.end(JSON.stringify({ error: { type: "rate_limit_exceeded", message: "slow down" } }));
+      }
       res.writeHead(200, { "Content-Type": "text/event-stream" });
       res.end(reply(protocol, scenario));
     });
@@ -90,41 +96,52 @@ afterEach(() => {
 });
 
 const keyed = () => allProviders().filter((d) => d.auth !== "oauth");
-const OPERATOR_PATHS: Record<string, string> = { "azure-like": "/openai/deployments/gpt-4o", "groq-like": "/openai/v1", "xapi-like": "/v1", "responses-like": "/v1" };
-const BUILTIN_PATHS: Record<string, string> = { openrouter: "/api/v1", openai: "/v1", anthropic: "/v1", compatible: "/v1" };
 const OPERATION: Record<ProviderDefinition["protocol"], string> = { "openai-chat": "/chat/completions", "openai-responses": "/responses", "anthropic-messages": "/messages" };
+/** The path part of a definition's base URL; definitions with no URL (the operator supplies it) use a stand-in. */
+const basePathOf = (def: ProviderDefinition) => (def.baseUrl ? new URL(def.baseUrl).pathname.replace(/\/+$/, "") : "/custom/v1");
+
+const CATALOG = ["mistral", "groq", "togetherai", "deepseek", "xai", "fireworks-ai", "cerebras", "perplexity", "gemini", "cloudflare-workers-ai", "azure-openai", "bedrock-openai"];
 
 describe("per-definition request shape and reply parsing", () => {
-  test("the matrix covers every key-authenticated definition (built-in and operator)", () => {
-    assert.deepEqual(keyed().map((d) => d.id), ["openrouter", "openai", "anthropic", "compatible", ...Object.keys(OPERATOR_PATHS)]);
+  test("the matrix covers every key-authenticated definition: built-in, shipped catalog and operator", () => {
+    assert.deepEqual(keyed().map((d) => d.id), ["openrouter", "openai", "anthropic", "compatible", ...CATALOG, "azure-like", "groq-like", "xapi-like", "responses-like"]);
   });
 
-  for (const id of ["openrouter", "openai", "anthropic", "compatible", ...Object.keys(OPERATOR_PATHS)]) {
-    for (const scenario of ["text", "tool"] as const) {
-      test(`${id}: ${scenario}`, async () => {
-        const def = allProviders().find((d) => d.id === id)!;
-        const m = await mock(def.protocol, scenario);
+  for (const def of allProviders().filter((d) => d.auth !== "oauth").concat(OPERATOR_FIXTURES)) {
+    const scenarios: Scenario[] = def.protocol === "openai-chat" ? ["text", "tool", "reasoning", "truncated", "error"] : ["text", "tool"];
+    for (const scenario of scenarios) {
+      test(`${def.id}: ${scenario}`, async () => {
+        setOperatorProviders(OPERATOR_FIXTURES);
+        const d = allProviders().find((x) => x.id === def.id)!;
+        const m = await mock(d.protocol, scenario);
         try {
-          const basePath = OPERATOR_PATHS[id] ?? BUILTIN_PATHS[id];
-          const config = { provider: id, endpoint: `${m.origin}${basePath}`, model: "model-x", apiKey: KEY, maxSteps: 2, temperature: 0.2, workspace: os.tmpdir(), shell: "bash" } as HarnessConfig;
-          const out = await new LocalLlmClient(config).chatCompletionStream(msgs, TOOLS, undefined, "req-matrix");
-          if (scenario === "text") assert.equal(out.content, "hello");
-          else assert.deepEqual(out.tool_calls, [{ id: "call_1", type: "function", function: { name: "read_file", arguments: '{"path":"a.txt"}' } }]);
+          const basePath = basePathOf(d);
+          const config = { provider: d.id, endpoint: `${m.origin}${basePath}`, model: "model-x", apiKey: KEY, maxSteps: 2, temperature: 0.2, workspace: os.tmpdir(), shell: "bash" } as HarnessConfig;
+          const client = new LocalLlmClient(config);
+          if (scenario === "error") {
+            await assert.rejects(client.chatCompletionStream(msgs, TOOLS, undefined, "req-matrix"), (e: any) => e instanceof InferenceError && e.httpStatus === 429);
+          } else if (scenario === "truncated") {
+            await assert.rejects(client.chatCompletionStream(msgs, TOOLS, undefined, "req-matrix"), (e: any) => e instanceof InferenceError && e.kind === "output_truncated");
+          } else {
+            const out = await client.chatCompletionStream(msgs, TOOLS, undefined, "req-matrix");
+            if (scenario === "tool") assert.deepEqual(out.tool_calls, [{ id: "call_1", type: "function", function: { name: "read_file", arguments: '{"path":"a.txt"}' } }]);
+            else assert.equal(out.content, "hello", scenario === "reasoning" ? "reasoning text is not part of the answer" : undefined);
+          }
 
           const req = m.seen[0];
-          const conn = connectionFor(id, "model-x");
+          const conn = connectionFor(d.id, "model-x");
           assert.equal(req.method, "POST");
           const url = new URL(req.url, "http://x");
           assert.equal(url.pathname, `${basePath}${OPERATION[conn.protocol]}`);
-          assert.deepEqual(Object.fromEntries(url.searchParams), def.query ?? {});
+          assert.deepEqual(Object.fromEntries(url.searchParams), d.query ?? {});
           // Exactly the credential header the definition declares carries the key; no other header does.
           const carrying = Object.entries(req.headers).filter(([, v]) => String(v).includes(KEY)).map(([k]) => k);
           const expected = conn.auth === "x-api-key" ? "x-api-key" : conn.auth === "header" ? conn.authHeader!.toLowerCase() : "authorization";
           assert.deepEqual(carrying, [expected]);
-          for (const [k, v] of Object.entries(def.staticHeaders ?? {})) assert.equal(req.headers[k.toLowerCase()], v);
+          for (const [k, v] of Object.entries(d.staticHeaders ?? {})) assert.equal(req.headers[k.toLowerCase()], v);
           assert.equal(req.headers["x-task-class"], undefined);
           assert.equal(req.body.stream, true);
-          for (const p of def.omitParams ?? []) assert.equal(req.body[p], undefined, `${p} is never sent`);
+          for (const p of d.omitParams ?? []) assert.equal(req.body[p], undefined, `${p} is never sent`);
         } finally { await m.close(); }
       });
     }
