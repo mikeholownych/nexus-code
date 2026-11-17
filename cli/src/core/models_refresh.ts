@@ -73,6 +73,31 @@ export interface RefreshResult {
   rejected: string[];
 }
 
+/** The response body as text, refusing more than `maxBytes` bytes: by the declared length first, then while reading, so an oversized body is never held whole. */
+async function readCapped(res: Response, maxBytes: number): Promise<string> {
+  const declared = Number(res.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) throw new Error("models.dev data is larger than the 30 MiB limit");
+  if (!res.body) {
+    const text = await res.text();
+    if (Buffer.byteLength(text) > maxBytes) throw new Error("models.dev data is larger than the 30 MiB limit");
+    return text;
+  }
+  const chunks: Buffer[] = [];
+  let total = 0;
+  const reader = res.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new Error("models.dev data is larger than the 30 MiB limit");
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 /**
  * Fetch models.dev (an explicit operator action), validate, and write the local cache atomically with private
  * permissions. `fetchImpl` is injectable so tests never touch the network.
@@ -81,8 +106,7 @@ export async function refreshModelsCache(opts: { pins: Record<string, ProviderPi
   const doFetch = opts.fetchImpl ?? fetch;
   const res = await doFetch(MODELS_API_URL, { signal: opts.signal ?? AbortSignal.timeout(30_000), redirect: "error" });
   if (!res.ok) throw new Error(`models.dev answered HTTP ${res.status}`);
-  const text = await res.text();
-  if (text.length > MAX_API_BYTES) throw new Error("models.dev data is larger than the 30 MiB limit");
+  const text = await readCapped(res, MAX_API_BYTES);
   let api: unknown;
   try {
     api = JSON.parse(text);

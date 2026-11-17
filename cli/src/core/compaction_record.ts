@@ -109,8 +109,7 @@ export function fullTranscript(saved: ChatMessage[], archivedOriginals: ChatMess
 
 /**
  * Whether the saved conversation still holds what a compaction inserted. False means the compaction's own output is
- * missing or altered (a damaged record), which is the case where the full transcript is restored instead. `protect` is the
- * same persistence protection the saved messages went through.
+ * missing or altered (a damaged record), which is the case where the full transcript is restored instead.
  */
 export function insertedBlockPresent(record: CompactionRecord, saved: ChatMessage[]): boolean {
   if (!record.inserted) return true;
