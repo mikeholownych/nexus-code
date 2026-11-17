@@ -20,6 +20,7 @@
  */
 import type { DurableOperationState, OperationPolicy, WorkUnit } from "./operation.js";
 import { specialistInputsProblem } from "./specialist_profiles.js";
+import { parseBoundaryRules } from "./boundary_rules.js";
 
 /** The operation document version this build writes. Independent of the task-store envelope version. */
 export const CURRENT_OPERATION_SCHEMA_VERSION = 2;
@@ -100,6 +101,15 @@ export function validateOperationState(state: DurableOperationState): void {
   }
   if (!state.policy || typeof state.policy !== "object" || Array.isArray(state.policy)) {
     throw new InvalidOperationStateError(`operation ${state.id}: policy is not an object`);
+  }
+
+  // A damaged boundary declaration is refused, not skipped: skipping it would silently switch the check off.
+  if (state.boundaries !== undefined) {
+    try {
+      parseBoundaryRules(state.boundaries);
+    } catch (error) {
+      throw new InvalidOperationStateError(`operation ${state.id}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   const ids = new Set<string>();

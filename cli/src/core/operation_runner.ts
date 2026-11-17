@@ -24,6 +24,7 @@ import type { InferenceFailure } from "./turn.js";
 import { OperationRevalidator } from "./operation_runner_revalidation.js";
 import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./operation_runner_diagnostics.js";
 import type { OperationStore } from "./operation_runner_persistence.js";
+import type { BoundaryRules } from "./boundary_rules.js";
 
 export { OperationStore, OperationLockedError, migrateLegacyAccountIdentities } from "./operation_runner_persistence.js";
 export { AgentWorkUnitExecutor } from "./operation_runner_execution.js";
@@ -39,6 +40,8 @@ export interface UnitRunContext {
   dependencies: Array<{ id: string; title: string; summary: string; verification?: { command: string; status: string; hasExecutedTests: boolean; definitionBound?: false }; failed?: true }>;
   /** Isolated operations: the commit the operation started from, which a review unit diffs against. */
   baseCommit?: string;
+  /** SI-5: the operation's declared boundary rules, for a review unit's evidence package. */
+  boundaries?: BoundaryRules;
   /** Non-isolated operations: HEAD when the operation first ran (absent outside Git, or for older operations). */
   startCommit?: string;
   /** Why the unit is being resumed on this resource (undefined on its first run). */
@@ -358,6 +361,7 @@ export class OperationRunner {
         return { id, title: dep.title, summary: dep.result?.summary ?? failedRun?.summary ?? "", ...(verification ? { verification } : {}), ...(failedRun ? { failed: true as const } : {}) };
       }),
       ...(this.state.git?.baseCommit ? { baseCommit: this.state.git.baseCommit } : {}),
+      ...(this.state.boundaries ? { boundaries: this.state.boundaries } : {}),
       ...(!this.state.git && this.state.startCommit ? { startCommit: this.state.startCommit } : {}),
       ...(unit.agentTaskId
         ? {

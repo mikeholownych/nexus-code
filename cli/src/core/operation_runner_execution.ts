@@ -748,6 +748,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       ...(ctx.operationId ? { operationId: ctx.operationId } : {}),
       unitId: unit.id,
       ...(unit.authorizedScope?.length ? { authorizedScope: unit.authorizedScope } : {}),
+      ...(ctx.boundaries ? { boundaries: ctx.boundaries } : {}),
       objective: `${ctx.objective}\n\nReview task: ${unit.prompt}`,
       baselineCommit: "base" in candidate ? candidate.base : "unknown",
       unifiedDiff: "diff" in candidate ? redactForPersistence(plainNote + candidateDiffText(candidate)) : "",

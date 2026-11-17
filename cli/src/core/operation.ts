@@ -50,6 +50,7 @@ import type { ResourceConditionRecord, ResourceDescriptor, ResourceRegistry, Wor
 import type { InferenceFailure } from "./turn.js";
 import { REVISION_MARKER } from "./scheduler.js";
 import { CURRENT_OPERATION_SCHEMA_VERSION, validateOperationPolicy, validateResourceSlots } from "./operation_schema.js";
+import type { BoundaryRules } from "./boundary_rules.js";
 export { ConvergenceScheduler, DecisionRejected, isRequired } from "./scheduler.js";
 export {
   CURRENT_OPERATION_SCHEMA_VERSION,
@@ -367,6 +368,8 @@ export interface DurableOperationState {
   decisions?: AppliedDecision[];
   /** Present only for an isolated operation; absent keeps the original in-place behaviour. */
   git?: OperationGitState;
+  /** SI-5: operator-declared boundary rules the review gate checks on each candidate diff (core/boundary_rules.ts). Absent: no boundary check. */
+  boundaries?: BoundaryRules;
   /**
    * Non-isolated operations in a Git checkout: HEAD when the operation first ran. A review unit diffs against it, so
    * work a unit committed is still part of the candidate. Isolated operations use `git.baseCommit` instead.

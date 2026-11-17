@@ -56,7 +56,7 @@ From the ledger pass (`docs/v1.1.4/FINDINGS.md`, `docs/releases/v1.1.4.md`, `v1.
 | DV-4 | attempt lineage; differential verification against a declared reference (G-DV-3, G-DV-5) | D, "v1.2.x" |
 | CG-5 | LSP references and impact analysis (G-CG-7, G-CG-8), only if SI-5 needs it | D, plan only |
 | compaction-03 | post-compaction check that every gating requirement is present | U; owner CX-5 (acceptance set by the 2026-11-15 compaction audit) |
-| cumulative-change-03 | needs SI-5 | D |
+| cumulative-change-03 | active (VC-1: boundary check on the cumulative diff, 2026-11-17) | done |
 | G-SI-6 | `compact --llm` summaries unlabelled in a system message; no ledger integrity binding | U |
 | G-AI-3 / G-AI-4 | cross-operation architecture evaluation; CERI domains for architecture, contract breakage, concurrency | U (partly covered) |
 | plan §10 | Codex refinements: rules-as-data with examples, untrusted-block markers, never-truncate-a-requirement, EXECUTION_UNKNOWN wording, re-hash verifier digest each run | U (partly adopted: TI-1) |
