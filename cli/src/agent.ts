@@ -54,6 +54,7 @@ import { snapshotModel } from "./core/models_snapshot.js";
 import { ProviderRecoveryController, RecoveryCancelled, RecoveryClock, RecoveryHooks, RecoveryPolicy, realRecoveryClock, recoveryPolicyFromEnv, startupProblemWarning, startupEndpointProblems, type StartupEndpointProblem } from "./core/provider_recovery.js";
 import { LocalTraceRecorder, type SpanHandle, type TraceAttributes, type TraceStatus } from "./core/trace.js";
 import { ObjectiveLedger, SteeringConflict, READ_OBJECTIVE_CAPABILITY, REQUIREMENTS_CAPABILITY, STEERING_PREFIX, invalidateVerified, requirementDone, blockedRequirements, gatingRequirements, isNewObjective, ledgerNeedsPinning, openRequirements, priorAttempt, queueSteering, steeringNegations, recordSteeringConflict, resolveSteeringConflict, settleSteeringConflicts, recoveryInput, renderPinnedLedger, missingGatingRequirements, PINNED_LEDGER_PREFIX, renderRecoveryContext, trackingOf } from "./core/objective.js";
+import { maskToolOutputs, maskThresholdFromEnv } from "./core/tool_output_mask.js";
 import { ELIDED_FINDINGS_PREFIX, READ_FINDINGS_CAPABILITY, READ_ARCHIVE_CAPABILITY, readArchive, condenseFinding, elidedFindingsNote, findingId, incompleteOutputNotice, indexFinding, isCondensedFinding } from "./core/findings.js";
 import { FILE_EDIT_TOOLS, snapshot } from "./file_diff.js";
 import { TurnEvidence, TurnReason } from "./core/turn.js";
@@ -2097,6 +2098,11 @@ export class AutonomousAgent {
    * so compaction can neither summarise nor drop it.
    */
   private requestMessages(source: ChatMessage[] = this.messages): ChatMessage[] {
+    // CX-4: old tool results the model already acted on are masked last, so presence checks above see the stored ones.
+    return maskToolOutputs(this.requestMessagesUnmasked(source), maskThresholdFromEnv());
+  }
+
+  private requestMessagesUnmasked(source: ChatMessage[]): ChatMessage[] {
     const messages = labelSummaryBlocks(source);
     const ledger = this.objective;
     if (!ledger || !this.durable || messages.length === 0) return messages;
