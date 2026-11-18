@@ -212,6 +212,8 @@ Process-wide limits, shared by all roles and subagents and enforced before each 
 `NEXUS_CLOUD_MAX_COST_USD` (only for providers that report cost; with any other provider the request is refused
 rather than guessed). These are budgets, not a guarantee of the provider's invoice.
 
+Prompt caching is opt-in: with `NEXUS_PROMPT_CACHE=1`, the built-in Anthropic provider (the only one that declares `promptCache: "anthropic"`) sends `cache_control` breakpoints on the system prompt and the pinned ledger. It has not been verified against the live API and Anthropic ignores a prefix below its minimum cacheable length, so a short prompt shows no cache hits. Other protocols cache automatically on the provider side (OpenAI, Gemini) or need provider-specific markers not implemented here (Bedrock `cachePoint`). The usage summary reports `cached N of M input tokens (P%)` whenever a provider reported cache counts.
+
 Per-provider limits (`NEXUS_CLOUD_LIMITS`) are a JSON object keyed by provider id, applied on top of the process-wide limits:
 `NEXUS_CLOUD_LIMITS='{"openrouter":{"maxCostUsd":5,"maxTokens":2000000},"groq":{"maxRequests":200}}'`. Keys per provider are
 `maxRequests`, `maxTokens` and `maxCostUsd`; each counts only that provider's requests. A provider that reports no cost is priced

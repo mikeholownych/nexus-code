@@ -238,6 +238,22 @@ describe("connections: endpoint paths, credentials and disclosure gate", () => {
     } finally { await m.close(); }
   });
 
+  test("Anthropic requests carry cache_control only with the operator's NEXUS_PROMPT_CACHE=1", async () => {
+    const m = await mock((_s, res) => json(res, 200, { content: [{ type: "text", text: "ok" }], stop_reason: "end_turn" }));
+    const previous = process.env.NEXUS_PROMPT_CACHE;
+    try {
+      delete process.env.NEXUS_PROMPT_CACHE;
+      await new LocalLlmClient(cfg("anthropic", `${m.url}/v1`)).chatCompletion(msgs, []);
+      process.env.NEXUS_PROMPT_CACHE = "1";
+      await new LocalLlmClient(cfg("anthropic", `${m.url}/v1`)).chatCompletion(msgs, []);
+      assert.doesNotMatch(JSON.stringify(m.seen[0].body), /cache_control/);
+      assert.deepEqual(m.seen[1].body.system, [{ type: "text", text: "sys", cache_control: { type: "ephemeral" } }]);
+    } finally {
+      if (previous === undefined) delete process.env.NEXUS_PROMPT_CACHE; else process.env.NEXUS_PROMPT_CACHE = previous;
+      await m.close();
+    }
+  });
+
   test("a provider connection never borrows the appliance's stored gateway token, even for a listed origin", async () => {
     const m = await mock((_s, res) => json(res, 200, {}));
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cloud-home-"));

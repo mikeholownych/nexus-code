@@ -3,6 +3,8 @@ import * as path from "node:path";
 import { PATHSPEC_MODE_ENV, verifyCheckout } from "./core/checkout_trust.js";
 import { nestedRepositoryReason, UntrustedCheckoutError } from "./worktrunk/git.js";
 import * as fs from "node:fs";
+import { expandImports } from "./project_rules.js";
+import { isWorkspaceTrusted } from "./workspace_trust.js";
 
 export interface GitInfo {
   isRepo: boolean;
@@ -92,21 +94,23 @@ export function getGitInfo(workspace: string): GitInfo {
   }
 }
 
-export function getProjectRules(workspace: string): string | null {
-  const candidates = [
-    "AGENTS.md",
-    "CLAUDE.md",
-    "CODEX.md",
-    ".nexusrules",
-  ];
+/**
+ * The first non-empty project instruction file, with `@path` imports expanded when the workspace is trusted (see
+ * project_rules.ts). The heading names the file and every import that was read, so the loaded set is visible.
+ */
+export function getProjectRules(workspace: string, options: { trusted?: boolean } = {}): string | null {
+  const candidates = ["AGENTS.md", "CLAUDE.md", "CODEX.md", ".nexusrules"];
+  const trusted = options.trusted ?? isWorkspaceTrusted(workspace);
 
   for (const filename of candidates) {
     const fullPath = path.join(workspace, filename);
     if (fs.existsSync(fullPath)) {
       try {
-        const content = fs.readFileSync(fullPath, "utf-8").trim();
-        if (content) {
-          return `### Project Instructions (loaded from ${filename}):\n${content}`;
+        const raw = fs.readFileSync(fullPath, "utf-8").trim();
+        if (raw) {
+          const { text, imports } = expandImports(fullPath, raw, workspace, trusted);
+          const loaded = imports.length ? `${filename}; imports: ${imports.join(", ")}` : filename;
+          return `### Project Instructions (loaded from ${loaded}):\n${text.trim()}`;
         }
       } catch {
         // ignore read error

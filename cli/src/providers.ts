@@ -57,6 +57,8 @@ export interface ProviderDefinition {
   query?: Record<string, string>;
   /** Ask the provider to report usage (and, where offered, cost) on streamed responses. */
   usage: "openrouter" | "stream-options" | "native";
+  /** The request cache hints this backend understands (anthropic: cache_control breakpoints). Sent only when the operator sets NEXUS_PROMPT_CACHE=1. */
+  promptCache?: "anthropic";
 }
 
 export const PROVIDERS: Readonly<Record<string, ProviderDefinition>> = Object.freeze({
@@ -93,6 +95,7 @@ export const PROVIDERS: Readonly<Record<string, ProviderDefinition>> = Object.fr
     auth: "x-api-key",
     staticHeaders: { "anthropic-version": "2023-06-01" },
     usage: "native",
+    promptCache: "anthropic",
     methods: [{ id: "api-key", label: "API key", kind: "key" }],
   },
   /** ChatGPT Plus/Pro plan through the Codex backend (unofficial: Codex CLI sign-in). */
@@ -209,6 +212,12 @@ export interface ResolvedConnection {
   sendTaskClass: boolean;
   streamOnly: boolean;
   omitParams: string[];
+  promptCache?: "anthropic";
+}
+
+/** Whether requests to this connection carry cache hints: the provider declares the capability and the operator opted in. */
+export function promptCacheEnabled(conn: Pick<ResolvedConnection, "promptCache" | "protocol">, env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.NEXUS_PROMPT_CACHE === "1" && conn.promptCache === "anthropic" && conn.protocol === "anthropic-messages";
 }
 
 /** The wire protocol a provider's rules assign to this model, when one applies. */
@@ -235,6 +244,7 @@ export function connectionFor(providerId: string | undefined, model = ""): Resol
     sendTaskClass: false,
     streamOnly: Boolean(def.streamOnly),
     omitParams: [...(def.omitParams ?? [])],
+    ...(def.promptCache ? { promptCache: def.promptCache } : {}),
   };
 }
 

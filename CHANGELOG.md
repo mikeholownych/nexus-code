@@ -8,6 +8,11 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 ## [Unreleased]
 
+### Added
+
+- Project instruction files expand `@path` imports (plan unit CX-7): in `AGENTS.md`, `CLAUDE.md`, `CODEX.md` or `.nexusrules`, a token such as `@docs/rules.md` or `@AGENTS.md` is replaced by that file's contents. Imports resolve against the importing file, must stay inside the workspace by real path (a symlink out is refused), must be regular files of at most 64 KiB (256 KiB in total), are read once each, and nest at most 5 levels, so a cycle ends at once. Code spans, code fences, `@mentions` and anything unresolvable stay literal. Only a trusted workspace is expanded. The heading of the instruction block lists the file and every import that was read (`loaded from CLAUDE.md; imports: AGENTS.md`). Still the first non-empty file only; the files are not merged.
+- Prompt-cache hints for Anthropic (plan unit CX-6, opt-in): with `NEXUS_PROMPT_CACHE=1`, requests to a provider that declares `promptCache: "anthropic"` (built-in Anthropic only) send `system` as blocks with `cache_control: {"type":"ephemeral"}` on the first block (the system prompt, which also covers the tools) and the last (the pinned ledger), two of the four breakpoints. Off by default and not verified against the live API (the request shape is covered by tests and a local mock). The usage summary (`/tokens`, run summaries) now reports the cached share of input tokens, for example `cached 300 of 500 input tokens (60%)`, from the provider's reported cache counts, counting Anthropic and Bedrock input as separate from cache reads and writes.
+
 ## [v1.2.1] - 2026-11-18
 
 ### Security
