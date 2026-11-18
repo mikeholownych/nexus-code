@@ -8,6 +8,7 @@ import { type RecoveryDenial } from "./execution_tracking.js";
 import { ensurePrivateDir, appendPrivateFile } from "./durable_file.js";
 import { type TruncatedCall } from "../client.js";
 import { TurnResult, ProviderRecoveryRecord } from "./turn.js";
+import type { NeedsInputQuestion } from "./needs_input.js";
 import { createHash } from "node:crypto";
 import { persistableEndpoint } from "./endpoint_identity.js";
 import { InformationFlowBoundary } from "./egress.js";
@@ -36,6 +37,8 @@ export interface SubagentResult {
   completed: boolean;
   summary: string;
   reason?: string;
+  /** VC-9: headless decisions the subagent needed and could not take (it stopped at the first call that raised one); the parent surfaces them. */
+  needsInput?: NeedsInputQuestion[];
 }
 
 export interface AgentObserver {

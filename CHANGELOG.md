@@ -11,6 +11,9 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 ### Changed
 - Redaction variants (MT-3, part 2): `formatSafeSidecarText` calls the shared `safeTerminal` instead of restating it, with output byte-identical; the remaining variants are kept and each has a reason in `docs/v1.2.1/REDACTION_VARIANTS.md`. New `cli/test/mt3_redaction_characterization.test.ts` pins the exact output of 23 redaction and terminal-safe variants over a shared corpus.
 
+### Added
+- VC-9: a delegated subagent's headless decision (tool approval, verification-file edit, verifier approval) is no longer lost. The subagent stops at it and returns the question (same id and shape, plus `subagent: { depth, objective }`) to its parent, whose headless run ends BLOCKED / NEEDS_INPUT; `--answer` resumes it (the re-spawned subagent receives the answers). Further questions raised in the same turn are listed in `furtherNeedsInput`. The subagent itself still never approves. Interactive runs and top-level behaviour are unchanged. The child is spawned again on resume, not resumed. The requirement-verifier approval now has its own test.
+
 ### Fixed
 - The real language-server job's Rust setup: rust-analyzer is now added to the default toolchain (the product launches servers outside the repository, where the repository's pinned toolchain does not apply), and the test's availability probe runs in the fixture directory, as the product does.
 
@@ -21,6 +24,7 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 - The weekly real language-server job requires typescript, python and go (all three passed on the first hosted run); the rust-analyzer case still runs but reports as a todo, because the product could not start rust-analyzer on the runner although its `--version` probe passed (cause undiagnosed).
 
 ### Added
+- Behavioural differential against a declared reference (plan unit VC-3, rest): `/requirements differential <R> --inputs <file>` runs the objective's latest verifier command and the operator-authorised reference command on each input (a JSON array of at most 50 strings, each at most 64 KiB) in the sandbox without network (30 s per run, output capped at 1 MiB), compares normalised output and exit code, and reports "run: N agree, M diverge" with the first differing line per divergence. A timed-out, errored or over-cap run is inconclusive, not agreement. Agreement on tested inputs is not equivalence; the model cannot trigger it or name the reference.
 - Real language servers (CS-6): `cli/test/lsp_real_servers.test.ts` runs the product's LSP client against typescript-language-server, pyright, rust-analyzer and gopls on a tiny fixture project (a deliberate error is reported; a clean file is a real empty report, not `unavailable`), skipping a server that is not installed unless `NEXUS_LSP_REQUIRE` names it. A weekly, non-required `lsp-real-servers` workflow installs the servers and requires TypeScript and Python. Not yet run on a hosted runner. See `docs/LSP_REAL_SERVERS.md`.
 
 ### Fixed

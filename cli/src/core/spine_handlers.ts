@@ -486,8 +486,10 @@ export function setupSpineHandlersImpl(this: any): void {
         { durable: false }
       );
       subagent.inheritTraceContext(this);
+      subagent.setOperatorAnswers(this.operatorAnswers);
       const subResult = await subagent.runSubagent(subPrompt, this.activeTurn?.onConfirm, this.activeTurn?.controller.signal);
       this.ui.stopSpinner(subResult.completed);
+      if (subResult.needsInput?.length) this.acceptSubagentQuestions(subResult.needsInput);
       if (!subResult.completed) {
         return { success: false, output: subResult.summary, error: `Subagent did not complete: ${subResult.reason}` };
       }
