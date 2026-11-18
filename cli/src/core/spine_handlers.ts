@@ -12,6 +12,7 @@ import { TOOL_GROUPS } from "./tool_groups.js";
 import { snapshotVerifierDefinitionWithReason, requiresWorkspaceVerifierDefinitionBinding, trustedDeliverablesFromBaseline, testsChangedSince, verifierDefinitionChangedSince, verifierDefinitionMatchesSnapshot, tddRedTestsMatchSnapshot, type Independence } from "./independent_check.js";
 import { VerificationEvidence } from "./turn.js";
 import { createHash } from "node:crypto";
+import { unmetObligationsMessage } from "./regression_obligations.js";
 import { RequirementUpdate, applyRequirementUpdates, invalidateVerified, isHardRequirement, readObjective, blockedRequirements, failedCheckFrom, attemptEvidence, describeAttemptEvidence, gatingRequirements, openRequirements, priorAttempt, convergenceSignal, convergenceHistory, recordAttempt } from "./objective.js";
 import { readArchive, readFindings } from "./findings.js";
 import { resolveMaskedOutput } from "./tool_output_mask.js";
@@ -419,6 +420,11 @@ export function setupSpineHandlersImpl(this: any): void {
       } else {
         this.verifiedWorktreeCompletion = !worktreeHasChanges;
       }
+    }
+    // DV-3: after the verifier above has had its chance to replay, an operator-authorised obligation still unmet blocks completion.
+    if (this.objective && (this.depth === 0 || this.role === "implementer" || this.role === "tester")) {
+      const unmet = unmetObligationsMessage(this.objective);
+      if (unmet) return { success: false, output: "", error: unmet };
     }
     this.completionSummary = { summary: args.summary || "Task completed.", notes: args.notes };
     return {

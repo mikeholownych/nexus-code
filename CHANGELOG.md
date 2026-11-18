@@ -12,6 +12,7 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 - `cli/test/loop_patterns.test.ts` and `docs/LOOP_PATTERNS.md` (CS-11): OpenHands' stuck-detector patterns replayed as deterministic scripted transcripts against the real agent turn, asserting what Nexus actually does with and without continuation. One gap is documented, not fixed: a command that fails with different text each time is neither noted nor stopped (bounded by the step limit).
 
 ### Fixed
+- Regression obligations (v1.2.1 plan VC-2): `task_completed` is now refused while an operator-authorised obligation is unmet, naming the obligation, its test and the command that replays it; a passing run of that command lets completion proceed, and a run with no obligations is unchanged. A weakening edit to an obligated test is now recorded for edits made through `run_command` as well (from the CS-2 shell snapshot and diff), and for file-tool edits when no UI observer is attached, which was previously never recorded.
 - A user asking the model to show an example tool call (a message with an example word and a call word) no longer triggers the call-written-as-text recovery for that turn (CS-5): the client does not ask again or force `tool_choice: required`, so under auto or full-access approval a demonstration cannot end as an executed call. A request such as "add an example to the README" does not switch the recovery off.
 
 ### Changed
