@@ -8,6 +8,9 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 ## [Unreleased]
 
+### Fixed
+- The nightly real-project smoke (MQ-3) failed on its first hosted run on the pytest repository: the workflow installed pytest with `pip install --user`, the smoke runs the CLI under a throwaway `HOME`, and the verifier could not import it, while the script's own pytest probe ran under the real home and said it was available. The probe now runs under an isolated home (and says to install system-wide), and the workflow installs pytest system-wide.
+
 ### Changed
 - The verifier convergence stop (DV-2: a stalled, oscillating or diverging failure history ends the turn BLOCKED with the attempt history) is now also judged when a verifier command is run through `run_tests` (or `run_command`), not only when the model calls `task_completed` (VC-7). A loop that only edits and re-runs the tests no longer waits for the step limit. A failure that changes each time, or a re-run on unchanged files, does not trip it.
 
