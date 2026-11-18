@@ -149,3 +149,20 @@ test("a timed-out attempt and a skipped re-report of unchanged inputs are not re
   failing(ledger, ["parses empty input"], "c3");
   assert.equal(ob.replays.length, 1, "a real run of the changed candidate is a replay");
 });
+
+test("the completion refusal names each unmet obligation and its replay command, and is silent once replayed", async () => {
+  const { unmetObligationsMessage } = await import("../src/core/regression_obligations.js");
+  const ledger = createLedger("fix it");
+  assert.equal(unmetObligationsMessage(ledger), undefined, "no obligations: nothing to say");
+  assert.equal(unmetObligationsMessage(undefined), undefined);
+  const a = failing(ledger, ["parses empty input"], "c1");
+  authoriseObligation(ledger, { authority: "operator", attempt: a.n, testName: "parses empty input" });
+  const msg = unmetObligationsMessage(ledger)!;
+  assert.match(msg, /RO1/);
+  assert.match(msg, /parses empty input/);
+  assert.match(msg, /npm test/);
+  failing(ledger, ["parses empty input"], "c2");
+  assert.match(unmetObligationsMessage(ledger)!, /last replay: fail/);
+  passing(ledger, "c3");
+  assert.equal(unmetObligationsMessage(ledger), undefined);
+});

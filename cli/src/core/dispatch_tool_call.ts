@@ -8,7 +8,7 @@ import { isWorkspaceTrusted } from "../workspace_trust.js";
 import { ExecutionReceipt, InvocationContext, extractTargetResources } from "./spine.js";
 import { repairJsonWithClass, isWriteOrExecTool } from "../parser.js";
 import { oneLine } from "../skills.js";
-import { VERIFICATION_CONFIG_PROTECTED, type VerificationEditContext } from "../security.js";
+import { VERIFICATION_CONFIG_PROTECTED, type VerificationEditContext, type VerificationShellChange } from "../security.js";
 import { sandboxNetworkNotice } from "../sandbox.js";
 import { hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand } from "../tester.js";
 import { toolGroupOf } from "./tool_groups.js";
@@ -196,6 +196,13 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
     fullAccess: Boolean(this.config.fullAccess) && !this.isReadOnly(),
   };
   const verificationSecurity = this.bridge.getSecurityManager();
+  // DV-3: a test edited through the shell is recorded against the obligation that names it (the CS-2 snapshot and diff).
+  verificationSecurity.setShellChangeObserver(this.objective?.obligations?.length ? (changes: VerificationShellChange[]) => {
+    for (const c of changes) {
+      if (!this.objective || c.beforeText === undefined) continue;
+      recordTestEdit(this.objective, { path: c.path, before: c.beforeText, after: c.afterText ?? "" });
+    }
+  } : undefined);
   const verificationAuthority: VerificationEditContext = { role: this.role, fullAccess: policyContext.fullAccess, operator: Boolean(onConfirm) };
   let verificationEdit = verificationSecurity.verificationEditDecision(toolName, args, verificationAuthority);
   let verificationQuestion: NeedsInputQuestion | undefined;
@@ -429,7 +436,8 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
   if (toolName === "run_command" && (args.background || args.service_name || MAY_OUTLIVE_COMMAND.test(String(args.command ?? "")))) this.turnBackgroundCommands++;
   // The file as it is right before this operation (after any approval wait), so the reported diff is this
   // operation's change only and never includes edits already in the working tree.
-  const diffTarget = this.observer?.onFileChange && !this.config.dryRun ? editTarget(toolName, args, this.config.workspace) : undefined;
+  const watchesObligations = Boolean(this.objective?.obligations?.length);
+  const diffTarget = (this.observer?.onFileChange || watchesObligations) && !this.config.dryRun ? editTarget(toolName, args, this.config.workspace) : undefined;
   const before = diffTarget ? snapshot(diffTarget) : undefined;
   if (this.durable && this.stateManager && durableTaskId) {
     try {
