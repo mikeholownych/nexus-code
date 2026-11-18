@@ -58,7 +58,8 @@ async function doctor({ host, args, signal }: SlashContext): Promise<SlashOutcom
  * to let a requirement the agent descoped count as done; the agent cannot do this itself. The same holds for the
  * regression-obligation and reference verbs (DV-3/DV-4): `obligate <attempt> <test>` promotes a confirmed failing test,
  * `minimise <RO> <attempt> <test>` narrows it keeping the original record, `retire <RO>` ends it, `reference <R> <ref>`
- * names the behavioural reference an operator requirement is checked against.
+ * names the behavioural reference an operator requirement is checked against, and `differential <R> --inputs <file>` runs
+ * the latest verifier command and that reference on each input in a JSON array of strings (VC-3; operator only).
  */
 async function requirements({ host, args }: SlashContext): Promise<SlashOutcome> {
   const { acceptDescoping, requirementRows } = await import("../core/objective.js");
@@ -77,6 +78,23 @@ async function requirements({ host, args }: SlashContext): Promise<SlashOutcome>
     const { accepted, refused } = acceptDescoping(ledger, ids);
     if (accepted.length) host.saveSession();
     note = `${accepted.length ? `Accepted the descoping of ${accepted.join(", ")}.` : ""}${refused.length ? ` Not descoped (nothing to accept): ${refused.join(", ")}.` : ""}\n\n`;
+  } else if (verb === "differential") {
+    const flag = ids.indexOf("--inputs");
+    const file = ids.slice(flag + 1).join(" ");
+    if (!ids[0] || flag !== 1 || !file) return reply("requirements", "Usage: /requirements differential <R> --inputs <file: JSON array of strings>", false);
+    const ro = await import("../core/regression_obligations.js");
+    const { sandboxedExecutor } = await import("../core/differential_executor.js");
+    const fsp = await import("node:fs/promises");
+    const path = await import("node:path");
+    const workspace = host.app.getConfig().workspace;
+    let inputs: unknown;
+    try { inputs = JSON.parse(await fsp.readFile(path.resolve(workspace, file), "utf8")); } catch (e) { return reply("requirements", `Not done: cannot read inputs: ${safeTerminal(String((e as Error).message))}`, false); }
+    if (!Array.isArray(inputs) || !inputs.every((i) => typeof i === "string")) return reply("requirements", "Not done: the inputs file must be a JSON array of strings.", false);
+    const candidate = [...ledger.verification].reverse().find((a) => a.command)?.command ?? "";
+    const result = await ro.runDifferential(ledger, { authority: "operator", requirementId: ids[0], candidate, inputs, execute: sandboxedExecutor(workspace) });
+    if (!result.ok) return reply("requirements", `Not done: ${safeTerminal(result.reason)}`, false);
+    host.saveSession();
+    return reply("requirements", `Differential for ${ids[0]} (reference ${safeTerminal(result.record.reference)}, candidate ${safeTerminal(result.record.candidate)}):\n${safeTerminal(ro.differentialSummary(result.record))}`);
   } else if (verb === "obligate" || verb === "minimise" || verb === "retire" || verb === "reference") {
     const ro = await import("../core/regression_obligations.js");
     const attemptAt = (i: number) => Number(ids[i]);
@@ -91,7 +109,7 @@ async function requirements({ host, args }: SlashContext): Promise<SlashOutcome>
     host.saveSession();
     return reply("requirements", `${verb} recorded for ${result.id}.`);
   } else if (verb) {
-    return reply("requirements", "Usage: /requirements [accept <id>...|clear|obligate|minimise|retire|reference]", false);
+    return reply("requirements", "Usage: /requirements [accept <id>...|clear|obligate|minimise|retire|reference|differential]", false);
   }
   const rows = requirementRows(ledger);
   if (!rows.length) return reply("requirements", `${note}The objective is a single request; no separate acceptance requirements were listed.`);

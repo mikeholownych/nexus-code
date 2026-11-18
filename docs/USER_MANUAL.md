@@ -377,7 +377,7 @@ with the remaining items, failed check and next action (see `/receipt`). Only th
 requirement the agent marks descoped stays unresolved until you run `/requirements accept <id>` (`/requirements`
 lists them). While an objective with listed requirements is unfinished, every message you send — however long, even
 with its own numbered list — continues it (numbered items are added as further requirements, and a notice says so);
-`/requirements clear` (or `/clear`) starts a new objective. A requirement counts as *verified* only when a passing
+`/requirements clear` (or `/clear`) starts a new objective. For a requirement you wrote, `/requirements reference <id> <command>` names a reference command, and `/requirements differential <id> --inputs <file>` (a JSON array of strings, at most 50, each at most 64 KiB) runs your latest verifier command and the reference on each input (stdin, sandboxed, no network, 30 s each) and reports how many agree, diverge or were inconclusive (timeout or error). Agreement on those inputs says nothing about other inputs; it is not equivalence. The agent cannot name a reference or run this. A requirement counts as *verified* only when a passing
 verifier run (`run_tests`, or the completion verifier) is recorded on the current workspace; any later change demotes
 it to *implemented (model-reported)*. Each requirement keeps its complete wording; when the objective is too long to
 repeat on every request, the unresolved requirements are carried in full and the agent reads the rest with

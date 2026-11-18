@@ -14,7 +14,7 @@ import { DEFAULT_CONVERGENCE_ATTEMPTS } from "../types.js";
 import type { CanonicalCapability } from "./capabilities.js";
 import { isFilteredVerifierCommand } from "../tester.js";
 import { redactSecrets, safeTerminal } from "../ui.js";
-import { replayObligations, type RegressionObligation, type ReferenceDeclaration } from "./regression_obligations.js";
+import { replayObligations, type RegressionObligation, type ReferenceDeclaration, type DifferentialRecord } from "./regression_obligations.js";
 import { createTracking, ExecutionTracker, normalizeTracking, type ExecutionTracking } from "./execution_tracking.js";
 
 export const LEDGER_VERSION = 1;
@@ -215,8 +215,10 @@ export interface ObjectiveLedger {
   verification: VerificationAttempt[];
   /** Operator-authorised regression obligations (core/regression_obligations.ts); absent in ledgers written before DV-3. */
   obligations?: RegressionObligation[];
-  /** Operator-authorised behavioural references, by requirement (DV-4 gate only; the differential is not implemented). */
+  /** Operator-authorised behavioural references, by requirement (DV-4 gate). */
   references?: ReferenceDeclaration[];
+  /** Latest VC-3 differential run per requirement; finite agreement, never equivalence. */
+  differentials?: DifferentialRecord[];
   continuation: ContinuationState;
   /** The model's own statement of what comes next (update_requirements next_action). */
   nextAction?: string;
