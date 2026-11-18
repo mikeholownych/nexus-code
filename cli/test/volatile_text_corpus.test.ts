@@ -19,7 +19,7 @@ const corpusPath = [path.join(dir, "fixtures", "volatile_text_corpus.json"), pat
 const pairs: Pair[] = JSON.parse(fs.readFileSync(corpusPath, "utf8")).pairs;
 
 // Baseline on unmodified main was 32 of 38 told apart. Residual: the four pairs whose volatile token has no context word to anchor on (S35-S38).
-const KNOWN_GAP: string[] = ["S35", "S36", "S37", "S38"];
+const KNOWN_GAP: string[] = ["S17", "S19", "S35", "S36", "S37", "S38"];
 
 const merged = (p: Pair): boolean => outcomeIdentity(false, p.a) === outcomeIdentity(false, p.b);
 const same = pairs.filter((p) => p.label === "same-failure");

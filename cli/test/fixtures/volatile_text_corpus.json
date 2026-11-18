@@ -688,6 +688,38 @@
    "note": "different job names",
    "a": "job_id=9921 stage=build failed",
    "b": "job_id=9921 stage=deploy failed"
+  },
+  {
+   "id": "D49",
+   "label": "different-failure",
+   "tool": "curl",
+   "note": "HTTP status differs (request <status>)",
+   "a": "curl: request 404",
+   "b": "curl: request 503"
+  },
+  {
+   "id": "D50",
+   "label": "different-failure",
+   "tool": "docker",
+   "note": "build step index differs: the build got further",
+   "a": "[1/3] RUN npm ci\nerror: build failed",
+   "b": "[2/3] RUN npm ci\nerror: build failed"
+  },
+  {
+   "id": "D51",
+   "label": "different-failure",
+   "tool": "npm",
+   "note": "nothing installed versus packages installed",
+   "a": "installed 0 packages; 3 vulnerabilities",
+   "b": "installed 142 packages; 3 vulnerabilities"
+  },
+  {
+   "id": "D52",
+   "label": "different-failure",
+   "tool": "tsc",
+   "note": "files compiled before the same error differs",
+   "a": "compiled 12 files, 1 error in src/a.ts",
+   "b": "compiled 3 files, 1 error in src/a.ts"
   }
  ]
 }

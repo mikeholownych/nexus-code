@@ -298,7 +298,10 @@ const VOLATILE: Array<[RegExp, string]> = [
   [/\b\d+\s+(attempts?|retries|tries)\b/gi, "<n> $1"],
   [/\b(failed|retried|tried|attempted)\s+\d+\s+times?\b/gi, "$1 <n> times"],
   // Incrementing request/poll numbers.
-  [/\b(request|req|poll|ping|heartbeat|iteration|tick)\s*(?:#|no\.?\s*)?\d+\b/gi, "$1 <n>"],
+  // "request"/"req" only with an explicit counter marker: a bare "request 404" is an HTTP status, which is the failure.
+  [/\b(request|req)\s*(?:#|no\.?\s*)\d+\b/gi, "$1 <n>"],
+  [/\b(request|req)\s+\d+(?=\s+(?:to|for|of)\b)/gi, "$1 <n>"],
+  [/\b(poll|ping|heartbeat|iteration|tick)\s*(?:#|no\.?\s*)?\d+\b/gi, "$1 <n>"],
   // Job, build and run identifiers.
   [/\b(job|build|run|task|session|pipeline|deployment|deploy|batch|txn|transaction)[-_ ]?(?:id|no|number)\b["']?\s*[:=#]?\s*["']?[\w.-]*\d[\w.-]*/gi, "$1_id=<id>"],
   [/\b(job|build|run|pipeline)\s*#\d+/gi, "$1 #<n>"],
@@ -313,10 +316,10 @@ const VOLATILE: Array<[RegExp, string]> = [
   // Content and artifact hashes: cargo's deps/foo-<16 hex>, webpack's name.<hash>.js.
   [/(\/(?:deps|build|\.fingerprint)\/[\w.]+)-[0-9a-f]{16}\b/g, "$1-<hash>"],
   [/\b([\w-]+)\.[0-9a-f]{8,}\.(js|mjs|css|map)\b/g, "$1.<hash>.$2"],
-  // Progress counters: "[12/340]", "Downloading x 45%", and counts after a progress verb ("processed 142 files").
-  [/\[\s*\d+\s*\/\s*\d+\s*\]/g, "[<n>/<n>]"],
+  // Progress counters: "Downloading x 45%", and counts after a transfer verb ("processed 142 files"). A "[2/5]" step index is
+  // NOT normalised: a build that reaches step 2 got further than one that stopped at step 1, which is progress, not a repeat.
   [/\b(download(?:ing|ed)?|upload(?:ing|ed)?|progress|loading|fetching|extracting)\b([^\n\d]{0,40})\d{1,3}(?:\.\d+)?%/gi, "$1$2<pct>"],
-  [/\b(processed|scanned|downloaded|received|transferred|indexed|compiled|bundled|resolved|fetched|added|installed|audited)\s+\d+/gi, "$1 <n>"],
+  [/\b(processed|scanned|downloaded|received|transferred|indexed|fetched)\s+\d+/gi, "$1 <n>"],
   [/\bprocess\s+\d{3,}\b/gi, "process <n>"],
 ];
 
