@@ -86,6 +86,7 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
   this.turnConvergenceUpTo = undefined;
   this.turnRepeatedCall = undefined;
   this.pendingNeedsInput = undefined;
+  this.furtherNeedsInput = [];
   this.turnCarriedChanges = this.hasPendingModifications;
   this.turnDenials = 0;
   this.turnFileWrites = 0;
@@ -1259,6 +1260,7 @@ export function buildTurnResultImpl(this: any, input: {
     return deepFreezeTurn(assertTurnResultInvariants({
       ...base, execution: "BLOCKED", outcome: "NOT_ESTABLISHED", reason: "NEEDS_INPUT",
       detail: this.pendingNeedsInput.prompt.slice(0, 300), finalOutputComplete: false, needsInput: this.pendingNeedsInput,
+      ...(this.furtherNeedsInput.length ? { furtherNeedsInput: [...this.furtherNeedsInput] } : {}),
     }));
   }
   if (input.limitReached && input.stopReason === "TOOL_CALL_LOOP" && this.turnRepeatedCall) {
