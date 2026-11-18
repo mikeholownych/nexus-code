@@ -8,6 +8,8 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 ## [Unreleased]
 
+## [v1.2.1] - 2026-11-18
+
 ### Security
 
 - Commands run through `run_command` no longer inherit credentials from the Nexus process. Variables from `~/.config/nexus/config.env`, plus anything named like a key, token, secret or password, `AWS_*`, `GH_TOKEN` and similar, are removed from the command environment, including inside the write-mode bwrap sandbox. To pass a variable through deliberately, list its name in `NEXUS_COMMAND_ENV_PASSTHROUGH` (operator environment or `config.env` only). Commands that relied on `SSH_AUTH_SOCK`, `GH_TOKEN` and similar must now opt in. Without `--sandbox` a command still runs as your user and can read your files and its parent processes' environment.
