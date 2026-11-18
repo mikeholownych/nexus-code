@@ -8,6 +8,9 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 ## [Unreleased]
 
+### Added
+- `cli/test/loop_patterns.test.ts` and `docs/LOOP_PATTERNS.md` (CS-11): OpenHands' stuck-detector patterns replayed as deterministic scripted transcripts against the real agent turn, asserting what Nexus actually does with and without continuation. One gap is documented, not fixed: a command that fails with different text each time is neither noted nor stopped (bounded by the step limit).
+
 ### Fixed
 - A user asking the model to show an example tool call (a message with an example word and a call word) no longer triggers the call-written-as-text recovery for that turn (CS-5): the client does not ask again or force `tool_choice: required`, so under auto or full-access approval a demonstration cannot end as an executed call. A request such as "add an example to the README" does not switch the recovery off.
 
