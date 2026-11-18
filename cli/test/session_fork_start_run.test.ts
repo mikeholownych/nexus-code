@@ -41,13 +41,15 @@ describe("nexus run --fork-session (end to end)", () => {
     const gw = await startGateway(() => ({ kind: "text", content: "fork answer" }));
     try {
       const child = spawn(process.execPath, [CLI, "run", "--fork-session", "src", "--fork-at", "3", "-w", ws, "-e", gw.url, "-m", "m", "-y", "branch here"], {
-        env: { ...process.env, HOME: state, XDG_CONFIG_HOME: path.join(state, ".config"), NEXUS_STATE_DIR: state },
+        env: { ...process.env, HOME: state, XDG_CONFIG_HOME: path.join(state, ".config"), NEXUS_STATE_DIR: state, NO_COLOR: "1", FORCE_COLOR: "0" },
         stdio: ["ignore", "pipe", "pipe"],
       });
       let out = "";
       child.stdout.on("data", (c) => (out += c));
       child.stderr.on("data", (c) => (out += c));
       const code: number = await new Promise((resolve) => child.on("close", (c) => resolve(c ?? -1)));
+      // CI sets colour on; match the text, not the escapes between "Assistant: " and the answer.
+      out = out.replace(/\u001b\[[0-9;]*m/g, "");
       const id = /Forked src at message 3 into (session_\w+)/.exec(out)?.[1];
       assert.ok(id, out);
       // Exit 2 is the harness's "completed, unverified" (no verifier applies to a plain answer); the run itself finished.
