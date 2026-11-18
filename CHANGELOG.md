@@ -8,6 +8,9 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 ## [Unreleased]
 
+### Changed
+- The weekly real language-server job requires typescript, python and go (all three passed on the first hosted run); the rust-analyzer case still runs but reports as a todo, because the product could not start rust-analyzer on the runner although its `--version` probe passed (cause undiagnosed).
+
 ### Added
 - Real language servers (CS-6): `cli/test/lsp_real_servers.test.ts` runs the product's LSP client against typescript-language-server, pyright, rust-analyzer and gopls on a tiny fixture project (a deliberate error is reported; a clean file is a real empty report, not `unavailable`), skipping a server that is not installed unless `NEXUS_LSP_REQUIRE` names it. A weekly, non-required `lsp-real-servers` workflow installs the servers and requires TypeScript and Python. Not yet run on a hosted runner. See `docs/LSP_REAL_SERVERS.md`.
 
