@@ -8,6 +8,9 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 ## [Unreleased]
 
+### Changed
+- The verifier convergence stop (DV-2: a stalled, oscillating or diverging failure history ends the turn BLOCKED with the attempt history) is now also judged when a verifier command is run through `run_tests` (or `run_command`), not only when the model calls `task_completed` (VC-7). A loop that only edits and re-runs the tests no longer waits for the step limit. A failure that changes each time, or a re-run on unchanged files, does not trip it.
+
 ### Fixed
 - A user asking the model to show an example tool call (a message with an example word and a call word) no longer triggers the call-written-as-text recovery for that turn (CS-5): the client does not ask again or force `tool_choice: required`, so under auto or full-access approval a demonstration cannot end as an executed call. A request such as "add an example to the README" does not switch the recovery off.
 

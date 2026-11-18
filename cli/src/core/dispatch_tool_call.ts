@@ -14,7 +14,7 @@ import { hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand
 import { toolGroupOf } from "./tool_groups.js";
 import { judgeWithoutCopy, trustedDeliverablesFromBaseline } from "./independent_check.js";
 import { createHash } from "node:crypto";
-import { failedCheckFrom, attemptEvidence, recordAttempt } from "./objective.js";
+import { failedCheckFrom, attemptEvidence, recordAttempt, convergenceSignal, convergenceHistory } from "./objective.js";
 import { recordTestEdit } from "./regression_obligations.js";
 import { FILE_EDIT_TOOLS, describeChange, editTarget, snapshot } from "../file_diff.js";
 import { roleToolAllowList } from "./roles.js";
@@ -511,6 +511,15 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
           status: parsed.passed === true && receipt.success && hasExecuted ? "PASSED" : "FAILED",
           ...(parsed.passed === true ? {} : { failedCheck: failedCheckFrom(`${rawOutput}\n${receipt.error ?? ""}`), ...attemptEvidence(`${rawOutput}\n${receipt.error ?? ""}`, typeof parsed.exitCode === "number" ? parsed.exitCode : undefined, { timedOut: parsed.timedOut === true, executorFailed: parsed.executorFailed === true }) }),
         });
+        // VC-7: the DV-2 stop signal is judged on this path too, so a loop that only edits and calls run_tests (never
+        // task_completed) ends BLOCKED with its attempt history instead of waiting for the step limit.
+        if (this.objective && !this.turnConvergence) {
+          const signal = convergenceSignal(this.objective, this.config.continuation?.verifierConvergenceAttempts, parsed.command);
+          if (signal.state !== "converging") {
+            this.turnConvergenceUpTo = this.objective.verification.at(-1)?.n;
+            this.turnConvergence = { state: signal.state, evidence: signal.evidence, attempts: convergenceHistory(signal.attempts) };
+          }
+        }
       }
     } catch {}
   }
