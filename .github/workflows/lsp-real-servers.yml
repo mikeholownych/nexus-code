@@ -1,0 +1,57 @@
+name: LSP real servers
+
+# Weekly run of the product's language-server client (cli/src/lsp.ts) against REAL servers on a tiny fixture project
+# (CS-6): a deliberate error must be reported, and a clean file must be a published empty report, not "unavailable".
+# The ordinary suite exercises the client only against a fake server. Not a required check. See docs/LSP_REAL_SERVERS.md
+# for what it covers and what it does not.
+#
+# typescript-language-server and pyright are installed with npm at pinned versions and are REQUIRED here
+# (NEXUS_LSP_REQUIRE): a missing one fails the job. rust-analyzer and gopls are best-effort installs; if one cannot be
+# installed its case skips with a reason in the log.
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lsp:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      NEXUS_LSP_REQUIRE: typescript,python
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.22.1
+      # Installed system-wide (npm -g puts them on an absolute PATH entry): the tests run under a throwaway HOME, where
+      # per-user installs (pip --user) are invisible (the MQ-3 first-run failure).
+      - name: Install typescript-language-server and pyright
+        run: npm install --global --no-audit --no-fund typescript@5.6.3 typescript-language-server@4.3.4 pyright@1.1.390
+      - name: Install rust-analyzer (best effort)
+        continue-on-error: true
+        run: |
+          rustup component add rust-analyzer
+          # The rustup proxy finds its toolchain through RUSTUP_HOME / CARGO_HOME; the tests' throwaway HOME hides the defaults.
+          echo "RUSTUP_HOME=$(rustup show home)" >> "$GITHUB_ENV"
+          echo "CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}" >> "$GITHUB_ENV"
+      - name: Install gopls (best effort)
+        continue-on-error: true
+        run: |
+          GOBIN="$RUNNER_TEMP/gobin" go install golang.org/x/tools/gopls@v0.16.2
+          echo "$RUNNER_TEMP/gobin" >> "$GITHUB_PATH"
+      - run: npm ci --prefix cli
+      - name: Versions on the runner
+        run: |
+          typescript-language-server --version
+          pyright --version
+          rust-analyzer --version || true
+          gopls version || true
+      - name: Run the real-server tests
+        working-directory: cli
+        run: node scripts/run_tests.mjs test/lsp_real_servers.test.ts

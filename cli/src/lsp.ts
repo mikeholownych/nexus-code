@@ -457,13 +457,13 @@ export class LspBridgeManager {
       return { cmd: "rust-analyzer", languageId: "rust" };
     }
     if (ext === ".ts" || ext === ".tsx") {
-      return { cmd: "typescript-language-server", languageId: "typescript" };
+      return { cmd: "typescript-language-server", args: ["--stdio"], languageId: "typescript" };
     }
     if (ext === ".js" || ext === ".jsx") {
-      return { cmd: "typescript-language-server", languageId: "javascript" };
+      return { cmd: "typescript-language-server", args: ["--stdio"], languageId: "javascript" };
     }
     if (ext === ".py") {
-      return { cmd: "pyright-langserver", languageId: "python" };
+      return { cmd: "pyright-langserver", args: ["--stdio"], languageId: "python" };
     }
     if (ext === ".go") {
       return { cmd: "gopls", languageId: "go" };

@@ -8,6 +8,12 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 ## [Unreleased]
 
+### Added
+- Real language servers (CS-6): `cli/test/lsp_real_servers.test.ts` runs the product's LSP client against typescript-language-server, pyright, rust-analyzer and gopls on a tiny fixture project (a deliberate error is reported; a clean file is a real empty report, not `unavailable`), skipping a server that is not installed unless `NEXUS_LSP_REQUIRE` names it. A weekly, non-required `lsp-real-servers` workflow installs the servers and requires TypeScript and Python. Not yet run on a hosted runner. See `docs/LSP_REAL_SERVERS.md`.
+
+### Fixed
+- `lsp_diagnostics`, `lsp_hover` and `lsp_definition` never worked for TypeScript, JavaScript or Python files: the default commands started `typescript-language-server` and `pyright-langserver` without `--stdio`, so both exited at once and every query was `unavailable`. Found by the real-server test (CS-6).
+
 ### Changed
 - The verifier convergence stop (DV-2: a stalled, oscillating or diverging failure history ends the turn BLOCKED with the attempt history) is now also judged when a verifier command is run through `run_tests` (or `run_command`), not only when the model calls `task_completed` (VC-7). A loop that only edits and re-runs the tests no longer waits for the step limit. A failure that changes each time, or a re-run on unchanged files, does not trip it.
 
