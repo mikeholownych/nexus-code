@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_019GxH8QJRjfkEBbgLmiNF4T",
+  "agent_id": "a1ef9cfded737cb33",
+  "subagent_type": "general-purpose",
+  "task_description": "CX-4 and RD-6 plan units",
+  "token_usage": {
+    "input_tokens": 130,
+    "cache_creation_tokens": 161905,
+    "cache_read_tokens": 8570628,
+    "output_tokens": 42463,
+    "api_call_count": 65
+  },
+  "started_at": "2026-11-18T07:16:45.863955276Z",
+  "completed_at": "2026-11-18T07:27:34.810951991Z"
+}

@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01MtXMRNLRcHEm2wirMZPkK5",
+  "agent_id": "a76c25d7118453ebf",
+  "subagent_type": "general-purpose",
+  "task_description": "VC-2, VC-3 and MT-3 plan units",
+  "token_usage": {
+    "input_tokens": 146,
+    "cache_creation_tokens": 128038,
+    "cache_read_tokens": 7946400,
+    "output_tokens": 40054,
+    "api_call_count": 70
+  },
+  "started_at": "2026-11-18T07:16:54.610892912Z",
+  "completed_at": "2026-11-18T07:34:15.897243585Z"
+}
