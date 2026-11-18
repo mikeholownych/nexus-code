@@ -8,6 +8,12 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 ## [Unreleased]
 
+### Added
+- Real language servers (CS-6): `cli/test/lsp_real_servers.test.ts` runs the product's LSP client against typescript-language-server, pyright, rust-analyzer and gopls on a tiny fixture project (a deliberate error is reported; a clean file is a real empty report, not `unavailable`), skipping a server that is not installed unless `NEXUS_LSP_REQUIRE` names it. A weekly, non-required `lsp-real-servers` workflow installs the servers and requires TypeScript and Python. Not yet run on a hosted runner. See `docs/LSP_REAL_SERVERS.md`.
+
+### Fixed
+- `lsp_diagnostics`, `lsp_hover` and `lsp_definition` never worked for TypeScript, JavaScript or Python files: the default commands started `typescript-language-server` and `pyright-langserver` without `--stdio`, so both exited at once and every query was `unavailable`. Found by the real-server test (CS-6).
+
 ### Fixed
 - The nightly real-project smoke (MQ-3) failed on its first hosted run on the pytest repository: the workflow installed pytest with `pip install --user`, the smoke runs the CLI under a throwaway `HOME`, and the verifier could not import it, while the script's own pytest probe ran under the real home and said it was available. The probe now runs under an isolated home (and says to install system-wide), and the workflow installs pytest system-wide.
 

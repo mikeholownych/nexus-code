@@ -26,6 +26,8 @@ make test-ci
 
 A nightly real-project smoke (`.github/workflows/real-project-smoke.yml`, not a required check) runs the built CLI on pinned synthetic repositories; see [the smoke notes](REAL_PROJECT_SMOKE.md).
 
+A weekly, non-required `lsp-real-servers` workflow runs the LSP client against real language servers; see [the LSP notes](LSP_REAL_SERVERS.md).
+
 The Cloudflare service has separate setup and tests; see [the contest entry](CLOUDFLARE_CONTEST.md).
 
 ## Release package
