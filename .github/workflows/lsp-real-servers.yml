@@ -45,7 +45,8 @@ jobs:
       - name: Install gopls (best effort)
         continue-on-error: true
         run: |
-          GOBIN="$RUNNER_TEMP/gobin" go install golang.org/x/tools/gopls@v0.16.2
+          # Not pinned: an old gopls stops building when the runner image moves to a newer Go (gopls v0.16.2 failed to build on 2026-11-18); this job exists to meet the current servers.
+          GOBIN="$RUNNER_TEMP/gobin" go install golang.org/x/tools/gopls@latest
           echo "$RUNNER_TEMP/gobin" >> "$GITHUB_PATH"
       - run: npm ci --prefix cli
       - name: Versions on the runner
