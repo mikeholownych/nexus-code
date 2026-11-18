@@ -8,6 +8,9 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 ## [Unreleased]
 
+### Changed
+- The verifier convergence stop (DV-2: a stalled, oscillating or diverging failure history ends the turn BLOCKED with the attempt history) is now also judged when a verifier command is run through `run_tests` (or `run_command`), not only when the model calls `task_completed` (VC-7). A loop that only edits and re-runs the tests no longer waits for the step limit. A failure that changes each time, or a re-run on unchanged files, does not trip it.
+
 ### Added
 - `cli/test/loop_patterns.test.ts` and `docs/LOOP_PATTERNS.md` (CS-11): OpenHands' stuck-detector patterns replayed as deterministic scripted transcripts against the real agent turn, asserting what Nexus actually does with and without continuation. One gap is documented, not fixed: a command that fails with different text each time is neither noted nor stopped (bounded by the step limit).
 
