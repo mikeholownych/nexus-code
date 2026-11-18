@@ -2199,7 +2199,9 @@ export class AutonomousAgent {
   private headlessDecision(question: NeedsInputQuestion): NeedsInputOption | "ask" {
     const answer = this.operatorAnswers.get(question.id);
     if (answer) return answer;
-    this.pendingNeedsInput ??= question;
+    // Only the top-level run can hand a question to the operator. A subagent's refusal stays a refusal that its parent sees
+    // (a subagent question is not propagated: VC-9 audit, "not done").
+    if (this.depth === 0) this.pendingNeedsInput ??= question;
     return "ask";
   }
 
