@@ -8,6 +8,15 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 ## [Unreleased]
 
+### Changed
+
+- Cross-runner reproducibility (`repro.yml`) now also runs weekly against the newest published RC pre-release; manual dispatch is unchanged. It is not a required check (v1.2.1 plan PC-4).
+- CI runs `check_requirements.mjs --enforce` in `test-matrix` (v1.2.1 plan DH-6).
+
+### Fixed
+
+- The compiler-exposure inventory could fail a qualification scan on a loaded host with `enumeration_exit_batch_N_signal_sigterm`, because it signalled a `find` that had already finished writing (v1.2.1 plan PC-7).
+
 ### Added
 
 - Project instruction files expand `@path` imports (plan unit CX-7): in `AGENTS.md`, `CLAUDE.md`, `CODEX.md` or `.nexusrules`, a token such as `@docs/rules.md` or `@AGENTS.md` is replaced by that file's contents. Imports resolve against the importing file, must stay inside the workspace by real path (a symlink out is refused), must be regular files of at most 64 KiB (256 KiB in total), are read once each, and nest at most 5 levels, so a cycle ends at once. Code spans, code fences, `@mentions` and anything unresolvable stay literal. Only a trusted workspace is expanded. The heading of the instruction block lists the file and every import that was read (`loaded from CLAUDE.md; imports: AGENTS.md`). Still the first non-empty file only; the files are not merged.

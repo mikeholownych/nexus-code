@@ -476,6 +476,32 @@ test("black-box oracle keeps canary expectations outside the candidate process a
   );
 });
 
+test("compiler inventory enumeration does not signal a find child that already finished, even under CPU load", { timeout: 180_000 }, () => {
+  // Regression for the `enumeration_exit_batch_N_signal_sigterm` flake. The helper batches 64 roots per
+  // enumeration `find`, so 129 roots take three batches. It used to SIGTERM a batch whose stdout had reached
+  // EOF but which was not yet reaped, which happens on a loaded host. The bound is 25 scans while one busy
+  // loop per CPU runs: before the fix about a quarter of the scans failed, so 25 clean scans is not luck.
+  const helper = path.join(ROOT, "eval/scan-compiler-exposure.mjs");
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "inventory-load-"));
+  const roots = Array.from({ length: 129 }, (_, index) => {
+    const root = path.join(base, `root-${String(index).padStart(3, "0")}`);
+    fs.mkdirSync(root);
+    return root;
+  });
+  const hogs = Array.from({ length: Math.max(2, os.cpus().length) }, () =>
+    spawn(process.execPath, ["-e", "for(;;);"], { stdio: "ignore" }));
+  try {
+    for (let run = 0; run < 25; run++) {
+      const result = spawnSync(process.execPath, [helper, ...roots], { encoding: "utf8", env: { PATH: "/usr/bin:/bin", LANG: "C" } });
+      assert.equal(result.stderr, "", `scan ${run} failed: ${result.stderr}`);
+      assert.equal(result.status, 0, `scan ${run} exited with ${result.status}`);
+    }
+  } finally {
+    for (const hog of hogs) hog.kill("SIGKILL");
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test("Python black-box oracle uses only pinned offline Go and Rust toolchains, or fails preflight", { timeout: 60_000 }, async (t) => {
   const { blackBoxOracleProblem, runBlackBoxOracle } = await import(path.join(ROOT, "eval/oracle.mjs"));
   const { candidateToolchainRootProblem, candidateToolchainRootSources, candidateToolchainVersionProblem, selectCandidateToolchainSource, compilerExposureMaskArgs, maskedSystemDirectoryPaths, scanOracleCompilerExposure, oracleToolchainPathProblem, oracleToolchainVersionProblem, oracleToolchainsProblem, isolatedProcessArgv, sandboxAvailable } = await import(path.join(ROOT, "eval/isolate.mjs"));
