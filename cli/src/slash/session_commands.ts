@@ -8,6 +8,7 @@ import * as path from "node:path";
 import { LocalLlmClient } from "../client.js";
 import { writeProtectedTextFile } from "../core/persistence_protection.js";
 import { receiptText } from "../evidence.js";
+import { safeTerminal } from "../ui.js";
 import { buildSessionExport } from "../session_export.js";
 import { getGitInfo, scaffoldProjectRules } from "../git.js";
 import { scanAndOnboardWorkspace } from "../onboard.js";
@@ -54,7 +55,10 @@ async function doctor({ host, args, signal }: SlashContext): Promise<SlashOutcom
 
 /**
  * `/requirements`: the acceptance requirements of the current objective. `accept <id>...` is the operator's authority
- * to let a requirement the agent descoped count as done; the agent cannot do this itself.
+ * to let a requirement the agent descoped count as done; the agent cannot do this itself. The same holds for the
+ * regression-obligation and reference verbs (DV-3/DV-4): `obligate <attempt> <test>` promotes a confirmed failing test,
+ * `minimise <RO> <attempt> <test>` narrows it keeping the original record, `retire <RO>` ends it, `reference <R> <ref>`
+ * names the behavioural reference an operator requirement is checked against.
  */
 async function requirements({ host, args }: SlashContext): Promise<SlashOutcome> {
   const { acceptDescoping, requirementRows } = await import("../core/objective.js");
@@ -73,8 +77,21 @@ async function requirements({ host, args }: SlashContext): Promise<SlashOutcome>
     const { accepted, refused } = acceptDescoping(ledger, ids);
     if (accepted.length) host.saveSession();
     note = `${accepted.length ? `Accepted the descoping of ${accepted.join(", ")}.` : ""}${refused.length ? ` Not descoped (nothing to accept): ${refused.join(", ")}.` : ""}\n\n`;
+  } else if (verb === "obligate" || verb === "minimise" || verb === "retire" || verb === "reference") {
+    const ro = await import("../core/regression_obligations.js");
+    const attemptAt = (i: number) => Number(ids[i]);
+    const rest = (i: number) => ids.slice(i).join(" ");
+    let result: { ok: true; id: string } | { ok: false; reason: string };
+    if (verb === "obligate" && Number.isInteger(attemptAt(0)) && rest(1)) result = ro.authoriseObligation(ledger, { authority: "operator", attempt: attemptAt(0), testName: rest(1) });
+    else if (verb === "minimise" && ids[0] && Number.isInteger(attemptAt(1)) && rest(2)) result = ro.minimiseObligation(ledger, ids[0], { attempt: attemptAt(1), testName: rest(2) });
+    else if (verb === "retire" && ids[0]) result = ro.retireObligation(ledger, ids[0]);
+    else if (verb === "reference" && ids[0] && rest(1)) result = ro.authoriseReference(ledger, { authority: "operator", requirementId: ids[0], reference: rest(1) });
+    else return reply("requirements", "Usage: /requirements obligate <attempt> <test name> | minimise <RO> <attempt> <test name> | retire <RO> | reference <R> <reference>", false);
+    if (!result.ok) return reply("requirements", `Not done: ${safeTerminal(result.reason)}`, false);
+    host.saveSession();
+    return reply("requirements", `${verb} recorded for ${result.id}.`);
   } else if (verb) {
-    return reply("requirements", "Usage: /requirements [accept <id>...|clear]", false);
+    return reply("requirements", "Usage: /requirements [accept <id>...|clear|obligate|minimise|retire|reference]", false);
   }
   const rows = requirementRows(ledger);
   if (!rows.length) return reply("requirements", `${note}The objective is a single request; no separate acceptance requirements were listed.`);

@@ -126,7 +126,7 @@ export const SLASH_COMMANDS: SlashSpec[] = [
   { name: "init", usage: "/init", summary: "Create a project rules file" },
   { name: "onboard", usage: "/onboard", summary: "Scan the workspace and write a tailored AGENTS.md" },
   { name: "plan", usage: "/plan [add <phase>|start <n>|done <n>|clear]", summary: "Show or edit the active plan" },
-  { name: "requirements", usage: "/requirements [accept <id>...|clear]", summary: "The objective's acceptance requirements; accept a scope reduction, or clear the objective to start a new one" },
+  { name: "requirements", usage: "/requirements [accept <id>...|clear|obligate <attempt> <test>|minimise|retire|reference]", summary: "The objective's acceptance requirements; accept a scope reduction, or clear the objective to start a new one" },
   { name: "knowledge", usage: "/knowledge [set <key> <rule>|delete <key>]", summary: "Persistent project knowledge" },
   { name: "skills", usage: "/skills", summary: "Discovered agent skills" },
   { name: "skill", usage: "/skill <name> | init <name>", summary: "Show a skill or scaffold a new one" },

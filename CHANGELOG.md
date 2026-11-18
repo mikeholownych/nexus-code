@@ -8,12 +8,27 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 ## [Unreleased]
 
+### Changed
+
+- Cross-runner reproducibility (`repro.yml`) now also runs weekly against the newest published RC pre-release; manual dispatch is unchanged. It is not a required check (v1.2.1 plan PC-4).
+- CI runs `check_requirements.mjs --enforce` in `test-matrix` (v1.2.1 plan DH-6).
+
+### Fixed
+
+- The compiler-exposure inventory could fail a qualification scan on a loaded host with `enumeration_exit_batch_N_signal_sigterm`, because it signalled a `find` that had already finished writing (v1.2.1 plan PC-7).
+
 ### Added
 
 - Tool-output masking (plan unit CX-4, opt-in): with `NEXUS_TOOL_OUTPUT_MASK_TOKENS=<n>`, a tool result larger than n estimated tokens that the model has already acted on is replaced in later requests by a short marker with a content id. The full output stays in the conversation and resolves with `read_archive` and the query `tool-output:<id>`. Results not yet acted on, retrieval results, the pinned ledger, findings and the independent reviewer's evidence are never masked, and the saved session is unchanged. Off by default.
 - Session fork (plan unit RD-6): `/fork [message-count]` continues in a copy of the current session (optionally only its first N messages, backed up to a complete tool exchange); the original is never modified and both can be resumed. Compaction records and archive lines are copied for the compactions the fork keeps, so the resume audit still verifies them. Not yet a start-up flag.
+- Operator-authorised regression obligations (plan unit VC-2): `/requirements obligate <attempt> <test>` promotes a confirmed failing test; it is replayed by every later attempt of its verifier command, keeps its original failure record when minimised (`minimise`), and an edit that removes, skips or thins the test is recorded. Nothing the agent can call promotes an obligation
+- Attempt lineage (plan unit VC-3, part): each verification attempt records its parent attempt and a hash of the step between candidate identities; `/requirements reference <R> <ref>` records an operator-named behavioural reference. The differential against it is not implemented
 - Project instruction files expand `@path` imports (plan unit CX-7): in `AGENTS.md`, `CLAUDE.md`, `CODEX.md` or `.nexusrules`, a token such as `@docs/rules.md` or `@AGENTS.md` is replaced by that file's contents. Imports resolve against the importing file, must stay inside the workspace by real path (a symlink out is refused), must be regular files of at most 64 KiB (256 KiB in total), are read once each, and nest at most 5 levels, so a cycle ends at once. Code spans, code fences, `@mentions` and anything unresolvable stay literal. Only a trusted workspace is expanded. The heading of the instruction block lists the file and every import that was read (`loaded from CLAUDE.md; imports: AGENTS.md`). Still the first non-empty file only; the files are not merged.
 - Prompt-cache hints for Anthropic (plan unit CX-6, opt-in): with `NEXUS_PROMPT_CACHE=1`, requests to a provider that declares `promptCache: "anthropic"` (built-in Anthropic only) send `system` as blocks with `cache_control: {"type":"ephemeral"}` on the first block (the system prompt, which also covers the tools) and the last (the pinned ledger), two of the four breakpoints. Off by default and not verified against the live API (the request shape is covered by tests and a local mock). The usage summary (`/tokens`, run summaries) now reports the cached share of input tokens, for example `cached 300 of 500 input tokens (60%)`, from the provider's reported cache counts, counting Anthropic and Bedrock input as separate from cache reads and writes.
+
+### Changed
+
+- One shared helper for escape-stripped redaction (`redactPlain`), one terminal-safe helper (`safeTerminal`) and one sanitisation-failure constant replace identical copies; no output changed (plan unit MT-3, `docs/v1.2.1/REDACTION_VARIANTS.md`)
 
 ## [v1.2.1] - 2026-11-18
 
