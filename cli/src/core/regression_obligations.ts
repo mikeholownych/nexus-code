@@ -10,6 +10,7 @@
  * test passes it vacuously, which Nexus cannot see. Pure data and pure functions; the agent owns persistence.
  */
 import type { ObjectiveLedger, VerificationAttempt } from "./objective.js";
+import { normalizeOutcomeText } from "./execution_tracking.js";
 
 export interface RegressionObligation {
   id: string;
@@ -156,7 +157,7 @@ export function recordTestEdit(ledger: ObjectiveLedger, edit: { path: string; be
 
 /**
  * DV-4 gate: a behavioural reference (previous revision, golden cases) may be declared only by the operator, and only
- * for a requirement the operator wrote. The differential itself is NOT implemented: this records authority only.
+ * for a requirement the operator wrote. This records authority only; `runDifferential` (VC-3) runs the comparison.
  */
 export function authoriseReference(ledger: ObjectiveLedger, req: { authority: "operator"; requirementId: string; reference: string; at?: string }): Authorisation {
   requireOperator(req.authority);
@@ -170,9 +171,108 @@ export function authoriseReference(ledger: ObjectiveLedger, req: { authority: "o
   return { ok: true, id: r.id };
 }
 
-export function differentialStatus(ledger: ObjectiveLedger, requirementId: string): { state: "no-reference" | "authorised-not-run"; reference?: string } {
+export interface DifferentialState {
+  state: "no-reference" | "authorised-not-run" | "run";
+  reference?: string;
+  agree?: number;
+  diverge?: number;
+  inconclusive?: number;
+  /** Wording for the result; only ever "agrees on N tested inputs, not equivalence". */
+  statement?: string;
+}
+
+export function differentialStatus(ledger: ObjectiveLedger, requirementId: string): DifferentialState {
   const ref = ledger.references?.find((x) => x.requirementId === requirementId);
-  return ref ? { state: "authorised-not-run", reference: ref.reference } : { state: "no-reference" };
+  if (!ref) return { state: "no-reference" };
+  const run = ledger.differentials?.find((x) => x.requirementId === requirementId);
+  if (!run) return { state: "authorised-not-run", reference: ref.reference };
+  const agree = run.results.filter((r) => r.verdict === "agree").length;
+  const diverge = run.results.filter((r) => r.verdict === "diverge").length;
+  const inconclusive = run.results.length - agree - diverge;
+  return { state: "run", reference: run.reference, agree, diverge, inconclusive, ...(agree > 0 ? { statement: agreementStatement(agree) } : {}) };
+}
+
+export const DIFFERENTIAL_MAX_INPUTS = 50;
+export const DIFFERENTIAL_MAX_INPUT_BYTES = 64 * 1024;
+export const DIFFERENTIAL_MAX_OUTPUT_CHARS = 1024 * 1024;
+const FIRST_DIFF_CLIP = 200;
+
+/** One command run on one stdin input. `timedOut` or `error` mean the run says nothing about behaviour. */
+export interface DifferentialRunResult { exit: number | null; output: string; timedOut?: boolean; error?: string }
+export type DifferentialExecutor = (command: string, input: string) => Promise<DifferentialRunResult>;
+
+export interface DifferentialInputResult {
+  input: number;
+  verdict: "agree" | "diverge" | "inconclusive";
+  referenceExit: number | null;
+  candidateExit: number | null;
+  /** First normalised line where the outputs differ, clipped; absent when only the exit codes differ. */
+  firstDiff?: string;
+}
+
+export interface DifferentialRecord { requirementId: string; reference: string; candidate: string; at: string; results: DifferentialInputResult[] }
+
+const clip = (s: string) => (s.length > FIRST_DIFF_CLIP ? `${s.slice(0, FIRST_DIFF_CLIP)}...` : s);
+const usable = (r: DifferentialRunResult) => !r.timedOut && !r.error && r.exit !== null && r.output.length <= DIFFERENTIAL_MAX_OUTPUT_CHARS;
+
+function firstDifferingLine(a: string, b: string): string | undefined {
+  const x = normalizeOutcomeText(a).split("\n");
+  const y = normalizeOutcomeText(b).split("\n");
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    if (x[i] !== y[i]) return clip(`reference: ${x[i] ?? "(no line)"} | candidate: ${y[i] ?? "(no line)"}`);
+  }
+  return undefined;
+}
+
+/**
+ * VC-3: run the candidate and the operator-declared reference on each declared input (stdin) through an injected
+ * executor and compare normalised output plus exit code. Refused unless the reference was authorised for an
+ * operator-written requirement (the same gate as `authoriseReference`). A timed-out, errored or over-cap run is
+ * "inconclusive" for that input, never agreement. Agreement on finite inputs is not equivalence.
+ */
+export async function runDifferential(
+  ledger: ObjectiveLedger,
+  req: { authority: "operator"; requirementId: string; candidate: string; inputs: string[]; execute: DifferentialExecutor; at?: string },
+): Promise<{ ok: true; record: DifferentialRecord } | { ok: false; reason: string }> {
+  requireOperator(req.authority);
+  const r = ledger.requirements.find((x) => x.id === req.requirementId);
+  const ref = ledger.references?.find((x) => x.requirementId === req.requirementId);
+  if (!r || !ref) return { ok: false, reason: `${req.requirementId} has no authorised reference` };
+  if (r.source === "model") return { ok: false, reason: `${r.id} was added by the model, so it cannot use a reference` };
+  if (!req.candidate.trim()) return { ok: false, reason: "no candidate command" };
+  if (!req.inputs.length) return { ok: false, reason: "no inputs declared" };
+  if (req.inputs.length > DIFFERENTIAL_MAX_INPUTS) return { ok: false, reason: `${req.inputs.length} inputs exceed the limit of ${DIFFERENTIAL_MAX_INPUTS}` };
+  const big = req.inputs.findIndex((i) => Buffer.byteLength(i) > DIFFERENTIAL_MAX_INPUT_BYTES);
+  if (big >= 0) return { ok: false, reason: `input ${big} exceeds ${DIFFERENTIAL_MAX_INPUT_BYTES} bytes` };
+
+  const results: DifferentialInputResult[] = [];
+  for (let i = 0; i < req.inputs.length; i++) {
+    const safe = async (cmd: string): Promise<DifferentialRunResult> => {
+      try { return await req.execute(cmd, req.inputs[i]); } catch (e) { return { exit: null, output: "", error: String(e) }; }
+    };
+    const refRun = await safe(ref.reference);
+    const candRun = await safe(req.candidate);
+    const base = { input: i, referenceExit: refRun.exit, candidateExit: candRun.exit };
+    if (!usable(refRun) || !usable(candRun)) { results.push({ ...base, verdict: "inconclusive" }); continue; }
+    const same = refRun.exit === candRun.exit && normalizeOutcomeText(refRun.output) === normalizeOutcomeText(candRun.output);
+    results.push(same ? { ...base, verdict: "agree" } : { ...base, verdict: "diverge", firstDiff: firstDifferingLine(refRun.output, candRun.output) });
+  }
+  const record: DifferentialRecord = { requirementId: r.id, reference: ref.reference, candidate: req.candidate, at: req.at ?? now(), results };
+  const runs = (ledger.differentials ??= []);
+  const at = runs.findIndex((x) => x.requirementId === r.id);
+  if (at >= 0) runs[at] = record; else runs.push(record);
+  return { ok: true, record };
+}
+
+/** Operator-facing summary of a run; wording comes from `agreementStatement`. */
+export function differentialSummary(record: DifferentialRecord): string {
+  const agree = record.results.filter((x) => x.verdict === "agree").length;
+  const diverge = record.results.filter((x) => x.verdict === "diverge");
+  const inconclusive = record.results.filter((x) => x.verdict === "inconclusive").length;
+  const lines = [`run: ${agree} agree, ${diverge.length} diverge${inconclusive ? `, ${inconclusive} inconclusive (timeout, error or output over the cap)` : ""}`];
+  for (const d of diverge) lines.push(`  input ${d.input}: exit ${d.referenceExit} vs ${d.candidateExit}${d.firstDiff ? `; ${d.firstDiff}` : ""}`);
+  if (agree > 0) lines.push(agreementStatement(agree));
+  return lines.join("\n");
 }
 
 /** How agreement with a reference is worded: finite cases are never reported as equivalence. */
