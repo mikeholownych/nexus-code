@@ -8,6 +8,9 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 ## [Unreleased]
 
+### Changed
+- Redaction variants (MT-3, part 2): `formatSafeSidecarText` calls the shared `safeTerminal` instead of restating it, with output byte-identical; the remaining variants are kept and each has a reason in `docs/v1.2.1/REDACTION_VARIANTS.md`. New `cli/test/mt3_redaction_characterization.test.ts` pins the exact output of 23 redaction and terminal-safe variants over a shared corpus.
+
 ### Added
 - VC-9: a delegated subagent's headless decision (tool approval, verification-file edit, verifier approval) is no longer lost. The subagent stops at it and returns the question (same id and shape, plus `subagent: { depth, objective }`) to its parent, whose headless run ends BLOCKED / NEEDS_INPUT; `--answer` resumes it (the re-spawned subagent receives the answers). Further questions raised in the same turn are listed in `furtherNeedsInput`. The subagent itself still never approves. Interactive runs and top-level behaviour are unchanged. The child is spawned again on resume, not resumed. The requirement-verifier approval now has its own test.
 

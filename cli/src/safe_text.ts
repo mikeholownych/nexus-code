@@ -1,6 +1,5 @@
 import { SANITIZATION_FAILED, redactForPersistence } from "./core/persistence_protection.js";
-import { redactSecrets } from "./ui.js";
-import { visibleControls } from "./file_diff.js";
+import { safeTerminal } from "./ui.js";
 
 /**
  * Sanitize text bound for a sink that is not a protocol event: the diff kept on disk, the evidence ledger, stderr
@@ -13,7 +12,7 @@ export function formatSafeSidecarText(value: string): string {
   try {
     const safe = redactForPersistence(value);
     if (typeof safe !== "string") throw new Error("unexpected sanitized value type");
-    return visibleControls(redactSecrets(safe));
+    return safeTerminal(safe);
   } catch {
     return SANITIZATION_FAILED;
   }
