@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { parseAnswers } from "./core/needs_input.js";
+import { forkStartError, forkStartNotice, startFork } from "./core/fork_start.js";
 import { Command } from "commander";
 import * as path from "node:path";
 import * as fs from "node:fs";
@@ -234,12 +235,18 @@ async function startRepl(options: any): Promise<void> {
     if (process.env.NEXUS_TEST_RECORD_REPL_SHELL) fs.appendFileSync(process.env.NEXUS_TEST_RECORD_REPL_SHELL, `${options.shell}\n`);
     return;
   }
+  const forkError = forkStartError(options);
+  if (forkError) {
+    console.error(`error: ${forkError}`);
+    exitAfterFlush(2);
+    return;
+  }
   const trustDecision = await promptWorkspaceTrust(options.workspace ? path.resolve(options.workspace) : process.cwd());
   if (trustDecision === "exit") return;
   triggerBackgroundGc();
   const config = buildConfig(options);
-  // A resumed start takes the model from the session record (or detects it after the resumed wait): no request now.
-  if (config.model === "local-model" && !options.resume) {
+  // A resumed or forked start takes the model from the session record (or detects it after the resumed wait): no request now.
+  if (config.model === "local-model" && !options.resume && options.forkSession === undefined) {
     try {
       const client = new LocalLlmClient(config);
       const models = await client.listModels();
@@ -250,16 +257,29 @@ async function startRepl(options: any): Promise<void> {
       // Fallback
     }
   }
-  const resumeId = typeof options.resume === "string" ? options.resume : options.resume ? "latest" : undefined;
+  let resumeId = typeof options.resume === "string" ? options.resume : options.resume ? "latest" : undefined;
   if (config.provider || config.plannerProvider || config.coderProvider) console.error(pc.dim(describeTarget(config)));
   config.surface = "repl";
   const app = new ApplicationCore(config);
+  if (options.forkSession !== undefined) {
+    try {
+      const forked = startFork(app.getSessionManager(), options);
+      console.error(forkStartNotice(forked));
+      resumeId = forked.id;
+    } catch (err: any) {
+      console.error(`error: ${redactDiagnosticForOutput(String(err?.message ?? err))}`);
+      app.shutdown();
+      exitAfterFlush(2);
+      return;
+    }
+  }
   const repl = new InteractiveRepl(app, config.approvalMode, resumeId);
   await repl.start();
 }
 
 async function runDefault(options: any): Promise<void> {
-  if (options.repl) {
+  // The fork happens in the REPL's start-up (the TUI is started by a separate binary that is not given a session to open).
+  if (options.repl || options.forkSession !== undefined) {
     await startRepl(options);
     return;
   }
@@ -338,6 +358,8 @@ program
   .option("--repl", "Start interactive coding session (REPL)")
   .option("--live", "Start live TUI")
   .option("-r, --resume [id]", "Resume previous session (defaults to latest if id omitted)")
+  .option("--fork-session <id>", "Start in a new copy of the named session (the original is never changed; prints the new id)")
+  .option("--fork-at <n>", "With --fork-session: copy only the first n messages (default: all)")
   .option("--approve", "Require human approval before destructive actions (edits, shell commands)")
   .option("-y, --yes", "Run non-interactively without approval prompts (forces auto mode)")
   .option("--mode <mode>", "Execution mode: auto, review, or read-only (default: review; folder trust does not change it)")
@@ -415,6 +437,8 @@ program
   .option("--planner-provider <id>", "Cloud provider for the planner model (requires --planner-model)")
   .option("--coder-provider <id>", "Cloud provider for the coder model (requires --coder-model)")
   .option("-r, --resume [id]", "Resume previous session (defaults to latest if id omitted)")
+  .option("--fork-session <id>", "Start in a new copy of the named session (the original is never changed; prints the new id)")
+  .option("--fork-at <n>", "With --fork-session: copy only the first n messages (default: all)")
   .action(async (_options: any, cmd: Command) => {
     const options = commandOptions(cmd);
     await startRepl(options);
@@ -461,6 +485,8 @@ program
   .option("-j, --json", "Output machine-readable JSON structured result (UI-002, UI-003)")
   .option("--output <format>", "Output format: text (default), json (same as --json) or stream-json (one JSON event per line, nothing else on stdout; see docs/STREAM_JSON.md)")
   .option("-r, --resume [id]", "Resume previous session or task state")
+  .option("--fork-session <id>", "Start in a new copy of the named session (the original is never changed; prints the new id)")
+  .option("--fork-at <n>", "With --fork-session: copy only the first n messages (default: all)")
   .option("--answer <id=approve|decline>", "With --resume: answer a question the blocked run asked (the 12-character needsInput.id in its result); repeatable", collectAnswer, [])
   .option("--step", "Execute one model/tool cycle and pause deterministically")
   .action(async (promptParts: string[], _options: any, cmd: Command) => {
@@ -479,6 +505,12 @@ program
         return;
       }
     }
+    const forkError = forkStartError(options);
+    if (forkError) {
+      console.error(`error: ${forkError}`);
+      exitAfterFlush(2);
+      return;
+    }
     const outputFormat = String(options.output ?? (options.json ? "json" : "text"));
     if (!["text", "json", "stream-json"].includes(outputFormat) || (options.json && outputFormat !== "json")) {
       console.error(options.json && ["text", "stream-json"].includes(outputFormat) ? "error: --json cannot be combined with --output " + outputFormat : "error: --output must be text, json or stream-json");
@@ -493,7 +525,7 @@ program
 
     // Auto-detect loaded model if model is 'local-model' (not on a resume: the task record supplies it, or the first
     // step detects it after the resumed provider wait)
-    if (config.model === "local-model" && (options.resume === undefined || options.resume === false)) {
+    if (config.model === "local-model" && (options.resume === undefined || options.resume === false) && options.forkSession === undefined) {
       try {
         const client = new LocalLlmClient(config);
         const models = await client.listModels();
@@ -510,6 +542,20 @@ program
 
     if (!isJson && (config.provider || config.plannerProvider || config.coderProvider)) console.error(pc.dim(describeTarget(config)));
     const app = new ApplicationCore(config);
+
+    if (options.forkSession !== undefined) {
+      try {
+        // `run --resume` reads the task store, so the fork is made there (the source is a task id, as for --resume).
+        const forked = startFork(new SessionManager(app.getStateManager().getBaseDir(), () => app.getAgent().getWorkspacePathIdentity()), options);
+        console.error(forkStartNotice(forked));
+        options.resume = forked.id;
+      } catch (err: any) {
+        console.error(`error: ${redactDiagnosticForOutput(String(err?.message ?? err))}`);
+        app.shutdown();
+        exitAfterFlush(2);
+        return;
+      }
+    }
 
     let resumeTaskId: string | undefined;
     if ((options.resume === undefined || options.resume === false) && !prompt) {

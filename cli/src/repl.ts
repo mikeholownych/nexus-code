@@ -1249,6 +1249,8 @@ export class InteractiveRepl {
                 console.log(pc.yellow("Nothing to fork yet: the conversation is empty.\n"));
               } else if (arg && !/^\d+$/.test(arg)) {
                 console.log(pc.yellow("Usage: /fork [message-count]\n"));
+              } else if (this.agent.getActiveWorktree()) {
+                console.log(pc.yellow("Not forked: this session is working in a git worktree, and a fork would share it with the original. Merge or discard the worktree first (/worktree), or continue here.\n"));
               } else {
                 const source = this.currentSessionId;
                 this.saveCurrentSession("Snapshot");

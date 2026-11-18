@@ -340,6 +340,11 @@ export class SessionManager {
     return withStateStoreGuard(this.sessionsDir, () => {
       const source = this.loadSession(sourceId);
       if (!source) throw new Error(`Session not found: ${sourceId}`);
+      // A worktree binding names one checkout. Copying it would put two sessions in that checkout (and let either's
+      // merge or discard pull it from under the other); creating a second checkout is not a fork's decision.
+      if (source.worktreeBinding) {
+        throw new Error(`Session ${source.id} is bound to the worktree ${source.worktreeBinding.worktreePath} (branch ${source.worktreeBinding.branch}); a fork would share it with the original, so nothing was forked. Continue the original with --resume, or start a new session.`);
+      }
       const total = source.messages.length;
       const asked = options.atMessage ?? total;
       if (!Number.isInteger(asked) || asked < 1 || asked > total) throw new Error(`The fork point must be a whole number between 1 and ${total}.`);

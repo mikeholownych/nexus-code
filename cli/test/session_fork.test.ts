@@ -147,7 +147,7 @@ describe("/fork", () => {
       sessionId: () => source,
       saveSession: () => calls.push("save"),
       resumeSession: (id: string) => { calls.push(`resume ${id}`); return { ok: true, message: `Resumed session ${id}.` }; },
-      app: { getSessionManager: () => s, getAgent: () => ({ getMessages: () => new Array(8).fill(m("user", "x")) }) },
+      app: { getSessionManager: () => s, getAgent: () => ({ getMessages: () => new Array(8).fill(m("user", "x")), getActiveWorktree: () => undefined }) },
     } as unknown as SlashHost;
     const out = (await routeSlash(host, "fork", "5", new AbortController().signal)) as SlashReply;
     assert.equal(out.success, true, out.output);
