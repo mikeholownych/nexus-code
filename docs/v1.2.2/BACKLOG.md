@@ -26,7 +26,15 @@ What the v1.2.1 plan ([`docs/v1.2.1/PLAN.md`](../v1.2.1/PLAN.md)) did not finish
 | CS-6 | Test `cli/test/lsp_real_servers.test.ts`, weekly non-required workflow `lsp-real-servers.yml`, `docs/LSP_REAL_SERVERS.md`; typescript-language-server and pyright validated locally (pass; mutation-checked); fixed the missing `--stdio` for TS/JS/Python | The workflow has not yet run on a hosted runner; rust-analyzer and gopls cases are written but have run nowhere (not installed on the dev host), so treat them as unvalidated; hover, definition, the trust and sandbox gates and multi-file projects are not exercised against real servers; versions of rust-analyzer and gopls are not pinned by the test |
 | MT-3 | One `redactPlain` and one `safeTerminal` use in place of 7 and 3 inline copies; each deliberately different variant has a row in `docs/v1.2.1/REDACTION_VARIANTS.md` | The remaining variants that are field-aware wrappers or classifier entry points |
 | MQ-7 | Slices B and C | Slices D (installed-evaluator adapter), E (request-context manifests), F (recovery reference checker), G (bounded campaigns) |
+| CS-11 | Deterministic loop-pattern transcripts against the real agent turn and the measured table in `docs/LOOP_PATTERNS.md` | The one gap it documents: a command that fails with a different message each time is neither noted nor stopped when continuation is on (a changed result counts as progress); closing it needs a normalisation of volatile text (numbers, times, paths) so "the text changed" is told from "the failure changed" |
 | WM-3 | All five gateway aliases measured (single runs) | A reasoning-aware pass rule for aliases with reasoning off (the runner marks them `passed: false` for the hybrid-reasoning check); repeats, to see run-to-run variation |
+
+## Landed after this list was first written (2026-11-18)
+
+- **VC-7** (done): the verifier convergence stop is also judged on the `run_tests` / `run_command` verifier path (`cli/test/vc7_run_tests_convergence.test.ts`).
+- **CS-5** (done): an example-call request is never recovered into an executed call.
+- **MQ-3** (built, first hosted run found a defect, fix in review): the nightly real-project smoke failed on its first scheduled run because pytest was installed with `pip install --user` and the smoke runs the CLI under a throwaway `HOME`; the probe and the workflow were fixed. It has to be dispatched once more on a hosted runner and the result recorded before it counts as validated.
+- **MQ-4**, **VC-2**, **RD-6**: rows above describe what is and is not done.
 
 ## Not started / deferred in their rows
 
@@ -43,3 +51,6 @@ CS-9 (per-command approval rules), CS-10 (RPC worker isolation), VC-8 (per-role 
 - A release workflow runs tests that pull-request CI skips (host-conditional ones); run those under a flooded environment before tagging.
 - A background agent's reported test subset is not the suite: two failures in the VC-9 PR were found only by CI.
 - An agent's own mutation report is not evidence until re-run; one PR had a surviving mutation, another reported a mutation as caught when it was not.
+- CI colours its output and runs on Node 22 and 24 with different timing: agent PRs need local runs with `FORCE_COLOR=1 CI=true`, and tables kept in sync by a test (such as the global option table in `eval_cli.ts`) need the new flag added in the same change. Two real failures in the `--fork-session` PR and one in the VC-9 PR were found only by CI.
+- A timing-sensitive PTY test (`the whole live TUI through a pseudo-terminal`) failed once on Node 22 in the VC-7 PR and passed on rerun; it is a known-flaky class (see `flake-report`), recorded here rather than hidden.
+- A background agent can stall behind its own watcher loops for hours; give agents a foreground-only rule and check their worktree for changes when a status request goes unanswered.
