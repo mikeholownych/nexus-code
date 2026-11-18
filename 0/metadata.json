@@ -1,0 +1,71 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M7QNS4YZSDV6BAEFEQT594Q1",
+  "session_id": "d4bd3c68-f3f4-43be-813c-96e898f069aa",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-18T15:53:05.657094106Z",
+  "branch": "main",
+  "checkpoints_count": 4,
+  "save_step_count": 4,
+  "files_touched": [
+    "AGENTS.md",
+    "docs/agents/domain.md",
+    "docs/agents/issue-tracker.md",
+    "docs/agents/triage-labels.md",
+    "tasks/lessons.md",
+    "tasks/todo.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5-5",
+  "turn_id": "26e1860b839e",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 48341,
+    "cache_read_tokens": 551035,
+    "output_tokens": 2592,
+    "api_call_count": 8
+  },
+  "redaction": {
+    "replacements": 0,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-setup-matt-pocock-skills-2026-11-15T12:53:01.64388632Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "setup-matt-pocock-skills"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "78a3d8a13f91",
+      "timestamp": "2026-11-15T12:53:01.64388632Z",
+      "native": {
+        "command": "/setup-matt-pocock-skills"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/setup-matt-pocock-skills",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  }
+}

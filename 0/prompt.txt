@@ -1,0 +1,113 @@
+/setup-matt-pocock-skills
+
+---
+
+yes
+
+---
+
+yes
+
+---
+
+yes
+
+---
+
+<pasted_content id="288c">
+You are working in github.com/mikeholownych/homelab-ai (an Ansible configuration repo plus a Python gateway, orchestrator_gateway/ and orchestrator_runtime/). A review found the issues below. Fix them on a feature branch, validate, open a PR, wait for CI to pass, then squash-merge to main.
+
+## Ground rules
+- Read AGENTS.md first and follow it.
+- Never print, log, echo or commit a secret value. In files you write and in the PR text, refer to a leaked credential by file:line or by its first 6 characters only.
+- Do NOT run any playbook against inventory/production, SSH to any host, or contact 10.0.8.x. This change is code-only. Deploying is a separate step that I will do.
+- Do NOT rewrite git history and do NOT force-push. Removing secrets from HEAD does not un-leak them. I will rotate them.
+- Before starting, create branch fix/security-review-2026-11 from an up-to-date main.
+- Make one commit per numbered section below, using Conventional Commit messages.
+- If a fix would change production behaviour in a way this prompt doesn't cover, stop and ask me instead of guessing.
+
+## 1. Remove hardcoded credentials (P0)
+- Find every hardcoded credential with: grep -rnE 'gzA6fT|QVF-MUM' . and a broader sweep for API_KEY/AUTH_TOKEN/*_password literals.
+- Expect about 29 files, under phase12/, phase13/, phase14/ and their tests, plus inventory/production/host_vars/grafana.yml:94.
+- Python runners and verifiers: read the key from an environment variable, e.g. AIHOST_GATEWAY_API_KEY and AIHOST_WORKER_API_KEY, or from a token file path. Fail with a clear message if it is missing.
+- Tests: use obviously fake values. Live tests stay gated behind AIHOST_RUN_LIVE_TESTS.
+- Sealed evidence: phase*/evidence/manifest.sha256 checksums source files. Check whether any edited file is covered and how the tests react to a mismatch. If one is covered, regenerate only the affected manifest with the repo's own tooling (e.g. phase14/.../generate_manifest.py). Record each re-seal in the PR description: which manifest, why, and old and new hashes. Do not change any other evidence.
+
+## 2. Grafana secrets to Vault (P0)
+- Remove observability_grafana_admin_password from grafana.yml. Read it from Vault at secret/local-ai/observability/grafana-admin, following the existing role/vault_integration lookup pattern and using no_log: true.
+- In roles/observability/defaults/main.yml, stop deriving observability_grafana_secret_key and observability_grafana_image_renderer_token from the admin password. Each must be its own Vault-sourced value.
+- If any of the three values is missing, the role must fail closed with a clear assert, in the same style as the existing observability gate.
+- Add to docs/observability.md a note that changing secret_key invalidates the secrets Grafana has already encrypted (datasource credentials, sessions), and list the operator steps.
+
+## 3. Secret scanning that actually catches this (P0)
+- Extend tests/test_no_secrets.py:
+  - scan phase*/, orchestrator_*/, tools/ and observability/ as well as the current roots;
+  - flag literal values assigned to keys or names matching (password|passwd|secret|token|api_?key) in YAML and Python. Allow Jinja expressions, lookups, null/empty values, and REPLACE_ME.
+- Allowlist only the known fake fixtures (AKIAIOSFODNN7EXAMPLE, the ghp_/sk- ABCDEF… strings in tests).
+- Prove the test now fails on the pre-fix tree (git stash or a temp copy), then passes after the fix.
+- Add a gitleaks job to .github/workflows/quality.yml:
+  - pin the action or binary by commit SHA or checksum, matching the repo's existing pinning style;
+  - scan the working tree or PR diff only, not full history, because history still contains the old keys;
+  - add a .gitleaks.toml with the same narrow allowlist.
+
+## 4. Gateway auth hardening (P1)
+Apply each fix in orchestrator_gateway/asgi.py (production engine). Mirror it in orchestrator_gateway/server.py wherever the sync server has the same behaviour.
+- a. The monitoring token must NOT grant admin. is_admin_authorized should accept only clients with the "admin" scope.
+  - Before changing it, grep the repo for every caller of /v1/admin/status, /v1/admin/reload and /admin (vllm-top, readiness probes, textfile collectors, roles/*/templates).
+  - Move each caller to a monitoring-scoped route, or give it an admin-scoped client, so nothing breaks. List them in the PR.
+- b. Remove the ?token= query-parameter path for admin auth.
+- c. Use hmac.compare_digest for every token-digest comparison.
+- d. Apply the same is_origin_refused check that /admin/workers uses to /v1/admin/reload, /v1/admin/status, /admin and /v1/admin/workers/{id}/recover.
+- e. JWT:
+  - default jwt_algorithms to a single family, chosen from whichever key is configured (public key → RS256 only, secret → HS256 only);
+  - reject a configuration that supplies both a public key and a secret;
+  - require "exp" (options={"require": ["exp"]});
+  - stop catching bare Exception around decode; catch jwt.PyJWTError.
+- f. mTLS: add an inventory variable orchestrator_gateway_tls_require_client_cert, default false, and pass it through gateway.env.j2. Do NOT turn it on in production inventory. Document it as a follow-up.
+- Add tests for each of a–e, as a shared contract test run against both server engines where possible:
+  - monitoring token gets 401/403 on admin routes;
+  - a query-string token is rejected;
+  - admin routes refuse requests from local origins on the remote listener;
+  - an HS256 token signed with the RS public key is rejected;
+  - a JWT without exp is rejected.
+
+## 5. Phase test isolation (P1)
+Problem: pytest.ini puts phase14/src … phase0/src on one path, and phase*/src/autonomous_engineering merge via pkgutil.extend_path. Where phases have duplicate modules, the earliest path entry wins. Example: phase0's tests import phase8's workflow/engine.py, which differs from phase0's copy.
+- Do NOT edit sealed phase source to fix this.
+- Make each phase's tests run in their own process with path [phaseN/src, phaseN-1/src, …, phase0/src, repo root], so a phase's own copy always wins. Implement it as:
+  - a Makefile target (e.g. make test-phases) plus a small runner script;
+  - pytest.ini/conftest changes so the default root `pytest` run no longer mixes the phases. Keep tests/ running as it does today.
+- Make CI run the per-phase target.
+- Some earlier-phase tests may fail once they run against their own code. Do not silently fix or skip them. Report each one in the PR as a finding, and ask me before marking any xfail.
+
+## 6. Repo hygiene (P2)
+- Add .cloudflare/ to .gitignore and git rm --cached the cached account file.
+- README:
+  - point the example commands at the commissioned host ai-5820-01, not ai-p620-01;
+  - replace the vLLM upgrade and rollback examples with llama_cpp (or note that vLLM is retired);
+  - rewrite the Vault "sole authority" wording so it is accurate after sections 1–2.
+- Out of scope; list these as follow-ups in the PR and do not do them:
+  - moving the root phase*.md files or the committed evidence;
+  - splitting orchestrator_runtime/runtime.py;
+  - retiring server.py.
+
+## Validation (all must pass before opening the PR)
+- make lint and make syntax.
+- Targeted: pytest -q tests/test_no_secrets.py, the new and changed gateway tests, tests/test_orchestrator_gateway*.py, tests/test_smart_gateway_*.py, tests/test_observability_*.py, tests/test_vault_*.py.
+- sh scripts/check-gateway-quality, using the locked requirements-gateway-test.lock environment as CI does.
+- The new per-phase runner, plus make test.
+- Run make check. Run make idempotency if Docker is available; if it isn't, say so in the PR rather than skipping silently.
+- Re-run the grep from section 1. It must return nothing outside the allowlisted fixtures.
+
+## PR and merge
+- Push the branch and open the PR with gh. In the description, give:
+  - a summary per section;
+  - every manifest re-seal, with its reason;
+  - each changed admin-route caller;
+  - any phase-isolation test failures;
+  - the follow-ups list;
+  - a "Human actions required" checklist: rotate both gateway/worker API keys; set new Grafana admin password, secret_key and renderer token in Vault; re-enter Grafana datasource secrets after the secret_key change; decide whether to purge the old values from git history; reconverge ai-5820-01 and the grafana host.
+- Wait for CI with gh pr checks --watch. If a check fails, fix the cause, push, and wait again. Never bypass or disable a check.
+- When every check is green, merge with gh pr merge --squash --delete-branch. Then confirm main's CI run on the merge commit is green.
+- Report back: the PR URL, the merge SHA, the test results, and the human-actions checklist.
+</pasted_content id="288c">
