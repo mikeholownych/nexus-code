@@ -10,8 +10,14 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 ### Added
 
+- Operator-authorised regression obligations (plan unit VC-2): `/requirements obligate <attempt> <test>` promotes a confirmed failing test; it is replayed by every later attempt of its verifier command, keeps its original failure record when minimised (`minimise`), and an edit that removes, skips or thins the test is recorded. Nothing the agent can call promotes an obligation
+- Attempt lineage (plan unit VC-3, part): each verification attempt records its parent attempt and a hash of the step between candidate identities; `/requirements reference <R> <ref>` records an operator-named behavioural reference. The differential against it is not implemented
 - Project instruction files expand `@path` imports (plan unit CX-7): in `AGENTS.md`, `CLAUDE.md`, `CODEX.md` or `.nexusrules`, a token such as `@docs/rules.md` or `@AGENTS.md` is replaced by that file's contents. Imports resolve against the importing file, must stay inside the workspace by real path (a symlink out is refused), must be regular files of at most 64 KiB (256 KiB in total), are read once each, and nest at most 5 levels, so a cycle ends at once. Code spans, code fences, `@mentions` and anything unresolvable stay literal. Only a trusted workspace is expanded. The heading of the instruction block lists the file and every import that was read (`loaded from CLAUDE.md; imports: AGENTS.md`). Still the first non-empty file only; the files are not merged.
 - Prompt-cache hints for Anthropic (plan unit CX-6, opt-in): with `NEXUS_PROMPT_CACHE=1`, requests to a provider that declares `promptCache: "anthropic"` (built-in Anthropic only) send `system` as blocks with `cache_control: {"type":"ephemeral"}` on the first block (the system prompt, which also covers the tools) and the last (the pinned ledger), two of the four breakpoints. Off by default and not verified against the live API (the request shape is covered by tests and a local mock). The usage summary (`/tokens`, run summaries) now reports the cached share of input tokens, for example `cached 300 of 500 input tokens (60%)`, from the provider's reported cache counts, counting Anthropic and Bedrock input as separate from cache reads and writes.
+
+### Changed
+
+- One shared helper for escape-stripped redaction (`redactPlain`), one terminal-safe helper (`safeTerminal`) and one sanitisation-failure constant replace identical copies; no output changed (plan unit MT-3, `docs/v1.2.1/REDACTION_VARIANTS.md`)
 
 ## [v1.2.1] - 2026-11-18
 

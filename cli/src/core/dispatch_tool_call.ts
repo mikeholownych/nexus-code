@@ -15,6 +15,7 @@ import { toolGroupOf } from "./tool_groups.js";
 import { judgeWithoutCopy, trustedDeliverablesFromBaseline } from "./independent_check.js";
 import { createHash } from "node:crypto";
 import { failedCheckFrom, attemptEvidence, recordAttempt } from "./objective.js";
+import { recordTestEdit } from "./regression_obligations.js";
 import { FILE_EDIT_TOOLS, describeChange, editTarget, snapshot } from "../file_diff.js";
 import { roleToolAllowList } from "./roles.js";
 import { MAY_OUTLIVE_COMMAND, ConfirmHandler, observationKey, egressOriginOf, READ_ONLY_TOOLS, logAudit } from "./agent_support.js";
@@ -527,6 +528,10 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
       const change = describeChange(display, before, snapshot(diffTarget));
       if (change) {
         this.modifiedFiles.add(diffTarget);
+        if (this.objective?.obligations?.length) {
+          const after = snapshot(diffTarget);
+          recordTestEdit(this.objective, { path: display, before: before.state === "text" ? before.content : "", after: after.state === "text" ? after.content : "" });
+        }
         this.observer?.onFileChange?.({ dispatch, callId: call.id, tool: toolName, path: display, change });
       }
     } catch {}

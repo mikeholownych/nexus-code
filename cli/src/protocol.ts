@@ -3,13 +3,12 @@
  * Node agent sidecar (child). The sidecar projects agent state; it never asks the client to decide outcomes.
  */
 import type { ProviderRecoveryRecord, TurnResult } from "./core/turn.js";
-import { redactSecrets } from "./ui.js";
+import { redactSecrets, safeTerminal } from "./ui.js";
 import { persistableEndpoint, scrubUrls } from "./core/endpoint_identity.js";
 import type { ApprovalReview } from "./approval_review.js";
 import type { SlashSpec } from "./slash/catalog.js";
 import type { EvidenceStatus, ReceiptSection } from "./evidence.js";
 import type { Catalog } from "./model_catalog.js";
-import { visibleControls } from "./file_diff.js";
 
 export const PROTOCOL_VERSION = 1;
 export const MAX_TEXT_FIELD = 8000;
@@ -324,6 +323,11 @@ export function stripEscapes(text: string): string {
   return text.replace(TERMINAL_ESCAPE, "");
 }
 
+/** Secrets redacted from text with terminal escape sequences removed: the shared first step of every operator-facing one-line projection. */
+export function redactPlain(text: string): string {
+  return redactSecrets(stripEscapes(text));
+}
+
 /** Operator-supplied text as shown to an operator or written to a record: escapes and control characters gone, secrets redacted, one line, capped. */
 export function safeOperatorText(text: string, max = 300): string {
   return redactSecrets(stripEscapes(String(text)).replace(/[\x00-\x1f\x7f-\x9f]+/g, " ")).replace(/\s+/g, " ").trim().slice(0, max);
@@ -335,7 +339,7 @@ export function toolSubject(args: Record<string, any>, tool?: string): string {
     return safeOperatorText(`steering ${args.steering} negates ${ids}: ${args.text}`, 200);
   }
   const subject = args.path ?? args.file_path ?? args.command ?? args.url ?? args.query ?? args.name ?? "";
-  return redactSecrets(stripEscapes(String(subject))).replace(/\s+/g, " ").trim().slice(0, 200);
+  return redactPlain(String(subject)).replace(/\s+/g, " ").trim().slice(0, 200);
 }
 
 /** Copy of a turn with secrets redacted from its free-text fields; enums, counts, ids and hashes are left as-is. */
@@ -504,15 +508,15 @@ export function toolSummary(success: boolean, output: string, error?: string): T
     const failure = success ? "" : (error ?? "").split(/\r?\n/).find((line) => line.trim())?.trim() ?? "";
     const summary = failure && !failure.startsWith("{") ? failure : `${exit} · ${rows.length ? `${rows.length} line${rows.length === 1 ? "" : "s"}` : "no output"}`;
     return {
-      summary: redactSecrets(stripEscapes(summary)).replace(/\s+/g, " ").slice(0, MAX_SUMMARY),
+      summary: redactPlain(summary).replace(/\s+/g, " ").slice(0, MAX_SUMMARY),
       lines: rows.length,
-      preview: (rows.length > TOOL_PREVIEW_LINES ? rows.slice(-TOOL_PREVIEW_LINES) : rows).map((row) => visibleControls(redactSecrets(row)).slice(0, 400)).join("\n"),
+      preview: (rows.length > TOOL_PREVIEW_LINES ? rows.slice(-TOOL_PREVIEW_LINES) : rows).map((row) => safeTerminal(row).slice(0, 400)).join("\n"),
       exit_code: command.exit_code,
       ...(command.duration_ms !== undefined ? { duration_ms: command.duration_ms } : {}),
       ...(command.timed_out ? { timed_out: true } : {}),
     };
   }
-  const text = redactSecrets(stripEscapes(success ? output || "" : error || output || "")).trim();
+  const text = redactPlain(success ? output || "" : error || output || "").trim();
   const first = text.split(/\r?\n/).find((line) => line.trim())?.trim() ?? (success ? "Completed" : "Tool failed");
   return { summary: first.replace(/\s+/g, " ").slice(0, MAX_SUMMARY), lines: text ? text.split(/\r?\n/).length : 0 };
 }

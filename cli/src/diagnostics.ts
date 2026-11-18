@@ -8,8 +8,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { LspDiagnostic } from "./lsp.js";
-import { capText, stripEscapes } from "./protocol.js";
-import { redactSecrets } from "./ui.js";
+import { capText, redactPlain } from "./protocol.js";
 
 export interface Diagnostic {
   file: string;
@@ -183,7 +182,7 @@ export const UNTRUSTED_FENCE_END = "(end untrusted tool output)";
 
 /** Escapes and control characters removed, whitespace collapsed, fence markers defused, length capped. */
 export function sanitizeDiagnosticMessage(message: unknown): string {
-  const text = redactSecrets(stripEscapes(String(message ?? "")))
+  const text = redactPlain(String(message ?? ""))
     .replace(/[\x00-\x1f\x7f-\x9f]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
