@@ -255,6 +255,24 @@ function resume({ host, args }: SlashContext): SlashOutcome {
   return reply("resume", `There is no other saved session in this workspace to resume.${note} /sessions lists what is saved; /resume <id> loads one.`, false);
 }
 
+function fork({ host, args }: SlashContext): SlashOutcome {
+  if (host.app.getAgent().getMessages().length <= 1) return reply("fork", "Nothing to fork yet: the conversation is empty.", false);
+  const wanted = args.trim();
+  if (wanted && !/^\d+$/.test(wanted)) return reply("fork", "Usage: /fork [message-count]", false);
+  const source = host.sessionId();
+  // Saved first, so the fork is of the conversation as it is now.
+  host.saveSession();
+  let forked;
+  try {
+    forked = host.app.getSessionManager().forkSession(source, wanted ? { atMessage: Number(wanted) } : {});
+  } catch (err) {
+    return reply("fork", errorText(err), false);
+  }
+  const result = host.resumeSession(forked.id);
+  if (!result.ok) return reply("fork", `Forked ${source} into ${forked.id}, but it could not be opened: ${result.message}`, false);
+  return reply("fork", `Forked ${source} at message ${forked.atMessage} into ${forked.id}; you are now in the fork. /resume ${source} returns to the original.`);
+}
+
 function comparableDir(dir: string | undefined): string {
   if (!dir) return "";
   try {
@@ -341,6 +359,7 @@ export const SESSION_HANDLERS: Record<string, SlashHandler> = {
   sessions,
   save,
   resume,
+  fork,
   history,
   export: exportSession,
   init,

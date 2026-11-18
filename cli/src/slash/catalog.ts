@@ -120,6 +120,7 @@ export const SLASH_COMMANDS: SlashSpec[] = [
   { name: "sessions", usage: "/sessions", summary: "Saved sessions" },
   { name: "save", usage: "/save [name]", summary: "Save this session" },
   { name: "resume", usage: "/resume [id]", summary: "Load a saved session (the latest by default)" },
+  { name: "fork", usage: "/fork [message-count]", summary: "Continue in a copy of this session (optionally only its first N messages); the original stays as it is" },
   { name: "history", usage: "/history [query|run <n>]", summary: "Search earlier prompts or run one again", cancellable: true },
   { name: "export", usage: "/export [md|json]", summary: "Write the session transcript into the workspace" },
   { name: "init", usage: "/init", summary: "Create a project rules file" },

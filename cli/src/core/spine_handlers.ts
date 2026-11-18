@@ -14,6 +14,7 @@ import { VerificationEvidence } from "./turn.js";
 import { createHash } from "node:crypto";
 import { RequirementUpdate, applyRequirementUpdates, invalidateVerified, isHardRequirement, readObjective, blockedRequirements, failedCheckFrom, attemptEvidence, describeAttemptEvidence, gatingRequirements, openRequirements, priorAttempt, convergenceSignal, convergenceHistory, recordAttempt } from "./objective.js";
 import { readArchive, readFindings } from "./findings.js";
+import { resolveMaskedOutput } from "./tool_output_mask.js";
 import { snapshot } from "../file_diff.js";
 import pc from "picocolors";
 import { collectMaterialDependencies } from "../material_deps.js";
@@ -711,6 +712,9 @@ export function setupSpineHandlersImpl(this: any): void {
   });
 
   this.spine.registerHandler("read_archive", async (args: any) => {
+    // CX-4: "tool-output:<id>" names a masked tool result; it resolves to the full output (live conversation, then archive).
+    const masked = typeof args?.query === "string" ? resolveMaskedOutput(args.query, this.messages, this.archiveForReading) : undefined;
+    if (masked !== undefined) return { success: true, output: masked };
     const result = readArchive(this.archiveForReading, args ?? {});
     return result.ok ? { success: true, output: result.text } : { success: false, output: "", error: result.text };
   });
