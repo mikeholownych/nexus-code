@@ -379,6 +379,8 @@ export interface TurnResult {
   };
   /** Present when the turn stopped as NEEDS_INPUT: the decision wanted. Resume with `--answer <id>=approve|decline`. */
   needsInput?: NeedsInputQuestion;
+  /** VC-9: further questions recorded in the same turn (delegated subagents), in the order raised; `needsInput` is the first. */
+  furtherNeedsInput?: NeedsInputQuestion[];
   /** Present when the turn stopped as TOOL_CALL_LOOP: the repeated call (arguments redacted) and the recent calls with their counts. */
   repeatedCall?: {
     tool: string;
@@ -450,6 +452,9 @@ export function assertTurnResultInvariants(t: TurnResult): TurnResult {
   }
   if ((t.reason === "NEEDS_INPUT" || t.needsInput) && (t.reason !== "NEEDS_INPUT" || t.execution !== "BLOCKED" || t.outcome !== "NOT_ESTABLISHED" || !t.needsInput)) {
     throw new TurnResultInvariantError("NEEDS_INPUT requires a BLOCKED, NOT_ESTABLISHED turn carrying the question (and only that reason carries one)");
+  }
+  if (t.furtherNeedsInput && !t.needsInput) {
+    throw new TurnResultInvariantError("furtherNeedsInput is only carried with the first question");
   }
   if (t.execution === "FAILED" && t.outcome !== "NOT_ESTABLISHED") {
     throw new TurnResultInvariantError("FAILED must not claim an engineering outcome");
@@ -555,7 +560,7 @@ export function summarizeTurn(t: TurnResult): { heading: string; line: string } 
   if (exec === "BLOCKED" && t.reason === "NEEDS_INPUT" && t.needsInput) {
     return {
       heading: "TURN BLOCKED - NEEDS INPUT",
-      line: `execution=BLOCKED outcome=NOT_ESTABLISHED (NEEDS_INPUT ${t.needsInput.id}: ${t.needsInput.prompt}). Resume with --answer ${t.needsInput.id}=approve or ${t.needsInput.id}=decline.`,
+      line: `execution=BLOCKED outcome=NOT_ESTABLISHED (NEEDS_INPUT ${t.needsInput.id}: ${t.needsInput.prompt}). Resume with --answer ${t.needsInput.id}=approve or ${t.needsInput.id}=decline.${t.furtherNeedsInput?.length ? ` ${t.furtherNeedsInput.length} more question(s) wait behind it: ${t.furtherNeedsInput.map((q) => q.id).join(", ")}.` : ""}`,
     };
   }
   if (exec === "BLOCKED" && t.reason === "TOOL_CALL_LOOP") {

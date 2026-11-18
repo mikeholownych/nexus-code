@@ -1,5 +1,0 @@
-{
-  "skillName": "docs-helper",
-  "requireConstraints": false,
-  "forbiddenBodySubstrings": ["[system]", "<|im_start|>"]
-}

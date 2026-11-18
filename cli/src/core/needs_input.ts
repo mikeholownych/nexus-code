@@ -20,6 +20,8 @@ export interface NeedsInputQuestion {
   /** What is being decided, as short strings (never secrets: arguments are clipped and redacted by the caller). */
   subject: Record<string, string>;
   options: Array<{ id: NeedsInputOption; label: string }>;
+  /** Present when a delegated subagent raised the question: how deep it ran and what it was asked to do. The id is unchanged, so `--answer` works as for any other question. */
+  subagent?: { depth: number; objective: string };
 }
 
 export const NEEDS_INPUT_OPTIONS: ReadonlyArray<{ id: NeedsInputOption; label: string }> = [

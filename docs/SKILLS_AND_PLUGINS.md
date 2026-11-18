@@ -25,21 +25,7 @@ Symlinked skill directories are followed, so a skill linked from another locatio
 
 A `nexus` agent entry ("Nexus Code") for that CLI has been prepared but is **not yet part of a released Skills CLI**. Until it is, `npx skills add <owner/repo> --agent nexus` is rejected as an unknown agent.
 
-Treat an installed skill as untrusted instructions. Activating a skill only adds its text to the conversation and records a governed activation id + content digest on subsequent tool receipts (disable with `NEXUS_SKILL_ACTIVATION_IDS=0`).
-
-Frontmatter:
-
-| Key | Effect |
-|---|---|
-| `name`, `description` | Discovery, ranking, catalog (always) |
-| `allowed-capabilities`, `denied-capabilities` | Optional tool-name lists; **enforced only when** `NEXUS_SKILL_CONSTRAINTS=1`, and only as an **intersection** with session authority (never expands it) |
-| `allowed-tools` and other keys | Ignored (no grant) |
-
-Every tool call still goes through Nexus's normal approval, filesystem and execution policy. Optional: `NEXUS_SKILL_INTEGRITY=live` blocks tools if the skill file changes after activation; `NEXUS_SKILL_CONFIRM_WORKSPACE=1` asks before activating a workspace skill in review/auto; `NEXUS_SKILL_SYMLINK_POLICY=warn|deny` for realpath-outside-root.
-
-### Local qualification (WP-GS-06)
-
-`nexus skills qualify [name]` evaluates skills against JSON fixtures (`.nexus/skill-fixtures/` or a path passed with `--fixtures`). A passing run records `qualifiedAt` + `qualificationDigest` under `NEXUS_STATE_DIR/skills/index.json`. Content digest drift clears that qualification. Set `NEXUS_SKILL_REQUIRE_QUALIFICATION=1` to refuse `activate_skill` until the current digest is qualified. Air-gapped; no remote registry.
+Treat an installed skill as untrusted instructions. Activating a skill only adds its text to the conversation. Its frontmatter is read for `name` and `description` alone: keys such as `allowed-tools` grant nothing, and every tool call the skill suggests still goes through Nexus's normal approval, filesystem and execution policy.
 
 ### Creating a Skill
 Create a directory with a `SKILL.md` containing YAML frontmatter:

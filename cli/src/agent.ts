@@ -10,7 +10,6 @@ import { CapabilityRegistry, createDefaultRegistry, changesWorkspace, type Effec
 import { fenceSuspected, scanForInjection } from "./core/injection_scanner.js";
 import { ApprovalPolicy, defaultApprovalPolicy, ApprovalMode } from "./core/approval_policy.js";
 import { ExecutionSpine, ExecutionReceipt } from "./core/spine.js";
-import { SkillActivationRegistry } from "./core/skill_activation.js";
 import { AuthorityAdmissionEngine } from "./core/authority.js";
 import { CandidateTracker, ValidationReceipt, computeCandidateIdentitySync } from "./core/candidate.js";
 import { ExecutionTracker, actionKind, combineState, ledgerStateIdentity, normalizeTracking, type ObservationVerdict } from "./core/execution_tracking.js";
@@ -80,10 +79,6 @@ export class AutonomousAgent {
   private depth: number;
   private runningAsSubagent = false;
   private skillManager: SkillManager;
-  /** Governed skill activations for the current agent (WP-GS-01); public for tests and evidence. */
-  public skillActivations = new SkillActivationRegistry();
-  /** Recent tool receipts (including skill attribution) for tests and diagnostics. */
-  public lastToolReceipts: ExecutionReceipt[] = [];
   /** The skill catalog in `messages[0]`, the window it was sized for, and whether that window came from the provider. */
   private skillCatalog?: { text: string; limit: number; discovered: boolean };
   private mcpManager: McpClientManager;
@@ -158,6 +153,10 @@ export class AutonomousAgent {
   /** VC-6: type-check errors present before the task's change (empty when it was clean); undefined when none was captured (resume, tool missing, not approved). */
   /** VC-9: the first decision this turn needed from an operator who is not there; it ends the turn BLOCKED. */
   private pendingNeedsInput?: NeedsInputQuestion;
+  /** VC-9: questions after the first that delegated subagents raised in this turn (depth 0). */
+  private furtherNeedsInput: NeedsInputQuestion[] = [];
+  private subagentQuestions: NeedsInputQuestion[] = [];
+  private subagentObjective = "";
   /** VC-9: the operator's answers (`--answer id=approve|decline`), consumed when the run reaches the same decision. */
   private operatorAnswers = new Map<string, NeedsInputOption>();
   private typecheckBaseline?: { command: string; signatures: Set<string> };
@@ -2204,10 +2203,24 @@ export class AutonomousAgent {
   private headlessDecision(question: NeedsInputQuestion): NeedsInputOption | "ask" {
     const answer = this.operatorAnswers.get(question.id);
     if (answer) return answer;
-    // Only the top-level run can hand a question to the operator. A subagent's refusal stays a refusal that its parent sees
-    // (a subagent question is not propagated: VC-9 audit, "not done").
+    // Only the top-level run can hand a question to the operator. A subagent keeps its questions on itself, stops, and
+    // returns them in its result; the parent records them (acceptSubagentQuestions).
     if (this.depth === 0) this.pendingNeedsInput ??= question;
+    else if (!this.subagentQuestions.some((q) => q.id === question.id)) {
+      this.subagentQuestions.push({ ...question, subagent: { depth: this.depth, objective: this.subagentObjective.slice(0, 160) } });
+    }
     return "ask";
+  }
+
+  /**
+   * VC-9: questions a delegated subagent returned. The first becomes the turn's question and the rest are listed behind
+   * it (never overwritten). Subagents cannot spawn subagents, so only the top-level run receives them.
+   */
+  public acceptSubagentQuestions(questions: readonly NeedsInputQuestion[]): void {
+    for (const q of questions) {
+      if (!this.pendingNeedsInput) this.pendingNeedsInput = q;
+      else if (this.pendingNeedsInput.id !== q.id && !this.furtherNeedsInput.some((x) => x.id === q.id)) this.furtherNeedsInput.push(q);
+    }
   }
 
   /** The newest recorded PASSED verifier attempt that still describes the current workspace, if any. */
@@ -4410,6 +4423,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       throw new Error("Subagent workspace no longer matches its inherited worktree authority.");
     }
     this.runningAsSubagent = true;
+    this.subagentObjective = prompt;
     // A subagent is used for one run: its commands are tied to the parent turn's cancellation for its lifetime.
     this.bridge.setTurnSignal(signal);
     this.resetConversation();
@@ -4519,6 +4533,10 @@ ${NEXUS_RUNTIME_IDENTITY}`;
           continue;
         }
         const { receipt, shouldExit } = await this.dispatchToolCall(call, currentStep, "subagent", onConfirm);
+        // VC-9: a decision only the operator can make. The subagent neither waits for it nor takes it: it stops here and the parent surfaces the question.
+        if (this.subagentQuestions.length) {
+          return { completed: false, summary: finalSummary, reason: `needs an operator decision: ${this.subagentQuestions[0].prompt.slice(0, 200)}`, needsInput: [...this.subagentQuestions] };
+        }
 
         if (shouldExit) {
           let args: any = {};

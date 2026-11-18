@@ -3,7 +3,6 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
 import { redactSecrets } from "./ui.js";
-import { watcherSkillDirs, skillSymlinkPolicy } from "./core/skill_activation.js";
 
 /**
  * Share of the context window the skill catalog in the system prompt may take. A user with hundreds of installed
@@ -184,10 +183,6 @@ export interface Skill {
   content: string;
   trusted?: boolean;
   isWorkspaceSkill?: boolean;
-  /** Optional enforced allow-list (comma-separated tool names); informational until NEXUS_SKILL_CONSTRAINTS=1. */
-  allowedCapabilities?: string;
-  /** Optional enforced deny-list (comma-separated tool names); informational until NEXUS_SKILL_CONSTRAINTS=1. */
-  deniedCapabilities?: string;
 }
 
 export interface SkillManagerOptions {
@@ -321,25 +316,6 @@ export class SkillManager {
       if (!name) return;
       const description = metadata.description || "Specialized skill instructions";
 
-      // Symlink / realpath supply-chain policy (WP-GS-07): optional warn or deny when the skill file
-      // resolves outside HOME for global skills, or outside the workspace for workspace skills.
-      const symlinkPolicy = skillSymlinkPolicy();
-      if (symlinkPolicy !== "off") {
-        try {
-          const real = fs.realpathSync(filePath);
-          const root = context.isWorkspace ? this.workspace : os.homedir();
-          const rel = path.relative(path.resolve(root), real);
-          if (rel.startsWith("..") || path.isAbsolute(rel)) {
-            if (symlinkPolicy === "deny") return;
-            console.warn(
-              `⚠️ Skill '${name}' resolves outside ${context.isWorkspace ? "workspace" : "HOME"} (${real}); treating as untrusted instructions.`
-            );
-          }
-        } catch {
-          if (symlinkPolicy === "deny") return;
-        }
-      }
-
       const skillItem: Skill = {
         name,
         description,
@@ -347,13 +323,6 @@ export class SkillManager {
         content: body.trim(),
         trusted: context.trusted,
         isWorkspaceSkill: context.isWorkspace,
-        // Enforced only when NEXUS_SKILL_CONSTRAINTS=1; never expands session authority.
-        ...(metadata["allowed-capabilities"] || metadata.allowedCapabilities
-          ? { allowedCapabilities: metadata["allowed-capabilities"] || metadata.allowedCapabilities }
-          : {}),
-        ...(metadata["denied-capabilities"] || metadata.deniedCapabilities
-          ? { deniedCapabilities: metadata["denied-capabilities"] || metadata.deniedCapabilities }
-          : {}),
       };
 
       if (context.trusted) {
@@ -371,11 +340,9 @@ export class SkillManager {
   }
 
   /**
-   * Reads the top-level scalar keys of a SKILL.md YAML frontmatter block. `name` and `description` drive discovery;
-   * `allowed-capabilities` / `denied-capabilities` are retained for optional enforcement (NEXUS_SKILL_CONSTRAINTS=1)
-   * and never expand session authority. Other keys (e.g. legacy `allowed-tools`) still have no effect.
-   * Supports plain, quoted, multi-line plain, and block (`|`, `>`, with `-`/`+` chomping) scalars; nested mappings
-   * are skipped, never merged into the top level.
+   * Reads the top-level scalar keys of a SKILL.md YAML frontmatter block. Only `name` and `description` are used;
+   * no other key (e.g. `allowed-tools`) has any effect. Supports plain, quoted, multi-line plain, and block
+   * (`|`, `>`, with `-`/`+` chomping) scalars; nested mappings are skipped, never merged into the top level.
    */
   private parseFrontmatter(text: string): { metadata: Record<string, string>; body: string } {
     const lines = text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").trim().split("\n");
@@ -551,8 +518,13 @@ export class SkillManager {
   public startWatcher(onReload?: (skills: Skill[]) => void): void {
     this.stopWatcher();
 
-    // S-03: watch every discovery root so catalog reload matches SkillManager.refresh.
-    const watchDirs = watcherSkillDirs(this.workspace, os.homedir());
+    const watchDirs = [
+      path.join(this.workspace, ".nexus", "skills"),
+      path.join(this.workspace, ".agents", "skills"),
+      path.join(this.workspace, "skills"),
+      path.join(os.homedir(), ".nexus", "skills"),
+      path.join(os.homedir(), ".agents", "skills"),
+    ];
 
     for (const dir of watchDirs) {
       if (fs.existsSync(dir)) {

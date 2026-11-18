@@ -1,7 +1,0 @@
-{
-  "skillName": "reader",
-  "requireConstraints": true,
-  "expectedTools": ["read_file"],
-  "forbiddenTools": ["run_command"],
-  "forbiddenBodySubstrings": ["ignore previous instructions", "<|im_start|>"]
-}

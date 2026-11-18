@@ -12,7 +12,6 @@ import {
   CapabilityHandler,
   changesWorkspace,
 } from "./capabilities.js";
-import type { SkillAttribution } from "./skill_activation.js";
 
 export interface InvocationRequest {
   /** Unique invocation identity (assigned if omitted) (EXEC-002) */
@@ -29,8 +28,6 @@ export interface InvocationRequest {
   args: Record<string, any>;
   /** Step index in active turn */
   stepIndex?: number;
-  /** Active skill attribution (WP-GS-01); omitted when no activation or disabled */
-  skillAttribution?: SkillAttribution;
 }
 
 export interface InvocationContext {
@@ -128,23 +125,6 @@ export interface ExecutionReceipt {
   timestamp: string;
   /** Whether operation was simulated rather than actual host effect (EXEC-010) */
   simulated: boolean;
-  /** Active skill activation id when governed skill attribution is enabled (WP-GS-01) */
-  skillActivationId?: string;
-  /** Skill name bound to this invocation when attributed */
-  skillName?: string;
-  /** SHA-256 of the skill body that was activated (WP-GS-02) */
-  skillContentDigest?: string;
-}
-
-function withSkillAttribution(receipt: ExecutionReceipt, request: InvocationRequest): ExecutionReceipt {
-  const a = request.skillAttribution;
-  if (!a?.skillActivationId) return receipt;
-  return {
-    ...receipt,
-    ...(a.skillActivationId ? { skillActivationId: a.skillActivationId } : {}),
-    ...(a.skillName ? { skillName: a.skillName } : {}),
-    ...(a.skillContentDigest ? { skillContentDigest: a.skillContentDigest } : {}),
-  };
 }
 
 /**
@@ -324,20 +304,11 @@ export class ExecutionSpine {
     const executionDomain = request.executionDomain || "agent_orchestration";
     const toolName = request.toolName;
     const targetResources = extractTargetResources(toolName, request.args || {});
-    const finish = async (receipt: ExecutionReceipt): Promise<ExecutionReceipt> => {
-      const attributed = withSkillAttribution(receipt, request);
-      try {
-        await this.hooks.evidenceEmission(attributed);
-      } catch {
-        // Degraded-mode per FAIL-003
-      }
-      return attributed;
-    };
 
     // Stage 1: Request Ingestion & Normalization
     const capability = this.registry.getByToolName(toolName);
     if (!capability) {
-      return finish({
+      const receipt: ExecutionReceipt = {
         invocationId,
         taskId,
         actor,
@@ -353,7 +324,9 @@ export class ExecutionSpine {
         status: "FAILED",
         timestamp: new Date().toISOString(),
         simulated: Boolean(context.dryRun),
-      });
+      };
+      await this.hooks.evidenceEmission(receipt);
+      return receipt;
     }
 
     const argValidation = validateToolArguments(capability, request.args || {});
@@ -375,7 +348,8 @@ export class ExecutionSpine {
         timestamp: new Date().toISOString(),
         simulated: Boolean(context.dryRun),
       };
-      return finish(receipt);
+      await this.hooks.evidenceEmission(receipt);
+      return receipt;
     }
 
     // Stage 2: Context & Admission Gate
@@ -399,7 +373,8 @@ export class ExecutionSpine {
           timestamp: new Date().toISOString(),
           simulated: Boolean(context.dryRun),
         };
-        return finish(receipt);
+        await this.hooks.evidenceEmission(receipt);
+        return receipt;
       }
     } catch (err: any) {
       const receipt: ExecutionReceipt = {
@@ -419,7 +394,8 @@ export class ExecutionSpine {
         timestamp: new Date().toISOString(),
         simulated: Boolean(context.dryRun),
       };
-      return finish(receipt);
+      await this.hooks.evidenceEmission(receipt);
+      return receipt;
     }
 
     // Stage 3: Authority & Resource Gate
@@ -443,7 +419,8 @@ export class ExecutionSpine {
           timestamp: new Date().toISOString(),
           simulated: Boolean(context.dryRun),
         };
-        return finish(receipt);
+        await this.hooks.evidenceEmission(receipt);
+        return receipt;
       }
 
       const confinementDecision = await this.hooks.resourceConfinement(request, context);
@@ -465,7 +442,8 @@ export class ExecutionSpine {
           timestamp: new Date().toISOString(),
           simulated: Boolean(context.dryRun),
         };
-        return finish(receipt);
+        await this.hooks.evidenceEmission(receipt);
+        return receipt;
       }
     } catch (err: any) {
       const receipt: ExecutionReceipt = {
@@ -485,7 +463,8 @@ export class ExecutionSpine {
         timestamp: new Date().toISOString(),
         simulated: Boolean(context.dryRun),
       };
-      return finish(receipt);
+      await this.hooks.evidenceEmission(receipt);
+      return receipt;
     }
 
     // Stage 4: Pre-Execution Hooks
@@ -510,7 +489,8 @@ export class ExecutionSpine {
           timestamp: new Date().toISOString(),
           simulated: Boolean(context.dryRun),
         };
-        return finish(receipt);
+        await this.hooks.evidenceEmission(receipt);
+        return receipt;
       }
       if (egressDecision.sanitizedArgs) {
         effectiveArgs = egressDecision.sanitizedArgs;
@@ -543,7 +523,8 @@ export class ExecutionSpine {
         timestamp: new Date().toISOString(),
         simulated: Boolean(context.dryRun),
       };
-      return finish(receipt);
+      await this.hooks.evidenceEmission(receipt);
+      return receipt;
     }
 
     // Stage 5: Capability Dispatch
@@ -632,6 +613,12 @@ export class ExecutionSpine {
       simulated: Boolean(context.dryRun),
     };
 
-    return finish(receipt);
+    try {
+      await this.hooks.evidenceEmission(receipt);
+    } catch {
+      // Degraded-mode per FAIL-003
+    }
+
+    return receipt;
   }
 }

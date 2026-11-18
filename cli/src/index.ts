@@ -12,11 +12,6 @@ import { InteractiveRepl } from "./repl.js";
 import { LocalLlmClient } from "./client.js";
 import { SessionManager } from "./session.js";
 import { SkillManager } from "./skills.js";
-import {
-  evaluateSkillQualification,
-  loadQualificationFixtures,
-  recordSkillQualification,
-} from "./core/skills_qualification.js";
 import { McpClientManager } from "./mcp.js";
 import { PluginManager } from "./plugins.js";
 import { HarnessConfig } from "./types.js";
@@ -863,7 +858,7 @@ program
     }
   });
 
-const skillsCmd = program
+program
   .command("skills")
   .description("List installed agent skills and their descriptions")
   .option("-w, --workspace <path>", "Workspace directory")
@@ -880,48 +875,6 @@ const skillsCmd = program
       console.log(`• ${pc.bold(pc.green(s.name))} (${pc.dim(s.path)})`);
       console.log(`  ${s.description}\n`);
     }
-  });
-
-skillsCmd
-  .command("qualify [name]")
-  .description("Qualify installed skills against local fixtures (WP-GS-06); air-gapped")
-  .option("-w, --workspace <path>", "Workspace directory")
-  .option("-f, --fixtures <dir>", "Fixture directory (default: <workspace>/.nexus/skill-fixtures or bundled test fixtures)")
-  .action((name: string | undefined, options: any) => {
-    const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
-    const sm = new SkillManager(ws);
-    const fixtureDirs = [
-      options.fixtures ? path.resolve(options.fixtures) : "",
-      path.join(ws, ".nexus", "skill-fixtures"),
-      path.join(path.dirname(fileURLToPath(import.meta.url)), "../test/skills_qualification/fixtures"),
-    ].filter(Boolean);
-    let fixtures = fixtureDirs.flatMap((d) => loadQualificationFixtures(d));
-    if (name) fixtures = fixtures.filter((f) => f.skillName === name);
-    if (fixtures.length === 0) {
-      console.log(pc.yellow(`No qualification fixtures found${name ? ` for '${name}'` : ""}.`));
-      console.log(pc.dim(`Looked in: ${fixtureDirs.join(", ")}`));
-      process.exitCode = 1;
-      return;
-    }
-    let failed = 0;
-    for (const fixture of fixtures) {
-      const skill = sm.getSkill(fixture.skillName);
-      if (!skill) {
-        console.log(pc.red(`✖ ${fixture.skillName}: skill not installed`));
-        failed++;
-        continue;
-      }
-      const result = evaluateSkillQualification(skill, fixture);
-      if (result.ok) {
-        recordSkillQualification(skill.name, result.contentDigest, skill.path);
-        console.log(pc.green(`✔ ${skill.name} qualified (${result.contentDigest.slice(0, 12)}…)`));
-      } else {
-        failed++;
-        console.log(pc.red(`✖ ${skill.name} failed qualification:`));
-        for (const f of result.failures) console.log(pc.red(`  - ${f}`));
-      }
-    }
-    if (failed) process.exitCode = 1;
   });
 
 program

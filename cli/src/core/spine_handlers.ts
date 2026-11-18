@@ -486,8 +486,10 @@ export function setupSpineHandlersImpl(this: any): void {
         { durable: false }
       );
       subagent.inheritTraceContext(this);
+      subagent.setOperatorAnswers(this.operatorAnswers);
       const subResult = await subagent.runSubagent(subPrompt, this.activeTurn?.onConfirm, this.activeTurn?.controller.signal);
       this.ui.stopSpinner(subResult.completed);
+      if (subResult.needsInput?.length) this.acceptSubagentQuestions(subResult.needsInput);
       if (!subResult.completed) {
         return { success: false, output: subResult.summary, error: `Subagent did not complete: ${subResult.reason}` };
       }
@@ -696,58 +698,10 @@ export function setupSpineHandlersImpl(this: any): void {
         output: `No skill is named '${oneLine(String(skillName))}'. Nothing was activated. Installed skills that match those words; call activate_skill again with an exact name to load one:\n${matches.map((s: any) => `- **${oneLine(s.name)}**: ${oneLine(s.description)}`).join("\n")}`,
       };
     }
-    // WP-GS-01/02/05/06: activation identity + digest; revocation; optional qualification gate.
-    const { parseSkillConstraints, skillContentDigest } = await import("./skill_activation.js");
-    const { isSkillRevoked, recordSkillActivationLifecycle } = await import("./skills_lifecycle.js");
-    const {
-      skillRequireQualificationEnabled,
-      isSkillQualified,
-      invalidateQualificationIfDigestChanged,
-    } = await import("./skills_qualification.js");
-    if (isSkillRevoked(skill.name)) {
-      return {
-        success: false,
-        output: "",
-        error: `Error: Skill '${oneLine(skill.name)}' is revoked in the local skill lifecycle index. Clear the revoke entry under NEXUS_STATE_DIR/skills/index.json to re-enable.`,
-      };
-    }
-    const digest = skillContentDigest(skill.content);
-    invalidateQualificationIfDigestChanged(skill.name, digest);
-    if (skillRequireQualificationEnabled() && !isSkillQualified(skill.name, digest)) {
-      return {
-        success: false,
-        output: "",
-        error: `Error: Skill '${oneLine(skill.name)}' is not qualified for digest ${digest.slice(0, 12)}…. Run \`nexus skills qualify ${skill.name}\` (or unset NEXUS_SKILL_REQUIRE_QUALIFICATION).`,
-      };
-    }
-    const activation = this.skillActivations.activate({
-      skillName: skill.name,
-      sourcePath: skill.path,
-      sourceClass: skill.isWorkspaceSkill ? "workspace" : "global",
-      content: skill.content,
-      taskId: this.currentTaskId || this.activeWorktree?.taskId || "task-default",
-      constraints: parseSkillConstraints({
-        allowedCapabilities: skill.allowedCapabilities,
-        deniedCapabilities: skill.deniedCapabilities,
-      }),
-    });
-    try {
-      recordSkillActivationLifecycle({
-        name: skill.name,
-        contentDigest: activation.contentDigest,
-        sourcePath: skill.path,
-      });
-    } catch {
-      // Best-effort index write; activation still succeeds.
-    }
     console.log(pc.green(`✔ Activated skill: ${pc.bold(skill.name)}`));
     return {
       success: true,
-      output:
-        `[Activated Skill: ${skill.name}] [source: ${oneLine(skill.path)}] [trust: ${skill.trusted ? "trusted" : "untrusted"}]` +
-        ` [activation: ${activation.activationId}] [digest: ${activation.contentDigest}]\n` +
-        `[Host application: Nexus Code. Provider/model identity does not change the host; select host-specific instructions for Nexus Code.]\n\n` +
-        `${skill.content}`,
+      output: `[Activated Skill: ${skill.name}] [source: ${oneLine(skill.path)}] [trust: ${skill.trusted ? "trusted" : "untrusted"}]\n[Host application: Nexus Code. Provider/model identity does not change the host; select host-specific instructions for Nexus Code.]\n\n${skill.content}`,
     };
   });
 

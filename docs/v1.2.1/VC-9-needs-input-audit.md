@@ -22,7 +22,7 @@ The shared shape added: turn `execution=BLOCKED`, `reason=NEEDS_INPUT`, `needsIn
 | 11 | Workspace trust | `cli/src/startup_trust.ts:136-141` | non-TTY: continues `untrusted` (instructions and integrations unloaded, noted) | no change: degraded, not blocked; trust never widens authority |
 | 12 | Verifier not converging / tool-call loop | `run_turn.ts:1244-1252` | already BLOCKED, but no question or answer path | no change here (a decision to stop, not a yes/no) |
 | 13 | Operation work unit BLOCKED | `cli/src/core/scheduler.ts:360-440`, `nexus operation decide` | already BLOCKED + question + resume (reference implementation) | no change |
-| 14 | Subagent hits 1-6 | `spine_handlers.ts:482`, `cli/src/synthesizer.ts:243-307` | stalls inside the child | **not done**: the child's question is not propagated to the parent turn |
+| 14 | Subagent hits 1-6 | `spine_handlers.ts:482`, `cli/src/synthesizer.ts:243-307` | stalls inside the child | `spawn_subagent`: the child stops at the question and returns it in its result (same id and shape as a parent-originated one, plus `subagent: { depth, objective }`); the parent ends BLOCKED / NEEDS_INPUT with it. Other child paths (`/team`, operations) already run as scheduled work units, not in-turn: no change |
 
 No ask-the-user tool, plan approval, git push confirmation or MCP elicitation exists in `cli/src` (searched), so there is no further path.
 
@@ -38,4 +38,9 @@ No ask-the-user tool, plan approval, git push confirmation or MCP elicitation ex
 
 - **7 (steering conflict)** only occurs through the sidecar, which already has a client that can resolve the conflict. Ending the turn BLOCKED requires deciding what the sidecar protocol does with a BLOCKED turn and whether an `unresolved` conflict may be resolved after the fact (`resolveSteeringConflict` accepts only `pending`).
 - **8 (blocked requirement)** currently ends `COMPLETED / REQUIREMENTS_INCOMPLETE`, and operations, continuation and several tests depend on that. Changing it to BLOCKED / NEEDS_INPUT changes an existing contract (reason, execution, exit code) and the answer is free text (what to do about the blocker), not approve/decline.
-- **14 (subagents)** needs a rule for how a child's question surfaces in the parent's turn.
+
+## Subagents (row 14)
+
+A headless in-turn subagent (`spawn_subagent`, depth 1) that needs a decision records the question on itself (`subagentQuestions`), stops at the call that raised it (it does not wait, take the decision or route around it) and returns it in `SubagentResult.needsInput`. The parent records it through `acceptSubagentQuestions`: the first becomes `TurnResult.needsInput`; further distinct questions go to `TurnResult.furtherNeedsInput` in order, never overwriting the first; a parent-originated question already recorded stays first. The turn ends BLOCKED / NEEDS_INPUT as for any question. On `--answer`, the parent hands its answers to each subagent it spawns (`setOperatorAnswers`), so the re-spawned child meets the same id and proceeds (approve) or is refused without asking (decline). Interactive runs pass the operator's confirm handler to the child as before and record nothing.
+
+Limits, stated plainly: the child is not resumed, it is spawned again from the model's next `spawn_subagent` call, so work it did before the question is redone (workspace changes it already made stay); resume depends on the model delegating the same way again. Questions are listed only when one call raised several (a batch stops at the first recorded question, so a second `spawn_subagent` in the same batch does not run). Subagents cannot spawn subagents, so there is no deeper level. Tests: `cli/test/vc9_subagent_needs_input.test.ts`, which also covers the requirement-verifier approval (`runRequirementVerifier`) on its own.
