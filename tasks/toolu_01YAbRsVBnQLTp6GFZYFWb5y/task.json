@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01YAbRsVBnQLTp6GFZYFWb5y",
+  "agent_id": "ad6c189d5afcef603",
+  "subagent_type": "general-purpose",
+  "task_description": "CS-6 real language servers CI job",
+  "token_usage": {
+    "input_tokens": 38,
+    "cache_creation_tokens": 100704,
+    "cache_read_tokens": 1383486,
+    "output_tokens": 19380,
+    "api_call_count": 19
+  },
+  "started_at": "2026-11-18T12:54:18.768775115Z",
+  "completed_at": "2026-11-18T13:01:22.130944358Z"
+}
