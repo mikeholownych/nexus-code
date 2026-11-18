@@ -8,6 +8,9 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 ## [Unreleased]
 
+### Fixed
+- A user asking the model to show an example tool call (a message with an example word and a call word) no longer triggers the call-written-as-text recovery for that turn (CS-5): the client does not ask again or force `tool_choice: required`, so under auto or full-access approval a demonstration cannot end as an executed call. A request such as "add an example to the README" does not switch the recovery off.
+
 ### Changed
 
 - Cross-runner reproducibility (`repro.yml`) now also runs weekly against the newest published RC pre-release; manual dispatch is unchanged. It is not a required check (v1.2.1 plan PC-4).
