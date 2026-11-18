@@ -111,7 +111,7 @@ export function trustedProjectRules(
   workspace: string,
   isTrusted: (workspace: string) => boolean = isWorkspaceTrusted,
 ): string | null {
-  return isTrusted(workspace) ? getProjectRules(workspace) : null;
+  return isTrusted(workspace) ? getProjectRules(workspace, { trusted: true }) : null;
 }
 
 /**

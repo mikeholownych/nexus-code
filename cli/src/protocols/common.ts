@@ -28,6 +28,8 @@ export interface NativeRequestInput {
   owner: string;
   reasoningEffort?: string;
   thinkingBudget?: number;
+  /** anthropic-messages only: mark the stable prefix (system prompt, pinned ledger) with cache_control breakpoints. */
+  cacheHints?: boolean;
   /** openai-chat only. */
   chat?: { toolChoice: "auto" | "required"; capOutput: boolean; usage: "openrouter" | "stream-options" | "native" | "none" };
 }

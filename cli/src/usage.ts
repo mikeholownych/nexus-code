@@ -105,6 +105,9 @@ export interface UsageTotals {
   uncertainRequests: number;
   /** Requests priced from the models snapshot instead of by the provider (per-provider totals only). */
   estimatedRequests: number;
+  /** Prompt tokens served from the provider cache, and the prompt tokens of requests that reported cache usage (the share's denominator). */
+  cachedTokens: number;
+  cacheReportedPromptTokens: number;
 }
 
 export class UsageLedger {
@@ -216,7 +219,7 @@ export class UsageLedger {
   }
 
   cloudTotals(providerId?: string): UsageTotals {
-    const t: UsageTotals = { requests: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, unpricedRequests: 0, uncertainRequests: 0, estimatedRequests: 0 };
+    const t: UsageTotals = { requests: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, unpricedRequests: 0, uncertainRequests: 0, estimatedRequests: 0, cachedTokens: 0, cacheReportedPromptTokens: 0 };
     for (const r of this.receipts) {
       if (providerId !== undefined && r.providerId !== providerId) continue;
       // Requests refused before sending (disclosure, limits, missing credential) cost nothing.
@@ -224,6 +227,12 @@ export class UsageLedger {
       t.requests++;
       t.inputTokens += r.usage?.inputTokens ?? 0;
       t.outputTokens += r.usage?.outputTokens ?? 0;
+      if (r.usage?.cachedInputTokens !== undefined) {
+        t.cachedTokens += r.usage.cachedInputTokens;
+        // Anthropic and Bedrock report input apart from cache reads and writes; the others count cached tokens inside input.
+        const apart = r.protocol === "anthropic-messages" || r.protocol === "bedrock-converse";
+        t.cacheReportedPromptTokens += (r.usage.inputTokens ?? 0) + (apart ? r.usage.cachedInputTokens + (r.usage.cacheWriteTokens ?? 0) : 0);
+      }
       if (r.costConfidence === "provider-reported") t.costUsd += r.usage?.costUsd ?? 0;
       else if (providerId !== undefined) {
         // Per-provider limits count a request the provider did not price at the snapshot's price for the model that ran.
@@ -247,6 +256,9 @@ export class UsageLedger {
       ? "cost unknown (not reported by provider)"
       : `$${t.costUsd.toFixed(4)} provider-reported${t.unpricedRequests ? ` + ${t.unpricedRequests} request(s) with unknown cost` : ""}`;
     const uncertain = t.uncertainRequests ? `; ${t.uncertainRequests} request(s) may have been billed without reported usage` : "";
-    return `Cloud usage: ${t.requests} request(s), ${t.inputTokens.toLocaleString()} input + ${t.outputTokens.toLocaleString()} output tokens, ${cost}${uncertain}`;
+    const cache = t.cacheReportedPromptTokens > 0
+      ? `, cached ${t.cachedTokens.toLocaleString()} of ${t.cacheReportedPromptTokens.toLocaleString()} input tokens (${Math.round((100 * t.cachedTokens) / t.cacheReportedPromptTokens)}%)`
+      : "";
+    return `Cloud usage: ${t.requests} request(s), ${t.inputTokens.toLocaleString()} input + ${t.outputTokens.toLocaleString()} output tokens${cache}, ${cost}${uncertain}`;
   }
 }
