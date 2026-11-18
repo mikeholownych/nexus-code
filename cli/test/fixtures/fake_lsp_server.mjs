@@ -24,6 +24,16 @@ function publish(uri, text, version) {
     return;
   }
   if (uri.endsWith(".huge.ts")) { process.stdout.write("Content-Length: 99999999\r\n\r\n" + "x".repeat(1024)); return; }
+  if (uri.endsWith(".stages.ts")) {
+    // Mimics a staged server (rust-analyzer): ask the client to create a progress token and wait for the answer, begin
+    // progress, publish an EMPTY list at once, and only later (and only if the request was answered) the real one.
+    send({ id: 9001, method: "window/workDoneProgress/create", params: { token: "analysis" } });
+    send({ method: "$/progress", params: { token: "analysis", value: { kind: "begin", title: "Analysing" } } });
+    send({ method: "textDocument/publishDiagnostics", params: { uri, diagnostics: [] } });
+    const real = () => send({ method: "textDocument/publishDiagnostics", params: { uri, diagnostics: text.includes("BAD") && globalThis.__answered ? [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } }, severity: 1, message: "type error after analysis", source: "fake" }] : [] } });
+    setTimeout(() => { real(); send({ method: "$/progress", params: { token: "analysis", value: { kind: "end" } } }); }, 700);
+    return;
+  }
   if (uri.endsWith(".silent.ts")) return;
   if (uri.endsWith(".die.ts")) process.exit(1);
   if (text.includes("STALE")) {
@@ -37,6 +47,7 @@ function publish(uri, text, version) {
   send({ method: "textDocument/publishDiagnostics", params: { uri, diagnostics } });
 }
 function handle(m) {
+  if (m.method === undefined && m.id === 9001) { globalThis.__answered = true; return; }
   if (m.method === "initialize") send({ id: m.id, result: { capabilities: {} } });
   else if (m.method === "shutdown") send({ id: m.id, result: null });
   else if (m.method === "exit") process.exit(0);

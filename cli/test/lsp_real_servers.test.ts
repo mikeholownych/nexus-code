@@ -66,7 +66,6 @@ const CASES: Case[] = [
   },
   {
     id: "rust",
-    unvalidated: "the server starts (once its default-toolchain component is installed) but the product returns on the FIRST publishDiagnostics, which rust-analyzer sends empty before it has loaded the Cargo project and analysed types, so a broken file is reported clean (docs/LSP_REAL_SERVERS.md)",
     label: "rust-analyzer",
     cmd: "rust-analyzer",
     probe: ["--version"],

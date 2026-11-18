@@ -11,8 +11,8 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 ### Fixed
 - The real language-server job's Rust setup: rust-analyzer is now added to the default toolchain (the product launches servers outside the repository, where the repository's pinned toolchain does not apply), and the test's availability probe runs in the fixture directory, as the product does.
 
-### Known limitation
-- For rust-analyzer, `lsp_diagnostics` can report a file with type errors as clean: it returns on the first `publishDiagnostics`, which rust-analyzer sends empty before the Cargo project is loaded and analysed. Reproduced against the real server; recorded in `docs/LSP_REAL_SERVERS.md` and the v1.2.2 backlog; an empty Rust result must not be read as "no errors".
+### Fixed
+- `lsp_diagnostics` for Rust no longer reports a file with type errors as clean: rust-analyzer sends an empty first `publishDiagnostics` before it has loaded the Cargo project and analysed types, and the client returned on it. Servers that analyse in stages are marked `awaitProgress` (rust-analyzer is); the client now advertises work-done progress, answers the server's own requests (`window/workDoneProgress/create`, `workspace/configuration`, ...), and waits for the server's progress to end (within the caller's timeout) before trusting a list.
 
 ### Changed
 - The weekly real language-server job requires typescript, python and go (all three passed on the first hosted run); the rust-analyzer case still runs but reports as a todo, because the product could not start rust-analyzer on the runner although its `--version` probe passed (cause undiagnosed).
