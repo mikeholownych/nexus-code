@@ -8,6 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import "./helpers/leak_guard.js";
 import {
   SkillActivationRegistry,
   skillContentDigest,
