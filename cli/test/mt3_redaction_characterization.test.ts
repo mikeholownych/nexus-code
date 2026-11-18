@@ -572,3 +572,14 @@ test("characterization: secrets never survive any redacting variant", () => {
     assert.ok(!String(got[`${v} :: ${c}`]).includes(SK), `${v} leaked on ${c}`);
   }
 });
+
+// A secret split by a control character: redaction must run BEFORE control characters are made visible. Today the first
+// half is hidden and the tail after the control character is not (a known limit, recorded in REDACTION_VARIANTS.md; this
+// pins today's bytes). Contiguous secrets are hidden by either step, so only an input like these tells "redact then
+// make visible" from "make visible only": skipping the redaction call in formatSafeSidecarText changes these bytes.
+test("formatSafeSidecarText redacts before it makes control characters visible (split-secret inputs)", () => {
+  const anthropic = `sk-ant-api03-${"A".repeat(30)}\u0007${"B".repeat(30)}`;
+  assert.equal(formatSafeSidecarText(anthropic), `[REDACTED:ANTHROPIC_API_KEY]␇${"B".repeat(30)}`);
+  const github = `ghp_${"a".repeat(20)}‮${"b".repeat(20)}`;
+  assert.equal(formatSafeSidecarText(github), `[REDACTED_KEY]<U+202E>${"b".repeat(20)}`);
+});
