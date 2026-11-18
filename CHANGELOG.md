@@ -8,6 +8,9 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 ## [Unreleased]
 
+### Changed
+- Redaction variants (MT-3, part 2): `formatSafeSidecarText` calls the shared `safeTerminal` instead of restating it, with output byte-identical; the remaining variants are kept and each has a reason in `docs/v1.2.1/REDACTION_VARIANTS.md`. New `cli/test/mt3_redaction_characterization.test.ts` pins the exact output of 23 redaction and terminal-safe variants over a shared corpus.
+
 ### Fixed
 - The real language-server job's Rust setup: rust-analyzer is now added to the default toolchain (the product launches servers outside the repository, where the repository's pinned toolchain does not apply), and the test's availability probe runs in the fixture directory, as the product does.
 
