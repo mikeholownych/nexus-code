@@ -20,6 +20,13 @@ import { FILE_EDIT_TOOLS, describeChange, editTarget, snapshot } from "../file_d
 import { roleToolAllowList } from "./roles.js";
 import { MAY_OUTLIVE_COMMAND, ConfirmHandler, observationKey, egressOriginOf, READ_ONLY_TOOLS, logAudit } from "./agent_support.js";
 import { buildNeedsInput, type NeedsInputQuestion } from "./needs_input.js";
+import {
+  skillConstraintsEnabled,
+  skillConfirmWorkspaceEnabled,
+  resolveSkillToolAllowed,
+  skillIntegrityMode,
+} from "./skill_activation.js";
+import * as fs from "node:fs";
 
 export async function dispatchToolCallImpl(this: any, call: ToolCall,
     currentStep: number,
@@ -73,12 +80,18 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
 
   args = normalizeToolArguments(toolName, args, this.getEffectiveTools());
 
+  const skillAttr = () => this.skillActivations?.attribution?.() ?? {};
+  const recordReceipt = (receipt: ExecutionReceipt) => {
+    this.lastToolReceipts = [...(this.lastToolReceipts || []), receipt].slice(-32);
+    return receipt;
+  };
+
   // A restricted role is refused any tool outside its allow-list, whatever the model was told or claims. A write or
   // exec call in read-only mode is left to the read-only check, which refuses it with its own reason.
   const roleAllowed = roleToolAllowList(this.role);
   if (roleAllowed && !roleAllowed.has(toolName) && !(this.isReadOnly() && isWriteOrExecTool(toolName))) {
     return {
-      receipt: {
+      receipt: recordReceipt({
         invocationId: call.id,
         taskId: this.activeWorktree?.taskId || this.currentTaskId,
         actor,
@@ -94,9 +107,80 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
         status: "DENIED",
         timestamp: new Date().toISOString(),
         simulated: Boolean(this.config.dryRun),
-      },
+        ...skillAttr(),
+      }),
       shouldExit: false,
     };
+  }
+
+  // WP-GS-03: optional skill constraint intersection (never expands session authority).
+  if (toolName !== "activate_skill" && skillConstraintsEnabled()) {
+    const cur = this.skillActivations?.current?.();
+    if (cur && !resolveSkillToolAllowed(toolName, cur.constraints)) {
+      return {
+        receipt: recordReceipt({
+          invocationId: call.id,
+          taskId: this.activeWorktree?.taskId || this.currentTaskId,
+          actor,
+          executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+          capabilityId: this.capabilityRegistry.getByToolName(toolName)?.id || toolName,
+          toolName,
+          targetResources: extractTargetResources(toolName, args),
+          success: false,
+          output: "",
+          error: `Skill constraint denied: tool '${toolName}' is not permitted while skill '${cur.skillName}' is active.`,
+          durationMs: 0,
+          candidateMutated: false,
+          status: "DENIED",
+          denialReason: "SKILL_CONSTRAINT",
+          timestamp: new Date().toISOString(),
+          simulated: Boolean(this.config.dryRun),
+          ...skillAttr(),
+        }),
+        shouldExit: false,
+      };
+    }
+  }
+
+  // WP-GS-02 live integrity: block tools if activated skill file drifted.
+  if (toolName !== "activate_skill" && skillIntegrityMode() === "live") {
+    const cur = this.skillActivations?.current?.();
+    if (cur) {
+      const check = this.skillActivations.liveIntegrityBlocked(() => {
+        try {
+          const raw = fs.readFileSync(cur.sourcePath, "utf8");
+          const close = raw.indexOf("\n---", 3);
+          if (raw.startsWith("---") && close > 0) return raw.slice(close + 4).trim();
+          return raw.trim();
+        } catch {
+          return null;
+        }
+      });
+      if (check.blocked) {
+        return {
+          receipt: recordReceipt({
+            invocationId: call.id,
+            taskId: this.activeWorktree?.taskId || this.currentTaskId,
+            actor,
+            executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+            capabilityId: this.capabilityRegistry.getByToolName(toolName)?.id || toolName,
+            toolName,
+            targetResources: [],
+            success: false,
+            output: "",
+            error: check.reason || "SKILL_INTEGRITY",
+            durationMs: 0,
+            candidateMutated: false,
+            status: "DENIED",
+            denialReason: "SKILL_INTEGRITY",
+            timestamp: new Date().toISOString(),
+            simulated: Boolean(this.config.dryRun),
+            ...skillAttr(),
+          }),
+          shouldExit: false,
+        };
+      }
+    }
   }
 
   try {
@@ -187,6 +271,12 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
       shouldExit: false,
     };
   }
+  // WP-GS-04: optional confirm on workspace skill activation (isUntrustedSource).
+  let activateIsUntrustedSource = false;
+  if (toolName === "activate_skill" && skillConfirmWorkspaceEnabled()) {
+    const named = typeof args?.name === "string" ? this.skillManager.getSkill(args.name) : null;
+    activateIsUntrustedSource = Boolean(named?.isWorkspaceSkill);
+  }
   const policyContext: PolicyContext = {
     mode,
     trusted: isTrusted,
@@ -194,6 +284,7 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
     approvedEgressOrigins: this.approvedEgressOrigins,
     egressOrigin,
     fullAccess: Boolean(this.config.fullAccess) && !this.isReadOnly(),
+    isUntrustedSource: activateIsUntrustedSource,
   };
   const verificationSecurity = this.bridge.getSecurityManager();
   // DV-3: a test edited through the shell is recorded against the obligation that names it (the CS-2 snapshot and diff).
@@ -471,6 +562,8 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
     : null;
   let receipt: ExecutionReceipt;
   try {
+    // activate_skill stamps attribution inside the handler; other tools inherit the current activation.
+    const priorAttr = toolName === "activate_skill" ? {} : skillAttr();
     receipt = await this.spine.execute(
       {
         invocationId: call.id,
@@ -480,9 +573,14 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
         toolName,
         args,
         stepIndex: currentStep,
+        skillAttribution: priorAttr,
       },
       context
     );
+    if (toolName === "activate_skill" && receipt.success) {
+      receipt = { ...receipt, ...skillAttr() };
+    }
+    recordReceipt(receipt);
   } finally {
     this.syncVerificationAttempts();
   }

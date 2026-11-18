@@ -10,6 +10,7 @@ import { CapabilityRegistry, createDefaultRegistry, changesWorkspace, type Effec
 import { fenceSuspected, scanForInjection } from "./core/injection_scanner.js";
 import { ApprovalPolicy, defaultApprovalPolicy, ApprovalMode } from "./core/approval_policy.js";
 import { ExecutionSpine, ExecutionReceipt } from "./core/spine.js";
+import { SkillActivationRegistry } from "./core/skill_activation.js";
 import { AuthorityAdmissionEngine } from "./core/authority.js";
 import { CandidateTracker, ValidationReceipt, computeCandidateIdentitySync } from "./core/candidate.js";
 import { ExecutionTracker, actionKind, combineState, ledgerStateIdentity, normalizeTracking, type ObservationVerdict } from "./core/execution_tracking.js";
@@ -79,6 +80,10 @@ export class AutonomousAgent {
   private depth: number;
   private runningAsSubagent = false;
   private skillManager: SkillManager;
+  /** Governed skill activations for the current agent (WP-GS-01); public for tests and evidence. */
+  public skillActivations = new SkillActivationRegistry();
+  /** Recent tool receipts (including skill attribution) for tests and diagnostics. */
+  public lastToolReceipts: ExecutionReceipt[] = [];
   /** The skill catalog in `messages[0]`, the window it was sized for, and whether that window came from the provider. */
   private skillCatalog?: { text: string; limit: number; discovered: boolean };
   private mcpManager: McpClientManager;
