@@ -293,7 +293,7 @@ Status of every unit that is not marked done above, decided under the owner's st
 | Unit | Disposition | Reason |
 |---|---|---|
 | MQ-1, MQ-2 | **Deferred to v1.2.2.** No external benchmark result is published for v1.2.1 (G-4 allows saying so in the notes, and the notes do). | Needs a Harbor/Terminal-Bench runner, containers and a model-cost budget (D3, D4) that this release did not have. Nothing was run, so nothing is claimed. |
-| MQ-4 | **Deferred to v1.2.2.** | The gateway (10.0.8.5) is not reachable from GitHub-hosted runners; a scheduled conformance run needs a local or self-hosted scheduler and a claim protocol. |
+| MQ-4 | **Built 2026-11-18, not yet scheduled or run live** (`scripts/gateway_conformance.mjs`, `docs/GATEWAY_CONFORMANCE.md`, `cli/test/gateway_conformance.test.ts`): claim protocol, judgement, and an alert path tested with a forced failure through a fake runner. | The gateway is not reachable from GitHub-hosted runners, so scheduling is the operator's (a timer unit example is in the doc); the first live run is still to be done. |
 | MQ-7 D to G | **Deferred to v1.2.2** (D7). B and C are done. | |
 | RD-1, RD-2 | **Deferred.** The release ships Linux x86_64 only. | No macOS or arm64/musl runner (D6, runner cost). |
 | PC-1 | **Not met; deferred to v1.2.2.** Measured: the required checks of this release's PRs took about 37 to 45 minutes. | Test sharding and toolchain caching were not done; the parallel `linux-x86_64` job is in place. |
