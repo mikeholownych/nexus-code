@@ -40,6 +40,7 @@ import { DurableStateManager } from "../src/core/state.js";
 import { SecurityManager } from "../src/security.js";
 import { DEFAULT_CONTINUATION, type HarnessConfig } from "../src/types.js";
 import { makeRepo, startGateway, type Reply } from "./helpers/fixtures.js";
+import "./helpers/leak_guard.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SCENARIO_FILE = path.join(here, "fixtures/ceri/semantic_integrity.scenarios.json");
@@ -291,6 +292,20 @@ const drivers: Record<string, () => unknown | Promise<unknown>> = {
     const verdictOf = (unifiedDiff: string) => parseIndependentReviewVerdict(accept, buildReviewEvidencePackage({ unitId: "rev", objective: "o", baselineCommit: "base", unifiedDiff, verifierExitCode: 0, boundaries: rules })).verdict;
     return { cumulativeBreachRejected: verdictOf(first) === "ACCEPT" && verdictOf(second) === "ACCEPT" && verdictOf(first + second) === "REJECT" };
   },
+  "repeated-call-01": async () => {
+    const read = (path: string): Reply => ({ kind: "tools", calls: [{ name: "read_file", args: { path } }] });
+    const files = { "a.txt": "hello\n", "b.txt": "b\n", "c.txt": "c\n" };
+    // Five identical reads with a different read between each pair: interleaving and timing do not hide the loop.
+    const loop = [read("a.txt"), read("b.txt"), read("a.txt"), read("c.txt"), read("a.txt"), read("b.txt"), read("a.txt"), read("c.txt"), read("a.txt")];
+    const stopped = await scriptedTurn(files, loop, "Read a.txt.", { continuation: undefined });
+    // Control: a different file every call (and then a file that never repeats) is exploration, not a loop.
+    const many = Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`f${i}.txt`, `${i}\n`]));
+    const varied = await scriptedTurn(many, Object.keys(many).map(read), "Read every file.", { continuation: undefined });
+    return {
+      repeated: { execution: stopped.execution, outcome: stopped.outcome, reason: stopped.reason, tool: stopped.repeatedCall?.tool, count: stopped.repeatedCall?.count, stepsUsed: stopped.steps.used },
+      varied: { reason: varied.reason ?? "none", repeatedCall: varied.repeatedCall !== undefined },
+    };
+  },
   "conflicting-specs-01": () => {
     const ledger = createLedger(NUMBERED);
     const snapshot = () => JSON.stringify(ledger.requirements);
@@ -410,7 +425,7 @@ test("the frozen scenario file is the one the manifest pins, in a registered CER
 });
 
 const PENDING_FROZEN: Record<string, string> = {};
-const ACTIVE_FROZEN = 25;
+const ACTIVE_FROZEN = 26;
 
 test("the scenario set cannot shrink or be reclassified without changing this file too", () => {
   const pending = Object.fromEntries(frozen.scenarios.filter((s) => s.status === "pending").map((s) => [s.id, s.pendingUnit]));
