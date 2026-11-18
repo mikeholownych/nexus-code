@@ -4,10 +4,9 @@
  */
 import type { ValidationReceipt } from "./core/candidate.js";
 import type { TurnResult } from "./core/turn.js";
-import { capText, stripEscapes } from "./protocol.js";
-import { redactSecrets } from "./ui.js";
+import { capText, redactPlain } from "./protocol.js";
+import { redactSecrets, safeTerminal } from "./ui.js";
 import { type ObjectiveLedger, requirementRows } from "./core/objective.js";
-import { visibleControls } from "./file_diff.js";
 
 export const MAX_DETAIL = 64_000;
 /** Full diffs are kept larger than other detail: inspecting the complete change is their purpose. */
@@ -43,7 +42,7 @@ export interface EvidenceRecord {
  * and escapes into literal `\u001b`, both of which a pass over the encoded text misses.
  */
 export function redactedJson(value: unknown): string {
-  const json = JSON.stringify(value ?? {}, (_key, v) => (typeof v === "string" ? redactSecrets(stripEscapes(v)) : v), 2);
+  const json = JSON.stringify(value ?? {}, (_key, v) => (typeof v === "string" ? redactPlain(v) : v), 2);
   return redactSecrets(json);
 }
 
@@ -60,11 +59,11 @@ function redactedOutput(text: string): string {
 
 /** A diff as it may be shown or stored: secrets redacted, then control characters made visible. */
 export function safeDiffText(diff: string): string {
-  return visibleControls(redactSecrets(diff));
+  return safeTerminal(diff);
 }
 
 function clean(text: string): string {
-  return capText(redactSecrets(stripEscapes(text)), MAX_DETAIL);
+  return capText(redactPlain(text), MAX_DETAIL);
 }
 
 /** The latest tool calls of this session; the oldest is dropped first. */

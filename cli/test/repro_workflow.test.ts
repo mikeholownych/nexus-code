@@ -29,3 +29,25 @@ test("cross-runner reproducibility rejects stable, malformed, and partial tags",
     assert.equal(accepts(tag), false, tag);
   }
 });
+
+test("cross-runner reproducibility runs weekly and stays manually dispatchable", () => {
+  const on = workflow.split(/^permissions:/m)[0];
+  assert.match(on, /^ {2}schedule:\n {4}- cron: "\d+ \d+ \* \* \d"$/m, "weekly cron trigger");
+  assert.match(on, /^ {2}workflow_dispatch:$/m, "manual dispatch kept");
+});
+
+test("scheduled runs resolve the newest published RC instead of an empty dispatch input", () => {
+  // Only the selection step may read the dispatch input; every later job takes the resolved tag.
+  const uses = workflow.split("\n").filter((line) => line.includes("inputs.tag"));
+  assert.deepEqual(uses.map((line) => line.trim()), [
+    "group: rc-repro-${{ inputs.tag || 'scheduled' }}",
+    "INPUT_TAG: ${{ inputs.tag }}",
+  ]);
+  assert.match(workflow, /isPrerelease and \(\.isDraft \| not\)/, "selects published pre-releases only");
+});
+
+test("every action in the reproducibility workflow is pinned to a commit SHA", () => {
+  for (const line of workflow.split("\n").filter((l) => /^\s*- uses:/.test(l))) {
+    assert.match(line, /uses: [\w./-]+@[0-9a-f]{40}\b/, line.trim());
+  }
+});

@@ -27,12 +27,15 @@ export function redactForPersistence<T>(value: T): T {
   return InformationFlowBoundary.getGlobalInstance().redactForDurablePersistence(value);
 }
 
+/** What every sanitiser returns when it fails: callers that must not use that text compare with this constant, never a prefix. */
+export const SANITIZATION_FAILED = "[diagnostic suppressed: credential sanitization failed]";
+
 /** Redact diagnostic text, suppressing it completely if the canonical classifier fails. */
 export function redactDiagnosticForOutput(value: string): string {
   try {
     return InformationFlowBoundary.getGlobalInstance().redactForTelemetry(value);
   } catch {
-    return "[diagnostic suppressed: credential sanitization failed]";
+    return SANITIZATION_FAILED;
   }
 }
 

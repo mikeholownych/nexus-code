@@ -1,4 +1,4 @@
-import { redactForPersistence } from "./core/persistence_protection.js";
+import { SANITIZATION_FAILED, redactForPersistence } from "./core/persistence_protection.js";
 import { redactSecrets } from "./ui.js";
 import { visibleControls } from "./file_diff.js";
 
@@ -7,8 +7,7 @@ import { visibleControls } from "./file_diff.js";
  * diagnostics. Events themselves are sanitized exactly once, by formatSafeSidecarEvent, so emit() call sites pass raw
  * text and never wrap it.
  */
-/** What the sanitiser returns when it fails: callers that must not use that text compare with this constant, never a prefix. */
-export const SANITIZATION_FAILED = "[diagnostic suppressed: credential sanitization failed]";
+export { SANITIZATION_FAILED };
 
 export function formatSafeSidecarText(value: string): string {
   try {
