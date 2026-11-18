@@ -19,6 +19,7 @@ import { recordTestEdit } from "./regression_obligations.js";
 import { FILE_EDIT_TOOLS, describeChange, editTarget, snapshot } from "../file_diff.js";
 import { roleToolAllowList } from "./roles.js";
 import { MAY_OUTLIVE_COMMAND, ConfirmHandler, observationKey, egressOriginOf, READ_ONLY_TOOLS, logAudit } from "./agent_support.js";
+import { buildNeedsInput, type NeedsInputQuestion } from "./needs_input.js";
 
 export async function dispatchToolCallImpl(this: any, call: ToolCall,
     currentStep: number,
@@ -196,9 +197,28 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
   };
   const verificationSecurity = this.bridge.getSecurityManager();
   const verificationAuthority: VerificationEditContext = { role: this.role, fullAccess: policyContext.fullAccess, operator: Boolean(onConfirm) };
-  const verificationEdit = verificationSecurity.verificationEditDecision(toolName, args, verificationAuthority);
+  let verificationEdit = verificationSecurity.verificationEditDecision(toolName, args, verificationAuthority);
+  let verificationQuestion: NeedsInputQuestion | undefined;
+  if (verificationEdit?.action === "deny" && verificationEdit.needsDecision) {
+    // VC-9: nobody to ask. An answer from a previous blocked run settles it; otherwise the turn ends BLOCKED with the question.
+    verificationQuestion = buildNeedsInput(
+      "verification_edit",
+      `Allow ${toolName} to change ${verificationEdit.path} (${verificationEdit.class}, rule '${verificationEdit.rule}')?`,
+      { tool: toolName, path: verificationEdit.path, class: verificationEdit.class },
+      toolName,
+      verificationEdit.path,
+      verificationEdit.class,
+    );
+    if (this.headlessDecision(verificationQuestion) === "approve") {
+      verificationAuthority.approved = { path: verificationEdit.path };
+      verificationEdit = verificationSecurity.verificationEditDecision(toolName, args, verificationAuthority);
+      verificationQuestion = undefined;
+    }
+  }
   if (verificationEdit?.action === "deny") {
-    const cancelMsg = verificationSecurity.refuseVerificationEdit(verificationEdit, toolName, this.role).error;
+    const declined = verificationQuestion && this.operatorAnswers.get(verificationQuestion.id) === "decline";
+    const cancelMsg = verificationSecurity.refuseVerificationEdit(verificationEdit, toolName, this.role).error
+      + (verificationQuestion ? (declined ? " The operator declined this edit." : ` needs_input ${verificationQuestion.id}: the run ends BLOCKED so the operator can decide.`) : "");
     this.syncVerificationAttempts();
     if (this.flightRecorder) {
       this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, cancelMsg, 0, VERIFICATION_CONFIG_PROTECTED);
@@ -256,12 +276,29 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
     }
   }
 
-  if (askOperator) {
+  // VC-9: a decision with nobody to ask. The operator's answer from a previous blocked run settles it for this exact
+  // call; otherwise the first such decision ends the turn BLOCKED with a question.
+  let toolQuestion: NeedsInputQuestion | undefined;
+  let preApproved = false;
+  if (askOperator && !onConfirm) {
+    toolQuestion = buildNeedsInput(
+      "tool_approval",
+      `Allow ${toolName} (${effect})${egressOrigin ? ` to ${egressOrigin}` : ""}: ${JSON.stringify(args).slice(0, 160)}?`,
+      { tool: toolName, effect, ...(egressOrigin ? { origin: egressOrigin } : {}), arguments: JSON.stringify(args).slice(0, 200) },
+      toolName,
+      JSON.stringify(args),
+    );
+    preApproved = this.headlessDecision(toolQuestion) === "approve";
+    if (preApproved && egressOrigin) this.approvedEgressOrigins.add(egressOrigin);
+  }
+
+  if (askOperator && !preApproved) {
     if (!onConfirm) {
+      const declined = toolQuestion && this.operatorAnswers.get(toolQuestion.id) === "decline";
       const approvalGuidance = effect === "egress"
         ? "Run with --yes to explicitly allow egress without an operator prompt."
         : "Run with --yes or --mode auto to explicitly select automatic approvals.";
-      const cancelMsg = `Error: Tool '${toolName}' requires operator approval (${effect}), but no operator is present (headless execution). ${approvalGuidance}`;
+      const cancelMsg = `Error: Tool '${toolName}' requires operator approval (${effect}), but no operator is present (headless execution). ${approvalGuidance}${toolQuestion ? (declined ? " The operator declined this action." : ` needs_input ${toolQuestion.id}: the run ends BLOCKED so the operator can decide.`) : ""}`;
       const receipt: ExecutionReceipt = {
         invocationId: call.id,
         taskId: this.activeWorktree?.taskId || this.currentTaskId,

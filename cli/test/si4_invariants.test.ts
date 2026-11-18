@@ -350,8 +350,8 @@ describe("the agent runs the invariant's verifier through the verifier path", ()
     const agent = new AutonomousAgent({ ...cfg(gw.url, repo), ...config });
     (agent as any).ui = new Proxy({}, { get: () => () => {} });
     try {
-      await agent.runTurn(objective, onConfirm);
-      return { requests: gw.requests as any[], ledger: agent.getObjective()! };
+      const turn = await agent.runTurn(objective, onConfirm);
+      return { requests: gw.requests as any[], ledger: agent.getObjective()!, turn };
     } finally {
       agent.shutdown();
       await gw.close();
@@ -388,7 +388,11 @@ describe("the agent runs the invariant's verifier through the verifier path", ()
     assert.match(lastTool(asked.requests[1]), /verifier execution was not approved/);
     assert.equal(asked.ledger.verification.length, 0);
     const headless = await run(OBJECTIVE, (n) => (n === 1 ? claim("R1") : { kind: "text", content: "stopping" }), { "marker.txt": "m\n" }, { approvalMode: "review", fullAccess: false });
-    assert.match(lastTool(headless.requests[1]), /requires operator approval/);
+    // VC-9: with nobody to approve the verifier, the run stops with a machine-readable question instead of letting the model route around the refusal.
+    assert.equal(headless.turn.execution, "BLOCKED");
+    assert.equal(headless.turn.reason, "NEEDS_INPUT");
+    assert.equal(headless.turn.needsInput?.kind, "verifier_approval");
+    assert.equal(headless.requests.length, 1, "the run ended at the decision; the model was not asked to continue");
   });
 
   test("a verifier that writes build output still verifies (L3)", { timeout: 90_000 }, async () => {
