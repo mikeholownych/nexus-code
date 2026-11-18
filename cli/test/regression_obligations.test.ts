@@ -136,3 +136,16 @@ test("the operator verbs on /requirements are the only path to an obligation", a
   assert.equal(ledger.obligations?.[0].status, "retired");
   assert.ok(saves >= 3);
 });
+
+test("a timed-out attempt and a skipped re-report of unchanged inputs are not replays", () => {
+  const ledger = createLedger("fix it");
+  const a = failing(ledger, ["parses empty input"], "c1");
+  assert.equal(authoriseObligation(ledger, { authority: "operator", attempt: a.n, testName: "parses empty input" }).ok, true);
+  const ob = ledger.obligations![0];
+  recordAttempt(ledger, { command: CMD, inputs: "c2", status: "TIMED_OUT", failingTests: ["parses empty input"] } as never);
+  assert.equal(ob.replays.length, 0, "a run that was cut off says nothing about the test");
+  recordAttempt(ledger, { command: CMD, inputs: "c1", status: "SKIPPED_UNCHANGED_INPUTS", failingTests: ["parses empty input"] } as never);
+  assert.equal(ob.replays.length, 0, "a skipped re-report of unchanged inputs ran nothing");
+  failing(ledger, ["parses empty input"], "c3");
+  assert.equal(ob.replays.length, 1, "a real run of the changed candidate is a replay");
+});
