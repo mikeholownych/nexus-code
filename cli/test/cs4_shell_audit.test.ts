@@ -143,7 +143,11 @@ test("a hung verifier is killed at the deadline together with its background chi
 test("exit 127 on runTestSuite names the scrub and the passthrough setting", { skip: fs.existsSync("/usr/bin/cargo") || fs.existsSync("/bin/cargo") }, () => {
   const root = tmp();
   fs.writeFileSync(path.join(root, "Cargo.toml"), "[package]\nname=\"x\"\n");
-  withEnv({ NEXUS_EVAL_TEST_ROOT: "/x", PATH: "/usr/bin:/bin" }, () => {
+  // The hint names at most 12 withheld toolchain-looking variables, sorted. A CI runner sets many (CARGO_*, GO*, JAVA_HOME_*,
+  // NEXUS_*) that sort before the one under test, so the test removes every other candidate rather than relying on the host.
+  const candidate = /^(NEXUS_|ANSIBLE_|PIP_|NPM_|CONDA_|RUBY|GEM_|BUNDLE_|PYTHON|CARGO_|RUST|GO[A-Z]|JAVA|NODE_|PNPM_|YARN_)/;
+  const others = Object.fromEntries(Object.keys(process.env).filter((name) => candidate.test(name)).map((name) => [name, undefined]));
+  withEnv({ ...others, NEXUS_EVAL_TEST_ROOT: "/x", PATH: "/usr/bin:/bin" }, () => {
     const r = runTestSuite(root);
     assert.equal(r.success, false);
     assert.match(r.rawOutput, /NEXUS_VERIFIER_ENV_PASSTHROUGH/);
