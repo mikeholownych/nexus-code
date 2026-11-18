@@ -194,3 +194,30 @@ test("usage of every request is summed into the last-usage report, and a streame
     assert.match(String(out.content), /only an example/);
   });
 });
+
+// CS-5: a user who asks for an example call wants text. Asking the model again (and above all forcing tool_choice=required)
+// would turn that text into an executed call under auto or full-access approval.
+const EXAMPLE_REQUESTS = [
+  "print an example call of run_command that lists files",
+  "Show me a sample tool call for run_command.",
+  "Can you demonstrate what a run_command invocation looks like in JSON?",
+  "write an example of the JSON you would send to call run_command",
+];
+
+test("CS-5: a reply to a request for an example call is not call-shaped, so it is never re-asked or forced", () => {
+  for (const ask of EXAMPLE_REQUESTS) assert.equal(isContentCallReply(msg('```json\n{"command": "ls"}\n```'), only("run_command"), [user(ask)]), false, ask);
+  // Only the latest user turn counts: an earlier example request does not excuse a later, ordinary one.
+  assert.equal(isContentCallReply(msg('{"command": "ls"}'), only("run_command"), [user(EXAMPLE_REQUESTS[0]!), msg("ok"), user("now run ls")]), true);
+  // An example word with no call or tool in the request is not enough.
+  assert.equal(isContentCallReply(msg('{"command": "ls"}'), only("run_command"), [user("add an example to the README, then run ls")]), true);
+});
+
+test("CS-5: a model that answers an example request with the call as text gets exactly one request and no executed call", async () => {
+  await withServer(() => textCall, async (client, seen) => {
+    const out = await client.chatCompletion([user(EXAMPLE_REQUESTS[0]!)], only("run_command"));
+    assert.equal(seen.length, 1);
+    assert.equal(seen.some((s) => s.toolChoice === "required"), false);
+    assert.equal(out.tool_calls, undefined);
+    assert.match(String(out.content), /echo ok/);
+  });
+});

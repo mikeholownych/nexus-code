@@ -13,6 +13,7 @@ export const CONTENT_CALL_NOTE = "Your last reply wrote a tool call as plain tex
  * the JSON is not text the request already contained (a model quoting what it read is not asking for a call).
  */
 export function isContentCallReply(message: ChatMessage, tools: readonly ToolDefinition[], requestMessages: readonly ChatMessage[] = []): boolean {
+  if (asksForExampleCall(requestMessages)) return false;
   if (tools.length === 0 || (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) || typeof message.content !== "string") return false;
   const body = soleJsonBody(message.content);
   if (body === undefined) return isFunctionCallText(message.content, tools, requestMessages);
@@ -20,6 +21,20 @@ export function isContentCallReply(message: ChatMessage, tools: readonly ToolDef
   try { value = JSON.parse(body); } catch { return false; }
   if (!isRecord(value) || echoedFromRequest(body, value, requestMessages)) return false;
   return (namedCall(value, tools) ?? (tools.length === 1 ? acceptedBy(tools[0]!, value) : undefined)) !== undefined;
+}
+
+const EXAMPLE_WORD = /\b(?:examples?|samples?|illustrat\w*|demonstrat\w*)\b/i;
+const CALL_WORD = /\b(?:calls?|invoc\w*|invok\w*|tools?|json)\b/i;
+
+/**
+ * Whether the latest user turn asks to be shown an example call (CS-5). The call-shaped text is then the answer, so the
+ * client must neither ask again nor force `tool_choice: required`: under auto or full-access approval that would turn
+ * a demonstration into an executed call. Both an example word and a call word are required, so "add an example to the
+ * README" does not switch the recovery off.
+ */
+function asksForExampleCall(requestMessages: readonly ChatMessage[]): boolean {
+  const last = [...requestMessages].reverse().find((message) => message.role === "user");
+  return typeof last?.content === "string" && EXAMPLE_WORD.test(last.content) && CALL_WORD.test(last.content);
 }
 
 /** Text as a model would quote it back: JSON escapes undone, `N | ` line-number prefixes and all whitespace dropped. */
