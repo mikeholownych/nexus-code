@@ -284,10 +284,13 @@ for (const n of NAV) {
       const deadline = Date.now() + c.timeoutMs;
       let hover: Awaited<ReturnType<typeof mgr.hover>> = { found: false };
       let def: Awaited<ReturnType<typeof mgr.definition>> = { found: false };
-      while (Date.now() < deadline && !(hover.found && def.found)) {
+      // A server may answer early from what it has loaded so far (tsserver names the import itself until the imported file is
+      // loaded), so an answer counts once it points where the definition is; the last answer is what the assertions report.
+      const pointsAtDefinition = (d: typeof def) => (d.locations ?? []).some((l) => l.uri.endsWith(`/${n.definedIn}`));
+      while (Date.now() < deadline && !(hover.found && pointsAtDefinition(def))) {
         if (!hover.found) hover = await mgr.hover(n.at.file, n.at.line, n.at.character);
-        if (!def.found) def = await mgr.definition(n.at.file, n.at.line, n.at.character);
-        if (!(hover.found && def.found)) await new Promise((r) => setTimeout(r, 1000));
+        if (!pointsAtDefinition(def)) def = await mgr.definition(n.at.file, n.at.line, n.at.character);
+        if (!(hover.found && pointsAtDefinition(def))) await new Promise((r) => setTimeout(r, 1000));
       }
       assert.ok(hover.found, `hover never answered: ${JSON.stringify(hover)}`);
       assert.match(hover.hoverText ?? "", n.hoverMentions, "hover text should name the function");
