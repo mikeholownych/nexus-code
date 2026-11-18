@@ -177,6 +177,16 @@
       "status": "active",
       "description": "A boundary rule declared by the operator is checked against the cumulative diff of successive operations, so changes that are each compatible but together breach it are rejected.",
       "expected": { "cumulativeBreachRejected": true }
+    },
+    {
+      "id": "repeated-call-01",
+      "category": "repeated_call",
+      "status": "active",
+      "description": "The same tool call with identical arguments and an identical result, repeated with other calls interleaved, ends the turn BLOCKED TOOL_CALL_LOOP at the hard threshold whatever the timing; a sequence whose arguments vary is never stopped.",
+      "expected": {
+        "repeated": { "execution": "BLOCKED", "outcome": "NOT_ESTABLISHED", "reason": "TOOL_CALL_LOOP", "tool": "read_file", "count": 5, "stepsUsed": 9 },
+        "varied": { "reason": "none", "repeatedCall": false }
+      }
     }
   ]
 }
