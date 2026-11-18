@@ -286,8 +286,38 @@ const VOLATILE: Array<[RegExp, string]> = [
   [/\b0x[0-9a-f]{6,}\b/gi, "<addr>"],
   [/\bpid[ =:]+\d+\b/gi, "pid <n>"],
   [/\/tmp\/[\w.-]+/g, "/tmp/<tmp>"],
-  [/\b\d+(?:\.\d+)?\s?(?:ms|µs|us|ns|s|sec|secs|seconds|m|min|mins|minutes)\b/g, "<dur>"],
+  // CS-11: patterns below are anchored to a context word or a unit, never to a bare number: a blanket digit replacement
+  // would merge line 12 with line 40 and "3 failed" with "2 failed". test/fixtures/volatile_text_corpus.json measures them.
+  [/\b\d+h\d+m(?:\d+s)?\b|\b\d+m\d+(?:\.\d+)?s\b/g, "<dur>"],
+  [/\bduration_ms:?\s+-?[\d.]+/gi, "duration_ms <dur>"],
+  [/\b\d+(?:\.\d+)?\s?(?:ms|msecs?|milliseconds?|µs|us|ns|s|sec|secs|seconds|m|min|mins|minutes)\b/g, "<dur>"],
   [/\b\d{10,13}\b/g, "<epoch>"],
+  // Retry counters: "attempt 3 of 5", "Retry 2/5", "try 2", "Retry(total=4", "after 3 attempts", "failed 17 times".
+  [/\b(attempts?|tries|try|retry|retries)\b(\s*[#:=(]?\s*)\d+(?:\s*(?:of|\/)\s*\d+)?\)?/gi, "$1 <n>"],
+  [/\bRetry\(total=\d+/g, "Retry(total=<n>"],
+  [/\b\d+\s+(attempts?|retries|tries)\b/gi, "<n> $1"],
+  [/\b(failed|retried|tried|attempted)\s+\d+\s+times?\b/gi, "$1 <n> times"],
+  // Incrementing request/poll numbers.
+  [/\b(request|req|poll|ping|heartbeat|iteration|tick)\s*(?:#|no\.?\s*)?\d+\b/gi, "$1 <n>"],
+  // Job, build and run identifiers.
+  [/\b(job|build|run|task|session|pipeline|deployment|deploy|batch|txn|transaction)[-_ ]?(?:id|no|number)\b["']?\s*[:=#]?\s*["']?[\w.-]*\d[\w.-]*/gi, "$1_id=<id>"],
+  [/\b(job|build|run|pipeline)\s*#\d+/gi, "$1 #<n>"],
+  // Ephemeral ports (32768+) after a host or the word "port"; a fixed port such as 3000 or 8080 is part of the failure.
+  [/(\blocalhost|\b\d{1,3}(?:\.\d{1,3}){3}|\[[0-9a-f:]+\]):(?:3[2-9]\d{3}|[45]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5])\b/gi, "$1:<port>"],
+  [/\bport\s+(?:3[2-9]\d{3}|[45]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5])\b/gi, "port <port>"],
+  // Temporary directories: macOS per-user folders, /var/tmp, pytest run counters, mkdtemp names that carry a digit.
+  [/\/(?:private\/)?var\/folders\/[\w.-]+\/[\w.-]+\/[TC0]\b/g, "/var/folders/<tmp>"],
+  [/\/var\/tmp\/[\w.-]+/g, "/var/tmp/<tmp>"],
+  [/\bpytest-\d+\b/g, "pytest-<n>"],
+  [/(?<=[\s/'"=:(])(?:tmp|temp)[-_.]?(?=[a-z0-9]*\d)[a-z0-9]{5,}\b/gi, "<tmpname>"],
+  // Content and artifact hashes: cargo's deps/foo-<16 hex>, webpack's name.<hash>.js.
+  [/(\/(?:deps|build|\.fingerprint)\/[\w.]+)-[0-9a-f]{16}\b/g, "$1-<hash>"],
+  [/\b([\w-]+)\.[0-9a-f]{8,}\.(js|mjs|css|map)\b/g, "$1.<hash>.$2"],
+  // Progress counters: "[12/340]", "Downloading x 45%", and counts after a progress verb ("processed 142 files").
+  [/\[\s*\d+\s*\/\s*\d+\s*\]/g, "[<n>/<n>]"],
+  [/\b(download(?:ing|ed)?|upload(?:ing|ed)?|progress|loading|fetching|extracting)\b([^\n\d]{0,40})\d{1,3}(?:\.\d+)?%/gi, "$1$2<pct>"],
+  [/\b(processed|scanned|downloaded|received|transferred|indexed|compiled|bundled|resolved|fetched|added|installed|audited)\s+\d+/gi, "$1 <n>"],
+  [/\bprocess\s+\d{3,}\b/gi, "process <n>"],
 ];
 
 /** Output with timestamps, durations, ids, addresses and temporary paths normalized away. */

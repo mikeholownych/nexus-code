@@ -3,9 +3,11 @@
  * Each ends BLOCKED, recovered (a Nexus note reached the model and the turn then finished), or is recorded with the
  * reason the existing guard already stops it.
  */
-import { test, describe } from "node:test";
+import { test, describe, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import "./helpers/leak_guard.js";
 import { AutonomousAgent } from "../src/agent.js";
 import { DEFAULT_CONTINUATION, HarnessConfig } from "../src/types.js";
@@ -37,10 +39,21 @@ const recoveryNotes = (agent: AutonomousAgent) => notes(agent, "Nexus recovery")
 const read = tool("read_file", { path: "a.txt" });
 const readB = tool("read_file", { path: "b.txt" });
 const failing = tool("run_command", { command: "echo broken; exit 1" });
-// The text changes on every call, deterministically: a counter file in the workspace, not the clock.
-const failingChanging = tool("run_command", { command: "n=$(cat .count 2>/dev/null || echo 0); n=$((n+1)); echo $n > .count; echo \"broken attempt $n\"; exit 1" });
+// The text changes on every call, deterministically: a counter file, never the clock. The counter lives outside the workspace
+// so the command does not change the workspace state (a mutated workspace would make each call a new state, not a repeat).
+const counterDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-loop-counter-"));
+let counterSeq = 0;
+after(() => fs.rmSync(counterDir, { recursive: true, force: true }));
+const counterCmd = (body: string): Reply => {
+  const f = path.join(counterDir, `c${++counterSeq}`);
+  return tool("run_command", { command: `f=${f}; n=$(cat $f 2>/dev/null || echo 0); n=$((n+1)); echo $n > $f; ${body}; exit 1` });
+};
+const failingChanging = (): Reply => counterCmd("echo \"broken attempt $n\"");
+// The failure itself changes on every call (six different errors, picked by the counter): genuine progress, never a loop.
+const failingDifferent = (): Reply => counterCmd("case $n in 1) m='cannot find module alpha';; 2) m='syntax error: unexpected token }';; 3) m='permission denied: /etc/hosts';; 4) m='type mismatch: string vs number';; 5) m='database schema is locked';; *) m='out of disk space';; esac; echo \"$m\"");
 const cmdA = tool("run_command", { command: "echo A; exit 1" });
 const cmdB = tool("run_command", { command: "echo B; exit 1" });
+const sixTimes = (r: Reply): Reply[] => [r, r, r, r, r, r, text("done")];
 const pingPong = (a: Reply, b: Reply): Reply[] => [a, b, a, b, a, b, a, b, a, b, a, b, text("done")];
 
 /*
@@ -73,12 +86,25 @@ describe("CS-11 with continuation (the default)", () => {
     });
   }
 
-  test("2b. the same command erroring with different text each time: NOT stopped (a documented gap)", { timeout: 90_000 }, async (t) => {
-    await withAgent(true, { "a.txt": "x\n" }, [failingChanging, failingChanging, failingChanging, failingChanging, failingChanging, failingChanging, text("done")], async (agent, gw) => {
+  test("2b. the same command erroring with only a counter changing: noted, then stopped (CS-11 gap closed)", { timeout: 120_000 }, async (t) => {
+    const replies = sixTimes(failingChanging());
+    await withAgent(true, { "a.txt": "x\n" }, replies, async (agent, gw) => {
       const turn = await agent.runTurn("Fix it.");
       if (engineUnusable(agent)) return t.skip("harness-core is stale: run_command cannot produce changing output here");
-      // Measured, and a documented gap: a changing result is progress to both guards, so six failing calls neither draw a note
-      // nor stop the turn; only the step limit bounds it (docs/LOOP_PATTERNS.md).
+      // The counter ("broken attempt N") is volatile text: the failure is the same, so the tracker sees a repeat.
+      assert.equal(turn.execution, "LIMIT_REACHED");
+      assert.equal(turn.reason, "STAGNATION_DETECTED");
+      assert.ok(recoveryNotes(agent) >= 1, "a recovery note reached the model before the stop");
+      assert.ok(gw.requests.length < replies.length, `stopped after ${gw.requests.length} of ${replies.length} replies`);
+    });
+  });
+
+  test("2c. the same command failing with a genuinely different error each time: NOT stopped", { timeout: 120_000 }, async (t) => {
+    const replies = sixTimes(failingDifferent());
+    await withAgent(true, { "a.txt": "x\n" }, replies, async (agent, gw) => {
+      const turn = await agent.runTurn("Fix it.");
+      if (engineUnusable(agent)) return t.skip("harness-core is stale: run_command cannot produce changing output here");
+      // Each failure is a new one, so each is progress: no note, no stop, every scripted reply consumed.
       assert.equal(turn.execution, "COMPLETED");
       assert.equal(recoveryNotes(agent), 0);
       assert.equal(sameNotes(agent), 0);
@@ -97,7 +123,7 @@ describe("CS-11 with continuation (the default)", () => {
 
 /*
  * With --no-continuation only CS-3 runs. Identical repeats are noted at 3 and stopped at the call class's hard
- * threshold (observer 5, command 10). A result that changes is progress by design, so 2b is not detected here.
+ * threshold (observer 5, command 10). A result that changes in more than volatile text is progress by design (2c).
  */
 describe("CS-11 without continuation (CS-3 alone)", () => {
   test("1. the same read and result 4 times: one note at the third repeat, no stop", { timeout: 90_000 }, async () => {
@@ -116,8 +142,17 @@ describe("CS-11 without continuation (CS-3 alone)", () => {
     });
   });
 
-  test("2b. the same command erroring with different text each time is progress to CS-3: no note, no stop (bounded by the step limit)", { timeout: 90_000 }, async (t) => {
-    await withAgent(false, { "a.txt": "x\n" }, [failingChanging, failingChanging, failingChanging, failingChanging, failingChanging, failingChanging, text("done")], async (agent) => {
+  test("2b. the same command erroring with only a counter changing is the same failure to CS-3: noted at the third repeat, no stop", { timeout: 90_000 }, async (t) => {
+    await withAgent(false, { "a.txt": "x\n" }, sixTimes(failingChanging()), async (agent) => {
+      const turn = await agent.runTurn("Fix it.");
+      if (engineUnusable(agent)) return t.skip("harness-core is stale: run_command cannot produce changing output here");
+      assert.equal(turn.execution, "COMPLETED");
+      assert.ok(sameNotes(agent) >= 1);
+    });
+  });
+
+  test("2c. a genuinely different error each time is progress to CS-3: no note, no stop", { timeout: 90_000 }, async (t) => {
+    await withAgent(false, { "a.txt": "x\n" }, sixTimes(failingDifferent()), async (agent) => {
       const turn = await agent.runTurn("Fix it.");
       if (engineUnusable(agent)) return t.skip("harness-core is stale: run_command cannot produce changing output here");
       assert.equal(turn.execution, "COMPLETED");
