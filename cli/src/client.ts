@@ -30,7 +30,7 @@ import {
 } from "./core/provider_recovery.js";
 import { redactSecrets } from "./ui.js";
 import { classifyLocality, setLocalityAuthorityResolver } from "./core/egress.js";
-import { connectionFor, disclosureClass, operatorSettingKeyForAuth, type ResolvedConnection } from "./providers.js";
+import { connectionFor, disclosureClass, promptCacheEnabled, operatorSettingKeyForAuth, type ResolvedConnection } from "./providers.js";
 import { ProviderStreamError, readSse, type NativeRequestInput, type NativeResult } from "./protocols/common.js";
 import { wireProtocol } from "./protocols/index.js";
 import { GcpAuthError, gcpTokenSource, resolveVertexTarget, vertexPath } from "./protocols/gcp_adc.js";
@@ -2158,6 +2158,7 @@ export class LocalLlmClient {
         owner,
         reasoningEffort: this.reasoningEffort,
         thinkingBudget: this.thinkingBudget,
+        ...(promptCacheEnabled(this.conn) ? { cacheHints: true } : {}),
       };
       const req = wire.build(input);
       this.omitUnsupported(req.body);

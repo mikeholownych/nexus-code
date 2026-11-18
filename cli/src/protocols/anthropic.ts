@@ -98,8 +98,16 @@ export function buildAnthropicRequest(input: NativeRequestInput): NativeRequest 
     messages: turns,
     stream: input.stream,
   };
-  const system = systemParts.filter(Boolean).join("\n\n");
-  if (system) body.system = system;
+  const system = systemParts.filter(Boolean);
+  if (input.cacheHints && system.length) {
+    // Tools and system precede the conversation, so one breakpoint after the stable system prompt and one after the
+    // pinned ledger (which changes less often than the conversation) cover the prefix; two of the four allowed.
+    body.system = system.map((text, i) => ({
+      type: "text",
+      text,
+      ...(i === 0 || i === system.length - 1 ? { cache_control: { type: "ephemeral" } } : {}),
+    }));
+  } else if (system.length) body.system = system.join("\n\n");
   if (input.tools.length) {
     body.tools = input.tools.map((t) => ({ name: t.function.name, description: t.function.description, input_schema: t.function.parameters }));
   }
