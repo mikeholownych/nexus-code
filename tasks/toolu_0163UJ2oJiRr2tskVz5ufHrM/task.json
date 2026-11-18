@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_0163UJ2oJiRr2tskVz5ufHrM",
+  "agent_id": "acb09e65b9e58d154",
+  "subagent_type": "general-purpose",
+  "task_description": "RD-6 --fork-session flag",
+  "token_usage": {
+    "input_tokens": 168,
+    "cache_creation_tokens": 135218,
+    "cache_read_tokens": 9775124,
+    "output_tokens": 42168,
+    "api_call_count": 83
+  },
+  "started_at": "2026-11-18T10:51:57.78085755Z",
+  "completed_at": "2026-11-18T11:25:28.720193546Z"
+}
