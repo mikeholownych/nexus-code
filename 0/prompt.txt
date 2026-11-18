@@ -1,0 +1,1553 @@
+# Terminal Agent Mission: Nexus Code Skills Architecture Independent Verification and Remediation Planning
+
+## Role and Mandate
+
+You are acting as an independent Principal Software Architect, Security Engineer, and Runtime Reliability Auditor reviewing the Nexus Code repository.
+
+Your mission is to **complete the previously limited skills architecture audit, independently verify every material finding, execute the necessary tests and adversarial experiments, and develop an implementation-ready remediation plan for any demonstrated gaps.**
+
+You have full authorization to inspect the repository, execute tests, build binaries, create temporary fixtures, instrument execution paths, and perform controlled adversarial testing.
+
+Do not restrict your investigation to static analysis.
+
+Do not implement the proposed production feature changes during this mission. The objective is to establish an accurate baseline, prove or disprove the findings, and prepare a technically defensible engineering plan.
+
+Repository: `https://github.com/mikeholownych/nexus-code`
+
+Previous audit baseline: `3c54e6014c2ea5281f642fdd53ac20605f2b24ae`
+
+Audit the current repository HEAD. Record the exact commit and identify changes since the previous audit that materially affect the findings.
+
+---
+
+## 1. Operating Principles
+
+Follow these requirements throughout the engagement.
+
+### 1.1 Independent verification
+
+Treat the previous audit as a collection of hypotheses, not authoritative conclusions.
+
+For every finding:
+
+- Locate the relevant implementation.
+- Trace the complete execution path.
+- Identify enforcement points and bypass routes.
+- Inspect existing tests.
+- Execute relevant tests.
+- Construct additional experiments where existing tests are insufficient.
+- Determine whether the finding is confirmed, partially confirmed, disproven, or unresolved.
+- Record supporting and contradictory evidence.
+
+Do not accept comments, documentation, test names, or intended architecture as proof of runtime behavior.
+
+### 1.2 Evidence standard
+
+Distinguish between:
+
+- **SOURCE_CONFIRMED:** Directly established by source inspection.
+- **TEST_CONFIRMED:** Established by executed tests with recorded results.
+- **ADVERSARIAL_CONFIRMED:** Established by a controlled negative-path experiment.
+- **INFERRED:** Supported by evidence but not directly demonstrated.
+- **UNVERIFIED:** Insufficient evidence.
+- **DISPROVEN:** Contradicted by verified evidence.
+
+A passing unit test establishes only the behavior exercised by that test.
+
+A security control is not considered proven merely because its happy path succeeds.
+
+### 1.3 Repository safety
+
+Inspect `AGENTS.md` and applicable repository instructions before executing work.
+
+Respect existing worktree and concurrency controls.
+
+Use a dedicated audit worktree and isolated temporary state.
+
+Never overwrite unrelated work.
+
+Use isolated `HOME`, configuration, and state directories for tests.
+
+Do not expose credentials, inference gateway tokens, private configuration, or sensitive runtime data.
+
+No production deployments, public releases, merges, tags, or publication are authorized.
+
+Local temporary changes required for instrumentation and experiments are authorized. Keep these isolated from production branches.
+
+### 1.4 No architectural assumptions
+
+Do not assume:
+
+- Skills require a new authorization engine.
+- Skill execution identity is entirely absent.
+- Existing receipts cannot establish attribution.
+- Current execution controls are bypassable.
+- Skill metadata must be the source of authority.
+- Existing qualification infrastructure cannot be reused.
+- The previously identified priorities remain correct.
+
+Determine these matters from evidence.
+
+---
+
+# 2. Establish the Current Baseline
+
+Before auditing, record:
+
+1. Repository commit SHA and branch.
+2. Working-tree cleanliness.
+3. Relevant package versions.
+4. Node.js and Rust toolchain versions.
+5. Build configuration.
+6. Test inventory.
+7. Existing CI workflows.
+8. Applicable architecture and release documents.
+9. Relevant work already merged since the prior audit.
+10. Relevant open issues, PRs, and roadmap commitments when accessible.
+
+Identify the current implementation of:
+
+- Skill discovery and loading.
+- Skill selection and ranking.
+- Skill activation.
+- Context injection.
+- Tool dispatch.
+- Capability registration.
+- Authorization and resource confinement.
+- Operator approval.
+- Subagent delegation.
+- MCP and plugin execution.
+- Execution evidence.
+- Session persistence and recovery.
+- Regression qualification.
+
+Do not limit discovery to previously identified files.
+
+Use repository-wide searches, call-graph tracing, tests, and runtime instrumentation.
+
+Produce a component and execution-path inventory with file and line references.
+
+---
+
+# 3. Independently Revalidate Previous Findings
+
+## F-01: Skill Capability Contracts
+
+Previous hypothesis:
+
+Skill frontmatter is used primarily for discovery metadata and does not define enforceable per-skill permissions.
+
+Investigate:
+
+- All supported frontmatter fields.
+- Skill metadata parsing.
+- Capability declarations.
+- Runtime policy configuration.
+- Existing authority grants.
+- Tool-group constraints.
+- Role-specific allowlists.
+- Possible skill-specific restrictions implemented elsewhere.
+
+Determine:
+
+1. Can a skill declare permitted capabilities?
+2. Can those declarations influence actual tool admission?
+3. Can the runtime independently enforce them?
+4. Does a skill declaration ever expand existing authority?
+5. Can a skill invoke tools outside its intended procedural scope?
+6. Are restrictions maintained across delegated execution?
+
+Do not conclude that per-skill authorization is missing until all existing enforcement mechanisms have been examined.
+
+## F-02: Skill-to-Execution Attribution
+
+Previous hypothesis:
+
+Activation injects instructions, but downstream tool calls are not bound to a persistent skill execution identity.
+
+Trace:
+
+`skill discovery → selection → activation → context injection → model response → tool dispatch → execution spine → authorization → execution receipt → durable state`
+
+Determine whether the runtime records:
+
+- Skill name.
+- Skill source.
+- Activation identity.
+- Content identity.
+- Associated task identity.
+- Subsequent tool calls.
+- Delegated tool calls.
+- Approval decisions.
+- Completion and verification evidence.
+
+Test whether these relationships survive:
+
+- Session restart.
+- Context compaction.
+- Model fallback.
+- Subagent delegation.
+- Failed tool execution.
+- Interrupted execution.
+- Recovery from partial state.
+
+Distinguish between information inferable from conversational history and structured, enforceable, durable execution attribution.
+
+## F-03: Skill Integrity and Version Binding
+
+Previous hypothesis:
+
+The skill content is not cryptographically pinned to the execution that activated it.
+
+Investigate:
+
+- File hashing.
+- Content identity.
+- Session snapshots.
+- Tool output preservation.
+- Existing integrity mechanisms.
+- Skill file reload behavior.
+- Changes during an active task.
+
+Test:
+
+1. Activate a skill.
+2. Modify its source file.
+3. Continue the execution.
+4. Restart the session.
+5. Resume the task.
+6. Determine which content version governs the execution.
+
+Repeat with:
+
+- Symlink target changes.
+- Duplicate skill names.
+- Global and workspace skill precedence.
+- Removed skills.
+- Changed skill metadata.
+
+Record whether existing behavior creates a time-of-check/time-of-use ambiguity.
+
+## F-04: Skill Trust and Supply Chain
+
+Previous hypothesis:
+
+Global installation location establishes trust without independently validating the publisher or contents.
+
+Inspect:
+
+- Global skill loading.
+- Workspace trust.
+- Symlink handling.
+- Trust transitions.
+- Source origin retention.
+- Skill installation and updates.
+- Prompt-injection defenses.
+- External skill compatibility.
+
+Evaluate these threat scenarios:
+
+- Malicious globally installed skill.
+- Compromised skill dependency.
+- Symlink redirected outside the expected installation root.
+- Trusted workspace containing malicious instructions.
+- Skill body attempting to impersonate operator or system authority.
+- Skill requesting secret exposure or unauthorized egress.
+- Skill changed after trust approval.
+
+Determine which protections are actually enforced and which depend on the user's installation decisions.
+
+Do not conflate workspace trust, content integrity, publisher identity, and execution authority.
+
+## F-05: Skill Lifecycle Qualification
+
+Previous hypothesis:
+
+The current skill system lacks an integrated qualification, revocation, and regression lifecycle.
+
+Inspect existing capabilities for:
+
+- Version management.
+- Dependency tracking.
+- Qualification status.
+- Automated skill testing.
+- Compatibility checks.
+- Change detection.
+- Regression obligations.
+- Revocation.
+- Rollback.
+- Evidence retention.
+- Resume compatibility.
+
+Identify which capabilities already exist and could be reused.
+
+Explicitly distinguish a missing mechanism from a mechanism that exists but has not been integrated with skills.
+
+---
+
+# 4. Additional Security and Reliability Investigation
+
+The audit must go beyond the five previous findings.
+
+## 4.1 Authorization composition
+
+Determine the effective authority model across:
+
+- Operator/session grants.
+- Full-access mode.
+- Review mode.
+- Read-only mode.
+- Workspace trust.
+- Agent roles.
+- Subagents.
+- Capability registry.
+- Resource confinement.
+- MCP integrations.
+- Plugins.
+- Shell execution.
+- Skill activation.
+
+Identify precedence rules and contradictory configurations.
+
+Verify whether authorization is evaluated against normalized tool arguments at the point of execution.
+
+Investigate whether tool arguments can change after approval or admission.
+
+Test whether authorization can be bypassed through alternative tools that produce equivalent side effects.
+
+Particular attention must be given to shell execution, because shell commands can perform operations that are not represented by a simple filesystem capability.
+
+## 4.2 Trust-boundary analysis
+
+Identify all transitions where lower-trust material enters higher-trust processing.
+
+Examples include:
+
+- Skill descriptions entering the system prompt.
+- Skill bodies entering model context.
+- Tool outputs entering subsequent model requests.
+- Retrieved documentation becoming execution guidance.
+- MCP descriptions becoming callable tools.
+- Subagent outputs influencing the parent agent.
+
+Determine whether sanitization, provenance labeling, and authorization enforcement remain distinct.
+
+Do not treat prompt sanitization as an execution security boundary.
+
+## 4.3 Fail-open behavior
+
+Inspect handling of:
+
+- Missing policy configuration.
+- Invalid configuration.
+- Unknown capabilities.
+- Failed authorization hooks.
+- Unavailable approval handlers.
+- Corrupted skill metadata.
+- Unavailable skill files.
+- Missing receipts.
+- Interrupted persistence.
+- Recovery using obsolete authority.
+- Unregistered or dynamically discovered tools.
+
+Classify observed behavior as fail-open, fail-closed, degraded, or explicitly operator-authorized.
+
+Assess impact according to actual deployment modes rather than assuming all default behavior is a security defect.
+
+## 4.4 Evidence integrity
+
+Investigate whether the system can reconstruct:
+
+- The selected skill.
+- Its exact instructions.
+- Its authorization context.
+- Its execution identity.
+- Every tool invocation.
+- Every admission decision.
+- Every approval.
+- Resource mutations.
+- Verification results.
+- Recovery events.
+- Final task disposition.
+
+Determine which records are durable, which are ephemeral, and which are merely logged.
+
+Identify redaction requirements so stronger evidence capture does not inadvertently persist secrets.
+
+---
+
+# 5. Execute the Existing Validation Suite
+
+Run the repository's documented build and test commands, including relevant CI-equivalent checks where feasible.
+
+At minimum, execute the suites covering:
+
+- Skills discovery and interoperability.
+- Skill ranking and lookup.
+- Skill injection.
+- Skill catalog management.
+- Workspace trust.
+- Authorization.
+- Approval policy.
+- Execution spine.
+- Resource confinement.
+- MCP integration.
+- Plugin permissions.
+- Subagent delegation.
+- Session persistence.
+- Resume and recovery.
+- Compaction continuity.
+- Evidence and audit integrity.
+- Security regression tests.
+
+Also run the applicable TypeScript build and Rust checks.
+
+Capture:
+
+- Exact commands.
+- Commit and environment.
+- Exit codes.
+- Pass/fail/skip counts.
+- Failure diagnostics.
+- Relevant test artifacts.
+- Whether failures reproduce.
+- Whether failures are caused by the implementation, test assumptions, or environment.
+
+Do not silently modify tests merely to obtain a green result.
+
+If a test cannot execute, record why.
+
+If a test requires infrastructure that is unavailable, identify the missing dependency and provide a reproducible command.
+
+---
+
+# 6. Controlled Adversarial Experiments
+
+Design and execute isolated experiments to test the actual enforcement boundaries.
+
+At minimum, investigate:
+
+| ID | Scenario | Required observation |
+|---|---|---|
+| ADV-01 | Skill requests unauthorized capability | Admission and execution behavior |
+| ADV-02 | Skill requests out-of-scope filesystem access | Resource confinement behavior |
+| ADV-03 | Skill attempts unauthorized shell side effect | Whether the shell path bypasses intended restrictions |
+| ADV-04 | Skill instructions attempt authority escalation | Model behavior versus runtime enforcement |
+| ADV-05 | Skill source modified after activation | Content identity and execution continuity |
+| ADV-06 | Skill symlink target replaced | Trust and integrity behavior |
+| ADV-07 | Skill delegated to a subagent | Authority inheritance and attribution |
+| ADV-08 | Skill execution interrupted and resumed | Persistence and authority restoration |
+| ADV-09 | Skill revoked during a task | Revocation and continuation behavior |
+| ADV-10 | Malicious tool output influences skill execution | Injection containment and tool authorization |
+| ADV-11 | MCP/plugin produces equivalent unauthorized side effect | Consistency across execution paths |
+| ADV-12 | Approval granted for one argument set, then arguments changed | Approval-to-execution binding |
+
+Where the requested security property does not currently exist, document the experiment as a baseline characterization rather than automatically reporting a test failure.
+
+Use temporary fixtures and disposable resources.
+
+Do not direct destructive tests against real infrastructure or credentials.
+
+Record negative results and unexpected behavior unaltered.
+
+---
+
+# 7. Gap Analysis
+
+After validation, produce a consolidated findings register.
+
+Each finding must include:
+
+- Finding ID.
+- Title.
+- Severity.
+- Verification status.
+- Affected components.
+- File and line evidence.
+- Tests executed.
+- Observed behavior.
+- Expected behavior.
+- Exploitability or operational impact.
+- Preconditions.
+- Existing compensating controls.
+- Scope of uncertainty.
+- Remediation recommendation.
+- Regression requirements.
+
+Use severity based on impact, exploitability, deployment assumptions, and existing controls.
+
+Do not assign critical or high severity solely because a feature is absent.
+
+Distinguish security vulnerabilities from architectural improvements and optional maturity enhancements.
+
+Explicitly identify any previous findings that were disproven or overstated.
+
+---
+
+# 8. Design the Remaining Work
+
+Only after completing the audit, develop an implementation plan.
+
+Prefer extending existing Nexus components.
+
+Do not propose a parallel authorization engine, logging subsystem, or orchestration framework unless reuse has been demonstrably ruled out.
+
+Evaluate the following proposed workstreams against the evidence.
+
+### A. Governed Skill Execution
+
+Potential capabilities:
+
+- Stable activation identity.
+- Skill content digest.
+- Skill-specific execution context.
+- Capability restrictions.
+- Resource scope intersection.
+- Execution attribution.
+- Revocation handling.
+
+Define exactly where each control would be enforced.
+
+### B. Skill Lifecycle Management
+
+Potential capabilities:
+
+- Versioned skill manifests.
+- Content verification.
+- Source provenance.
+- Dependency metadata.
+- Compatibility validation.
+- Qualification state.
+- Revocation and rollback.
+
+Avoid introducing mandatory central registries or remote verification dependencies unless justified.
+
+Local-first and air-gapped operation must remain supported.
+
+### C. Skill Execution Evidence
+
+Potential capabilities:
+
+- Activation receipts.
+- Skill-to-tool linkage.
+- Authorization decision records.
+- Version and digest references.
+- Completion verdicts.
+- Recovery and replay references.
+
+Reuse existing durable state and evidence mechanisms where possible.
+
+### D. Continuous Skill Qualification
+
+Potential capabilities:
+
+- Skill-level test fixtures.
+- Expected tool-call sequences.
+- Negative security tests.
+- Regression evaluation.
+- Model compatibility testing.
+- Qualification invalidation after changes.
+
+Integrate with Nexus's existing Continuous Evaluation and Regression Intelligence capabilities where applicable.
+
+---
+
+# 9. Engineering Plan Requirements
+
+For every recommended work package, specify:
+
+1. Objective and rationale.
+2. Findings addressed.
+3. Existing code to reuse.
+4. Files/modules expected to change.
+5. New interfaces and schemas.
+6. Authority and trust implications.
+7. Migration and compatibility requirements.
+8. Implementation sequence.
+9. Dependencies.
+10. Failure modes.
+11. Unit tests.
+12. Integration tests.
+13. Adversarial tests.
+14. Acceptance criteria.
+15. Evidence required for closure.
+16. Rollback strategy.
+17. Estimated complexity and principal uncertainties.
+
+Organize the plan into independently testable increments.
+
+Prioritize correctness and auditability over feature breadth.
+
+Avoid unnecessary refactoring.
+
+Preserve existing Agent Skills compatibility unless evidence establishes a compelling reason to change it.
+
+Any new manifest fields must have explicit semantics. Separate informational metadata from fields that are actually enforced.
+
+Ensure existing skills without extended metadata have a documented compatibility policy.
+
+Do not silently grant them expanded authority.
+
+---
+
+# 10. Required Deliverables
+
+Create an audit documentation directory consistent with the repository's existing conventions.
+
+Produce the following artifacts:
+
+### 1. Independent Audit Report
+
+`SKILLS_ARCHITECTURE_AUDIT.md`
+
+Include:
+
+- Scope.
+- Exact repository baseline.
+- Methodology.
+- Architecture inventory.
+- Validated findings.
+- Disproved findings.
+- Residual uncertainties.
+- Security implications.
+- Operational implications.
+- Final assessment.
+
+### 2. Evidence Register
+
+`SKILLS_AUDIT_EVIDENCE.md`
+
+Include:
+
+- Source references.
+- Test commands.
+- Test results.
+- Adversarial experiments.
+- Relevant outputs.
+- Reproduction instructions.
+- Evidence integrity considerations.
+
+Raw outputs should be retained as separate artifacts where appropriate, with secrets redacted.
+
+### 3. Threat Model
+
+`SKILLS_THREAT_MODEL.md`
+
+Include:
+
+- Assets.
+- Actors.
+- Trust boundaries.
+- Entry points.
+- Authorization boundaries.
+- Attack paths.
+- Existing controls.
+- Residual risks.
+- Deployment assumptions.
+
+### 4. Remediation Architecture
+
+`GOVERNED_SKILLS_ARCHITECTURE.md`
+
+Include:
+
+- Current versus proposed architecture.
+- Component reuse.
+- Proposed interfaces.
+- Authority composition.
+- Execution identity.
+- Integrity model.
+- Lifecycle model.
+- Evidence model.
+- Failure handling.
+
+### 5. Implementation Plan
+
+`GOVERNED_SKILLS_IMPLEMENTATION_PLAN.md`
+
+Include:
+
+- Prioritized work packages.
+- Detailed implementation steps.
+- Dependencies.
+- Test requirements.
+- Acceptance gates.
+- Migration requirements.
+- Rollback.
+- Release considerations.
+
+### 6. Findings Register
+
+`SKILLS_AUDIT_FINDINGS.json`
+
+Use a machine-readable structure with stable finding IDs, verification states, severity, evidence references, and remediation work-package mappings.
+
+### 7. Executive Decision Record
+
+`SKILLS_AUDIT_DECISION.md`
+
+Summarize:
+
+- What is already working.
+- What is genuinely missing.
+- What is unsafe or unreliable.
+- What should be implemented.
+- What should explicitly not be implemented.
+- Recommended execution sequence.
+- Remaining blockers and uncertainties.
+
+Place these files under the repository's existing documentation conventions rather than automatically creating a new top-level directory.
+
+---
+
+# 11. Acceptance Gates
+
+The mission is complete only when:
+
+- Every original audit finding has been independently adjudicated.
+- The main execution and authorization paths have been traced.
+- Relevant existing tests have been executed.
+- Controlled adversarial experiments have been performed or explicitly documented as blocked.
+- Actual results are distinguished from architectural intentions.
+- Security findings are supported by reproducible evidence.
+- Existing compensating controls are acknowledged.
+- The remediation architecture reuses current components where feasible.
+- The implementation plan is specific enough for another engineering agent to execute without rediscovering the architecture.
+- Unresolved questions are explicitly recorded.
+- No production feature changes have been introduced.
+
+Do not declare the architecture secure, compliant, production-ready, or fully verified unless the evidence supports those claims.
+
+---
+
+# 12. Final Response Format
+
+When finished, report:
+
+**A. Baseline**
+
+Exact commit, environment, build status, and test status.
+
+**B. Findings**
+
+Table containing each original finding, its final verification status, actual severity, and a concise conclusion.
+
+**C. Additional Discoveries**
+
+New defects, architectural constraints, or significant compensating controls.
+
+**D. Adversarial Results**
+
+Experiments executed, observed outcomes, and any blocked tests.
+
+**E. Recommended Engineering Work**
+
+Ordered work packages, dependencies, and acceptance gates.
+
+**F. Evidence and Artifacts**
+
+Locations of generated reports, test evidence, and reproducible experiments.
+
+**G. Remaining Uncertainty**
+
+What has not been proven and what evidence is still required.
+
+**H. Release Recommendation**
+
+Explicit recommendation for whether to proceed with implementation, defer pending evidence, or address an immediate defect first.
+
+## Final Directive
+
+Do not optimize for validating the previous audit.
+
+Optimize for discovering how Nexus Code actually behaves.
+
+Challenge incorrect assumptions, including those in this prompt.
+
+Execute the authorized investigation rather than stopping at static analysis.
+
+Do not implement speculative improvements.
+
+The required outcome is an independently verified, reproducible, implementation-ready engineering assessment that can withstand technical and adversarial review.
+
+---
+
+# Terminal Agent Mission: Nexus Code Skills Architecture Independent Verification and Remediation Planning
+
+## Role and Mandate
+
+You are acting as an independent Principal Software Architect, Security Engineer, and Runtime Reliability Auditor reviewing the Nexus Code repository.
+
+Your mission is to **complete the previously limited skills architecture audit, independently verify every material finding, execute the necessary tests and adversarial experiments, and develop an implementation-ready remediation plan for any demonstrated gaps.**
+
+You have full authorization to inspect the repository, execute tests, build binaries, create temporary fixtures, instrument execution paths, and perform controlled adversarial testing.
+
+Do not restrict your investigation to static analysis.
+
+Do not implement the proposed production feature changes during this mission. The objective is to establish an accurate baseline, prove or disprove the findings, and prepare a technically defensible engineering plan.
+
+Repository: `https://github.com/mikeholownych/nexus-code`
+
+Previous audit baseline: `3c54e6014c2ea5281f642fdd53ac20605f2b24ae`
+
+Audit the current repository HEAD. Record the exact commit and identify changes since the previous audit that materially affect the findings.
+
+---
+
+## 1. Operating Principles
+
+Follow these requirements throughout the engagement.
+
+### 1.1 Independent verification
+
+Treat the previous audit as a collection of hypotheses, not authoritative conclusions.
+
+For every finding:
+
+- Locate the relevant implementation.
+- Trace the complete execution path.
+- Identify enforcement points and bypass routes.
+- Inspect existing tests.
+- Execute relevant tests.
+- Construct additional experiments where existing tests are insufficient.
+- Determine whether the finding is confirmed, partially confirmed, disproven, or unresolved.
+- Record supporting and contradictory evidence.
+
+Do not accept comments, documentation, test names, or intended architecture as proof of runtime behavior.
+
+### 1.2 Evidence standard
+
+Distinguish between:
+
+- **SOURCE_CONFIRMED:** Directly established by source inspection.
+- **TEST_CONFIRMED:** Established by executed tests with recorded results.
+- **ADVERSARIAL_CONFIRMED:** Established by a controlled negative-path experiment.
+- **INFERRED:** Supported by evidence but not directly demonstrated.
+- **UNVERIFIED:** Insufficient evidence.
+- **DISPROVEN:** Contradicted by verified evidence.
+
+A passing unit test establishes only the behavior exercised by that test.
+
+A security control is not considered proven merely because its happy path succeeds.
+
+### 1.3 Repository safety
+
+Inspect `AGENTS.md` and applicable repository instructions before executing work.
+
+Respect existing worktree and concurrency controls.
+
+Use a dedicated audit worktree and isolated temporary state.
+
+Never overwrite unrelated work.
+
+Use isolated `HOME`, configuration, and state directories for tests.
+
+Do not expose credentials, inference gateway tokens, private configuration, or sensitive runtime data.
+
+No production deployments, public releases, merges, tags, or publication are authorized.
+
+Local temporary changes required for instrumentation and experiments are authorized. Keep these isolated from production branches.
+
+### 1.4 No architectural assumptions
+
+Do not assume:
+
+- Skills require a new authorization engine.
+- Skill execution identity is entirely absent.
+- Existing receipts cannot establish attribution.
+- Current execution controls are bypassable.
+- Skill metadata must be the source of authority.
+- Existing qualification infrastructure cannot be reused.
+- The previously identified priorities remain correct.
+
+Determine these matters from evidence.
+
+---
+
+# 2. Establish the Current Baseline
+
+Before auditing, record:
+
+1. Repository commit SHA and branch.
+2. Working-tree cleanliness.
+3. Relevant package versions.
+4. Node.js and Rust toolchain versions.
+5. Build configuration.
+6. Test inventory.
+7. Existing CI workflows.
+8. Applicable architecture and release documents.
+9. Relevant work already merged since the prior audit.
+10. Relevant open issues, PRs, and roadmap commitments when accessible.
+
+Identify the current implementation of:
+
+- Skill discovery and loading.
+- Skill selection and ranking.
+- Skill activation.
+- Context injection.
+- Tool dispatch.
+- Capability registration.
+- Authorization and resource confinement.
+- Operator approval.
+- Subagent delegation.
+- MCP and plugin execution.
+- Execution evidence.
+- Session persistence and recovery.
+- Regression qualification.
+
+Do not limit discovery to previously identified files.
+
+Use repository-wide searches, call-graph tracing, tests, and runtime instrumentation.
+
+Produce a component and execution-path inventory with file and line references.
+
+---
+
+# 3. Independently Revalidate Previous Findings
+
+## F-01: Skill Capability Contracts
+
+Previous hypothesis:
+
+Skill frontmatter is used primarily for discovery metadata and does not define enforceable per-skill permissions.
+
+Investigate:
+
+- All supported frontmatter fields.
+- Skill metadata parsing.
+- Capability declarations.
+- Runtime policy configuration.
+- Existing authority grants.
+- Tool-group constraints.
+- Role-specific allowlists.
+- Possible skill-specific restrictions implemented elsewhere.
+
+Determine:
+
+1. Can a skill declare permitted capabilities?
+2. Can those declarations influence actual tool admission?
+3. Can the runtime independently enforce them?
+4. Does a skill declaration ever expand existing authority?
+5. Can a skill invoke tools outside its intended procedural scope?
+6. Are restrictions maintained across delegated execution?
+
+Do not conclude that per-skill authorization is missing until all existing enforcement mechanisms have been examined.
+
+## F-02: Skill-to-Execution Attribution
+
+Previous hypothesis:
+
+Activation injects instructions, but downstream tool calls are not bound to a persistent skill execution identity.
+
+Trace:
+
+`skill discovery → selection → activation → context injection → model response → tool dispatch → execution spine → authorization → execution receipt → durable state`
+
+Determine whether the runtime records:
+
+- Skill name.
+- Skill source.
+- Activation identity.
+- Content identity.
+- Associated task identity.
+- Subsequent tool calls.
+- Delegated tool calls.
+- Approval decisions.
+- Completion and verification evidence.
+
+Test whether these relationships survive:
+
+- Session restart.
+- Context compaction.
+- Model fallback.
+- Subagent delegation.
+- Failed tool execution.
+- Interrupted execution.
+- Recovery from partial state.
+
+Distinguish between information inferable from conversational history and structured, enforceable, durable execution attribution.
+
+## F-03: Skill Integrity and Version Binding
+
+Previous hypothesis:
+
+The skill content is not cryptographically pinned to the execution that activated it.
+
+Investigate:
+
+- File hashing.
+- Content identity.
+- Session snapshots.
+- Tool output preservation.
+- Existing integrity mechanisms.
+- Skill file reload behavior.
+- Changes during an active task.
+
+Test:
+
+1. Activate a skill.
+2. Modify its source file.
+3. Continue the execution.
+4. Restart the session.
+5. Resume the task.
+6. Determine which content version governs the execution.
+
+Repeat with:
+
+- Symlink target changes.
+- Duplicate skill names.
+- Global and workspace skill precedence.
+- Removed skills.
+- Changed skill metadata.
+
+Record whether existing behavior creates a time-of-check/time-of-use ambiguity.
+
+## F-04: Skill Trust and Supply Chain
+
+Previous hypothesis:
+
+Global installation location establishes trust without independently validating the publisher or contents.
+
+Inspect:
+
+- Global skill loading.
+- Workspace trust.
+- Symlink handling.
+- Trust transitions.
+- Source origin retention.
+- Skill installation and updates.
+- Prompt-injection defenses.
+- External skill compatibility.
+
+Evaluate these threat scenarios:
+
+- Malicious globally installed skill.
+- Compromised skill dependency.
+- Symlink redirected outside the expected installation root.
+- Trusted workspace containing malicious instructions.
+- Skill body attempting to impersonate operator or system authority.
+- Skill requesting secret exposure or unauthorized egress.
+- Skill changed after trust approval.
+
+Determine which protections are actually enforced and which depend on the user's installation decisions.
+
+Do not conflate workspace trust, content integrity, publisher identity, and execution authority.
+
+## F-05: Skill Lifecycle Qualification
+
+Previous hypothesis:
+
+The current skill system lacks an integrated qualification, revocation, and regression lifecycle.
+
+Inspect existing capabilities for:
+
+- Version management.
+- Dependency tracking.
+- Qualification status.
+- Automated skill testing.
+- Compatibility checks.
+- Change detection.
+- Regression obligations.
+- Revocation.
+- Rollback.
+- Evidence retention.
+- Resume compatibility.
+
+Identify which capabilities already exist and could be reused.
+
+Explicitly distinguish a missing mechanism from a mechanism that exists but has not been integrated with skills.
+
+---
+
+# 4. Additional Security and Reliability Investigation
+
+The audit must go beyond the five previous findings.
+
+## 4.1 Authorization composition
+
+Determine the effective authority model across:
+
+- Operator/session grants.
+- Full-access mode.
+- Review mode.
+- Read-only mode.
+- Workspace trust.
+- Agent roles.
+- Subagents.
+- Capability registry.
+- Resource confinement.
+- MCP integrations.
+- Plugins.
+- Shell execution.
+- Skill activation.
+
+Identify precedence rules and contradictory configurations.
+
+Verify whether authorization is evaluated against normalized tool arguments at the point of execution.
+
+Investigate whether tool arguments can change after approval or admission.
+
+Test whether authorization can be bypassed through alternative tools that produce equivalent side effects.
+
+Particular attention must be given to shell execution, because shell commands can perform operations that are not represented by a simple filesystem capability.
+
+## 4.2 Trust-boundary analysis
+
+Identify all transitions where lower-trust material enters higher-trust processing.
+
+Examples include:
+
+- Skill descriptions entering the system prompt.
+- Skill bodies entering model context.
+- Tool outputs entering subsequent model requests.
+- Retrieved documentation becoming execution guidance.
+- MCP descriptions becoming callable tools.
+- Subagent outputs influencing the parent agent.
+
+Determine whether sanitization, provenance labeling, and authorization enforcement remain distinct.
+
+Do not treat prompt sanitization as an execution security boundary.
+
+## 4.3 Fail-open behavior
+
+Inspect handling of:
+
+- Missing policy configuration.
+- Invalid configuration.
+- Unknown capabilities.
+- Failed authorization hooks.
+- Unavailable approval handlers.
+- Corrupted skill metadata.
+- Unavailable skill files.
+- Missing receipts.
+- Interrupted persistence.
+- Recovery using obsolete authority.
+- Unregistered or dynamically discovered tools.
+
+Classify observed behavior as fail-open, fail-closed, degraded, or explicitly operator-authorized.
+
+Assess impact according to actual deployment modes rather than assuming all default behavior is a security defect.
+
+## 4.4 Evidence integrity
+
+Investigate whether the system can reconstruct:
+
+- The selected skill.
+- Its exact instructions.
+- Its authorization context.
+- Its execution identity.
+- Every tool invocation.
+- Every admission decision.
+- Every approval.
+- Resource mutations.
+- Verification results.
+- Recovery events.
+- Final task disposition.
+
+Determine which records are durable, which are ephemeral, and which are merely logged.
+
+Identify redaction requirements so stronger evidence capture does not inadvertently persist secrets.
+
+---
+
+# 5. Execute the Existing Validation Suite
+
+Run the repository's documented build and test commands, including relevant CI-equivalent checks where feasible.
+
+At minimum, execute the suites covering:
+
+- Skills discovery and interoperability.
+- Skill ranking and lookup.
+- Skill injection.
+- Skill catalog management.
+- Workspace trust.
+- Authorization.
+- Approval policy.
+- Execution spine.
+- Resource confinement.
+- MCP integration.
+- Plugin permissions.
+- Subagent delegation.
+- Session persistence.
+- Resume and recovery.
+- Compaction continuity.
+- Evidence and audit integrity.
+- Security regression tests.
+
+Also run the applicable TypeScript build and Rust checks.
+
+Capture:
+
+- Exact commands.
+- Commit and environment.
+- Exit codes.
+- Pass/fail/skip counts.
+- Failure diagnostics.
+- Relevant test artifacts.
+- Whether failures reproduce.
+- Whether failures are caused by the implementation, test assumptions, or environment.
+
+Do not silently modify tests merely to obtain a green result.
+
+If a test cannot execute, record why.
+
+If a test requires infrastructure that is unavailable, identify the missing dependency and provide a reproducible command.
+
+---
+
+# 6. Controlled Adversarial Experiments
+
+Design and execute isolated experiments to test the actual enforcement boundaries.
+
+At minimum, investigate:
+
+| ID | Scenario | Required observation |
+|---|---|---|
+| ADV-01 | Skill requests unauthorized capability | Admission and execution behavior |
+| ADV-02 | Skill requests out-of-scope filesystem access | Resource confinement behavior |
+| ADV-03 | Skill attempts unauthorized shell side effect | Whether the shell path bypasses intended restrictions |
+| ADV-04 | Skill instructions attempt authority escalation | Model behavior versus runtime enforcement |
+| ADV-05 | Skill source modified after activation | Content identity and execution continuity |
+| ADV-06 | Skill symlink target replaced | Trust and integrity behavior |
+| ADV-07 | Skill delegated to a subagent | Authority inheritance and attribution |
+| ADV-08 | Skill execution interrupted and resumed | Persistence and authority restoration |
+| ADV-09 | Skill revoked during a task | Revocation and continuation behavior |
+| ADV-10 | Malicious tool output influences skill execution | Injection containment and tool authorization |
+| ADV-11 | MCP/plugin produces equivalent unauthorized side effect | Consistency across execution paths |
+| ADV-12 | Approval granted for one argument set, then arguments changed | Approval-to-execution binding |
+
+Where the requested security property does not currently exist, document the experiment as a baseline characterization rather than automatically reporting a test failure.
+
+Use temporary fixtures and disposable resources.
+
+Do not direct destructive tests against real infrastructure or credentials.
+
+Record negative results and unexpected behavior unaltered.
+
+---
+
+# 7. Gap Analysis
+
+After validation, produce a consolidated findings register.
+
+Each finding must include:
+
+- Finding ID.
+- Title.
+- Severity.
+- Verification status.
+- Affected components.
+- File and line evidence.
+- Tests executed.
+- Observed behavior.
+- Expected behavior.
+- Exploitability or operational impact.
+- Preconditions.
+- Existing compensating controls.
+- Scope of uncertainty.
+- Remediation recommendation.
+- Regression requirements.
+
+Use severity based on impact, exploitability, deployment assumptions, and existing controls.
+
+Do not assign critical or high severity solely because a feature is absent.
+
+Distinguish security vulnerabilities from architectural improvements and optional maturity enhancements.
+
+Explicitly identify any previous findings that were disproven or overstated.
+
+---
+
+# 8. Design the Remaining Work
+
+Only after completing the audit, develop an implementation plan.
+
+Prefer extending existing Nexus components.
+
+Do not propose a parallel authorization engine, logging subsystem, or orchestration framework unless reuse has been demonstrably ruled out.
+
+Evaluate the following proposed workstreams against the evidence.
+
+### A. Governed Skill Execution
+
+Potential capabilities:
+
+- Stable activation identity.
+- Skill content digest.
+- Skill-specific execution context.
+- Capability restrictions.
+- Resource scope intersection.
+- Execution attribution.
+- Revocation handling.
+
+Define exactly where each control would be enforced.
+
+### B. Skill Lifecycle Management
+
+Potential capabilities:
+
+- Versioned skill manifests.
+- Content verification.
+- Source provenance.
+- Dependency metadata.
+- Compatibility validation.
+- Qualification state.
+- Revocation and rollback.
+
+Avoid introducing mandatory central registries or remote verification dependencies unless justified.
+
+Local-first and air-gapped operation must remain supported.
+
+### C. Skill Execution Evidence
+
+Potential capabilities:
+
+- Activation receipts.
+- Skill-to-tool linkage.
+- Authorization decision records.
+- Version and digest references.
+- Completion verdicts.
+- Recovery and replay references.
+
+Reuse existing durable state and evidence mechanisms where possible.
+
+### D. Continuous Skill Qualification
+
+Potential capabilities:
+
+- Skill-level test fixtures.
+- Expected tool-call sequences.
+- Negative security tests.
+- Regression evaluation.
+- Model compatibility testing.
+- Qualification invalidation after changes.
+
+Integrate with Nexus's existing Continuous Evaluation and Regression Intelligence capabilities where applicable.
+
+---
+
+# 9. Engineering Plan Requirements
+
+For every recommended work package, specify:
+
+1. Objective and rationale.
+2. Findings addressed.
+3. Existing code to reuse.
+4. Files/modules expected to change.
+5. New interfaces and schemas.
+6. Authority and trust implications.
+7. Migration and compatibility requirements.
+8. Implementation sequence.
+9. Dependencies.
+10. Failure modes.
+11. Unit tests.
+12. Integration tests.
+13. Adversarial tests.
+14. Acceptance criteria.
+15. Evidence required for closure.
+16. Rollback strategy.
+17. Estimated complexity and principal uncertainties.
+
+Organize the plan into independently testable increments.
+
+Prioritize correctness and auditability over feature breadth.
+
+Avoid unnecessary refactoring.
+
+Preserve existing Agent Skills compatibility unless evidence establishes a compelling reason to change it.
+
+Any new manifest fields must have explicit semantics. Separate informational metadata from fields that are actually enforced.
+
+Ensure existing skills without extended metadata have a documented compatibility policy.
+
+Do not silently grant them expanded authority.
+
+---
+
+# 10. Required Deliverables
+
+Create an audit documentation directory consistent with the repository's existing conventions.
+
+Produce the following artifacts:
+
+### 1. Independent Audit Report
+
+`SKILLS_ARCHITECTURE_AUDIT.md`
+
+Include:
+
+- Scope.
+- Exact repository baseline.
+- Methodology.
+- Architecture inventory.
+- Validated findings.
+- Disproved findings.
+- Residual uncertainties.
+- Security implications.
+- Operational implications.
+- Final assessment.
+
+### 2. Evidence Register
+
+`SKILLS_AUDIT_EVIDENCE.md`
+
+Include:
+
+- Source references.
+- Test commands.
+- Test results.
+- Adversarial experiments.
+- Relevant outputs.
+- Reproduction instructions.
+- Evidence integrity considerations.
+
+Raw outputs should be retained as separate artifacts where appropriate, with secrets redacted.
+
+### 3. Threat Model
+
+`SKILLS_THREAT_MODEL.md`
+
+Include:
+
+- Assets.
+- Actors.
+- Trust boundaries.
+- Entry points.
+- Authorization boundaries.
+- Attack paths.
+- Existing controls.
+- Residual risks.
+- Deployment assumptions.
+
+### 4. Remediation Architecture
+
+`GOVERNED_SKILLS_ARCHITECTURE.md`
+
+Include:
+
+- Current versus proposed architecture.
+- Component reuse.
+- Proposed interfaces.
+- Authority composition.
+- Execution identity.
+- Integrity model.
+- Lifecycle model.
+- Evidence model.
+- Failure handling.
+
+### 5. Implementation Plan
+
+`GOVERNED_SKILLS_IMPLEMENTATION_PLAN.md`
+
+Include:
+
+- Prioritized work packages.
+- Detailed implementation steps.
+- Dependencies.
+- Test requirements.
+- Acceptance gates.
+- Migration requirements.
+- Rollback.
+- Release considerations.
+
+### 6. Findings Register
+
+`SKILLS_AUDIT_FINDINGS.json`
+
+Use a machine-readable structure with stable finding IDs, verification states, severity, evidence references, and remediation work-package mappings.
+
+### 7. Executive Decision Record
+
+`SKILLS_AUDIT_DECISION.md`
+
+Summarize:
+
+- What is already working.
+- What is genuinely missing.
+- What is unsafe or unreliable.
+- What should be implemented.
+- What should explicitly not be implemented.
+- Recommended execution sequence.
+- Remaining blockers and uncertainties.
+
+Place these files under the repository's existing documentation conventions rather than automatically creating a new top-level directory.
+
+---
+
+# 11. Acceptance Gates
+
+The mission is complete only when:
+
+- Every original audit finding has been independently adjudicated.
+- The main execution and authorization paths have been traced.
+- Relevant existing tests have been executed.
+- Controlled adversarial experiments have been performed or explicitly documented as blocked.
+- Actual results are distinguished from architectural intentions.
+- Security findings are supported by reproducible evidence.
+- Existing compensating controls are acknowledged.
+- The remediation architecture reuses current components where feasible.
+- The implementation plan is specific enough for another engineering agent to execute without rediscovering the architecture.
+- Unresolved questions are explicitly recorded.
+- No production feature changes have been introduced.
+
+Do not declare the architecture secure, compliant, production-ready, or fully verified unless the evidence supports those claims.
+
+---
+
+# 12. Final Response Format
+
+When finished, report:
+
+**A. Baseline**
+
+Exact commit, environment, build status, and test status.
+
+**B. Findings**
+
+Table containing each original finding, its final verification status, actual severity, and a concise conclusion.
+
+**C. Additional Discoveries**
+
+New defects, architectural constraints, or significant compensating controls.
+
+**D. Adversarial Results**
+
+Experiments executed, observed outcomes, and any blocked tests.
+
+**E. Recommended Engineering Work**
+
+Ordered work packages, dependencies, and acceptance gates.
+
+**F. Evidence and Artifacts**
+
+Locations of generated reports, test evidence, and reproducible experiments.
+
+**G. Remaining Uncertainty**
+
+What has not been proven and what evidence is still required.
+
+**H. Release Recommendation**
+
+Explicit recommendation for whether to proceed with implementation, defer pending evidence, or address an immediate defect first.
+
+## Final Directive
+
+Do not optimize for validating the previous audit.
+
+Optimize for discovering how Nexus Code actually behaves.
+
+Challenge incorrect assumptions, including those in this prompt.
+
+Execute the authorized investigation rather than stopping at static analysis.
+
+Do not implement speculative improvements.
+
+The required outcome is an independently verified, reproducible, implementation-ready engineering assessment that can withstand technical and adversarial review.
+
+---
+
+action the plan
+
+---
+
+complete WP-GS-06, then validate, then push/PR/merge
