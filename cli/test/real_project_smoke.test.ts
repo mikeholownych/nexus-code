@@ -95,3 +95,23 @@ test("usage errors exit 2: a missing CLI build and an unknown argument", () => {
   assert.equal(smoke(["--cli", path.join(os.tmpdir(), "nexus-smoke-no-such-cli.js")]).code, 2);
   assert.equal(smoke(["--bogus"]).code, 2);
 });
+
+test("the pytest probe sees what the isolated run sees: a pytest visible only from the real HOME is reported unavailable", async () => {
+  const fake = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-smoke-fakepy-"));
+  const realHome = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-smoke-realhome-"));
+  fs.writeFileSync(path.join(fake, "python3"), `#!/bin/sh\n[ "$HOME" = "${realHome}" ] && exit 0\nexit 1\n`, { mode: 0o755 });
+  const saved = { PATH: process.env.PATH, HOME: process.env.HOME };
+  try {
+    process.env.PATH = `${fake}${path.delimiter}${saved.PATH}`;
+    process.env.HOME = realHome;
+    const mod = await import(`${path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../scripts/real_project_smoke.mjs")}?probe`);
+    assert.equal(mod.pytestAvailable(), false, "a pytest importable only under the real HOME is not available to the isolated run");
+    fs.writeFileSync(path.join(fake, "python3"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    assert.equal(mod.pytestAvailable(), true, "a system-wide pytest is available");
+  } finally {
+    process.env.PATH = saved.PATH;
+    process.env.HOME = saved.HOME;
+    fs.rmSync(fake, { recursive: true, force: true });
+    fs.rmSync(realHome, { recursive: true, force: true });
+  }
+});

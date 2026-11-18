@@ -206,8 +206,19 @@ function parseResult(stdout) {
   try { return JSON.parse(stdout.slice(start)); } catch { return null; }
 }
 
-function pytestAvailable() {
-  return spawnSync("python3", ["-m", "pytest", "--version"], { stdio: "ignore" }).status === 0;
+/**
+ * Whether the verifier will find pytest. The CLI under test runs with a throwaway HOME, so a pytest installed with
+ * `pip install --user` (under the real home's user site) is invisible to it; the probe must see what the child sees.
+ */
+export function pytestAvailable() {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-smoke-probe-"));
+  try {
+    const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), XDG_DATA_HOME: path.join(home, ".local", "share"), XDG_CACHE_HOME: path.join(home, ".cache") };
+    delete env.PYTHONUSERBASE;
+    return spawnSync("python3", ["-m", "pytest", "--version"], { stdio: "ignore", env }).status === 0;
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 }
 
 export async function smokeOne(repo, { cli, seedRegression }) {
@@ -268,7 +279,7 @@ export async function main(argv) {
   const results = [];
   for (const repo of repos) {
     if (repo.needs === "pytest" && !pytestAvailable()) {
-      const r = { name: repo.name, ok: !opt.requireAll, skipped: true, problems: opt.requireAll ? ["pytest is not installed (--require-all)"] : [], outcome: null, ms: 0, requests: 0 };
+      const r = { name: repo.name, ok: !opt.requireAll, skipped: true, problems: opt.requireAll ? ["pytest is not installed where the isolated run can see it (--require-all); install it system-wide, not with pip --user"] : [], outcome: null, ms: 0, requests: 0 };
       results.push(r);
       continue;
     }

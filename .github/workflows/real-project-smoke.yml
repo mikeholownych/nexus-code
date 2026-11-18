@@ -25,7 +25,8 @@ jobs:
         with:
           node-version: 22.22.1
       - run: sudo apt-get update && sudo apt-get install --yes make build-essential pkg-config libcap-dev
-      - run: python3 -m pip install --user pytest==9.0.3
+      # System-wide: the smoke runs the CLI with a throwaway HOME, so a --user install would not be importable by the verifier.
+      - run: sudo python3 -m pip install pytest==9.0.3
       - run: npm ci --prefix cli
       - run: npm --prefix cli run build
       - run: cargo build --locked --release --manifest-path core/Cargo.toml --bin harness-core --bin nexus-tui
