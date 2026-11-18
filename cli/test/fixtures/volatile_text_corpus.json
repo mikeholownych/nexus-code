@@ -1,0 +1,725 @@
+{
+ "description": "CS-11: labelled pairs of command outputs. 'same-failure' = the failure is the same and only volatile text (counters, times, temp names, ports, ids) differs; 'different-failure' = the failure genuinely differs and must never be merged. Entries whose note starts with UNFIXED are same-failure pairs the normaliser deliberately does not merge.",
+ "pairs": [
+  {
+   "id": "S01",
+   "label": "same-failure",
+   "tool": "curl",
+   "note": "retry counter 'attempt N of M'",
+   "a": "curl: (7) Failed to connect to api.internal port 8443 after 3 ms: Connection refused\nattempt 3 of 5, giving up on this host",
+   "b": "curl: (7) Failed to connect to api.internal port 8443 after 2 ms: Connection refused\nattempt 4 of 5, giving up on this host"
+  },
+  {
+   "id": "S02",
+   "label": "same-failure",
+   "tool": "curl",
+   "note": "'retrying in Ns' backoff",
+   "a": "curl: (28) Operation timed out after 10001 milliseconds with 0 bytes received\nWarning: Problem : timeout. Will retry in 12 seconds. 4 retries left.",
+   "b": "curl: (28) Operation timed out after 10002 milliseconds with 0 bytes received\nWarning: Problem : timeout. Will retry in 24 seconds. 3 retries left."
+  },
+  {
+   "id": "S03",
+   "label": "same-failure",
+   "tool": "curl",
+   "note": "'Retry N/M' counter",
+   "a": "error: connection refused (ECONNREFUSED)\nRetry 2/5 ...",
+   "b": "error: connection refused (ECONNREFUSED)\nRetry 3/5 ..."
+  },
+  {
+   "id": "S04",
+   "label": "same-failure",
+   "tool": "pip",
+   "note": "urllib3 Retry(total=N)",
+   "a": "WARNING: Retrying (Retry(total=4, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError(<pip._vendor.urllib3.connection.HTTPSConnection object at 0x7f3a9c1d2e50>: Failed to establish a new connection: [Errno 111] Connection refused)': /simple/requests/",
+   "b": "WARNING: Retrying (Retry(total=3, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError(<pip._vendor.urllib3.connection.HTTPSConnection object at 0x7f3a9c1d4b10>: Failed to establish a new connection: [Errno 111] Connection refused)': /simple/requests/"
+  },
+  {
+   "id": "S05",
+   "label": "same-failure",
+   "tool": "npm",
+   "note": "incrementing request numbers",
+   "a": "npm ERR! network request 14 to https://registry.npmjs.org/left-pad failed, reason: connect ECONNREFUSED 10.0.8.5:4873",
+   "b": "npm ERR! network request 15 to https://registry.npmjs.org/left-pad failed, reason: connect ECONNREFUSED 10.0.8.5:4873"
+  },
+  {
+   "id": "S06",
+   "label": "same-failure",
+   "tool": "node",
+   "note": "request #N counter",
+   "a": "Error: connect ECONNREFUSED 127.0.0.1:9200\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1605:16)\nrequest #7 failed",
+   "b": "Error: connect ECONNREFUSED 127.0.0.1:9200\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1605:16)\nrequest #8 failed"
+  },
+  {
+   "id": "S07",
+   "label": "same-failure",
+   "tool": "node",
+   "note": "ephemeral port in ECONNREFUSED",
+   "a": "Error: connect ECONNREFUSED 127.0.0.1:54321\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1605:16)",
+   "b": "Error: connect ECONNREFUSED 127.0.0.1:54322\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1605:16)"
+  },
+  {
+   "id": "S08",
+   "label": "same-failure",
+   "tool": "node",
+   "note": "random listen port announced",
+   "a": "server listening on http://localhost:41873\nfetch failed: socket hang up",
+   "b": "server listening on http://localhost:38112\nfetch failed: socket hang up"
+  },
+  {
+   "id": "S09",
+   "label": "same-failure",
+   "tool": "node",
+   "note": "macOS per-run temp dir",
+   "a": "Error: ENOENT: no such file or directory, open '/var/folders/zz/k3x9q2_s5v1b7m0c4h8d6f0r0000gn/T/nexus-spec/config.json'",
+   "b": "Error: ENOENT: no such file or directory, open '/var/folders/zz/p8w2e4_t7y3n1a6g9j5l2c0q0000gn/T/nexus-spec/config.json'"
+  },
+  {
+   "id": "S10",
+   "label": "same-failure",
+   "tool": "python",
+   "note": "tempfile mkdtemp suffix with digit",
+   "a": "FileNotFoundError: [Errno 2] No such file or directory: '/work/tmpk3j2h1xz/data/input.csv'",
+   "b": "FileNotFoundError: [Errno 2] No such file or directory: '/work/tmpq9v7b4rn/data/input.csv'"
+  },
+  {
+   "id": "S11",
+   "label": "same-failure",
+   "tool": "pytest",
+   "note": "pytest tmp_path run counter",
+   "a": "E   FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-mike/pytest-17/test_load0/cfg.toml'\ntests/test_load.py:31: FileNotFoundError",
+   "b": "E   FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pytest-of-mike/pytest-18/test_load0/cfg.toml'\ntests/test_load.py:31: FileNotFoundError"
+  },
+  {
+   "id": "S12",
+   "label": "same-failure",
+   "tool": "go test",
+   "note": "go-build temp dir and elapsed",
+   "a": "--- FAIL: TestParse (0.00s)\n    parse_test.go:44: got 3, want 4\nFAIL\nFAIL\tnexus/parse\t0.012s\n# work dir /tmp/go-build3821901244/b001",
+   "b": "--- FAIL: TestParse (0.01s)\n    parse_test.go:44: got 3, want 4\nFAIL\nFAIL\tnexus/parse\t0.019s\n# work dir /tmp/go-build1177002931/b001"
+  },
+  {
+   "id": "S13",
+   "label": "same-failure",
+   "tool": "cargo",
+   "note": "cargo artifact hash in test binary path",
+   "a": "error: test failed, to rerun pass `--lib`\nCaused by:\n  process didn't exit successfully: `/repo/target/debug/deps/core-1a2b3c4d5e6f7a8b` (exit status: 101)",
+   "b": "error: test failed, to rerun pass `--lib`\nCaused by:\n  process didn't exit successfully: `/repo/target/debug/deps/core-9f8e7d6c5b4a3921` (exit status: 101)"
+  },
+  {
+   "id": "S14",
+   "label": "same-failure",
+   "tool": "ci",
+   "note": "job id",
+   "a": "ERROR: Job failed: exit code 1\njob_id=9921 runner=r-04 reason=script_failure",
+   "b": "ERROR: Job failed: exit code 1\njob_id=9934 runner=r-04 reason=script_failure"
+  },
+  {
+   "id": "S15",
+   "label": "same-failure",
+   "tool": "ci",
+   "note": "build number",
+   "a": "Build #3482 FAILED: step 'unit' exited with status 2",
+   "b": "Build #3483 FAILED: step 'unit' exited with status 2"
+  },
+  {
+   "id": "S16",
+   "label": "same-failure",
+   "tool": "ci",
+   "note": "run id",
+   "a": "gh run view: run id 1234567 concluded failure (conclusion: failure)",
+   "b": "gh run view: run id 1234588 concluded failure (conclusion: failure)"
+  },
+  {
+   "id": "S17",
+   "label": "same-failure",
+   "tool": "npm",
+   "note": "'added N packages' counter before the same error",
+   "a": "added 142 packages, and audited 143 packages\nnpm ERR! code ELIFECYCLE\nnpm ERR! errno 1\nnpm ERR! app@1.0.0 build: `tsc -p .`",
+   "b": "added 143 packages, and audited 144 packages\nnpm ERR! code ELIFECYCLE\nnpm ERR! errno 1\nnpm ERR! app@1.0.0 build: `tsc -p .`"
+  },
+  {
+   "id": "S18",
+   "label": "same-failure",
+   "tool": "lint",
+   "note": "'processed N files' counter",
+   "a": "processed 142 files\nsrc/index.ts: parse error: Unexpected token }",
+   "b": "processed 143 files\nsrc/index.ts: parse error: Unexpected token }"
+  },
+  {
+   "id": "S19",
+   "label": "same-failure",
+   "tool": "cargo",
+   "note": "bracketed progress counter",
+   "a": "[12/340] Compiling serde v1.0.190\nerror: could not compile `core` (lib) due to previous error",
+   "b": "[13/340] Compiling serde v1.0.190\nerror: could not compile `core` (lib) due to previous error"
+  },
+  {
+   "id": "S20",
+   "label": "same-failure",
+   "tool": "curl",
+   "note": "download percentage meter",
+   "a": "Downloading artifact.tgz 45% \ncurl: (56) OpenSSL SSL_read: Connection reset by peer, errno 104",
+   "b": "Downloading artifact.tgz 78% \ncurl: (56) OpenSSL SSL_read: Connection reset by peer, errno 104"
+  },
+  {
+   "id": "S21",
+   "label": "same-failure",
+   "tool": "make",
+   "note": "compound minutes+seconds elapsed",
+   "a": "make: *** [Makefile:18: all] Error 2\nreal 2m05.113s",
+   "b": "make: *** [Makefile:18: all] Error 2\nreal 1m58.047s"
+  },
+  {
+   "id": "S22",
+   "label": "same-failure",
+   "tool": "node test",
+   "note": "node test runner duration_ms diagnostics",
+   "a": "not ok 1 - parses config\n  ---\n  duration_ms: 1.234567\n  error: 'Expected values to be strictly equal'\n  ...\n# duration_ms 41.2",
+   "b": "not ok 1 - parses config\n  ---\n  duration_ms: 2.001122\n  error: 'Expected values to be strictly equal'\n  ...\n# duration_ms 39.8"
+  },
+  {
+   "id": "S23",
+   "label": "same-failure",
+   "tool": "webpack",
+   "note": "content-hashed asset name",
+   "a": "ERROR in ./src/app.js 12:4\nModule not found: Error: Can't resolve 'lodash'\nasset main.4f3a2b1c.js 212 KiB [emitted]",
+   "b": "ERROR in ./src/app.js 12:4\nModule not found: Error: Can't resolve 'lodash'\nasset main.9e1d77ab.js 212 KiB [emitted]"
+  },
+  {
+   "id": "S24",
+   "label": "same-failure",
+   "tool": "shell",
+   "note": "child pid",
+   "a": "worker: process 4821 exited with code 1 (segfault in libfoo)",
+   "b": "worker: process 5130 exited with code 1 (segfault in libfoo)"
+  },
+  {
+   "id": "S25",
+   "label": "same-failure",
+   "tool": "shell",
+   "note": "'N times' repetition counter",
+   "a": "retry loop: giving up, connection refused (failed 17 times)",
+   "b": "retry loop: giving up, connection refused (failed 18 times)"
+  },
+  {
+   "id": "S26",
+   "label": "same-failure",
+   "tool": "curl",
+   "note": "'after N attempts'",
+   "a": "error: could not reach https://hub.example.test/v2/ after 3 attempts: ECONNRESET",
+   "b": "error: could not reach https://hub.example.test/v2/ after 4 attempts: ECONNRESET"
+  },
+  {
+   "id": "S27",
+   "label": "same-failure",
+   "tool": "http",
+   "note": "'try N' counter",
+   "a": "try 2: HTTP/1.1 503 Service Unavailable from upstream pool-a",
+   "b": "try 3: HTTP/1.1 503 Service Unavailable from upstream pool-a"
+  },
+  {
+   "id": "S28",
+   "label": "same-failure",
+   "tool": "run_command",
+   "note": "JSON-wrapped run with duration_ms and an attempt counter",
+   "a": "{\"exit_code\":1,\"stdout\":\"broken attempt 3\\\\n\",\"stderr\":\"\",\"duration_ms\":12,\"timed_out\":false}",
+   "b": "{\"exit_code\":1,\"stdout\":\"broken attempt 4\\\\n\",\"stderr\":\"\",\"duration_ms\":15,\"timed_out\":false}"
+  },
+  {
+   "id": "S29",
+   "label": "same-failure",
+   "tool": "run_command",
+   "note": "JSON-wrapped, 'retrying in Ns'",
+   "a": "{\"exit_code\":1,\"stdout\":\"db unreachable, retrying in 8s\\\\n\",\"stderr\":\"\",\"duration_ms\":8004,\"timed_out\":false}",
+   "b": "{\"exit_code\":1,\"stdout\":\"db unreachable, retrying in 16s\\\\n\",\"stderr\":\"\",\"duration_ms\":16003,\"timed_out\":false}"
+  },
+  {
+   "id": "S30",
+   "label": "same-failure",
+   "tool": "tsc",
+   "note": "watch-mode timestamp and compile counter",
+   "a": "[12:03:44] Starting compilation in watch mode...\nsrc/a.ts(12,5): error TS2322: Type 'string' is not assignable to type 'number'.\n[12:03:51] Found 1 error. Watching for file changes.",
+   "b": "[12:09:10] Starting compilation in watch mode...\nsrc/a.ts(12,5): error TS2322: Type 'string' is not assignable to type 'number'.\n[12:09:18] Found 1 error. Watching for file changes."
+  },
+  {
+   "id": "S31",
+   "label": "same-failure",
+   "tool": "pytest",
+   "note": "pytest duration and tmp path",
+   "a": "FAILED tests/test_api.py::test_login - AssertionError: assert 401 == 200\n=== 1 failed, 9 passed in 0.42s ===",
+   "b": "FAILED tests/test_api.py::test_login - AssertionError: assert 401 == 200\n=== 1 failed, 9 passed in 0.57s ==="
+  },
+  {
+   "id": "S32",
+   "label": "same-failure",
+   "tool": "go test",
+   "note": "go test timestamps in logs",
+   "a": "2026-11-18T12:03:44.123Z ERROR handler: upstream refused\n--- FAIL: TestHandler (0.03s)",
+   "b": "2026-11-18T12:09:10.998Z ERROR handler: upstream refused\n--- FAIL: TestHandler (0.04s)"
+  },
+  {
+   "id": "S33",
+   "label": "same-failure",
+   "tool": "shell",
+   "note": "uuid in message",
+   "a": "error: lock held by session 3f2a1b9c-8d7e-4c6b-9a5f-1e2d3c4b5a69",
+   "b": "error: lock held by session a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d"
+  },
+  {
+   "id": "S34",
+   "label": "same-failure",
+   "tool": "shell",
+   "note": "heartbeat counter",
+   "a": "heartbeat 120 missed: agent unreachable at relay.internal",
+   "b": "heartbeat 121 missed: agent unreachable at relay.internal"
+  },
+  {
+   "id": "S35",
+   "label": "same-failure",
+   "tool": "shell",
+   "note": "UNFIXED: random mkdtemp suffix with no digit and no tmp prefix",
+   "a": "ENOENT: no such file or directory, open '/work/build-Xkqzpw/out/bundle.js'",
+   "b": "ENOENT: no such file or directory, open '/work/build-Rtmhvc/out/bundle.js'"
+  },
+  {
+   "id": "S36",
+   "label": "same-failure",
+   "tool": "shell",
+   "note": "UNFIXED: unanchored consecutive-failure counter",
+   "a": "link check: consecutive failures: 4 (host unreachable)",
+   "b": "link check: consecutive failures: 5 (host unreachable)"
+  },
+  {
+   "id": "S37",
+   "label": "same-failure",
+   "tool": "shell",
+   "note": "UNFIXED: queue depth",
+   "a": "enqueue rejected: queue is full (depth 8921)",
+   "b": "enqueue rejected: queue is full (depth 8930)"
+  },
+  {
+   "id": "S38",
+   "label": "same-failure",
+   "tool": "shell",
+   "note": "UNFIXED: short git sha in message",
+   "a": "merge failed: conflict while applying 3fa9c1b (wip checkpoint)",
+   "b": "merge failed: conflict while applying 7be21d0 (wip checkpoint)"
+  },
+  {
+   "id": "D01",
+   "label": "different-failure",
+   "tool": "tsc",
+   "note": "same message, line 12 vs line 40",
+   "a": "src/a.ts(12,5): error TS2322: Type 'string' is not assignable to type 'number'.",
+   "b": "src/a.ts(40,5): error TS2322: Type 'string' is not assignable to type 'number'."
+  },
+  {
+   "id": "D02",
+   "label": "different-failure",
+   "tool": "tsc",
+   "note": "different error code",
+   "a": "src/a.ts(12,5): error TS2322: Type 'string' is not assignable to type 'number'.",
+   "b": "src/a.ts(12,5): error TS2345: Argument of type 'string' is not assignable to parameter of type 'number'."
+  },
+  {
+   "id": "D03",
+   "label": "different-failure",
+   "tool": "tsc",
+   "note": "different file",
+   "a": "src/a.ts(12,5): error TS2304: Cannot find name 'foo'.",
+   "b": "src/b.ts(12,5): error TS2304: Cannot find name 'foo'."
+  },
+  {
+   "id": "D04",
+   "label": "different-failure",
+   "tool": "tsc",
+   "note": "different symbol",
+   "a": "src/a.ts(12,5): error TS2304: Cannot find name 'foo'.",
+   "b": "src/a.ts(12,5): error TS2304: Cannot find name 'bar'."
+  },
+  {
+   "id": "D05",
+   "label": "different-failure",
+   "tool": "tsc",
+   "note": "Found 3 errors vs Found 2 errors",
+   "a": "src/a.ts(1,1): error TS1005: ';' expected.\nFound 3 errors in 2 files.",
+   "b": "src/a.ts(1,1): error TS1005: ';' expected.\nFound 2 errors in 2 files."
+  },
+  {
+   "id": "D06",
+   "label": "different-failure",
+   "tool": "tsc",
+   "note": "Found 3 errors in 2 files vs in 3 files",
+   "a": "Found 3 errors in 2 files.",
+   "b": "Found 3 errors in 3 files."
+  },
+  {
+   "id": "D07",
+   "label": "different-failure",
+   "tool": "node test",
+   "note": "# fail 3 vs # fail 2",
+   "a": "# tests 12\n# pass 9\n# fail 3",
+   "b": "# tests 12\n# pass 10\n# fail 2"
+  },
+  {
+   "id": "D08",
+   "label": "different-failure",
+   "tool": "node test",
+   "note": "different failing test names",
+   "a": "not ok 4 - parses config\n  error: 'Expected values to be strictly equal'",
+   "b": "not ok 5 - writes output\n  error: 'Expected values to be strictly equal'"
+  },
+  {
+   "id": "D09",
+   "label": "different-failure",
+   "tool": "node test",
+   "note": "different expected values",
+   "a": "AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n\n3 !== 4",
+   "b": "AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n\n7 !== 4"
+  },
+  {
+   "id": "D10",
+   "label": "different-failure",
+   "tool": "node test",
+   "note": "different stack line numbers",
+   "a": "    at Object.<anonymous> (/repo/test/a.test.js:12:9)",
+   "b": "    at Object.<anonymous> (/repo/test/a.test.js:40:9)"
+  },
+  {
+   "id": "D11",
+   "label": "different-failure",
+   "tool": "pytest",
+   "note": "3 failed vs 2 failed",
+   "a": "=== 3 failed, 7 passed in 0.42s ===",
+   "b": "=== 2 failed, 8 passed in 0.42s ==="
+  },
+  {
+   "id": "D12",
+   "label": "different-failure",
+   "tool": "pytest",
+   "note": "different failing test ids",
+   "a": "FAILED tests/test_api.py::test_login - AssertionError: assert 401 == 200",
+   "b": "FAILED tests/test_api.py::test_logout - AssertionError: assert 401 == 200"
+  },
+  {
+   "id": "D13",
+   "label": "different-failure",
+   "tool": "pytest",
+   "note": "different assertion values",
+   "a": "E   AssertionError: assert 401 == 200",
+   "b": "E   AssertionError: assert 500 == 200"
+  },
+  {
+   "id": "D14",
+   "label": "different-failure",
+   "tool": "pytest",
+   "note": "different line in file",
+   "a": "tests/test_load.py:31: FileNotFoundError",
+   "b": "tests/test_load.py:58: FileNotFoundError"
+  },
+  {
+   "id": "D15",
+   "label": "different-failure",
+   "tool": "python",
+   "note": "traceback line 12 vs 40",
+   "a": "Traceback (most recent call last):\n  File \"app.py\", line 12, in <module>\n    main()\nKeyError: 'name'",
+   "b": "Traceback (most recent call last):\n  File \"app.py\", line 40, in <module>\n    main()\nKeyError: 'name'"
+  },
+  {
+   "id": "D16",
+   "label": "different-failure",
+   "tool": "python",
+   "note": "different exception",
+   "a": "Traceback (most recent call last):\n  File \"app.py\", line 12, in <module>\nKeyError: 'name'",
+   "b": "Traceback (most recent call last):\n  File \"app.py\", line 12, in <module>\nValueError: invalid literal for int() with base 10: 'x'"
+  },
+  {
+   "id": "D17",
+   "label": "different-failure",
+   "tool": "go test",
+   "note": "different failing test",
+   "a": "--- FAIL: TestParse (0.00s)\nFAIL\tnexus/parse\t0.012s",
+   "b": "--- FAIL: TestRender (0.00s)\nFAIL\tnexus/parse\t0.012s"
+  },
+  {
+   "id": "D18",
+   "label": "different-failure",
+   "tool": "go test",
+   "note": "different got/want",
+   "a": "    parse_test.go:44: got 3, want 4",
+   "b": "    parse_test.go:44: got 9, want 4"
+  },
+  {
+   "id": "D19",
+   "label": "different-failure",
+   "tool": "go build",
+   "note": "different undefined symbol and line",
+   "a": "./main.go:12:5: undefined: foo",
+   "b": "./main.go:12:5: undefined: bar"
+  },
+  {
+   "id": "D20",
+   "label": "different-failure",
+   "tool": "go build",
+   "note": "different line of same error",
+   "a": "./main.go:12:5: undefined: foo",
+   "b": "./main.go:40:5: undefined: foo"
+  },
+  {
+   "id": "D21",
+   "label": "different-failure",
+   "tool": "go test",
+   "note": "exit status 1 vs 2",
+   "a": "exit status 1\nFAIL\tnexus/parse\t0.012s",
+   "b": "exit status 2\nFAIL\tnexus/parse\t0.012s"
+  },
+  {
+   "id": "D22",
+   "label": "different-failure",
+   "tool": "cargo",
+   "note": "E0308 vs E0599",
+   "a": "error[E0308]: mismatched types\n --> src/main.rs:12:5",
+   "b": "error[E0599]: no method named `len` found\n --> src/main.rs:12:5"
+  },
+  {
+   "id": "D23",
+   "label": "different-failure",
+   "tool": "cargo",
+   "note": "different line",
+   "a": "error[E0308]: mismatched types\n --> src/main.rs:12:5",
+   "b": "error[E0308]: mismatched types\n --> src/main.rs:40:5"
+  },
+  {
+   "id": "D24",
+   "label": "different-failure",
+   "tool": "cargo",
+   "note": "different file",
+   "a": "error[E0308]: mismatched types\n --> src/main.rs:12:5",
+   "b": "error[E0308]: mismatched types\n --> src/lib.rs:12:5"
+  },
+  {
+   "id": "D25",
+   "label": "different-failure",
+   "tool": "cargo",
+   "note": "test counts",
+   "a": "test result: FAILED. 8 passed; 2 failed; 0 ignored",
+   "b": "test result: FAILED. 9 passed; 1 failed; 0 ignored"
+  },
+  {
+   "id": "D26",
+   "label": "different-failure",
+   "tool": "npm",
+   "note": "E404 vs EACCES",
+   "a": "npm ERR! code E404\nnpm ERR! 404 Not Found - GET https://registry.npmjs.org/foo",
+   "b": "npm ERR! code EACCES\nnpm ERR! syscall mkdir\nnpm ERR! path /usr/lib/node_modules"
+  },
+  {
+   "id": "D27",
+   "label": "different-failure",
+   "tool": "npm",
+   "note": "different missing package",
+   "a": "npm ERR! 404 Not Found - GET https://registry.npmjs.org/left-pad",
+   "b": "npm ERR! 404 Not Found - GET https://registry.npmjs.org/right-pad"
+  },
+  {
+   "id": "D28",
+   "label": "different-failure",
+   "tool": "npm",
+   "note": "run_command exit code 1 vs 127",
+   "a": "{\"exit_code\":1,\"stdout\":\"sh: 1: tsc: not found\\\\n\",\"stderr\":\"\",\"duration_ms\":30,\"timed_out\":false}",
+   "b": "{\"exit_code\":127,\"stdout\":\"sh: 1: tsc: not found\\\\n\",\"stderr\":\"\",\"duration_ms\":31,\"timed_out\":false}"
+  },
+  {
+   "id": "D29",
+   "label": "different-failure",
+   "tool": "curl",
+   "note": "(7) refused vs (6) could not resolve",
+   "a": "curl: (7) Failed to connect to api.internal port 8443: Connection refused",
+   "b": "curl: (6) Could not resolve host: api.internal"
+  },
+  {
+   "id": "D30",
+   "label": "different-failure",
+   "tool": "curl",
+   "note": "HTTP 404 vs 500",
+   "a": "curl: (22) The requested URL returned error: 404",
+   "b": "curl: (22) The requested URL returned error: 500"
+  },
+  {
+   "id": "D31",
+   "label": "different-failure",
+   "tool": "http",
+   "note": "status code in message",
+   "a": "Error: Request failed with status code 404",
+   "b": "Error: Request failed with status code 500"
+  },
+  {
+   "id": "D32",
+   "label": "different-failure",
+   "tool": "node",
+   "note": "different stable ports",
+   "a": "Error: connect ECONNREFUSED 127.0.0.1:3000",
+   "b": "Error: connect ECONNREFUSED 127.0.0.1:8080"
+  },
+  {
+   "id": "D33",
+   "label": "different-failure",
+   "tool": "node",
+   "note": "different path in ENOENT",
+   "a": "Error: ENOENT: no such file or directory, open 'src/a.ts'",
+   "b": "Error: ENOENT: no such file or directory, open 'src/b.ts'"
+  },
+  {
+   "id": "D34",
+   "label": "different-failure",
+   "tool": "shell",
+   "note": "permission denied on different files",
+   "a": "cp: cannot create regular file '/etc/app/a.conf': Permission denied",
+   "b": "cp: cannot create regular file '/etc/app/b.conf': Permission denied"
+  },
+  {
+   "id": "D35",
+   "label": "different-failure",
+   "tool": "curl",
+   "note": "same attempt counter, different error",
+   "a": "attempt 3 of 5: connect ECONNREFUSED 10.0.8.5:443",
+   "b": "attempt 3 of 5: connect ETIMEDOUT 10.0.8.5:443"
+  },
+  {
+   "id": "D36",
+   "label": "different-failure",
+   "tool": "http",
+   "note": "same retry number, different status",
+   "a": "retry 4: HTTP/1.1 404 Not Found",
+   "b": "retry 4: HTTP/1.1 500 Internal Server Error"
+  },
+  {
+   "id": "D37",
+   "label": "different-failure",
+   "tool": "docker",
+   "note": "different failing step",
+   "a": "Step 3/8 : RUN npm ci\n ---> Running in 3f2a1b9c8d7e\nnpm ERR! code ELIFECYCLE",
+   "b": "Step 5/8 : RUN npm run build\n ---> Running in 8d7e3f2a1b9c\nnpm ERR! code ELIFECYCLE"
+  },
+  {
+   "id": "D38",
+   "label": "different-failure",
+   "tool": "shell",
+   "note": "Test 3 failed vs Test 4 failed",
+   "a": "Test 3 failed: expected 200",
+   "b": "Test 4 failed: expected 200"
+  },
+  {
+   "id": "D39",
+   "label": "different-failure",
+   "tool": "jest",
+   "note": "coverage threshold 80% vs 90%",
+   "a": "Jest: \"global\" coverage threshold for lines (90%) not met: 80%",
+   "b": "Jest: \"global\" coverage threshold for lines (90%) not met: 90%"
+  },
+  {
+   "id": "D40",
+   "label": "different-failure",
+   "tool": "shell",
+   "note": "size over limit differs",
+   "a": "error: bundle is 10 MB, exceeds limit of 5 MB",
+   "b": "error: bundle is 4 MB, exceeds limit of 5 MB"
+  },
+  {
+   "id": "D41",
+   "label": "different-failure",
+   "tool": "eslint",
+   "note": "different rule",
+   "a": "src/a.ts\n  12:5  error  'x' is assigned a value but never used  no-unused-vars",
+   "b": "src/a.ts\n  12:5  error  Unexpected console statement  no-console"
+  },
+  {
+   "id": "D42",
+   "label": "different-failure",
+   "tool": "eslint",
+   "note": "error count",
+   "a": "✖ 4 problems (3 errors, 1 warning)",
+   "b": "✖ 3 problems (2 errors, 1 warning)"
+  },
+  {
+   "id": "D43",
+   "label": "different-failure",
+   "tool": "shell",
+   "note": "processed N files then different error",
+   "a": "processed 142 files\nsrc/index.ts: parse error: Unexpected token }",
+   "b": "processed 142 files\nsrc/index.ts: parse error: Unexpected end of input"
+  },
+  {
+   "id": "D44",
+   "label": "different-failure",
+   "tool": "shell",
+   "note": "retry counter then different error",
+   "a": "retry 3/5: connection refused",
+   "b": "retry 3/5: certificate has expired"
+  },
+  {
+   "id": "D45",
+   "label": "different-failure",
+   "tool": "shell",
+   "note": "request counter, different status",
+   "a": "request 14 failed: 404",
+   "b": "request 14 failed: 500"
+  },
+  {
+   "id": "D46",
+   "label": "different-failure",
+   "tool": "run_command",
+   "note": "same stdout, different exit code with durations",
+   "a": "{\"exit_code\":1,\"stdout\":\"build failed\\\\n\",\"stderr\":\"\",\"duration_ms\":120,\"timed_out\":false}",
+   "b": "{\"exit_code\":2,\"stdout\":\"build failed\\\\n\",\"stderr\":\"\",\"duration_ms\":118,\"timed_out\":false}"
+  },
+  {
+   "id": "D47",
+   "label": "different-failure",
+   "tool": "make",
+   "note": "different target",
+   "a": "make: *** [Makefile:18: all] Error 2",
+   "b": "make: *** [Makefile:42: test] Error 2"
+  },
+  {
+   "id": "D48",
+   "label": "different-failure",
+   "tool": "shell",
+   "note": "different job names",
+   "a": "job_id=9921 stage=build failed",
+   "b": "job_id=9921 stage=deploy failed"
+  },
+  {
+   "id": "D49",
+   "label": "different-failure",
+   "tool": "curl",
+   "note": "HTTP status differs (request <status>)",
+   "a": "curl: request 404",
+   "b": "curl: request 503"
+  },
+  {
+   "id": "D50",
+   "label": "different-failure",
+   "tool": "docker",
+   "note": "build step index differs: the build got further",
+   "a": "[1/3] RUN npm ci\nerror: build failed",
+   "b": "[2/3] RUN npm ci\nerror: build failed"
+  },
+  {
+   "id": "D51",
+   "label": "different-failure",
+   "tool": "npm",
+   "note": "nothing installed versus packages installed",
+   "a": "installed 0 packages; 3 vulnerabilities",
+   "b": "installed 142 packages; 3 vulnerabilities"
+  },
+  {
+   "id": "D52",
+   "label": "different-failure",
+   "tool": "tsc",
+   "note": "files compiled before the same error differs",
+   "a": "compiled 12 files, 1 error in src/a.ts",
+   "b": "compiled 3 files, 1 error in src/a.ts"
+  }
+ ]
+}
