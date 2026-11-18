@@ -193,11 +193,11 @@ describe("type-check as verifier evidence: agent level", () => {
     assert.notEqual(enforce.turn.outcome, "VERIFIED");
   });
 
-  test("tsc not installed is ENVIRONMENT, recorded, not a candidate failure (PATH without tsc)", { timeout: 120_000 }, async () => {
+  test("tsc not installed is UNAVAILABLE, recorded, not a candidate failure (PATH without tsc)", { timeout: 120_000 }, async () => {
     const { turn, ledger } = await run({ "tsconfig.json": TSCONFIG, "types.ts": TYPES_OK }, { path: "none", steps: [fix, write("types.ts", TYPES_BAD), done], config: { authoritativeVerifierCommand: NODE_VERIFIER }, env: { NEXUS_TYPECHECK: "enforce" } });
-    assert.equal(turn.verification?.typecheck?.status, "ENVIRONMENT");
+    assert.equal(turn.verification?.typecheck?.status, "UNAVAILABLE");
     assert.equal(turn.verification?.status, "PASSED");
-    assert.ok(!ledger?.some((a) => /tsc/.test(a.command)), "an ENVIRONMENT type-check is not recorded as an attempt");
+    assert.ok(!ledger?.some((a) => /tsc/.test(a.command)), "an UNAVAILABLE type-check is not recorded as an attempt");
     assert.equal(turn.verification?.status, "PASSED");
     assert.equal(turn.outcome, "REGRESSION_FREE");
   });
@@ -376,7 +376,7 @@ describe("type-check as verifier evidence: units", () => {
     assert.equal((await runTypecheck(unitCheck, scripted(ok, envelope(null)).exec, ws, none, 100)).status, "ENVIRONMENT");
     assert.equal((await runTypecheck(unitCheck, scripted(ok, async () => ({ success: true, output: "not an envelope" })).exec, ws, none, 100)).status, "ENVIRONMENT");
     assert.equal((await runTypecheck(unitCheck, scripted(ok, async () => ({ success: false, output: "", error: "bridge down" })).exec, ws, none, 100)).status, "ENVIRONMENT");
-    assert.equal((await runTypecheck(unitCheck, scripted(envelope(127), envelope(0)).exec, ws, none, 100)).status, "ENVIRONMENT");
+    assert.equal((await runTypecheck(unitCheck, scripted(envelope(127), envelope(0)).exec, ws, none, 100)).status, "UNAVAILABLE");
     assert.equal((await runTypecheck(unitCheck, scripted(ok, envelope(127)).exec, ws, none, 100)).status, "ENVIRONMENT");
     assert.equal((await runTypecheck(unitCheck, async () => { throw new Error("boom"); }, ws, none, 100)).status, "ENVIRONMENT");
     const s = scripted(ok, envelope(0));

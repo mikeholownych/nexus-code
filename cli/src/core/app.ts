@@ -5,6 +5,7 @@
  * CLI, interactive REPL, and TUI presentations without parallel state machines.
  */
 
+import { answerNote, type NeedsInputOption } from "./needs_input.js";
 import { withDurableSync } from "./durable_file.js";
 import { EventEmitter } from "node:events";
 import * as path from "node:path";
@@ -35,6 +36,8 @@ export interface RunTaskOptions {
   quiet?: boolean;
   onConfirm?: (tool: string, args: any) => Promise<boolean>;
   resumeTaskId?: string;
+  /** Answers to the questions a blocked headless run asked (VC-9), keyed by `needsInput.id`. */
+  answers?: ReadonlyMap<string, NeedsInputOption>;
   /** Operator cancellation authority for this task. */
   signal?: AbortSignal;
   /** Execute one model/tool cycle and pause deterministically (WP-1106). */
@@ -240,7 +243,8 @@ export class ApplicationCore extends EventEmitter {
     let turn: TurnResult | undefined;
     if (options.observer) this.agent.setObserver(options.observer);
     try {
-      turn = await this.agent.run(prompt, options.onConfirm, {
+      if (options.answers?.size) this.agent.setOperatorAnswers(options.answers);
+      turn = await this.agent.run(options.answers?.size ? `${answerNote(options.answers)}\n\n${prompt}` : prompt, options.onConfirm, {
         signal: options.signal,
         resume: Boolean(options.resumeTaskId),
         step: Boolean(options.step),

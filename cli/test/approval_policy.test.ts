@@ -243,16 +243,20 @@ describe("headless execution (no onConfirm handler)", () => {
     agent.setApprovalMode("review"); // review mode gates write_workspace
     try {
       // Call runTurn WITHOUT an onConfirm handler
-      await agent.runTurn("write a file");
-      const toolResults = gw.requests.at(-1)!.body.messages.filter((m: any) => m.role === "tool");
-      assert.ok(toolResults.length > 0, "tool result returned to model");
-      assert.match(toolResults[0].content, /Tool 'write_file' requires operator approval \(write_workspace\), but no operator is present/);
-      assert.match(toolResults[0].content, /--yes/);
+      // VC-9: the decision nobody can make ends the turn BLOCKED with a question instead of a refusal the model can route around.
+      const turn = await agent.runTurn("write a file");
+      assert.equal(turn.execution, "BLOCKED");
+      assert.equal(turn.reason, "NEEDS_INPUT");
+      assert.equal(turn.needsInput?.kind, "tool_approval");
+      assert.equal(turn.needsInput?.subject.tool, "write_file");
+      assert.equal(gw.requests.length, 1, "no further request: the model is not asked to work around the refusal");
 
       const call = { id: "c1", type: "function", function: { name: "write_file", arguments: '{"path":"a.txt","content":"b"}' } };
       const dispatchRes = await (agent as any).dispatchToolCall(call, 1, "agent");
       assert.equal(dispatchRes.receipt.status, "DENIED");
       assert.equal(dispatchRes.receipt.denialReason, "DECISION_REQUIRED_NO_OPERATOR");
+      assert.match(dispatchRes.receipt.error, /Tool 'write_file' requires operator approval \(write_workspace\), but no operator is present/);
+      assert.match(dispatchRes.receipt.error, /--yes/);
     } finally {
       agent.shutdown();
       await gw.close();

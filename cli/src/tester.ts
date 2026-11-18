@@ -160,7 +160,9 @@ export function typecheckMode(configured: TypecheckMode | undefined, hasConfigur
 }
 
 export interface DiscoveredTypecheck {
-  tool: "tsc" | "cargo";
+  tool: "tsc" | "cargo" | "go" | "pyright" | "mypy";
+  /** The tool is on no search path the check would use here: reported UNAVAILABLE without running or asking approval. */
+  missingTool?: boolean;
   /** Prints the tool version; run as its own call so no shell operator is assumed. */
   probe: string;
   command: string;
@@ -217,6 +219,7 @@ export function discoverTypecheck(workspace: string): DiscoveredTypecheck | null
       configPath: "tsconfig.json",
       configSha256: sha(tsconfig),
       toolSha256: sha256File(useLocal ? local : resolveOnPath("tsc") ?? ""),
+      ...(useLocal || resolveOnPath("tsc") ? {} : { missingTool: true }),
       ...(solution ? { skipReason: "tsconfig.json is solution-style or composite (references/composite), so a plain tsc run does not check it" } : {}),
     };
   }
@@ -232,10 +235,55 @@ export function discoverTypecheck(workspace: string): DiscoveredTypecheck | null
         configPath: rel,
         configSha256: sha(text),
         toolSha256: sha256File(resolveOnPath("cargo") ?? ""),
+        ...(resolveOnPath("cargo") ? {} : { missingTool: true }),
       };
     }
   }
-  return null;
+  const gomod = read("go.mod");
+  if (gomod !== null) {
+    const go = resolveOnPath("go");
+    return {
+      tool: "go",
+      probe: "go version",
+      // Offline: a module that is not already downloaded is an environment problem, never a fetch.
+      command: "GOPROXY=off GOFLAGS=-mod=mod go vet ./...",
+      configPath: "go.mod",
+      configSha256: sha(gomod),
+      toolSha256: sha256File(go ?? ""),
+      ...(go ? {} : { missingTool: true }),
+    };
+  }
+  return discoverPythonTypecheck(root, read, sha);
+}
+
+/** Python is checked only when the project configures pyright or mypy; the tool comes from the project's virtualenv or PATH. */
+function discoverPythonTypecheck(root: string, read: (rel: string) => string | null, sha: (text: string) => string): DiscoveredTypecheck | null {
+  const pyproject = read("pyproject.toml") ?? "";
+  const setupCfg = read("setup.cfg") ?? "";
+  const candidates: Array<{ tool: "pyright" | "mypy"; configPath: string; text: string }> = [];
+  const pyrightJson = read("pyrightconfig.json");
+  if (pyrightJson !== null) candidates.push({ tool: "pyright", configPath: "pyrightconfig.json", text: pyrightJson });
+  if (/^\[tool\.pyright\]/m.test(pyproject)) candidates.push({ tool: "pyright", configPath: "pyproject.toml", text: pyproject });
+  for (const rel of ["mypy.ini", ".mypy.ini"]) {
+    const text = read(rel);
+    if (text !== null) candidates.push({ tool: "mypy", configPath: rel, text });
+  }
+  if (/^\[tool\.mypy\]/m.test(pyproject)) candidates.push({ tool: "mypy", configPath: "pyproject.toml", text: pyproject });
+  if (/^\[mypy\]/m.test(setupCfg)) candidates.push({ tool: "mypy", configPath: "setup.cfg", text: setupCfg });
+  const chosen = candidates[0];
+  if (!chosen) return null;
+  const local = [".venv/bin", "venv/bin"].map((d) => path.join(root, d, chosen.tool)).find((f) => fs.existsSync(f));
+  const resolved = local ?? resolveOnPath(chosen.tool);
+  const launcher = local ? `./${path.relative(root, local)}` : chosen.tool;
+  return {
+    tool: chosen.tool,
+    probe: `${launcher} --version`,
+    command: chosen.tool === "mypy" ? `${launcher} .` : launcher,
+    configPath: chosen.configPath,
+    configSha256: sha(chosen.text),
+    toolSha256: sha256File(resolved ?? ""),
+    ...(resolved ? {} : { missingTool: true }),
+  };
 }
 
 export interface TypecheckDiagnostics {
@@ -245,6 +293,8 @@ export interface TypecheckDiagnostics {
   /** Error codes of diagnostics with no source location (configuration errors). */
   unlocatedCodes: string[];
   first: string[];
+  /** Every located error as file (as printed) and the message without its line and column. */
+  located: Array<{ file: string; text: string }>;
 }
 
 /** tsc `path(line,col): error TSxxxx` and `path:line:col - error TSxxxx`; cargo `error...` followed by `--> path:line:col`. */
@@ -252,10 +302,12 @@ export function parseTypecheckDiagnostics(output: string): TypecheckDiagnostics 
   const files = new Set<string>();
   const unlocatedCodes: string[] = [];
   const first: string[] = [];
+  const located: Array<{ file: string; text: string }> = [];
   let errorCount = 0;
   let cargoError: string | undefined;
-  const note = (line: string) => {
+  const note = (line: string, file?: string, text?: string) => {
     errorCount++;
+    if (file !== undefined) located.push({ file, text: (text ?? line).trim().slice(0, 240) });
     if (first.length < 5) first.push(line.trim().slice(0, 240));
   };
   for (const raw of output.split("\n")) {
@@ -263,7 +315,14 @@ export function parseTypecheckDiagnostics(output: string): TypecheckDiagnostics 
     const tsc = line.match(/^(.+?)\((\d+),(\d+)\): error (TS\d+):/) ?? line.match(/^(.+?):(\d+):(\d+) - error (TS\d+):/);
     if (tsc) {
       files.add(tsc[1]);
-      note(line);
+      note(line, tsc[1], line.slice(line.indexOf(" error ") + 1));
+      continue;
+    }
+    // go: `path.go:12:5: message` (and `vet: path.go:12:5: message`); pyright: `  /abs/f.py:12:5 - error: message`; mypy: `f.py:12: error: message`
+    const other = line.match(/^(?:vet: )?(\S.*?\.go):(\d+):(\d+): (.+)$/) ?? line.match(/^\s*(.+?\.pyi?):(\d+):(\d+) - error: (.+)$/) ?? line.match(/^(.+?\.pyi?):(\d+)(?::\d+)?: error: (.+)$/);
+    if (other) {
+      files.add(other[1]);
+      note(line, other[1], other[other.length - 1]);
       continue;
     }
     const bare = line.match(/^error (TS\d+):/);
@@ -280,14 +339,15 @@ export function parseTypecheckDiagnostics(output: string): TypecheckDiagnostics 
     const arrow = line.match(/^\s*--> (.+?):\d+:\d+/);
     if (arrow && cargoError) {
       files.add(arrow[1]);
-      note(cargoError);
+      note(cargoError, arrow[1]);
       cargoError = undefined;
     }
   }
-  return { errorCount, files: [...files], unlocatedCodes, first };
+  return { errorCount, files: [...files], unlocatedCodes, first, located };
 }
 
-export type TypecheckStatus = "PASSED" | "FAILED" | "TIMED_OUT" | "ENVIRONMENT" | "PREEXISTING";
+/** UNAVAILABLE: the tool is not installed here, so nothing was checked (never a pass). */
+export type TypecheckStatus = "PASSED" | "FAILED" | "TIMED_OUT" | "ENVIRONMENT" | "PREEXISTING" | "UNAVAILABLE";
 
 export interface TypecheckRun {
   status: TypecheckStatus;
@@ -296,24 +356,44 @@ export interface TypecheckRun {
   output: string;
   errorCount?: number;
   firstDiagnostics?: string[];
+  /** Errors not present in the baseline run (only when a baseline was supplied). */
+  introducedCount?: number;
+  /** Every located error, as `file<NL>message` signatures; what a baseline stores. */
+  signatures?: string[];
 }
 
 export type TimedExecutor = (command: string, timeoutSecs: number) => Promise<{ success: boolean; output: string; error?: string; timedOut?: boolean }>;
 
+/** A located error's identity across runs: the file relative to the workspace and the message, never the line (edits move it). */
+export function typecheckSignatures(check: Pick<DiscoveredTypecheck, "configPath">, output: string, workspace: string): string[] {
+  const root = path.resolve(workspace);
+  const bases = [root, path.resolve(root, path.dirname(check.configPath))];
+  return parseTypecheckDiagnostics(output).located.map(({ file, text }) => {
+    const abs = path.isAbsolute(file) ? file : path.resolve(bases[1], file);
+    const rel = path.relative(root, abs);
+    return `${rel.startsWith("..") ? file : rel}\n${text}`;
+  });
+}
+
 /**
- * Decide what a non-zero check means. It blocks (FAILED) only when an error is located in a file the candidate modified;
- * errors only in untouched files are PREEXISTING, and output that cannot be attributed is ENVIRONMENT.
+ * Decide what a non-zero check means. It blocks (FAILED) when an error is located in a file the candidate modified, or,
+ * given a `baseline` (the signatures present before the change), when any error is new (a caller broken in an untouched
+ * file). Errors only in untouched files that the baseline already had are PREEXISTING; output that cannot be attributed
+ * is ENVIRONMENT.
  */
 export function classifyTypecheck(
   check: Pick<DiscoveredTypecheck, "tool" | "configPath">,
   output: string,
   workspace: string,
   modified: ReadonlySet<string>,
-): { status: "FAILED" | "ENVIRONMENT" | "PREEXISTING"; diagnostics: TypecheckDiagnostics } {
+  baseline?: ReadonlySet<string>,
+): { status: "FAILED" | "ENVIRONMENT" | "PREEXISTING"; diagnostics: TypecheckDiagnostics; introducedCount?: number; signatures: string[] } {
   const diagnostics = parseTypecheckDiagnostics(output);
   // No located error: configuration (TS5xxx/TS6xxx), missing type packages, dependency resolution, offline or lockfile
   // failures. These say the check could not run here, not that the candidate broke it.
-  if (diagnostics.files.length === 0) return { status: "ENVIRONMENT", diagnostics };
+  if (diagnostics.files.length === 0) return { status: "ENVIRONMENT", diagnostics, signatures: [] };
+  const signatures = typecheckSignatures(check, output, workspace);
+  const introduced = baseline ? signatures.filter((sig) => !baseline.has(sig)).length : undefined;
   const root = path.resolve(workspace);
   const bases = [root, path.resolve(root, path.dirname(check.configPath))];
   const real = (f: string) => {
@@ -332,7 +412,7 @@ export function classifyTypecheck(
     const abs = path.resolve(b, f);
     return touched.has(abs) || touched.has(real(abs));
   }));
-  return { status: hit ? "FAILED" : "PREEXISTING", diagnostics };
+  return { status: hit || (introduced ?? 0) > 0 ? "FAILED" : "PREEXISTING", diagnostics, signatures, ...(introduced !== undefined ? { introducedCount: introduced } : {}) };
 }
 
 export async function runTypecheck(
@@ -341,12 +421,14 @@ export async function runTypecheck(
   workspace: string,
   modified: ReadonlySet<string>,
   budgetSecs: number,
+  baseline?: ReadonlySet<string>,
 ): Promise<TypecheckRun> {
   const PROBE_SECS = 30;
   let version: string | undefined;
+  if (check.missingTool) return { status: "UNAVAILABLE", exitCode: null, output: `${check.tool} is not installed here` };
   try {
     const probe = parseExecution(await execute(check.probe, Math.min(PROBE_SECS, budgetSecs)));
-    if (!probe.succeeded) return { status: "ENVIRONMENT", exitCode: probe.exitCode ?? null, output: probe.rawOutput };
+    if (!probe.succeeded) return { status: probe.exitCode === 126 || probe.exitCode === 127 ? "UNAVAILABLE" : "ENVIRONMENT", exitCode: probe.exitCode ?? null, output: probe.rawOutput };
     const line = probe.rawOutput.split("\n")[0]?.trim() ?? "";
     if (/\d+\.\d+/.test(line)) version = line.slice(0, 100);
   } catch (error: any) {
@@ -362,12 +444,14 @@ export async function runTypecheck(
   if (run.timedOut) return { ...base, status: "TIMED_OUT" };
   if (run.succeeded) return { ...base, status: "PASSED" };
   if (run.exitCode === undefined || run.exitCode === null || run.exitCode === 126 || run.exitCode === 127) return { ...base, status: "ENVIRONMENT" };
-  const { status, diagnostics } = classifyTypecheck(check, run.rawOutput, workspace, modified);
+  const { status, diagnostics, introducedCount, signatures } = classifyTypecheck(check, run.rawOutput, workspace, modified, baseline);
   return {
     ...base,
     status,
     errorCount: diagnostics.errorCount,
     firstDiagnostics: diagnostics.first,
+    signatures,
+    ...(introducedCount !== undefined ? { introducedCount } : {}),
   };
 }
 

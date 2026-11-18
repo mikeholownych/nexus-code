@@ -312,18 +312,15 @@ describe("ACC-SAFE-09: Verifier Gating", () => {
       (agent as any).hasPendingModifications = true;
 
       // Headless execution has no onConfirm handler and must not execute the verifier.
-      await agent.runTurn("finish task");
+      const turn = await agent.runTurn("finish task");
 
-      const lastReq = gw.requests.at(-1);
-      const toolRes = lastReq?.body?.messages?.find((m: any) => m.role === "tool");
-      assert.ok(toolRes, "tool response should exist");
-      assert.match(
-        String(toolRes.content),
-        /requires operator approval \(exec\), but no operator is present/,
-        "headless execution without an operator must deny verifier execution",
-      );
-      assert.match(String(toolRes.content), /--mode auto to explicitly select automatic approvals/);
-      assert.doesNotMatch(String(toolRes.content), /nexus trust/);
+      // VC-9: the decision nobody can make ends the turn BLOCKED with a machine-readable question (the model is not
+      // asked to route around the refusal), and the verifier did not run.
+      assert.equal(turn.execution, "BLOCKED");
+      assert.equal(turn.reason, "NEEDS_INPUT");
+      assert.equal(turn.needsInput?.kind, "verifier_approval");
+      assert.equal(turn.needsInput?.subject.command, "npm test");
+      assert.equal(gw.requests.length, 1);
       assert.equal(fs.existsSync(sentinelPath), false, "the verifier must not execute without operator approval");
     } finally {
       agent.shutdown();

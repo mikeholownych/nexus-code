@@ -65,6 +65,7 @@ import { ConfirmHandler, SubagentResult, AgentObserver, AgentActivity, Compactio
 import { setupSpineHandlersImpl } from "./core/spine_handlers.js";
 import { buildTurnResultImpl, runTurnImpl } from "./core/run_turn.js";
 import { dispatchToolCallImpl } from "./core/dispatch_tool_call.js";
+import type { NeedsInputOption, NeedsInputQuestion } from "./core/needs_input.js";
 import { captureChangeBaselineImpl, ensureVerifierApprovedImpl, judgeIndependenceImpl, runRequirementVerifierImpl, runTypecheckOracleImpl, verifierDefinitionAtCaptureImpl } from "./core/completion_oracle.js";
 export { DEFAULT_VERIFIER_TIMEOUT_SECS, CompactionCommitError, ContextBudgetError, LedgerNotRetainedError, observationKey, foldVoluminousOutput } from "./core/agent_support.js";
 export type { ConfirmHandler, SubagentResult, AgentObserver, AgentActivity, CompactionOutcome } from "./core/agent_support.js";
@@ -149,6 +150,14 @@ export class AutonomousAgent {
    * change (null: none could be taken). Cleared when a covering run settles the change.
    */
   private changeBaseline: ChangeBaseline | null | undefined;
+  /** VC-6: type-check errors present before the task's change (empty when it was clean); undefined when none was captured (resume, tool missing, not approved). */
+  /** VC-9: the first decision this turn needed from an operator who is not there; it ends the turn BLOCKED. */
+  private pendingNeedsInput?: NeedsInputQuestion;
+  /** VC-9: the operator's answers (`--answer id=approve|decline`), consumed when the run reaches the same decision. */
+  private operatorAnswers = new Map<string, NeedsInputOption>();
+  private typecheckBaseline?: { command: string; signatures: Set<string> };
+  /** VC-6: paths already changed in the workspace when the task began, so only later shell changes count as the candidate's. */
+  private preTaskChanged?: Set<string>;
   /** Optional tool groups offered in this conversation (see core/tool_groups). */
   private enabledToolGroups = new Set<string>();
   /** Removals recorded in a recovered conversation; the next (resumed) turn starts with them. */
@@ -926,6 +935,8 @@ export class AutonomousAgent {
     // resumed workspace with pending changes: an attacker could delete the field
     // and make candidate-edited tests look pristine.
     this.changeBaseline = undefined;
+    this.typecheckBaseline = undefined;
+    this.preTaskChanged = undefined;
     this.untrustedRecoveredBaseline = state.changeBaseline ?? undefined;
     this.recheckOnResume();
     this.restoreHistory(state.history);
@@ -1349,8 +1360,8 @@ export class AutonomousAgent {
    * Durable progress within a turn. A failed write is tolerated here: the turn-end checkpoint writes the same state,
    * and an operation whose result never reached the durable conversation is detected on recovery.
    */
-  private async ensureVerifierApproved(command: string, confirmHandler?: ConfirmHandler, origin?: string, binding?: string): Promise<boolean> {
-    return ensureVerifierApprovedImpl.call(this, command, confirmHandler, origin, binding);
+  private async ensureVerifierApproved(command: string, confirmHandler?: ConfirmHandler, origin?: string, binding?: string, askHeadless = true): Promise<boolean> {
+    return ensureVerifierApprovedImpl.call(this, command, confirmHandler, origin, binding, askHeadless);
   }
 
   /**
@@ -2173,6 +2184,25 @@ export class AutonomousAgent {
   /** What the acceptance ledger asserts now (not the plan): a new value is ledger progress. */
   private ledgerProgressIdentity(): string {
     return ledgerStateIdentity(this.objective?.requirements ?? [], this.verificationEvidence ?? null);
+  }
+
+  /** Answers to the questions a previous headless run was blocked on. They bind to the decision by id. */
+  public setOperatorAnswers(answers: ReadonlyMap<string, NeedsInputOption>): void {
+    for (const [id, answer] of answers) this.operatorAnswers.set(id, answer);
+  }
+
+  /**
+   * A headless run needs a decision: the operator's recorded answer if there is one ("approve" | "decline"), otherwise
+   * the question is recorded (the first one wins) and "ask" is returned: the caller refuses the action and the turn
+   * ends BLOCKED / NEEDS_INPUT.
+   */
+  private headlessDecision(question: NeedsInputQuestion): NeedsInputOption | "ask" {
+    const answer = this.operatorAnswers.get(question.id);
+    if (answer) return answer;
+    // Only the top-level run can hand a question to the operator. A subagent's refusal stays a refusal that its parent sees
+    // (a subagent question is not propagated: VC-9 audit, "not done").
+    if (this.depth === 0) this.pendingNeedsInput ??= question;
+    return "ask";
   }
 
   /** The newest recorded PASSED verifier attempt that still describes the current workspace, if any. */

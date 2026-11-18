@@ -1,7 +1,10 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { PolicyContext } from "./approval_policy.js";
 import { isWorkspaceTrusted } from "../workspace_trust.js";
 import { safeTerminal } from "../ui.js";
+import { workspaceChangedPaths } from "../git.js";
+import { buildNeedsInput } from "./needs_input.js";
 import { runTestSuiteWithExecutor, discoverTypecheck, runTypecheck, typecheckMode, discoverVerifier, describeVerifier, hasExecutedTests } from "../tester.js";
 import { isInlineProgramVerifier, snapshotVerifierDefinitionWithReason, judgeWithoutCopy, prepareBaselineTestsCopy, snapshotTests, type ChangeBaseline, type Independence } from "./independent_check.js";
 import { TypecheckEvidence } from "./turn.js";
@@ -9,7 +12,11 @@ import { createHash } from "node:crypto";
 import { failedCheckFrom, attemptEvidence, priorAttempt, recordAttempt } from "./objective.js";
 import { DEFAULT_VERIFIER_TIMEOUT_SECS, ConfirmHandler, foldVoluminousOutput } from "./agent_support.js";
 
-export async function ensureVerifierApprovedImpl(this: any, command: string, confirmHandler?: ConfirmHandler, origin?: string, binding?: string): Promise<boolean> {
+/**
+ * `askHeadless`: with no operator present, record the decision as a NEEDS_INPUT question (VC-9) instead of only
+ * refusing. The baseline captures pass false: they run before any change and a refusal there ends nothing.
+ */
+export async function ensureVerifierApprovedImpl(this: any, command: string, confirmHandler?: ConfirmHandler, origin?: string, binding?: string, askHeadless = true): Promise<boolean> {
   const isTrusted = isWorkspaceTrusted(this.config.workspace, this.isReadOnly());
   const mode = this.getApprovalMode();
   const policyContext: PolicyContext = {
@@ -36,7 +43,17 @@ export async function ensureVerifierApprovedImpl(this: any, command: string, con
 
   const onConfirm = confirmHandler ?? this.activeTurn?.onConfirm;
   if (!onConfirm) {
-    return false;
+    if (!askHeadless) return false;
+    const decision = this.headlessDecision(buildNeedsInput(
+      "verifier_approval",
+      `Run ${verifierCmd.slice(0, 160)} as the verifier${origin ? ` (${origin.slice(0, 120)})` : ""}?`,
+      { command: verifierCmd.slice(0, 200), digest: digest.slice(0, 16) },
+      verifierCmd,
+      digest,
+    ));
+    if (decision !== "approve") return false;
+    this.approvedVerifiers.add(cacheKey);
+    return true;
   }
 
   const approved = await onConfirm("verifier", {
@@ -70,6 +87,10 @@ export async function runTypecheckOracleImpl(this: any, opts: {
   if (!check) return skipped("no tsconfig.json or Cargo.toml found");
   const named = { tool: check.tool, command: check.command, configPath: check.configPath, configSha256: check.configSha256, ...(check.toolSha256 ? { toolSha256: check.toolSha256 } : {}) };
   if (check.skipReason) return skipped(check.skipReason, named);
+  // Not installed: nothing was checked. Said plainly, with no approval prompt for a tool that cannot run, never a pass.
+  if (check.missingTool) {
+    return { evidence: (this.lastTypecheck = { status: "UNAVAILABLE" as const, scope: `${check.tool} is not installed, so nothing was type-checked under ${check.configPath}`, ...named, enforced: mode === "enforce", candidateId: opts.candidateId, at: at() }) };
+  }
   const enforced = mode === "enforce";
   const ledger = this.objective;
   const current = opts.current;
@@ -81,18 +102,32 @@ export async function runTypecheckOracleImpl(this: any, opts: {
       block: `Verification Oracle: ${check.command} already failed on these exact workspace inputs (attempt #${prior.n}); nothing it checks has changed, so it was not run again.\n${prior.failedCheck ? `Failed check: ${prior.failedCheck}\n` : ""}Fix the type errors, then call task_completed again.`,
     };
   }
-  if (!(await this.ensureVerifierApproved(check.command, opts.onConfirm, "type-check for the task", check.toolSha256))) {
+  // Only an enforced type-check can end the turn BLOCKED on a question; a record-only one is just not run.
+  if (!(await this.ensureVerifierApproved(check.command, opts.onConfirm, "type-check for the task", check.toolSha256, enforced))) {
     return enforced
       ? { evidence: (this.lastTypecheck = { status: "NOT_APPLICABLE" as const, scope: "type-check not approved", ...named, enforced, candidateId: opts.candidateId, at: at() }), block: `Verification Oracle: type-check execution was not approved by operator (${check.command}).` }
       : skipped("type-check not approved", named);
   }
   this.activity("verifying", { tool: check.command });
+  // Modified = what an edit tool touched plus what the workspace diff shows changed since the task began (a shell
+  // command, a formatter or a generator edits files no edit tool reported).
+  const modified = new Set<string>(this.modifiedFiles);
+  const shellChanged: string[] = [];
+  try {
+    for (const file of workspaceChangedPaths(this.config.workspace)) {
+      if (modified.has(file) || this.preTaskChanged?.has(file)) continue;
+      modified.add(file);
+      shellChanged.push(path.relative(this.config.workspace, file));
+    }
+  } catch {}
+  const baseline = this.typecheckBaseline?.command === check.command ? this.typecheckBaseline.signatures : undefined;
   const run = await runTypecheck(
     check,
     (command, timeout_secs) => this.bridge.executeTool("run_command", { command, timeout_secs }),
     this.config.workspace,
-    this.modifiedFiles,
+    modified,
     opts.budgetSecs,
+    baseline,
   );
   const excerpt = `(untrusted compiler output)\n${safeTerminal(foldVoluminousOutput(run.output || "", 30, 2000))}`;
   const evidence: TypecheckEvidence = {
@@ -102,6 +137,9 @@ export async function runTypecheckOracleImpl(this: any, opts: {
     ...(run.version ? { toolVersion: run.version } : {}),
     exitCode: run.exitCode,
     ...(run.errorCount !== undefined ? { errorCount: run.errorCount, firstDiagnostics: (run.firstDiagnostics ?? []).map((d) => safeTerminal(d)) } : {}),
+    ...(baseline ? { baselineErrorCount: baseline.size } : {}),
+    ...(run.introducedCount !== undefined ? { introducedCount: run.introducedCount } : {}),
+    ...(shellChanged.length ? { shellChangedFiles: shellChanged.slice(0, 20) } : {}),
     scope: `under ${check.configPath}`,
     ...(run.status === "PASSED" ? {} : { excerpt }),
     candidateId: opts.candidateId,
@@ -133,6 +171,12 @@ export async function runTypecheckOracleImpl(this: any, opts: {
 }
 
 export async function captureChangeBaselineImpl(this: any, confirmHandler?: ConfirmHandler): Promise<void> {
+  // What was already changed when the task began (carried changes included), so only later shell changes are the candidate's.
+  if (!this.preTaskChanged) {
+    try {
+      this.preTaskChanged = new Set(workspaceChangedPaths(this.config.workspace));
+    } catch {}
+  }
   // A new conversation does not make candidate writes from an interrupted or
   // resumed task trustworthy. Do not establish a discovered-verifier baseline
   // from a workspace that still carries an unverified-change obligation.
@@ -159,7 +203,7 @@ export async function captureChangeBaselineImpl(this: any, confirmHandler?: Conf
       }
       return;
     }
-    const approved = await this.ensureVerifierApproved(command, confirmHandler);
+    const approved = await this.ensureVerifierApproved(command, confirmHandler, undefined, undefined, false);
     if (!approved) {
       this.changeBaseline = null;
       return;
@@ -169,6 +213,7 @@ export async function captureChangeBaselineImpl(this: any, confirmHandler?: Conf
     const run = await runTestSuiteWithExecutor(this.config.workspace, (c) => this.bridge.executeTool("run_command", { command: c, timeout_secs: deadlineSecs }), command);
     this.changeBaseline = { command, failed: !run.success, tests, ...definition, trustedDeliverables, at: new Date().toISOString() };
     this.turnVerifierRuns.push({ command, phase: "before_change", passed: run.success });
+    await captureTypecheckBaselineImpl.call(this, confirmHandler, deadlineSecs);
     if (this.durable) {
       try {
         this.checkpointDurableState("baseline captured");
@@ -233,3 +278,22 @@ export async function runRequirementVerifierImpl(this: any, requirement: { id: s
   return undefined;
 }
 
+
+/**
+ * VC-6: the type-check errors that exist before the change, so an error that appears in an untouched file (a caller the
+ * change broke) is told apart from one that was already there. Only where cheap: tsc, go vet, pyright and mypy, not
+ * cargo, whose first check compiles dependencies. Nothing is recorded when the tool is missing, the run is not approved,
+ * times out or cannot be attributed; completion then behaves as before.
+ */
+export async function captureTypecheckBaselineImpl(this: any, confirmHandler: ConfirmHandler | undefined, deadlineSecs: number): Promise<void> {
+  try {
+    if (typecheckMode(this.config.typecheck, Boolean(this.config.authoritativeVerifierCommand?.trim())) === "off") return;
+    const check = discoverTypecheck(this.config.workspace);
+    if (!check || check.skipReason || check.missingTool || check.tool === "cargo") return;
+    if (!(await this.ensureVerifierApproved(check.command, confirmHandler, "type-check baseline (before the change)", check.toolSha256, false))) return;
+    this.activity("verifying", { tool: `${check.command} (before the change)` });
+    const run = await runTypecheck(check, (command, timeout_secs) => this.bridge.executeTool("run_command", { command, timeout_secs }), this.config.workspace, new Set(), deadlineSecs);
+    if (run.status === "PASSED") this.typecheckBaseline = { command: check.command, signatures: new Set() };
+    else if (run.status === "PREEXISTING") this.typecheckBaseline = { command: check.command, signatures: new Set(run.signatures ?? []) };
+  } catch {}
+}

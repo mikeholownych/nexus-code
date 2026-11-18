@@ -85,6 +85,7 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
   this.turnConvergence = undefined;
   this.turnConvergenceUpTo = undefined;
   this.turnRepeatedCall = undefined;
+  this.pendingNeedsInput = undefined;
   this.turnCarriedChanges = this.hasPendingModifications;
   this.turnDenials = 0;
   this.turnFileWrites = 0;
@@ -492,6 +493,10 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
           this.turnRepeatedCall = { tool: loopedCall.name, arguments: loopedCall.arguments.slice(0, 200), count: loopedCall.count, history: loopedCall.history };
         }
         loopedCall = undefined;
+        if (this.pendingNeedsInput && !stopReason) {
+          stopReason = "NEEDS_INPUT";
+          stopDetail = this.pendingNeedsInput.prompt;
+        }
         if (evaluation.progressed && this.objective) this.objective.continuation.lastProgressStep = currentStep;
         this.persistProgress({ messages: true });
         currentStep++;
@@ -906,6 +911,11 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
           rawArgs = {};
         }
 
+        // A decision only an operator can make stops the batch at the call that needed it.
+        if (this.pendingNeedsInput && !stopReason) {
+          stopReason = "NEEDS_INPUT";
+          stopDetail = this.pendingNeedsInput.prompt;
+        }
         // Recovery stopped the turn earlier in this batch: nothing more runs.
         if (stopReason) {
           for (const rest of parsed.toolCalls.slice(ci)) this.messages.push(notExecutedMessage(rest, stopDetail ?? stopReason));
@@ -1243,6 +1253,12 @@ export function buildTurnResultImpl(this: any, input: {
     return deepFreezeTurn(assertTurnResultInvariants({
       ...base, execution: "BLOCKED", outcome: "NOT_ESTABLISHED", reason: "VERIFIER_NOT_CONVERGING",
       detail: this.turnConvergence.evidence.slice(0, 300), finalOutputComplete: false, convergence: this.turnConvergence,
+    }));
+  }
+  if (input.limitReached && input.stopReason === "NEEDS_INPUT" && this.pendingNeedsInput) {
+    return deepFreezeTurn(assertTurnResultInvariants({
+      ...base, execution: "BLOCKED", outcome: "NOT_ESTABLISHED", reason: "NEEDS_INPUT",
+      detail: this.pendingNeedsInput.prompt.slice(0, 300), finalOutputComplete: false, needsInput: this.pendingNeedsInput,
     }));
   }
   if (input.limitReached && input.stopReason === "TOOL_CALL_LOOP" && this.turnRepeatedCall) {
