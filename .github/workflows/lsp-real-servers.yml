@@ -36,7 +36,9 @@ jobs:
       - name: Install rust-analyzer (best effort)
         continue-on-error: true
         run: |
-          rustup component add rust-analyzer
+          # The product launches the server in a fixture directory outside this repository, where rustup uses the DEFAULT toolchain,
+          # not the one the repository's rust-toolchain.toml pins: add the component there (from a directory with no override).
+          (cd "$RUNNER_TEMP" && rustup component add rust-analyzer)
           # The rustup proxy finds its toolchain through RUSTUP_HOME / CARGO_HOME; the tests' throwaway HOME hides the defaults.
           echo "RUSTUP_HOME=$(rustup show home)" >> "$GITHUB_ENV"
           echo "CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}" >> "$GITHUB_ENV"
