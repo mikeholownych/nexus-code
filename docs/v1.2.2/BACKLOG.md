@@ -34,7 +34,7 @@ What the v1.2.1 plan ([`docs/v1.2.1/PLAN.md`](../v1.2.1/PLAN.md)) did not finish
 - **VC-7** (done): the verifier convergence stop is also judged on the `run_tests` / `run_command` verifier path (`cli/test/vc7_run_tests_convergence.test.ts`).
 - **CS-5** (done): an example-call request is never recovered into an executed call.
 - **MQ-3** (done, validated): the nightly real-project smoke failed on its first scheduled run (pytest installed with `pip install --user` was invisible under the smoke's throwaway `HOME`); fixed in #614; a manual hosted run (44314195365) passed with all four repositories REGRESSION_FREE.
-- **CS-6** (mostly validated): the weekly real language-server job ran on a hosted runner: typescript-language-server, pyright and gopls pass; **rust-analyzer fails to start under the product launch on the runner** (cause undiagnosed, needs a host with the component), so the Rust case is a `todo`. The first run also confirmed a real product fix (`--stdio`).
+- **CS-6** (validated on a hosted runner, see the run recorded in `docs/LSP_REAL_SERVERS.md`): typescript-language-server, pyright, gopls and rust-analyzer. The Rust case exposed two real problems, both fixed: a setup mismatch (the component must be on the default toolchain) and a client that returned on rust-analyzer's empty first publish (progress-aware waiting now). The first run also confirmed the `--stdio` fix. Still open: hover, definition and multi-file projects against real servers; the sandbox-refusal path is tested only with the fake server.
 - **MQ-4**, **VC-2**, **RD-6**: rows above describe what is and is not done.
 
 ## Not started / deferred in their rows

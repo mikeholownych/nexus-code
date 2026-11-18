@@ -74,6 +74,12 @@ export interface LspServerSpec {
   languageId: string;
   /** Extra variables for this server only; the built-in table never sets it. */
   env?: Record<string, string>;
+  /**
+   * The server analyses in stages and publishes an empty list before it has finished (rust-analyzer: before the Cargo
+   * project is loaded and types are analysed). Diagnostics then wait, within the caller's timeout, until the server's own
+   * progress reports (`$/progress`) have ended, instead of returning on the first publish.
+   */
+  awaitProgress?: boolean;
 }
 
 export interface LspDiagnostic {
@@ -100,8 +106,12 @@ export class LspClient {
   private diagnosticsMap: Map<string, LspDiagnostic[]> = new Map();
   private buffer: Buffer = Buffer.alloc(0);
   public initialized: boolean = false;
+  /** Tokens of the server's work-done progress that has begun and not ended, and when progress last changed. */
+  private progressActive: Set<string> = new Set();
+  private progressSeen = false;
+  private lastProgressAt = 0;
 
-  constructor(serverCmd: string, rootPath: string, serverArgs: string[] = [], private extraEnv: Record<string, string> = {}) {
+  constructor(serverCmd: string, rootPath: string, serverArgs: string[] = [], private extraEnv: Record<string, string> = {}, private awaitProgress: boolean = false) {
     this.serverCmd = serverCmd;
     this.serverArgs = serverArgs;
     this.rootPath = path.resolve(rootPath);
@@ -144,6 +154,8 @@ export class LspClient {
             definition: { dynamicRegistration: true },
             publishDiagnostics: { relatedInformation: true },
           },
+          // Declared so that servers which report progress (rust-analyzer) send $/progress, which diagnostics wait on.
+          window: { workDoneProgress: true },
         },
       }, 5000);
 
@@ -206,6 +218,21 @@ export class LspClient {
 
       try {
         const msg = JSON.parse(body);
+        if (typeof msg.method === "string" && msg.id !== undefined) {
+          // A request FROM the server (it has a method; its id space is its own, so it can collide with ours): answer it, or
+          // a server that waits for the reply (window/workDoneProgress/create, workspace/configuration) can stall.
+          this.answerServerRequest(msg);
+          continue;
+        }
+        if (msg.method === "$/progress" && msg.params) {
+          const token = String(msg.params.token);
+          const kind = msg.params.value?.kind;
+          if (kind === "begin") this.progressActive.add(token);
+          else if (kind === "end") this.progressActive.delete(token);
+          this.progressSeen = true;
+          this.lastProgressAt = Date.now();
+          continue;
+        }
         if (msg.id !== undefined && this.pending.has(msg.id)) {
           const { resolve, reject } = this.pending.get(msg.id)!;
           this.pending.delete(msg.id);
@@ -279,6 +306,14 @@ export class LspClient {
     });
   }
 
+  private answerServerRequest(msg: { id: number | string; method: string; params?: any }): void {
+    if (!this.child || !this.child.stdin || this.child.killed || this.child.exitCode !== null) return;
+    // Nothing is configured or registered on the server's behalf: an empty answer is a valid one for the requests servers send.
+    const result = msg.method === "workspace/configuration" && Array.isArray(msg.params?.items) ? msg.params.items.map(() => null) : null;
+    const payload = JSON.stringify({ jsonrpc: "2.0", id: msg.id, result });
+    this.child.stdin.write(`Content-Length: ${Buffer.byteLength(payload, "utf-8")}\r\n\r\n${payload}`);
+  }
+
   public sendNotification(method: string, params: any): void {
     if (!this.child || !this.child.stdin || this.child.killed || this.child.exitCode !== null) return;
     const payload = JSON.stringify({
@@ -340,6 +375,24 @@ export class LspClient {
   /** Resolves with the diagnostics the server published for the file, or null if none arrived within the timeout. */
   public async waitForDiagnostics(filePath: string, timeoutMs: number): Promise<LspDiagnostic[] | null> {
     const uri = pathToFileURL(path.resolve(this.rootPath, filePath)).href;
+    const startedAt = Date.now();
+    const first = await this.firstDiagnostics(uri, timeoutMs);
+    if (!this.awaitProgress || !first) return first;
+    // A staged server's first publish may be empty. Wait until its progress has ended and been quiet for a moment (or, if it
+    // never reports progress, for a grace period), within the caller's timeout, then return the latest list.
+    const QUIET_MS = 1500;
+    const GRACE_MS = 4000;
+    while (Date.now() - startedAt < timeoutMs) {
+      const now = Date.now();
+      const idle = this.progressActive.size === 0;
+      const settled = this.progressSeen ? now - this.lastProgressAt >= QUIET_MS : now - startedAt >= GRACE_MS;
+      if (idle && settled) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return this.diagnosticsMap.get(uri) ?? first;
+  }
+
+  private async firstDiagnostics(uri: string, timeoutMs: number): Promise<LspDiagnostic[] | null> {
     const have = this.diagnosticsMap.get(uri);
     if (have) return have;
     await new Promise<void>((resolve) => {
@@ -454,7 +507,7 @@ export class LspBridgeManager {
     const ext = path.extname(filePath).toLowerCase();
     if (this.servers[ext]) return this.servers[ext];
     if (ext === ".rs") {
-      return { cmd: "rust-analyzer", languageId: "rust" };
+      return { cmd: "rust-analyzer", languageId: "rust", awaitProgress: true };
     }
     if (ext === ".ts" || ext === ".tsx") {
       return { cmd: "typescript-language-server", args: ["--stdio"], languageId: "typescript" };
@@ -484,7 +537,7 @@ export class LspBridgeManager {
     if (inFlight) return inFlight;
 
     const startup = (async () => {
-      const client = new LspClient(serverInfo.cmd, this.workspace, serverInfo.args ?? [], serverInfo.env);
+      const client = new LspClient(serverInfo.cmd, this.workspace, serverInfo.args ?? [], serverInfo.env, serverInfo.awaitProgress === true);
       const ok = await client.start();
       if (ok && this.closed) {
         client.shutdown();

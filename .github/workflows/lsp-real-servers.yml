@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     env:
-      NEXUS_LSP_REQUIRE: typescript,python,go
+      NEXUS_LSP_REQUIRE: typescript,python,go,rust
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -36,14 +36,17 @@ jobs:
       - name: Install rust-analyzer (best effort)
         continue-on-error: true
         run: |
-          rustup component add rust-analyzer
+          # The product launches the server in a fixture directory outside this repository, where rustup uses the DEFAULT toolchain,
+          # not the one the repository's rust-toolchain.toml pins: add the component there (from a directory with no override).
+          (cd "$RUNNER_TEMP" && rustup component add rust-analyzer)
           # The rustup proxy finds its toolchain through RUSTUP_HOME / CARGO_HOME; the tests' throwaway HOME hides the defaults.
           echo "RUSTUP_HOME=$(rustup show home)" >> "$GITHUB_ENV"
           echo "CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}" >> "$GITHUB_ENV"
       - name: Install gopls (best effort)
         continue-on-error: true
         run: |
-          GOBIN="$RUNNER_TEMP/gobin" go install golang.org/x/tools/gopls@v0.16.2
+          # Not pinned: an old gopls stops building when the runner image moves to a newer Go (gopls v0.16.2 failed to build on 2026-11-18); this job exists to meet the current servers.
+          GOBIN="$RUNNER_TEMP/gobin" go install golang.org/x/tools/gopls@latest
           echo "$RUNNER_TEMP/gobin" >> "$GITHUB_PATH"
       - run: npm ci --prefix cli
       - name: Versions on the runner

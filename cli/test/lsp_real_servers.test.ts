@@ -66,7 +66,6 @@ const CASES: Case[] = [
   },
   {
     id: "rust",
-    unvalidated: "rust-analyzer started by the product's isolated launch has not been validated: on the first hosted run it reported 'not installed or failed to start' although the rustup proxy answered --version",
     label: "rust-analyzer",
     cmd: "rust-analyzer",
     probe: ["--version"],
@@ -124,7 +123,8 @@ function unavailableReason(c: Case, workspace: string): string | null {
   const { bin, env } = resolveOnProductPath(c.cmd, workspace);
   if (!bin) return `${c.cmd} is not on the PATH the product gives a language server`;
   if (c.probe) {
-    const r = spawnSync(bin, c.probe, { env, encoding: "utf-8", timeout: 20_000 });
+    // In the fixture directory, as the product launches the server: a rustup proxy picks its toolchain from the working directory (a repo's rust-toolchain.toml would hide a missing default component).
+    const r = spawnSync(bin, c.probe, { env, cwd: workspace, encoding: "utf-8", timeout: 20_000 });
     if (r.status !== 0) {
       const why = (r.stderr || r.error?.message || `exit ${r.status}`).toString().trim().split("\n")[0];
       return `${c.cmd} ${c.probe.join(" ")} failed under the product environment (${why})`;
