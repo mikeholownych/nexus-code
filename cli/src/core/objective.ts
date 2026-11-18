@@ -13,8 +13,8 @@ import type { VerificationStatus } from "./turn.js";
 import { DEFAULT_CONVERGENCE_ATTEMPTS } from "../types.js";
 import type { CanonicalCapability } from "./capabilities.js";
 import { isFilteredVerifierCommand } from "../tester.js";
-import { redactSecrets } from "../ui.js";
-import { visibleControls } from "../file_diff.js";
+import { redactSecrets, safeTerminal } from "../ui.js";
+import { replayObligations, type RegressionObligation, type ReferenceDeclaration } from "./regression_obligations.js";
 import { createTracking, ExecutionTracker, normalizeTracking, type ExecutionTracking } from "./execution_tracking.js";
 
 export const LEDGER_VERSION = 1;
@@ -175,6 +175,10 @@ export interface VerificationAttempt {
   failingTruncated?: boolean;
   /** Redacted tail of the verifier's output, capped at MAX_ATTEMPT_EXCERPT_BYTES. */
   excerpt?: string;
+  /** Lineage (DV-4): the previous real attempt (a skipped re-report is never a parent) and the hash of the step from its inputs to these. */
+  parent?: number;
+  /** sha256 of `parent.inputs NUL inputs`: it identifies the transition between two candidate identities, it is not a content diff. */
+  diffHash?: string;
 }
 
 export interface ObjectiveOutcome {
@@ -209,6 +213,10 @@ export interface ObjectiveLedger {
   steeringConflicts?: SteeringConflict[];
   superseded?: SupersededObjective[];
   verification: VerificationAttempt[];
+  /** Operator-authorised regression obligations (core/regression_obligations.ts); absent in ledgers written before DV-3. */
+  obligations?: RegressionObligation[];
+  /** Operator-authorised behavioural references, by requirement (DV-4 gate only; the differential is not implemented). */
+  references?: ReferenceDeclaration[];
   continuation: ContinuationState;
   /** The model's own statement of what comes next (update_requirements next_action). */
   nextAction?: string;
@@ -752,7 +760,7 @@ const NAME_PATTERNS = [
 const ANSI = /\u001b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b\\))/g;
 const stripAnsi = (text: string): string => text.replace(ANSI, "");
 /** Verifier-controlled text made safe to carry: secrets redacted, then controls and bidi overrides made visible, then clipped. */
-const safeVerifierText = (text: string, max: number): string => clip(visibleControls(redactSecrets(text)), max);
+const safeVerifierText = (text: string, max: number): string => clip(safeTerminal(text), max);
 
 /** Names of failing tests in TAP, node:test, jest, vitest, mocha, unittest, pytest, go and cargo output. */
 export function failingTestNames(output: string): string[] {
@@ -850,8 +858,11 @@ export function priorAttempt(
 
 export function recordAttempt(ledger: ObjectiveLedger, attempt: Omit<VerificationAttempt, "n" | "at">, at = now()): VerificationAttempt {
   const lastN = ledger.verification.length > 0 ? (ledger.verification[ledger.verification.length - 1]?.n ?? 0) : 0;
-  const record: VerificationAttempt = { n: lastN + 1, at, ...attempt };
+  const parent = [...ledger.verification].reverse().find((v) => v.status !== "SKIPPED_UNCHANGED_INPUTS");
+  const lineage = parent ? { parent: parent.n, diffHash: sha256(`${parent.inputs}\u0000${attempt.inputs}`) } : {};
+  const record: VerificationAttempt = { n: lastN + 1, at, ...attempt, ...lineage };
   ledger.verification.push(record);
+  replayObligations(ledger, record);
   for (const old of ledger.verification.slice(0, -EXCERPT_RETAINED_ATTEMPTS)) delete old.excerpt;
   if (ledger.verification.length > 50) ledger.verification = ledger.verification.slice(-50);
   return record;
@@ -882,7 +893,7 @@ const failureKey = (a: VerificationAttempt): string | undefined => {
 const checkOnly = (key: string | undefined): boolean => key?.startsWith("check:") === true;
 const failureCount = (a: VerificationAttempt): number | undefined =>
   a.failingTests?.length && !(a.failingTruncated && a.failingTotal === undefined) ? (a.failingTotal ?? a.failingTests.length) : undefined;
-const safeText = (text: string, max = 160): string => clip(visibleControls(redactSecrets(text)), max);
+const safeText = (text: string, max = 160): string => clip(safeTerminal(text), max);
 
 /**
  * Whether repeated verifier failures show the work is not getting anywhere: the same failure across `attempts`
