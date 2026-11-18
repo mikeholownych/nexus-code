@@ -221,7 +221,7 @@ export interface TypecheckEvidence {
    * ENVIRONMENT: the check could not run or be attributed here (not a candidate failure). PREEXISTING: errors exist, but
    * none in a file the candidate modified; it is not a pass and does not block.
    */
-  status: "PASSED" | "FAILED" | "TIMED_OUT" | "ENVIRONMENT" | "NOT_APPLICABLE" | "PREEXISTING";
+  status: "PASSED" | "FAILED" | "TIMED_OUT" | "ENVIRONMENT" | "NOT_APPLICABLE" | "PREEXISTING" | "UNAVAILABLE";
   /** False when the result is recorded only (operator-configured verifier, or NEXUS_TYPECHECK mode "record"). */
   enforced?: boolean;
   tool?: string;
@@ -234,6 +234,12 @@ export interface TypecheckEvidence {
   exitCode?: number | null;
   errorCount?: number;
   firstDiagnostics?: string[];
+  /** Errors in the run that the pre-change baseline run did not have (present only when a baseline was captured). */
+  introducedCount?: number;
+  /** Errors the baseline run (before the change) already had. */
+  baselineErrorCount?: number;
+  /** Files counted as modified that no edit tool touched (changed through the shell), when any. */
+  shellChangedFiles?: string[];
   /** What the result holds for: "under <configPath>", never universal. */
   scope?: string;
   /** Redacted, control characters made visible, capped, and fenced as untrusted compiler output. */

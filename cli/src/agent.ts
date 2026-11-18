@@ -148,6 +148,10 @@ export class AutonomousAgent {
    * change (null: none could be taken). Cleared when a covering run settles the change.
    */
   private changeBaseline: ChangeBaseline | null | undefined;
+  /** VC-6: type-check errors present before the task's change (empty when it was clean); undefined when none was captured (resume, tool missing, not approved). */
+  private typecheckBaseline?: { command: string; signatures: Set<string> };
+  /** VC-6: paths already changed in the workspace when the task began, so only later shell changes count as the candidate's. */
+  private preTaskChanged?: Set<string>;
   /** Optional tool groups offered in this conversation (see core/tool_groups). */
   private enabledToolGroups = new Set<string>();
   /** Removals recorded in a recovered conversation; the next (resumed) turn starts with them. */
@@ -925,6 +929,8 @@ export class AutonomousAgent {
     // resumed workspace with pending changes: an attacker could delete the field
     // and make candidate-edited tests look pristine.
     this.changeBaseline = undefined;
+    this.typecheckBaseline = undefined;
+    this.preTaskChanged = undefined;
     this.untrustedRecoveredBaseline = state.changeBaseline ?? undefined;
     this.recheckOnResume();
     this.restoreHistory(state.history);

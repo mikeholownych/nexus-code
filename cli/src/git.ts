@@ -55,6 +55,30 @@ export function workspaceStatus(workspace: string, format: "--porcelain" | "--sh
   });
 }
 
+/**
+ * Absolute paths the workspace's repository reports as changed (modified, added, deleted, renamed, untracked), whoever
+ * changed them: an edit tool, a shell command or a formatter. Throws when git fails (not a repository, refused checkout).
+ */
+export function workspaceChangedPaths(workspace: string): string[] {
+  const out = execFileSync("git", [...trustedGitArgs(workspace), "-c", "core.quotepath=off", "status", "--porcelain=v1", "-z", "--untracked-files=all", ...WITHOUT_NEXUS_STATE], {
+    cwd: workspace,
+    env: pathspecEnv(),
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const top = execFileSync("git", [...trustedGitArgs(workspace), "rev-parse", "--show-toplevel"], { cwd: workspace, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  const records = out.split("\0").filter(Boolean);
+  const paths: string[] = [];
+  for (let i = 0; i < records.length; i++) {
+    const rec = records[i];
+    paths.push(path.resolve(top, rec.slice(3)));
+    // A rename or copy is followed by its source path as a separate record.
+    if (rec[0] === "R" || rec[0] === "C") i++;
+  }
+  return paths;
+}
+
 /** The current branch; on an unborn branch (no commit yet) `rev-parse` fails, so read the symbolic ref instead. */
 function currentBranch(workspace: string, pin: string[]): string {
   const run = (args: string[]) =>
