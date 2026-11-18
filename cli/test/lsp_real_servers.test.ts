@@ -209,3 +209,96 @@ test("the default servers for typescript and python are launched with --stdio (t
     mgr.shutdownAll();
   }
 });
+
+// Navigation (hover and definition) against the same real servers: a function defined in one file and called in another.
+// A server answers these only once it has analysed the project, so the call is retried until a deadline; a server that never
+// answers is a failure, and an answer is checked for what it names, not merely for existing.
+interface NavCase {
+  id: string;
+  files: Record<string, string>;
+  /** The call site (1-based line and character, as the product's lsp_hover/lsp_definition take them, on the callee's name) and the file that defines it. */
+  at: { file: string; line: number; character: number };
+  definedIn: string;
+  hoverMentions: RegExp;
+}
+
+const NAV: NavCase[] = [
+  {
+    id: "typescript",
+    files: {
+      "tsconfig.json": JSON.stringify({ compilerOptions: { strict: true, noEmit: true, target: "es2022", module: "esnext", moduleResolution: "bundler" }, include: ["*.ts"] }),
+      "lib.ts": "export function greet(name: string): string {\n  return name;\n}\n",
+      "use.ts": 'import { greet } from "./lib";\nexport const msg: string = greet("a");\n',
+    },
+    at: { file: "use.ts", line: 2, character: 30 },
+    definedIn: "lib.ts",
+    hoverMentions: /greet/,
+  },
+  {
+    id: "python",
+    files: {
+      "pyrightconfig.json": JSON.stringify({ typeCheckingMode: "basic" }),
+      "lib.py": "def greet(name: str) -> str:\n    return name\n",
+      "use.py": 'from lib import greet\n\nmsg: str = greet("a")\n',
+    },
+    at: { file: "use.py", line: 3, character: 13 },
+    definedIn: "lib.py",
+    hoverMentions: /greet/,
+  },
+  {
+    id: "rust",
+    files: {
+      "Cargo.toml": '[package]\nname = "lspnav"\nversion = "0.0.0"\nedition = "2021"\n',
+      "src/main.rs": 'mod util;\nfn main() {\n    let _ = util::greet("a");\n}\n',
+      "src/util.rs": "pub fn greet(name: &str) -> String {\n    name.to_string()\n}\n",
+    },
+    at: { file: "src/main.rs", line: 3, character: 20 },
+    definedIn: "src/util.rs",
+    hoverMentions: /greet/,
+  },
+  {
+    id: "go",
+    files: {
+      "go.mod": "module lspnav\n\ngo 1.21\n",
+      "lib.go": "package main\n\nfunc greet(name string) string {\n\treturn name\n}\n",
+      "main.go": 'package main\n\nfunc main() {\n\t_ = greet("a")\n}\n',
+    },
+    at: { file: "main.go", line: 4, character: 7 },
+    definedIn: "lib.go",
+    hoverMentions: /greet/,
+  },
+];
+
+for (const n of NAV) {
+  const c = CASES.find((x) => x.id === n.id)!;
+  test(`real ${c.label}: hover and definition name the function defined in another file`, { timeout: c.timeoutMs * 2 + 30_000 }, async (t) => {
+    const dir = writeFixture(n.files);
+    const reason = unavailableReason(c, dir);
+    if (reason) {
+      if (required(c.id)) assert.fail(`NEXUS_LSP_REQUIRE names ${c.id} but ${reason}`);
+      t.skip(`${reason}; install it to run this case`);
+      return;
+    }
+    const mgr = new LspBridgeManager(dir, { gate: () => null });
+    try {
+      const deadline = Date.now() + c.timeoutMs;
+      let hover: Awaited<ReturnType<typeof mgr.hover>> = { found: false };
+      let def: Awaited<ReturnType<typeof mgr.definition>> = { found: false };
+      // A server may answer early from what it has loaded so far (tsserver names the import itself until the imported file is
+      // loaded), so an answer counts once it points where the definition is; the last answer is what the assertions report.
+      const pointsAtDefinition = (d: typeof def) => (d.locations ?? []).some((l) => l.uri.endsWith(`/${n.definedIn}`));
+      while (Date.now() < deadline && !(hover.found && pointsAtDefinition(def))) {
+        if (!hover.found) hover = await mgr.hover(n.at.file, n.at.line, n.at.character);
+        if (!pointsAtDefinition(def)) def = await mgr.definition(n.at.file, n.at.line, n.at.character);
+        if (!(hover.found && pointsAtDefinition(def))) await new Promise((r) => setTimeout(r, 1000));
+      }
+      assert.ok(hover.found, `hover never answered: ${JSON.stringify(hover)}`);
+      assert.match(hover.hoverText ?? "", n.hoverMentions, "hover text should name the function");
+      assert.ok(def.found, `definition never answered: ${JSON.stringify(def)}`);
+      const uris = (def.locations ?? []).map((l) => l.uri);
+      assert.ok(uris.some((u) => u.endsWith(`/${n.definedIn}`)), `definition should point into ${n.definedIn}, got ${JSON.stringify(uris)}`);
+    } finally {
+      mgr.shutdownAll();
+    }
+  });
+}

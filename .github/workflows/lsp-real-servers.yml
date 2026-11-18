@@ -46,7 +46,12 @@ jobs:
         continue-on-error: true
         run: |
           # Not pinned: an old gopls stops building when the runner image moves to a newer Go (gopls v0.16.2 failed to build on 2026-11-18); this job exists to meet the current servers.
-          GOBIN="$RUNNER_TEMP/gobin" go install golang.org/x/tools/gopls@latest
+          # @latest may need a newer Go than the runner has and download that toolchain; the proxy can fail transiently (a stream error on 2026-11-18), so retry.
+          for attempt in 1 2 3; do
+            GOBIN="$RUNNER_TEMP/gobin" go install golang.org/x/tools/gopls@latest && break
+            [ "$attempt" = 3 ] && exit 1
+            sleep 15
+          done
           echo "$RUNNER_TEMP/gobin" >> "$GITHUB_PATH"
       - run: npm ci --prefix cli
       - name: Versions on the runner
