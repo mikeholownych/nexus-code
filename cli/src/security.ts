@@ -84,6 +84,9 @@ export interface VerificationShellChange {
   kind: "modified" | "removed" | "added";
   /** A short line summary of what changed (removed lines with `-`, added with `+`), empty when the file is not small text. */
   diff: string[];
+  /** The file's text before and after, when both were small enough to keep (`after` is "" for a removed file); absent otherwise. */
+  beforeText?: string;
+  afterText?: string;
 }
 
 const DIFF_LINES_SHOWN = 12;
@@ -115,7 +118,11 @@ export function diffVerificationSnapshots(
     const cls = classOf(rel);
     if (!cls || (was && now && was.hash === now.hash)) continue;
     if (!was && cls === "test_file") continue;
-    out.push({ path: rel, class: cls, kind: !was ? "added" : !now ? "removed" : "modified", diff: compactDiff(was?.raw, now?.raw) });
+    const known = was?.raw && (now ? now.raw : true);
+    out.push({
+      path: rel, class: cls, kind: !was ? "added" : !now ? "removed" : "modified", diff: compactDiff(was?.raw, now?.raw),
+      ...(known ? { beforeText: was!.raw!.toString("utf8"), afterText: now?.raw ? now.raw.toString("utf8") : "" } : {}),
+    });
   }
   return out;
 }
@@ -867,13 +874,29 @@ export class SecurityManager {
    * `recordVerificationCommand` and cost nothing here.
    */
   public beginVerificationShellGuard(): VerificationShellGuard | undefined {
-    if ((this.policy.verificationPaths?.mode ?? "approve") !== "block") return undefined;
+    if ((this.policy.verificationPaths?.mode ?? "approve") !== "block" && !this.shellChangeObserver) return undefined;
     return { before: this.snapshotVerificationFiles() };
   }
+
+  /**
+   * DV-3: told, after every guarded shell command, which verification files it changed (any mode, nothing reverted or
+   * refused). The agent sets it while an operator-authorised regression obligation exists, so a test edited through the
+   * shell is recorded from the same snapshot and diff the block mode uses.
+   */
+  public setShellChangeObserver(observer: ((changes: VerificationShellChange[]) => void) | undefined): void {
+    this.shellChangeObserver = observer;
+  }
+  private shellChangeObserver?: (changes: VerificationShellChange[]) => void;
 
   /** What changed in the verification files since `guard` began. In block mode each change is reverted, recorded as blocked and returned as the refusal. */
   public finishVerificationShellGuard(guard: VerificationShellGuard, role?: string): { error?: string; note?: string } {
     const after = this.snapshotVerificationFiles();
+    const block = (this.policy.verificationPaths?.mode ?? "approve") === "block";
+    if (!block) {
+      const seen = diffVerificationSnapshots(guard.before.files, after.files, (rel) => this.classifyVerificationPath(rel)?.class);
+      if (seen.length) this.shellChangeObserver?.(seen);
+      return {};
+    }
     const note = !guard.before.complete || !after.complete
       ? `[nexus] Shell-write guard: the workspace is larger than the ${VERIFICATION_SNAPSHOT_MAX_ENTRIES}-entry scan limit, so verification files beyond it were not checked.`
       : undefined;

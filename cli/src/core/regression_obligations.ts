@@ -109,6 +109,22 @@ export function unmetObligations(ledger: ObjectiveLedger): RegressionObligation[
   return active(ledger).filter((o) => o.replays.at(-1)?.outcome !== "pass");
 }
 
+/**
+ * The refusal text for a completion while obligations are unmet, or undefined when none are. Names each obligation and
+ * the command that replays it; a recorded pass of that command on the latest candidate is what discharges it.
+ */
+export function unmetObligationsMessage(ledger: ObjectiveLedger | undefined): string | undefined {
+  const unmet = ledger ? unmetObligations(ledger) : [];
+  if (!unmet.length) return undefined;
+  const lines = unmet.map((o) => {
+    const last = o.replays.at(-1);
+    return `  ${o.id}: test ${JSON.stringify(o.testName)} (${last ? `last replay: ${last.outcome}` : "not replayed yet"}); replay it with: ${o.command}`;
+  });
+  return `Not complete: the operator authorised regression obligations that are not met.\n${lines.join("\n")}\n` +
+    `Run each command above on your current change and make the named test pass; a passing run of that command is what discharges the obligation. ` +
+    `Do not remove, skip or thin the test: such an edit is recorded against the obligation. Only the operator can retire it.`;
+}
+
 /** Called for every recorded attempt: a replay is an attempt of the obligation's command that can say whether its test failed. */
 export function replayObligations(ledger: ObjectiveLedger, attempt: VerificationAttempt): void {
   if (attempt.status === "SKIPPED_UNCHANGED_INPUTS" || attempt.status === "TIMED_OUT" || attempt.classification === "ENVIRONMENT" || attempt.filtered) return;
