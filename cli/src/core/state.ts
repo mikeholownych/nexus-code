@@ -195,6 +195,9 @@ export interface DurableTaskState {
     archivedMessages: number;
   };
 
+  /** RD-6: set on a session made by forking another: where it came from. Informational; nothing resumes from it. */
+  forkedFrom?: { sessionId: string; atMessage: number; at: string };
+
   // Pre-change test baseline for independent verifier judgements (REQ-AGT-103)
   changeBaseline?: {
     command: string;

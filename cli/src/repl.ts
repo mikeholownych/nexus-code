@@ -401,6 +401,7 @@ export class InteractiveRepl {
     console.log(`  ${pc.bold(pc.yellow("/sessions"))}           List past saved sessions`);
     console.log(`  ${pc.bold(pc.yellow("/save [name]"))}        Save current session snapshot to ~/.nexus/sessions/`);
     console.log(`  ${pc.bold(pc.yellow("/resume [id]"))}        Load a past session into memory`);
+    console.log(`  ${pc.bold(pc.yellow("/fork [n]"))}           Continue in a copy of this session (first n messages); the original stays`);
     console.log(`  ${pc.bold(pc.yellow("/skills"))}             List discovered agent skills (SKILL.md)`);
     console.log(`  ${pc.bold(pc.yellow("/skill [init <name>|<name>]"))} View or scaffold specialized skill`);
     console.log(`  ${pc.bold(pc.yellow("/mcp [add|resources|prompts]"))} Manage MCP servers, tools, resources, and prompts`);
@@ -661,7 +662,7 @@ export class InteractiveRepl {
       completer: (line: string) => {
         const completions = [
           "/help", "/status", "/doctor", "/clear", "/reset", "/compact", "/mode",
-          "/diff", "/git", "/commit", "/sessions", "/save", "/resume", "/skills",
+          "/diff", "/git", "/commit", "/sessions", "/save", "/resume", "/fork", "/skills",
           "/skill", "/mcp", "/plugins", "/plan", "/checkpoint",
           "/checkpoints", "/undo", "/audit", "/export", "/tokens", "/init",
           "/onboard", "/test",
@@ -1240,6 +1241,26 @@ export class InteractiveRepl {
               }
             } catch (err: any) {
               console.log(pc.red(`Failed to resume session: ${formatDiagnosticForOutput(err)}\n`));
+            }
+            continue;
+          } else if (cmd === "fork") {
+            try {
+              if (this.agent.getMessages().length <= 1) {
+                console.log(pc.yellow("Nothing to fork yet: the conversation is empty.\n"));
+              } else if (arg && !/^\d+$/.test(arg)) {
+                console.log(pc.yellow("Usage: /fork [message-count]\n"));
+              } else {
+                const source = this.currentSessionId;
+                this.saveCurrentSession("Snapshot");
+                const forked = this.sessionManager.forkSession(source, arg ? { atMessage: Number(arg) } : {});
+                const sess = this.sessionManager.loadSession(forked.id)!;
+                this.currentSessionId = sess.id;
+                const archiveNotice = this.agent.restoreConversation(sess, (committed) => this.sessionManager.readArchivedHistory(sess.id, committed));
+                if (archiveNotice) console.log(pc.yellow(archiveNotice));
+                console.log(pc.green(`✔ Forked ${source} at message ${forked.atMessage} into ${pc.bold(forked.id)}; you are now in the fork. /resume ${source} returns to the original.\n`));
+              }
+            } catch (err: any) {
+              console.log(pc.red(`Failed to fork session: ${formatDiagnosticForOutput(err)}\n`));
             }
             continue;
           } else if (cmd === "tokens" || cmd === "cost") {

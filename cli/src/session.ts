@@ -15,6 +15,7 @@ import {
 import { withStateStoreGuard } from "./core/state_store_guard.js";
 import { WorkspacePath } from "./core/workspace_path.js";
 import { protectArchivedMessages } from "./core/persistence_protection.js";
+import { insertedBlockPresent, isCompactionRecord } from "./core/compaction_record.js";
 import { appendLinesDurably, readArchiveLines, type ArchiveRead, ensurePrivateDir, writePrivateFile } from "./core/durable_file.js";
 import { persistableEndpoint } from "./core/endpoint_identity.js";
 
@@ -78,6 +79,22 @@ function randomBase36Suffix(length: number): string {
     }
   }
   return suffix;
+}
+
+/** The longest prefix of `messages` no longer than `n` that does not end inside a tool exchange (a call without all its results). */
+function completeExchangePrefix(messages: ChatMessage[], n: number): number {
+  let end = n;
+  while (end > 1) {
+    let owner = end - 1;
+    while (owner > 0 && messages[owner].role === "tool") owner--;
+    const head = messages[owner];
+    const calls = head.role === "assistant" ? head.tool_calls ?? [] : [];
+    if (!calls.length) return end;
+    const answered = new Set(messages.slice(owner + 1, end).filter((x) => x.role === "tool").map((x) => x.tool_call_id));
+    if (calls.every((c) => answered.has(c.id))) return end;
+    end = owner;
+  }
+  return end;
 }
 
 export class SessionManager {
@@ -157,6 +174,7 @@ export class SessionManager {
       ...(session.findings !== undefined ? { findings: session.findings } : {}),
       ...(session.verificationConfigAttempts !== undefined ? { verificationConfigAttempts: session.verificationConfigAttempts } : {}),
       ...(session.history !== undefined ? { history: session.history } : {}),
+      ...(session.forkedFrom !== undefined ? { forkedFrom: session.forkedFrom } : {}),
     };
 
     this.stateManager.saveTaskState(fullState, selectedWorkspace ? [selectedWorkspace] : []);
@@ -308,6 +326,69 @@ export class SessionManager {
       }
       return null;
     }
+  }
+
+  /**
+   * RD-6: forks a saved session into a new id holding its conversation up to `atMessage` (default: all of it). The
+   * source is only read. The cut backs up to the last complete tool exchange. Compactions whose summary is still in the
+   * kept conversation keep their record and archive lines (copied verbatim, so resume's audit still verifies them);
+   * a compaction whose summary the cut removed is left out, rather than letting resume "undo" it into history the
+   * operator did not choose. The objective ledger is carried only by a fork of the whole conversation: it describes
+   * the source's later state, which a truncated fork never reached.
+   */
+  public forkSession(sourceId: string, options: { atMessage?: number; newId?: string } = {}): { id: string; sourceId: string; atMessage: number; compactions: number } {
+    return withStateStoreGuard(this.sessionsDir, () => {
+      const source = this.loadSession(sourceId);
+      if (!source) throw new Error(`Session not found: ${sourceId}`);
+      const total = source.messages.length;
+      const asked = options.atMessage ?? total;
+      if (!Number.isInteger(asked) || asked < 1 || asked > total) throw new Error(`The fork point must be a whole number between 1 and ${total}.`);
+      const atMessage = completeExchangePrefix(source.messages, asked);
+      const whole = atMessage === total;
+      const messages = source.messages.slice(0, atMessage);
+      const id = options.newId ?? this.generateSessionId();
+      if (!/^[A-Za-z0-9._-]{1,160}$/.test(id) || id === "." || id === "..") throw new Error("The new session id is not a safe persistence name.");
+      if (this.stateManager.hasTaskState(id) || fs.existsSync(this.archivedHistoryPath(id))) throw new Error(`Session ${id} already exists.`);
+
+      const committed: string[] = Array.isArray((source.history as any)?.committedCompactions) ? (source.history as any).committedCompactions.filter((c: unknown): c is string => typeof c === "string") : [];
+      const read = this.readArchivedHistory(source.id, new Set(committed));
+      const kept = committed.filter((c) => {
+        const record = read.byCompaction?.get(c)?.record;
+        return !isCompactionRecord(record) || insertedBlockPresent(record, messages);
+      });
+      // The archive goes first: a record never names a compaction whose originals are not already on disk.
+      const keep = new Set(kept);
+      const lines: string[] = [];
+      let archivedMessages = 0;
+      let raw = "";
+      try { raw = fs.readFileSync(this.archivedHistoryPath(source.id), "utf8"); } catch {}
+      for (const line of raw.split("\n")) {
+        if (!line.trim()) continue;
+        let parsed: { compactionId?: string };
+        try { parsed = JSON.parse(line); } catch { continue; }
+        if (parsed.compactionId !== undefined && !keep.has(parsed.compactionId)) continue;
+        lines.push(line);
+        archivedMessages++;
+      }
+      if (lines.length) appendLinesDurably(this.archivedHistoryPath(id), lines);
+
+      const at = new Date().toISOString();
+      this.saveSession({
+        id,
+        title: `Fork of ${source.title || "session"}`.slice(0, 120),
+        workspace: source.workspace,
+        model: source.model,
+        ...(source.endpoint ? { endpoint: source.endpoint } : {}),
+        messages,
+        history: { complete: kept.length === 0, compactions: kept.length, archivedMessages, committedCompactions: kept } as any,
+        ...(source.findings !== undefined ? { findings: source.findings } : {}),
+        ...(source.durableNotes !== undefined ? { durableNotes: source.durableNotes } : {}),
+        ...(source.activePlan ? { activePlan: source.activePlan } : {}),
+        ...(whole && source.objective !== undefined ? { objective: source.objective } : {}),
+        forkedFrom: { sessionId: source.id, atMessage, at },
+      });
+      return { id, sourceId: source.id, atMessage, compactions: kept.length };
+    });
   }
 
   /** Archive of messages context compaction replaced in this session (redacted JSON lines beside the record). */
