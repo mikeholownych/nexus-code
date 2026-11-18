@@ -97,6 +97,8 @@ async function* enumerateJobs() {
     let entryDepth = null;
     let entryType = null;
     let pending = Buffer.alloc(0);
+    // True once stdout reached EOF: find has finished writing and is only being reaped.
+    let drained = false;
     try {
       for await (const chunk of child.stdout) {
         enumerationBytes += chunk.length;
@@ -164,8 +166,12 @@ async function* enumerateJobs() {
         }
         pending = data.subarray(offset);
       }
+      drained = true;
     } finally {
-      if (child.exitCode === null && !child.killed) child.kill("SIGTERM");
+      // Terminate only an enumeration that is being abandoned. After EOF the child may not be reaped
+      // yet (`exitCode` is still null on a loaded host); signalling it then turns a clean exit into
+      // `signal_sigterm` and fails the scan spuriously.
+      if (!drained && child.exitCode === null && !child.killed) child.kill("SIGTERM");
       const { code, signal } = await closed;
       children.delete(child);
       if (spawnError || code !== 0 || stderrBytes !== 0 || entryDepth !== null || entryType !== null || pending.length !== 0) {

@@ -8,6 +8,15 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 ## [Unreleased]
 
+### Changed
+
+- Cross-runner reproducibility (`repro.yml`) now also runs weekly against the newest published RC pre-release; manual dispatch is unchanged. It is not a required check (v1.2.1 plan PC-4).
+- CI runs `check_requirements.mjs --enforce` in `test-matrix` (v1.2.1 plan DH-6).
+
+### Fixed
+
+- The compiler-exposure inventory could fail a qualification scan on a loaded host with `enumeration_exit_batch_N_signal_sigterm`, because it signalled a `find` that had already finished writing (v1.2.1 plan PC-7).
+
 ## [v1.2.1] - 2026-11-18
 
 ### Security

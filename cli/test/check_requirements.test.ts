@@ -548,3 +548,11 @@ test("exact-RC qualification evidence rejects symlinked evidence files", () => {
   fs.symlinkSync(target, source);
   assert.match(fixture.runFixture(...fixture.enforcedArgs).stdout, /evidence path must contain only directories and a regular file/);
 });
+
+test("CI runs the requirements ledger gate in enforce mode before anything is built (DH-6)", () => {
+  // Enforce mode needs a clean worktree, so it runs in test-matrix right after checkout. The later
+  // linux-x86_64 call follows a build and stays in report mode.
+  const ci = fs.readFileSync(path.resolve(import.meta.dirname, "..", "..", ".github/workflows/ci.yml"), "utf8");
+  const matrix = ci.slice(ci.indexOf("\n  test-matrix:"), ci.indexOf("\n  cloudflare-experiment:"));
+  assert.match(matrix, /^\s+- run: node scripts\/check_requirements\.mjs --enforce$/m);
+});
