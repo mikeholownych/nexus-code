@@ -4,6 +4,7 @@ import { PolicyContext } from "./approval_policy.js";
 import { isWorkspaceTrusted } from "../workspace_trust.js";
 import { safeTerminal } from "../ui.js";
 import { workspaceChangedPaths } from "../git.js";
+import { buildNeedsInput } from "./needs_input.js";
 import { runTestSuiteWithExecutor, discoverTypecheck, runTypecheck, typecheckMode, discoverVerifier, describeVerifier, hasExecutedTests } from "../tester.js";
 import { isInlineProgramVerifier, snapshotVerifierDefinitionWithReason, judgeWithoutCopy, prepareBaselineTestsCopy, snapshotTests, type ChangeBaseline, type Independence } from "./independent_check.js";
 import { TypecheckEvidence } from "./turn.js";
@@ -11,7 +12,11 @@ import { createHash } from "node:crypto";
 import { failedCheckFrom, attemptEvidence, priorAttempt, recordAttempt } from "./objective.js";
 import { DEFAULT_VERIFIER_TIMEOUT_SECS, ConfirmHandler, foldVoluminousOutput } from "./agent_support.js";
 
-export async function ensureVerifierApprovedImpl(this: any, command: string, confirmHandler?: ConfirmHandler, origin?: string, binding?: string): Promise<boolean> {
+/**
+ * `askHeadless`: with no operator present, record the decision as a NEEDS_INPUT question (VC-9) instead of only
+ * refusing. The baseline captures pass false: they run before any change and a refusal there ends nothing.
+ */
+export async function ensureVerifierApprovedImpl(this: any, command: string, confirmHandler?: ConfirmHandler, origin?: string, binding?: string, askHeadless = true): Promise<boolean> {
   const isTrusted = isWorkspaceTrusted(this.config.workspace, this.isReadOnly());
   const mode = this.getApprovalMode();
   const policyContext: PolicyContext = {
@@ -38,7 +43,17 @@ export async function ensureVerifierApprovedImpl(this: any, command: string, con
 
   const onConfirm = confirmHandler ?? this.activeTurn?.onConfirm;
   if (!onConfirm) {
-    return false;
+    if (!askHeadless) return false;
+    const decision = this.headlessDecision(buildNeedsInput(
+      "verifier_approval",
+      `Run ${verifierCmd.slice(0, 160)} as the verifier${origin ? ` (${origin.slice(0, 120)})` : ""}?`,
+      { command: verifierCmd.slice(0, 200), digest: digest.slice(0, 16) },
+      verifierCmd,
+      digest,
+    ));
+    if (decision !== "approve") return false;
+    this.approvedVerifiers.add(cacheKey);
+    return true;
   }
 
   const approved = await onConfirm("verifier", {
@@ -87,7 +102,8 @@ export async function runTypecheckOracleImpl(this: any, opts: {
       block: `Verification Oracle: ${check.command} already failed on these exact workspace inputs (attempt #${prior.n}); nothing it checks has changed, so it was not run again.\n${prior.failedCheck ? `Failed check: ${prior.failedCheck}\n` : ""}Fix the type errors, then call task_completed again.`,
     };
   }
-  if (!(await this.ensureVerifierApproved(check.command, opts.onConfirm, "type-check for the task", check.toolSha256))) {
+  // Only an enforced type-check can end the turn BLOCKED on a question; a record-only one is just not run.
+  if (!(await this.ensureVerifierApproved(check.command, opts.onConfirm, "type-check for the task", check.toolSha256, enforced))) {
     return enforced
       ? { evidence: (this.lastTypecheck = { status: "NOT_APPLICABLE" as const, scope: "type-check not approved", ...named, enforced, candidateId: opts.candidateId, at: at() }), block: `Verification Oracle: type-check execution was not approved by operator (${check.command}).` }
       : skipped("type-check not approved", named);
@@ -187,7 +203,7 @@ export async function captureChangeBaselineImpl(this: any, confirmHandler?: Conf
       }
       return;
     }
-    const approved = await this.ensureVerifierApproved(command, confirmHandler);
+    const approved = await this.ensureVerifierApproved(command, confirmHandler, undefined, undefined, false);
     if (!approved) {
       this.changeBaseline = null;
       return;
@@ -274,7 +290,7 @@ export async function captureTypecheckBaselineImpl(this: any, confirmHandler: Co
     if (typecheckMode(this.config.typecheck, Boolean(this.config.authoritativeVerifierCommand?.trim())) === "off") return;
     const check = discoverTypecheck(this.config.workspace);
     if (!check || check.skipReason || check.missingTool || check.tool === "cargo") return;
-    if (!(await this.ensureVerifierApproved(check.command, confirmHandler, "type-check baseline (before the change)", check.toolSha256))) return;
+    if (!(await this.ensureVerifierApproved(check.command, confirmHandler, "type-check baseline (before the change)", check.toolSha256, false))) return;
     this.activity("verifying", { tool: `${check.command} (before the change)` });
     const run = await runTypecheck(check, (command, timeout_secs) => this.bridge.executeTool("run_command", { command, timeout_secs }), this.config.workspace, new Set(), deadlineSecs);
     if (run.status === "PASSED") this.typecheckBaseline = { command: check.command, signatures: new Set() };

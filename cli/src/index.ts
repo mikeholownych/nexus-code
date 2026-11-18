@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { parseAnswers } from "./core/needs_input.js";
 import { Command } from "commander";
 import * as path from "node:path";
 import * as fs from "node:fs";
@@ -31,6 +32,10 @@ import { isolateEvalCommandHome, runVersionedEvalCommand } from "./eval_cli.js";
 import { redactDiagnosticForOutput } from "./core/persistence_protection.js";
 import { formatDiagnosticForOutput } from "./ui.js";
 import { streamEventSink, streamObserver } from "./stream_json.js";
+
+function collectAnswer(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
+}
 
 function collectDeliverableFile(value: string, previous: string[] = []): string[] {
   return [...previous, value];
@@ -456,12 +461,24 @@ program
   .option("-j, --json", "Output machine-readable JSON structured result (UI-002, UI-003)")
   .option("--output <format>", "Output format: text (default), json (same as --json) or stream-json (one JSON event per line, nothing else on stdout; see docs/STREAM_JSON.md)")
   .option("-r, --resume [id]", "Resume previous session or task state")
+  .option("--answer <id=approve|decline>", "With --resume: answer a question the blocked run asked (the 12-character needsInput.id in its result); repeatable", collectAnswer, [])
   .option("--step", "Execute one model/tool cycle and pause deterministically")
   .action(async (promptParts: string[], _options: any, cmd: Command) => {
     const options = commandOptions(cmd);
     let prompt = promptParts.join(" ").trim();
     const config = buildConfig(options);
     config.surface = "headless";
+    let answers: ReturnType<typeof parseAnswers> | undefined;
+    if ((options.answer ?? []).length) {
+      try {
+        if (options.resume === undefined || options.resume === false) throw new Error("--answer needs --resume (it answers a question a blocked run asked)");
+        answers = parseAnswers(options.answer);
+      } catch (err: any) {
+        console.error(`error: ${err.message}`);
+        exitAfterFlush(2);
+        return;
+      }
+    }
     const outputFormat = String(options.output ?? (options.json ? "json" : "text"));
     if (!["text", "json", "stream-json"].includes(outputFormat) || (options.json && outputFormat !== "json")) {
       console.error(options.json && ["text", "stream-json"].includes(outputFormat) ? "error: --json cannot be combined with --output " + outputFormat : "error: --output must be text, json or stream-json");
@@ -543,6 +560,7 @@ program
         json: isJson,
         ...(emitEvent ? { observer: streamObserver(emitEvent) } : {}),
         resumeTaskId,
+        ...(answers ? { answers } : {}),
         signal: abort.signal,
         step: Boolean(options.step),
       });

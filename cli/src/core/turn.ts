@@ -12,6 +12,7 @@
  * reinterpret it. VERIFIED can only be produced from verifier evidence, never asserted.
  */
 import type { ToolCallSyntaxCounts } from "../parser.js";
+import type { NeedsInputQuestion } from "./needs_input.js";
 
 export type ExecutionState = "COMPLETED" | "INTERRUPTED" | "FAILED" | "BLOCKED" | "LIMIT_REACHED";
 
@@ -39,6 +40,8 @@ export type TurnReason =
   | "VERIFIER_NOT_CONVERGING"
   /** The model repeated one tool call with identical arguments and an identical result until the hard threshold. */
   | "TOOL_CALL_LOOP"
+  /** A headless run needs an operator decision (approval): BLOCKED with the question in TurnResult.needsInput (VC-9). */
+  | "NEEDS_INPUT"
   | "INFERENCE_FAILED"
   | "STEP_LIMIT_REACHED"
   | "STEP_PAUSED"
@@ -374,6 +377,8 @@ export interface TurnResult {
     evidence: string;
     attempts: Array<{ n: number; command: string; status: string; classification?: string; failingTests?: string[]; failedCheck?: string; candidate: string }>;
   };
+  /** Present when the turn stopped as NEEDS_INPUT: the decision wanted. Resume with `--answer <id>=approve|decline`. */
+  needsInput?: NeedsInputQuestion;
   /** Present when the turn stopped as TOOL_CALL_LOOP: the repeated call (arguments redacted) and the recent calls with their counts. */
   repeatedCall?: {
     tool: string;
@@ -442,6 +447,9 @@ export function assertTurnResultInvariants(t: TurnResult): TurnResult {
   }
   if (t.reason === "TOOL_CALL_LOOP" && (t.execution !== "BLOCKED" || t.outcome !== "NOT_ESTABLISHED" || !t.repeatedCall)) {
     throw new TurnResultInvariantError("TOOL_CALL_LOOP requires a BLOCKED, NOT_ESTABLISHED turn carrying the repeated call");
+  }
+  if ((t.reason === "NEEDS_INPUT" || t.needsInput) && (t.reason !== "NEEDS_INPUT" || t.execution !== "BLOCKED" || t.outcome !== "NOT_ESTABLISHED" || !t.needsInput)) {
+    throw new TurnResultInvariantError("NEEDS_INPUT requires a BLOCKED, NOT_ESTABLISHED turn carrying the question (and only that reason carries one)");
   }
   if (t.execution === "FAILED" && t.outcome !== "NOT_ESTABLISHED") {
     throw new TurnResultInvariantError("FAILED must not claim an engineering outcome");
@@ -542,6 +550,12 @@ export function summarizeTurn(t: TurnResult): { heading: string; line: string } 
     return {
       heading: "TURN BLOCKED - VERIFIER NOT CONVERGING",
       line: `execution=BLOCKED outcome=NOT_ESTABLISHED (VERIFIER_NOT_CONVERGING: ${t.convergence?.evidence ?? t.detail ?? "repeated verifier failures"}). Nothing is verified; the operator decides how to proceed.`,
+    };
+  }
+  if (exec === "BLOCKED" && t.reason === "NEEDS_INPUT" && t.needsInput) {
+    return {
+      heading: "TURN BLOCKED - NEEDS INPUT",
+      line: `execution=BLOCKED outcome=NOT_ESTABLISHED (NEEDS_INPUT ${t.needsInput.id}: ${t.needsInput.prompt}). Resume with --answer ${t.needsInput.id}=approve or ${t.needsInput.id}=decline.`,
     };
   }
   if (exec === "BLOCKED" && t.reason === "TOOL_CALL_LOOP") {

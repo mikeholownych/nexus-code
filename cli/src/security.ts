@@ -44,6 +44,8 @@ export type VerificationEditDecision = (VerificationClassification & {
   path: string;
   action: "allow" | "ask" | "deny";
   label?: VerificationDecisionLabel;
+  /** A deny only because nobody is there to decide (headless, mode "approve"); a rule-based deny does not carry it. */
+  needsDecision?: true;
 }) | null;
 
 export const VERIFICATION_CONFIG_PROTECTED = "VERIFICATION_CONFIG_PROTECTED";
@@ -808,7 +810,7 @@ export class SecurityManager {
     if (mode === "block") return { ...base, action: "deny" };
     if (ctx.approved?.path === rel) return { ...base, action: "allow", label: "operator-approved" };
     if (ctx.fullAccess && found.class !== "policy") return { ...base, action: "allow", label: "auto-recorded" };
-    return { ...base, action: ctx.operator ? "ask" : "deny" };
+    return ctx.operator ? { ...base, action: "ask" } : { ...base, action: "deny", needsDecision: true };
   }
 
   /** The gate in front of a file edit: records the attempt and says whether it may run. */
