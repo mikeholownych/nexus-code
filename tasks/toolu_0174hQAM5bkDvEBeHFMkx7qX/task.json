@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_0174hQAM5bkDvEBeHFMkx7qX",
+  "agent_id": "a5f0d23bb8d307864",
+  "subagent_type": "general-purpose",
+  "task_description": "VC-9 subagent question propagation",
+  "token_usage": {
+    "input_tokens": 72,
+    "cache_creation_tokens": 115121,
+    "cache_read_tokens": 3600879,
+    "output_tokens": 32405,
+    "api_call_count": 36
+  },
+  "started_at": "2026-11-18T17:17:27.771630463Z",
+  "completed_at": "2026-11-18T17:34:40.509966593Z"
+}
