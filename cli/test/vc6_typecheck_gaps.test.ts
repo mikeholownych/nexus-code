@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 import { AutonomousAgent } from "../src/agent.js";
-import { classifyTypecheck, discoverTypecheck, parseTypecheckDiagnostics, runTypecheck, typecheckSignatures, DiscoveredTypecheck } from "../src/tester.js";
+import { classifyTypecheck, discoverTypecheck, discoverTypechecks, parseTypecheckDiagnostics, runTypecheck, typecheckSignatures, DiscoveredTypecheck } from "../src/tester.js";
 import { workspaceChangedPaths } from "../src/git.js";
 import { DEFAULT_CONTINUATION, HarnessConfig } from "../src/types.js";
 import { startGateway, Reply } from "./helpers/fixtures.js";
@@ -57,6 +57,11 @@ if [ "$1" = --version ]; then echo "mypy 1.11.0 (compiled: yes)"; exit 0; fi
 if grep -q BADPY app.py 2>/dev/null; then printf 'app.py:2: error: bad type  [assignment]\\nFound 1 error in 1 file\\n'; exit 1; fi
 exit 0
 `;
+const FAKE_CARGO = `#!/bin/sh
+if [ "$1" = --version ]; then echo "cargo 1.90.0"; exit 0; fi
+if grep -q BADRUST core/src/lib.rs 2>/dev/null; then printf 'error[E0425]: cannot find value BADRUST in this scope\n --> core/src/lib.rs:1:1\n'; exit 1; fi
+exit 0
+`;
 
 function repo(files: Record<string, string>): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-vc6-"));
@@ -69,7 +74,7 @@ function repo(files: Record<string, string>): string {
 }
 
 /** A PATH holding only the basics plus the named tools: `tsc` is the real compiler, any other name a fake script. */
-function toolPath(tools: Record<string, string | "real-tsc">): string {
+function toolPath(tools: Record<string, string | "real-tsc">, hideTools: string[] = []): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-vc6-bin-"));
   fs.symlinkSync(process.execPath, path.join(dir, "node"));
   for (const t of ["env", "bash", "sh", "git", "dirname", "ls", "cat", "grep", "printf", "rm", "mkdir", "npm"]) {
@@ -85,13 +90,14 @@ function toolPath(tools: Record<string, string | "real-tsc">): string {
   return dir;
 }
 
-async function withAgent<T>(files: Record<string, string>, opts: { tools: Record<string, string>; steps: Reply[]; env?: Record<string, string>; config?: Partial<HarnessConfig>; prepare?: (root: string) => void }, body: (agent: AutonomousAgent, root: string) => Promise<T>): Promise<T> {
+async function withAgent<T>(files: Record<string, string>, opts: { tools: Record<string, string>; hideTools?: string[]; steps: Reply[]; env?: Record<string, string>; config?: Partial<HarnessConfig>; prepare?: (root: string) => void }, body: (agent: AutonomousAgent, root: string) => Promise<T>): Promise<T> {
   const root = repo(files);
   opts.prepare?.(root);
   const saved = { HOME: process.env.HOME, PATH: process.env.PATH, NEXUS_TYPECHECK: process.env.NEXUS_TYPECHECK };
-  const bin = toolPath(opts.tools);
+  const bin = toolPath(opts.tools, opts.hideTools);
   // The ambient PATH minus any directory that provides go, pyright, mypy or tsc: only the fakes below exist.
-  const ambient = (saved.PATH ?? "").split(path.delimiter).filter((d) => d && !["go", "pyright", "mypy", "tsc"].some((t) => fs.existsSync(path.join(d, t))));
+  const hidden = new Set(["go", "pyright", "mypy", "tsc", ...(opts.hideTools ?? [])]);
+  const ambient = (saved.PATH ?? "").split(path.delimiter).filter((d) => d && ![...hidden].some((t) => fs.existsSync(path.join(d, t))));
   process.env.PATH = [bin, ...ambient].join(path.delimiter);
   process.env.HOME = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-vc6-home-"));
   delete process.env.NEXUS_TYPECHECK;
@@ -153,6 +159,65 @@ describe("VC-6: a change that breaks an untouched caller", () => {
     assert.equal(r.introducedCount, 1);
     assert.equal(classifyTypecheck(check, out, ws, new Set()).status, "PREEXISTING", "no baseline: unchanged behaviour");
     assert.equal(classifyTypecheck(check, "a.ts(1,1): error TS2322: old", ws, new Set(), baseline).status, "PREEXISTING", "the line number moving does not make it new");
+  });
+});
+
+describe("VC-6: every configured project in a workspace is checked", () => {
+  test("discovers the root TypeScript project and nested Rust project", () => {
+    const root = repo({ "tsconfig.json": TSCONFIG, "core/Cargo.toml": "[package]\nname = \"core\"\nversion = \"0.1.0\"\nedition = \"2021\"\n", "core/src/lib.rs": "pub fn ok() {}\n" });
+    try {
+      const checks = discoverTypechecks(root);
+      assert.deepEqual(checks.map((check) => check.configPath), ["tsconfig.json", "core/Cargo.toml"]);
+      assert.equal(discoverTypecheck(root)?.configPath, "tsconfig.json", "the single-project compatibility API remains root-scoped");
+      assert.match(checks[1].command, /--manifest-path core\/Cargo\.toml/);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("discovers multiple typecheck configurations in one project", () => {
+    const root = repo({ "tsconfig.json": TSCONFIG, "Cargo.toml": "[package]\nname = \"root\"\nversion = \"0.1.0\"\nedition = \"2021\"\n" });
+    try {
+      assert.deepEqual(discoverTypechecks(root).map((check) => check.configPath), ["tsconfig.json", "Cargo.toml"]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("reports incomplete discovery after the bounded project scan limit", () => {
+    const root = repo({});
+    try {
+      for (let index = 0; index < 33; index++) {
+        const project = path.join(root, `packages/p${index}`);
+        fs.mkdirSync(project, { recursive: true });
+        fs.writeFileSync(path.join(project, "tsconfig.json"), TSCONFIG);
+      }
+      const checks = discoverTypechecks(root);
+      assert.equal(checks.length, 33);
+      assert.equal(checks.at(-1)?.discoveryIncomplete, true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a nested Rust type error blocks completion even when the root TypeScript check passes", { timeout: 120_000 }, async () => {
+    const files = { "tsconfig.json": TSCONFIG, "types.ts": "export const n: number = 1;\n", "core/Cargo.toml": "[package]\nname = \"core\"\nversion = \"0.1.0\"\nedition = \"2021\"\n", "core/src/lib.rs": "pub fn ok() {}\n" };
+    const turn = await turnOf(files, { tools: { tsc: "real-tsc", cargo: FAKE_CARGO }, steps: [fix, write("core/src/lib.rs", "pub fn fail() { BADRUST; }\n"), done], config: { authoritativeVerifierCommand: NODE_VERIFIER }, env: { NEXUS_TYPECHECK: "enforce" } });
+    const checks = turn.verification?.typecheck?.projects;
+    assert.deepEqual(checks?.map((check) => check.configPath), ["tsconfig.json", "core/Cargo.toml"]);
+    assert.equal(checks?.[0]?.status, "PASSED");
+    assert.equal(checks?.[1]?.status, "FAILED");
+    assert.equal(turn.verification?.typecheck?.status, "FAILED");
+    assert.notEqual(turn.outcome, "VERIFIED");
+  });
+
+  test("an unavailable nested typechecker blocks even when the root typecheck passes", { timeout: 120_000 }, async () => {
+    const files = { "tsconfig.json": TSCONFIG, "types.ts": "export const n: number = 1;\n", "native/Cargo.toml": "[package]\nname = \"native\"\nversion = \"0.1.0\"\nedition = \"2021\"\n" };
+    const turn = await turnOf(files, { tools: { tsc: "real-tsc" }, hideTools: ["cargo"], steps: [fix, done], config: { authoritativeVerifierCommand: NODE_VERIFIER }, env: { NEXUS_TYPECHECK: "enforce" } });
+    const checks = turn.verification?.typecheck?.projects;
+    assert.deepEqual(checks?.map((check) => check.status), ["PASSED", "UNAVAILABLE"]);
+    assert.equal(turn.verification?.typecheck?.status, "UNAVAILABLE");
+    assert.notEqual(turn.outcome, "VERIFIED");
   });
 });
 

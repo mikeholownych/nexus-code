@@ -245,6 +245,8 @@ export interface TypecheckEvidence {
   shellChangedFiles?: string[];
   /** What the result holds for: "under <configPath>", never universal. */
   scope?: string;
+  /** Per-project evidence when a workspace contains multiple configured type-check projects. */
+  projects?: TypecheckEvidence[];
   /** Redacted, control characters made visible, capped, and fenced as untrusted compiler output. */
   excerpt?: string;
   candidateId?: string;

@@ -157,12 +157,13 @@ describe("type-check as verifier evidence: agent level", () => {
     assert.equal(turn.verification?.typecheck?.status, "NOT_APPLICABLE");
   });
 
-  test("solution-style tsconfig is not applicable and the bad file does not block", { timeout: 120_000 }, async () => {
+  test("an enforced solution-style tsconfig that this checker cannot run blocks completion", { timeout: 120_000 }, async () => {
     const solution = JSON.stringify({ files: [], references: [{ path: "./src" }] });
     const { turn } = await run({ "tsconfig.json": solution, "types.ts": TYPES_OK }, { steps: [fix, write("types.ts", TYPES_BAD), done] });
     assert.equal(turn.verification?.typecheck?.status, "NOT_APPLICABLE");
-    assert.equal(turn.verification?.status, "PASSED");
-    assert.equal(turn.outcome, "REGRESSION_FREE");
+    assert.equal(turn.verification?.typecheck?.enforced, true);
+    assert.equal(turn.verification?.status, "FAILED");
+    assert.notEqual(turn.outcome, "VERIFIED");
   });
 
   test("NEXUS_TYPECHECK=off disables the check", { timeout: 120_000 }, async () => {
@@ -193,13 +194,13 @@ describe("type-check as verifier evidence: agent level", () => {
     assert.notEqual(enforce.turn.outcome, "VERIFIED");
   });
 
-  test("tsc not installed is UNAVAILABLE, recorded, not a candidate failure (PATH without tsc)", { timeout: 120_000 }, async () => {
+  test("tsc not installed is UNAVAILABLE and blocks an enforced check (PATH without tsc)", { timeout: 120_000 }, async () => {
     const { turn, ledger } = await run({ "tsconfig.json": TSCONFIG, "types.ts": TYPES_OK }, { path: "none", steps: [fix, write("types.ts", TYPES_BAD), done], config: { authoritativeVerifierCommand: NODE_VERIFIER }, env: { NEXUS_TYPECHECK: "enforce" } });
     assert.equal(turn.verification?.typecheck?.status, "UNAVAILABLE");
-    assert.equal(turn.verification?.status, "PASSED");
+    assert.equal(turn.verification?.typecheck?.enforced, true);
+    assert.equal(turn.verification?.status, "FAILED");
     assert.ok(!ledger?.some((a) => /tsc/.test(a.command)), "an UNAVAILABLE type-check is not recorded as an attempt");
-    assert.equal(turn.verification?.status, "PASSED");
-    assert.equal(turn.outcome, "REGRESSION_FREE");
+    assert.notEqual(turn.outcome, "VERIFIED");
   });
 
   test("an unchanged failing type-check is not rerun: the skip names the typecheck command and keeps its evidence", { timeout: 120_000 }, async () => {
