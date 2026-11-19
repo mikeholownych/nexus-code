@@ -77,6 +77,17 @@ export function buildMcpEnvironment(customEnv?: Record<string, string>): Record<
   return env;
 }
 
+/** A tool call may have reached its server, but Nexus did not receive a usable result. */
+export class McpOutcomeUnknownError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "McpOutcomeUnknownError";
+  }
+}
+
+/** These responses identify a missing/unsupported route and allow the legacy endpoint to be tried. */
+const MCP_ROUTE_ABSENT = new Set([404, 405, 501]);
+
 export class McpConnection {
   public serverName: string;
   public config: McpServerConfig;
@@ -318,7 +329,8 @@ export class McpConnection {
       return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
           this.pendingRequests.delete(id);
-          reject(new Error(`MCP WS request '${method}' timed out`));
+          const message = `MCP WS request '${method}' timed out`;
+          reject(method === "tools/call" ? new McpOutcomeUnknownError(message) : new Error(message));
         }, timeoutMs);
         this.pendingRequests.set(id, {
           resolve: (val) => {
@@ -336,24 +348,53 @@ export class McpConnection {
 
     if ((this.transport === "sse" || this.transport === "http") && this.config.url) {
       const cleanUrl = this.config.url.replace(/\/+$/, "");
-      const res = await fetch(`${cleanUrl}/message`, {
+      const post = (target: string) => fetch(target, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: payload,
         signal: AbortSignal.timeout(timeoutMs),
-      }).catch(async () => {
-        return await fetch(cleanUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: payload,
-          signal: AbortSignal.timeout(timeoutMs),
-        });
       });
+      let res: Response;
+      if (method === "tools/call") {
+        // A lost response does not prove the server did not perform the effect. Never retransmit an ambiguous call.
+        let first: Response;
+        try {
+          first = await post(`${cleanUrl}/message`);
+        } catch (err: any) {
+          throw new McpOutcomeUnknownError(`tools/call to '${this.serverName}' got no answer (${err?.message ?? err})`);
+        }
+        if (MCP_ROUTE_ABSENT.has(first.status)) {
+          try {
+            res = await post(cleanUrl);
+          } catch (err: any) {
+            throw new McpOutcomeUnknownError(`tools/call to '${this.serverName}' got no answer from the legacy endpoint (${err?.message ?? err})`);
+          }
+          if (!res.ok && !MCP_ROUTE_ABSENT.has(res.status)) {
+            throw new McpOutcomeUnknownError(`tools/call to '${this.serverName}' received HTTP ${res.status} from the legacy endpoint; the effect may have happened`);
+          }
+        } else {
+          res = first;
+          if (!res.ok) {
+            throw new McpOutcomeUnknownError(`tools/call to '${this.serverName}' received HTTP ${res.status}; the effect may have happened`);
+          }
+        }
+      } else {
+        // Discovery and other read requests retain legacy fallback behavior.
+        res = await post(`${cleanUrl}/message`).catch(async () => await post(cleanUrl));
+      }
 
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}: ${res.statusText}`);
       }
-      const data = (await res.json()) as any;
+      let data: any;
+      try {
+        data = await res.json();
+      } catch (err: any) {
+        if (method === "tools/call") {
+          throw new McpOutcomeUnknownError(`tools/call to '${this.serverName}' returned an unreadable response (${err?.message ?? err})`);
+        }
+        throw err;
+      }
       if (data.error) {
         throw new Error(data.error.message || JSON.stringify(data.error));
       }
@@ -368,7 +409,8 @@ export class McpConnection {
       const timeout = setTimeout(() => {
         if (this.pendingRequests.has(id)) {
           this.pendingRequests.delete(id);
-          reject(new Error(`MCP request '${method}' timed out after ${timeoutMs}ms`));
+          const message = `MCP request '${method}' timed out after ${timeoutMs}ms`;
+          reject(method === "tools/call" ? new McpOutcomeUnknownError(message) : new Error(message));
         }
       }, timeoutMs);
 
@@ -444,15 +486,15 @@ export class McpConnection {
     };
   }
 
-  public async callTool(toolName: string, args: Record<string, any>): Promise<ExecutionResult> {
+  public async callTool(toolName: string, args: Record<string, any>, timeoutMs?: number): Promise<ExecutionResult> {
     try {
       const res = await this.sendRequest("tools/call", {
         name: toolName,
         arguments: args,
-      });
+      }, timeoutMs);
 
       if (!res) {
-        return { success: false, output: "", error: "No response from MCP tool call" };
+        return { success: false, output: "", error: "MCP call outcome unknown: the server returned no result; the tool may have run, so check its effect before retrying." };
       }
 
       let textOutput = "";
@@ -477,6 +519,13 @@ export class McpConnection {
         ...(isError ? { error: textOutput } : {}),
       };
     } catch (err: any) {
+      if (err instanceof McpOutcomeUnknownError) {
+        return {
+          success: false,
+          output: "",
+          error: `MCP call outcome unknown: ${err.message}. The tool may have run; check its effect before retrying, do not assume it failed.`,
+        };
+      }
       return {
         success: false,
         output: "",
