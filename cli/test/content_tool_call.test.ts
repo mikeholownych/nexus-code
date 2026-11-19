@@ -221,3 +221,48 @@ test("CS-5: a model that answers an example request with the call as text gets e
     assert.match(String(out.content), /echo ok/);
   });
 });
+
+test("a server that keeps writing a call as text after tool_choice=required is reported once", async () => {
+  const warnings: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => { warnings.push(String(args[0])); };
+  try {
+    await withServer(() => textCall, async (client) => {
+      await client.chatCompletion([user("run echo ok")], only("run_command"));
+      await client.chatCompletion([user("run echo ok again")], only("run_command"));
+      assert.equal(warnings.filter((warning) => /did not return a native tool call even when one was required/.test(warning)).length, 1);
+      assert.equal(warnings[0]?.includes("call-like text is never executed"), true);
+    });
+  } finally {
+    console.warn = original;
+  }
+});
+
+test("a native call from the required retry does not report a tool-call capability failure", async () => {
+  const warnings: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => { warnings.push(String(args[0])); };
+  try {
+    await withServer((seen) => (seen.toolChoice === "required" ? nativeCall : textCall), async (client) => {
+      const out = await client.chatCompletion([user("run echo ok")], only("run_command"));
+      assert.equal(out.toolCallSource, "required");
+      assert.equal(warnings.some((warning) => /did not return a native tool call/.test(warning)), false);
+    });
+  } finally {
+    console.warn = original;
+  }
+});
+
+test("a failed required-call retry does not claim that the model lacks tool-call support", async () => {
+  const warnings: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => { warnings.push(String(args[0])); };
+  try {
+    await withServer((seen) => (seen.toolChoice === "required" ? { __status: 400 } : textCall), async (client) => {
+      await client.chatCompletion([user("run echo ok")], only("run_command"));
+      assert.equal(warnings.some((warning) => /did not return a native tool call/.test(warning)), false);
+    });
+  } finally {
+    console.warn = original;
+  }
+});

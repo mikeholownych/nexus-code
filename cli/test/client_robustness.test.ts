@@ -226,3 +226,34 @@ test("endpoint normalization strips trailing slashes and appends /v1 for legacy 
   assert.equal(c5.getEndpoints()[1], "http://localhost:5678/v1");
   assert.equal(c5.getEndpoints()[2], "http://localhost:9999/api/v1");
 });
+
+test("finish_reason=content_filter is not a complete non-streamed answer or a failover condition", async () => {
+  await withServer(
+    (_req, res) => json(res, { choices: [{ finish_reason: "content_filter", message: { role: "assistant", content: "I cannot" } }] }),
+    async (base) => {
+      const c = new LocalLlmClient({ model: "m", endpoint: base, apiKey: "k" } as any);
+      await assert.rejects(
+        () => c.chatCompletion([{ role: "user", content: "x" }], []),
+        (error: any) => error.kind === "protocol_error" && error.failoverEligible === false && /content_filter/.test(error.message),
+      );
+    },
+  );
+});
+
+test("streamed finish_reason=content_filter is not a complete answer", async () => {
+  await withServer(
+    (_req, res) => {
+      res.setHeader("Content-Type", "text/event-stream");
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "partial" }, finish_reason: null }] })}\n\n`);
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "content_filter" }] })}\n\n`);
+      res.end("data: [DONE]\n\n");
+    },
+    async (base) => {
+      const c = new LocalLlmClient({ model: "m", endpoint: base, apiKey: "k" } as any);
+      await assert.rejects(
+        () => c.chatCompletionStream([{ role: "user", content: "x" }], []),
+        (error: any) => error.kind === "protocol_error" && error.failoverEligible === false && /content_filter/.test(error.message),
+      );
+    },
+  );
+});

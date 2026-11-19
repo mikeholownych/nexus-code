@@ -666,6 +666,8 @@ export class LocalLlmClient {
   private lastUsageReport?: UsageReport;
   /** Replies already asked about, so a credential-reload re-entry never asks twice for one reply. */
   private readonly askedAgain = new WeakSet<ChatMessage>();
+  /** A bounded warning when this connection keeps returning tool-call-shaped text after a required-call request. */
+  private warnedToolCallTextOnly = false;
   private pending?: PendingRequest;
   /** Ledger reservations taken by the request in progress (released when its receipt is recorded). */
   private reservations: string[] = [];
@@ -1763,6 +1765,10 @@ export class LocalLlmClient {
     }
     this.emitDiagnostic("error", pc.dim(`[nexus] ${this.conn.label} wrote the call as text again; asking once more with tool_choice=required.`));
     const forced = await ask("required");
+    if (forced && !forced.tool_calls?.length && !this.warnedToolCallTextOnly) {
+      this.warnedToolCallTextOnly = true;
+      this.emitDiagnostic("warn", pc.yellow(`[nexus] ${this.conn.label} (${this.model}) did not return a native tool call even when one was required; call-like text is never executed. Check that the selected model or server supports tool calls.`));
+    }
     return finish(forced?.tool_calls?.length ? { ...forced, toolCallSource: "required" } : response);
   }
 
@@ -1871,10 +1877,15 @@ export class LocalLlmClient {
     });
   }
 
-  /** A chat answer that is not a complete one: a provider error finish or a cut-off at the output limit. */
+  /** A chat answer that is not complete: provider refusal/filter, provider error, stream gap or output-limit cutoff. */
   private refuseChatFinish(result: NativeResult, requestId: string, streamed = false): void {
     if (this.conn.providerId && result.finishReason === "error") {
       throw new InferenceError("provider_error_frame", "provider", `Provider ended the ${streamed ? "stream" : "response"} with finish_reason=error.`, { requestId, partialText: result.text });
+    }
+    // The provider withheld or cut the answer; remaining text is not a complete response. Do not retry or fail over:
+    // filtering is not an outage, and another endpoint would be asked the same question.
+    if (result.finishReason === "content_filter") {
+      throw new InferenceError("protocol_error", "provider", `Provider withheld the ${streamed ? "stream" : "response"} (finish_reason=content_filter); refusing to treat it as a complete answer.`, { requestId, partialText: result.text, failoverEligible: false });
     }
     if (streamed && result.finish === "incomplete") {
       throw new InferenceError("stream_incomplete", "transport", "Inference stream ended without a finish_reason or [DONE]; response is incomplete.", { requestId, partialText: result.text });
