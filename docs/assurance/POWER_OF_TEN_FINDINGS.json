@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "repository": "https://github.com/mikeholownych/nexus-code",
+  "source_revision": "a0329e72ea796a306ea138ab2870d15920e4af61",
+  "source_ref": "origin/main",
+  "assessed_at": "2026-11-18",
+  "findings": [
+    {
+      "id": "P10-001",
+      "source_rule": "Rule 2; Nexus adaptation AI-E",
+      "subsystem": "agent_orchestration",
+      "severity": "high",
+      "maturity": "M2",
+      "status": "confirmed",
+      "description": "Default progressing agent turns have infinite total-step and wall-time budgets; the delegated runSubagent loop also has no total step or time ceiling. Local request idle/first-byte limits do not bound a local stream that continues sending data.",
+      "source_locations": [
+        "cli/src/types.ts:182-188@a0329e72ea796a306ea138ab2870d15920e4af61",
+        "cli/src/core/run_turn.ts:220-275@a0329e72ea796a306ea138ab2870d15920e4af61",
+        "cli/src/agent.ts:4440-4457@a0329e72ea796a306ea138ab2870d15920e4af61",
+        "cli/src/client.ts:1123-1144@a0329e72ea796a306ea138ab2870d15920e4af61"
+      ],
+      "test_evidence": [
+        "cli/test/compaction_continuity.test.ts:75-95 documents and tests >300 progressing steps without forced termination; not executed in this audit"
+      ],
+      "operational_impact": "A model can continue making distinct changes and consume unbounded session time, provider requests and tool resources until external cancellation or a failure occurs.",
+      "recommended_action": "Add finite operator-configured task budgets enforced by a shared tracker across direct turns, subagents, provider retry and every tool; exhaustion must remain non-success.",
+      "priority": "P0"
+    },
+    {
+      "id": "P10-002",
+      "source_rule": "Rule 2; Nexus adaptation AI-E",
+      "subsystem": "recovery_and_resume",
+      "severity": "high",
+      "maturity": "M2",
+      "status": "confirmed",
+      "description": "Explicit maxTotalSteps and maxTurnMinutes are checked against counters initialized for each runTurnImpl invocation. Persisted cumulativeSteps is marked observability-only, so resuming a task receives a fresh per-turn budget; operation runner's 10,000 transition ceiling also applies per invocation.",
+      "source_locations": [
+        "cli/src/core/run_turn.ts:137-145@a0329e72ea796a306ea138ab2870d15920e4af61",
+        "cli/src/core/run_turn.ts:220-267@a0329e72ea796a306ea138ab2870d15920e4af61",
+        "cli/src/core/turn.ts:348-359@a0329e72ea796a306ea138ab2870d15920e4af61",
+        "cli/src/core/operation_runner.ts:160-175,255-269@a0329e72ea796a306ea138ab2870d15920e4af61"
+      ],
+      "test_evidence": [],
+      "operational_impact": "Repeated operator/service resume can exceed an intended task-wide work or elapsed-time budget while every individual invocation reports ordinary budget exhaustion.",
+      "recommended_action": "Persist consumed task budgets with durable objective/operation state and pass remaining budget into each resume and child execution; renewal must be explicit and attributable.",
+      "priority": "P0"
+    },
+    {
+      "id": "P10-003",
+      "source_rule": "Nexus adaptation AI-D; Rule 8/10",
+      "subsystem": "acceptance_and_ci_governance",
+      "severity": "critical",
+      "maturity": "M2",
+      "status": "confirmed",
+      "description": "The active main/v1-integration ruleset requires the three CI checks but zero approving reviews, no code-owner review and non-strict status checks. Candidate changes can modify CI/verifier source without an independently required reviewer, weakening the authority that reports their own checks.",
+      "source_locations": [
+        ".github/workflows/ci.yml@a0329e72ea796a306ea138ab2870d15920e4af61",
+        "GitHub ruleset 25340146 API snapshot 2026-11-18: required_approving_review_count=0, require_code_owner_review=false, strict_required_status_checks_policy=false"
+      ],
+      "test_evidence": [
+        "Read-only `gh api repos/mikeholownych/nexus-code/rulesets/25340146` query returned active branch ruleset, three required checks, zero required approvals, and no bypass actors"
+      ],
+      "operational_impact": "A green check can be made less meaningful by changing the workflow or verifier in the same candidate; incorrect code can be accepted without external review.",
+      "recommended_action": "Require independent/code-owner approval for workflow, verifier, policy and test-harness paths; require strict checks and protect required workflow implementation from candidate self-modification.",
+      "priority": "P0"
+    },
+    {
+      "id": "P10-004",
+      "source_rule": "Nexus adaptation AI-C/AI-E",
+      "subsystem": "execution_evidence",
+      "severity": "medium",
+      "maturity": "M2",
+      "status": "confirmed",
+      "description": "FlightRecorder catches append failures and returns an event without recording it; local flight logs have no tamper-evident chain or signature. These logs cannot substantiate a complete execution history.",
+      "source_locations": [
+        "cli/src/flight.ts:77-108@a0329e72ea796a306ea138ab2870d15920e4af61"
+      ],
+      "test_evidence": [],
+      "operational_impact": "Forensic records can be missing or rewritten silently. This primarily undermines diagnosis and audit reconstruction, not the structured TurnResult success predicate.",
+      "recommended_action": "Keep optional telemetry best effort but mark skipped writes; implement a hash-chained export/verify manifest for required acceptance evidence and fail acceptance if its required receipt cannot persist.",
+      "priority": "P1"
+    },
+    {
+      "id": "P10-005",
+      "source_rule": "Rule 3; Nexus adaptation resource ownership",
+      "subsystem": "resource_admission",
+      "severity": "high",
+      "maturity": "M2",
+      "status": "suspected",
+      "description": "The examined paths contain per-tool output/time bounds and context admission but no demonstrated product-wide process memory, persistent disk, provider spend or concurrent-session admission limit.",
+      "source_locations": [
+        "cli/src/tools.ts:515-539@a0329e72ea796a306ea138ab2870d15920e4af61",
+        "cli/src/core/operation_runner.ts:276-299@a0329e72ea796a306ea138ab2870d15920e4af61",
+        "core/src/runner.rs@a0329e72ea796a306ea138ab2870d15920e4af61"
+      ],
+      "test_evidence": [],
+      "operational_impact": "Concurrent or long-lived sessions may exhaust shared host/provider resources and impair unrelated sessions or recovery.",
+      "recommended_action": "Measure multi-session memory/disk/process behavior and add admission limits through existing ResourceRegistry, client lease and process registry seams.",
+      "priority": "P1"
+    },
+    {
+      "id": "P10-006",
+      "source_rule": "Rule 10",
+      "subsystem": "static_analysis_ci",
+      "severity": "medium",
+      "maturity": "M2",
+      "status": "confirmed",
+      "description": "Rust Clippy is installed by the pinned toolchain and passed locally with warnings denied, but CI workflows do not run it; TypeScript has strict type checking but no configured lint/complexity gate.",
+      "source_locations": [
+        "rust-toolchain.toml@a0329e72ea796a306ea138ab2870d15920e4af61",
+        ".github/workflows/ci.yml@a0329e72ea796a306ea138ab2870d15920e4af61",
+        "cli/tsconfig.json@a0329e72ea796a306ea138ab2870d15920e4af61"
+      ],
+      "test_evidence": [
+        "Local `cargo clippy --locked --manifest-path core/Cargo.toml -- -D warnings` exited 0; it is not a CI gate"
+      ],
+      "operational_impact": "Static diagnostics may regress between local review and merge without a required CI signal.",
+      "recommended_action": "Add Clippy to protected CI after baseline confirmation; maintain strict TS build and introduce only targeted complexity diagnostics for critical functions.",
+      "priority": "P2"
+    }
+  ]
+}
