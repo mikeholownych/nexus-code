@@ -9,7 +9,7 @@ import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { LocalLlmClient, boundedProviderText } from "../src/client.js";
+import { DEFAULT_INFERENCE_TOTAL_TIMEOUT_MS, MAX_INFERENCE_TOTAL_TIMEOUT_MS, LocalLlmClient, boundedProviderText, inferenceTotalTimeoutMs } from "../src/client.js";
 import { UsageLedger } from "../src/usage.js";
 
 async function server(handler: (req: http.IncomingMessage, body: any, res: http.ServerResponse) => void) {
@@ -34,6 +34,16 @@ test("boundedProviderText redacts secrets and caps length", () => {
   const out = boundedProviderText("key=sk-ant-api03-" + "A".repeat(40) + " " + "x".repeat(10_000));
   assert.ok(out.length <= 2_000, String(out.length));
   assert.ok(!out.includes("sk-ant-api03-AAAA"));
+});
+
+test("whole-request inference timeout has finite defaults and an operator hard ceiling", () => {
+  assert.equal(DEFAULT_INFERENCE_TOTAL_TIMEOUT_MS, 900_000);
+  assert.equal(MAX_INFERENCE_TOTAL_TIMEOUT_MS, 3_600_000);
+  assert.equal(inferenceTotalTimeoutMs(undefined), DEFAULT_INFERENCE_TOTAL_TIMEOUT_MS);
+  assert.equal(inferenceTotalTimeoutMs("0"), DEFAULT_INFERENCE_TOTAL_TIMEOUT_MS);
+  assert.equal(inferenceTotalTimeoutMs("invalid"), DEFAULT_INFERENCE_TOTAL_TIMEOUT_MS);
+  assert.equal(inferenceTotalTimeoutMs("1250"), 1250);
+  assert.equal(inferenceTotalTimeoutMs("99999999"), MAX_INFERENCE_TOTAL_TIMEOUT_MS);
 });
 
 test("a local endpoint's huge error body is bounded and redacted in the error (PRV-03)", async () => {
@@ -392,7 +402,7 @@ test("watchdog first-byte and idle timeouts reject when server hangs or stalls (
   } finally { await srv.close(); }
 });
 
-test("trickle stream succeeds when total timeout is off (ACC-INF-04)", async () => {
+test("a short trickle stream succeeds while the finite total timeout has not expired", async () => {
   const srv = await server((_req, _b, res) => {
     res.writeHead(200, { "content-type": "text/event-stream" });
     res.write(sse({ choices: [{ index: 0, delta: { content: "chunk1" } }] }));
@@ -404,7 +414,7 @@ test("trickle stream succeeds when total timeout is off (ACC-INF-04)", async () 
   try {
     const origTotal = process.env.LOCAL_LLM_TIMEOUT_MS;
     try {
-      process.env.LOCAL_LLM_TIMEOUT_MS = "0"; // total timeout off
+      process.env.LOCAL_LLM_TIMEOUT_MS = "0"; // zero cannot disable the finite default, but this response is short
       const reply = await client(srv.url).chatCompletionStream([{ role: "user", content: "hi" }], [], undefined, "r");
       assert.equal(reply.content, "chunk1chunk2");
     } finally {
@@ -412,6 +422,41 @@ test("trickle stream succeeds when total timeout is off (ACC-INF-04)", async () 
       else delete process.env.LOCAL_LLM_TIMEOUT_MS;
     }
   } finally { await srv.close(); }
+});
+
+test("a slow-drip stream is aborted by the total inference deadline even when it never idles", async () => {
+  const origTotal = process.env.LOCAL_LLM_TIMEOUT_MS;
+  const origIdle = process.env.LOCAL_LLM_IDLE_TIMEOUT_MS;
+  const srv = await server((_req, _body, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    let n = 0;
+    const timer = setInterval(() => {
+      n++;
+      res.write(sse({ choices: [{ index: 0, delta: { content: `chunk${n}` } }] }));
+      if (n >= 20) {
+        clearInterval(timer);
+        res.write(sse({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }));
+        res.end("data: [DONE]\n\n");
+      }
+    }, 50);
+    res.on("close", () => clearInterval(timer));
+  });
+  try {
+    process.env.LOCAL_LLM_TIMEOUT_MS = "300";
+    process.env.LOCAL_LLM_IDLE_TIMEOUT_MS = "1000";
+    const started = Date.now();
+    await assert.rejects(
+      client(srv.url).chatCompletionStream([{ role: "user", content: "hi" }], [], undefined, "slow-drip"),
+      (error: any) => error.kind === "timeout",
+    );
+    assert.ok(Date.now() - started < 2000, "total timeout should abort before the 1-second idle timeout");
+  } finally {
+    if (origTotal === undefined) delete process.env.LOCAL_LLM_TIMEOUT_MS;
+    else process.env.LOCAL_LLM_TIMEOUT_MS = origTotal;
+    if (origIdle === undefined) delete process.env.LOCAL_LLM_IDLE_TIMEOUT_MS;
+    else process.env.LOCAL_LLM_IDLE_TIMEOUT_MS = origIdle;
+    await srv.close();
+  }
 });
 
 test("empty stream re-request records executions: 2 in receipt (ACC-INF-06)", async () => {
