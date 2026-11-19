@@ -36,6 +36,10 @@ WantedBy=timers.target
 
 `SuccessExitStatus=75` keeps a skipped run (claim held) from showing as a failed unit.
 
+## Live result
+
+The first live run against the published v1.2.1 archive completed on 2026-11-18 and **did not meet the 99.5% native-valid bar**. `engineering/deep` returned 177/200 (88.5%) native-valid calls and `engineering/lead-reasoning` returned 155/200 (77.5%). The raw result and per-tool breakdown are recorded in [`docs/evidence/v1.2.1/MQ-4-first-live-run.md`](evidence/v1.2.1/MQ-4-first-live-run.md); the JSON result is retained unchanged beside it. This is a failed conformance observation, not a passing qualification. The scheduler role was not applied after this result.
+
 ## What is and is not validated
 
-The claim protocol, the judgement, the alert path (forced failure, a failing alert command, a runner that produces nothing) and the stale-result rule are tested end to end through the script with a fake matrix runner (`cli/test/gateway_conformance.test.ts`, each behaviour mutation-checked). **It has not yet run against the live gateway**: the first run needs an operator-prepared config for an installed release, and a full run takes about 45 minutes per two aliases.
+The claim protocol, the judgement, the alert path (forced failure, a failing alert command, a runner that produces nothing) and the stale-result rule are tested end to end through the script with a fake matrix runner (`cli/test/gateway_conformance.test.ts`, each behaviour mutation-checked). A live run has now been performed once; it failed the configured bar. One run does not establish repeatability or isolate gateway load, worker changes, or other causes.
