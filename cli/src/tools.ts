@@ -1160,6 +1160,7 @@ export class RustCoreBridge {
   async executeTool(toolName: string, args: Record<string, any>, authority?: VerificationEditContext): Promise<ExecutionResult> {
     // CS-2: in verificationPaths mode "block" a shell command may not change verification files (reverted and refused).
     const guard = toolName === "run_command" ? this.securityManager.beginVerificationShellGuard() : undefined;
+    if (guard?.refusal) return { success: false, output: "", error: guard.refusal, denialReason: VERIFICATION_CONFIG_PROTECTED };
     const result = await this.executeToolChecked(toolName, args, authority);
     if (!guard) return result;
     const verdict = this.securityManager.finishVerificationShellGuard(guard, authority?.role);

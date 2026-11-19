@@ -78,6 +78,7 @@ export interface VerificationSnapshot {
 }
 export interface VerificationShellGuard {
   before: VerificationSnapshot;
+  refusal?: string;
 }
 export interface VerificationShellChange {
   path: string;
@@ -884,7 +885,11 @@ export class SecurityManager {
    */
   public beginVerificationShellGuard(): VerificationShellGuard | undefined {
     if ((this.policy.verificationPaths?.mode ?? "approve") !== "block" && !this.shellChangeObserver) return undefined;
-    return { before: this.snapshotVerificationFiles() };
+    const before = this.snapshotVerificationFiles();
+    const refusal = (this.policy.verificationPaths?.mode ?? "approve") === "block" && !before.complete
+      ? `${VERIFICATION_CONFIG_PROTECTED}: the bounded verification snapshot is incomplete, so shell execution is refused until the workspace can be scanned completely.`
+      : undefined;
+    return { before, ...(refusal ? { refusal } : {}) };
   }
 
   /**
@@ -956,7 +961,11 @@ export class SecurityManager {
           if (!complete) return;
         } else if (entry.isFile()) {
           const rel = path.relative(this.workspace, child).replace(/\\/g, "/");
-          if (this.classifyVerificationPath(rel)) files.set(rel, this.fingerprintVerificationFile(child, rel));
+          if (this.classifyVerificationPath(rel)) {
+            const state = this.fingerprintVerificationFile(child, rel);
+            if (state) files.set(rel, state);
+            else complete = false;
+          }
         }
       }
     };
@@ -964,10 +973,10 @@ export class SecurityManager {
     return { files, complete };
   }
 
-  private fingerprintVerificationFile(abs: string, rel: string): VerificationFileState {
+  private fingerprintVerificationFile(abs: string, rel: string): VerificationFileState | undefined {
     try {
       const stat = fs.statSync(abs);
-      if (stat.size > VERIFICATION_SNAPSHOT_MAX_BYTES) return { hash: `large:${stat.size}:${stat.mtimeMs}` };
+      if (stat.size > VERIFICATION_SNAPSHOT_MAX_BYTES) return undefined;
       const raw = fs.readFileSync(abs);
       let subject: Buffer | string = raw;
       if (isConditionalConfig(rel)) {
@@ -982,7 +991,7 @@ export class SecurityManager {
       }
       return { hash: createHash("sha256").update(subject).digest("hex"), raw: raw.length <= VERIFICATION_SNAPSHOT_KEEP_BYTES ? raw : undefined };
     } catch {
-      return { hash: "unreadable" };
+      return undefined;
     }
   }
 
