@@ -344,17 +344,20 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
 - **Background Services:** Commands launched with `run_command { background: true, service_name }` (such as background dev servers) are registered as managed services. They survive turn cancellation and are listed in `/status`. On client exit or application shutdown, all registered background services are cleaned up. Background processes spawned without registration (`cmd &`) are terminated on turn cancellation.
 - **Notification Gating (REQ-AGT-109a):** Turn completion notifications (desktop `notify-send` and terminal `BEL` `\x07`) are gated to interactive TTY environments running on the REPL or TUI surface. Headless runs (`nexus run --json`) emit no BEL characters and spawn no notifications.
 
-### Long tasks: no step ceiling
+### Long tasks: bounded automatic continuation
 
 `--max-steps` (default 30) is a segment: at each segment boundary the turn writes a durable checkpoint and continues
-on its own. Progressing work has no step or time ceiling: a turn stops on completion, cancellation, demonstrated lack
+on its own. The objective has a finite default ceiling of 500 total steps and each invocation has a 480-minute ceiling.
+Operator overrides are bounded at 5,000 steps and 4,320 minutes. A turn also stops on completion, cancellation, demonstrated lack
 of progress (`--stagnation-steps`, default 12 consecutive steps without progress, or a repeated action on an unchanged
 workspace after two recovery notes), an actionable failure, or a limit **you** set (`--max-total-steps`,
 `--max-turn-minutes`). Progress is judged against workspace content, not tool-call equality: plan edits, identical
 rewrites and timestamp-only output changes do not count, and a retry after a real change is legitimate. Polls and
 transient failures are spaced with backoff instead of being treated as loops. `--no-continuation` restores the
 single-segment turn. Tracking (cumulative steps, loops, failed approaches, compactions) belongs to the objective and
-survives compaction, follow-ups ("continue") and `/resume`. See `docs/COMPACTION_AND_CONTINUITY.md`.
+survives compaction, follow-ups ("continue") and `/resume`; the total-step budget is shared with in-turn delegated
+helpers. The time limit currently applies to each active invocation and is not accumulated across process restarts.
+See `docs/COMPACTION_AND_CONTINUITY.md`.
 
 A second, independent brake watches the verifier itself: when `task_completed` fails the same verifier
 `NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS` times in a row (default 3; a check-only failure with no test names needs one

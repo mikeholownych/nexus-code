@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { randomUUID } from "node:crypto";
-import { ChatMessage, DEFAULT_CONTINUATION, EvaluationToolReceipt, HarnessConfig, ToolCall, ToolDefinition } from "./types.js";
+import { assertValidContinuationBudget, ChatMessage, DEFAULT_CONTINUATION, EvaluationToolReceipt, HarnessConfig, MAX_CONTINUATION_STEPS, ToolCall, ToolDefinition } from "./types.js";
 import { LocalLlmClient } from "./client.js";
 import { normalizeToolArguments } from "./core/tool_arguments.js";
 import { HARNESS_TOOLS, RustCoreBridge } from "./tools.js";
@@ -341,6 +341,10 @@ export class AutonomousAgent {
     options?: { durable?: boolean; role?: AgentRole; unitId?: string },
   ) {
     canonicalDurableProvenance.set(this, new WeakMap());
+    assertValidContinuationBudget(config.continuation);
+    if (!Number.isSafeInteger(config.maxSteps) || config.maxSteps < 1 || config.maxSteps > MAX_CONTINUATION_STEPS) {
+      throw new Error(`Invalid --max-steps value: expected an integer from 1 to ${MAX_CONTINUATION_STEPS}.`);
+    }
     this.config = config;
     this.surface = config.surface || "headless";
     this.primaryWorkspacePathIdentity = WorkspacePath.fromSelectedWorkspace(path.resolve(config.workspace || process.cwd()));
@@ -1423,8 +1427,10 @@ export class AutonomousAgent {
     this.persistProgress({ verificationConfigAttempts: true });
   }
 
-  private persistProgress(progress: { verificationConfigAttempts?: boolean; messages?: boolean; unverifiedChangesPending?: boolean; changeBaseline?: ChangeBaseline | null }): void {
-    if (!this.durable || this.restoringConversation) return;
+  /** Save mid-turn progress and report whether every configured persistence sink succeeded. */
+  private persistProgress(progress: { verificationConfigAttempts?: boolean; messages?: boolean; unverifiedChangesPending?: boolean; changeBaseline?: ChangeBaseline | null }): boolean {
+    if (!this.durable || this.restoringConversation) return true;
+    let saved = true;
     try {
       if (this.stateManager && !this.stateManager.hasTaskState(this.currentTaskId)) this.checkpointDurableState();
       else this.stateManager?.recordProgress(this.currentTaskId, {
@@ -1469,6 +1475,7 @@ export class AutonomousAgent {
       });
       this.progressSaveFailing = false;
     } catch (err: any) {
+      saved = false;
       // Tolerated (the turn-end checkpoint writes the same state), but not silent: a crash before then would lose the
       // work since the last save. Said once until a save succeeds again.
       if (!this.progressSaveFailing) {
@@ -1483,6 +1490,7 @@ export class AutonomousAgent {
       this.progressListener?.();
       this.sessionSaveFailing = false;
     } catch (err: any) {
+      saved = false;
       // The host's session record (what /resume reads) failed: reported once until a save succeeds again.
       if (!this.sessionSaveFailing) {
         this.sessionSaveFailing = true;
@@ -1492,6 +1500,7 @@ export class AutonomousAgent {
         else console.warn(pc.yellow(text));
       }
     }
+    return saved;
   }
 
   /**
@@ -4439,6 +4448,10 @@ ${NEXUS_RUNTIME_IDENTITY}`;
 
     const stagnationSteps = this.config.continuation?.stagnationSteps ?? DEFAULT_CONTINUATION.stagnationSteps;
     const maxRecoveries = this.config.continuation?.maxRecoveries ?? DEFAULT_CONTINUATION.maxRecoveries;
+    const maxTotalSteps = this.config.continuation?.maxTotalSteps ?? this.config.maxSteps;
+    // A subagent consumes the same objective-wide step allowance as its parent. The shared tracking data survives
+    // resume; the subagent's local tracker below is only for its own progress/stagnation decisions.
+    const objectiveTracker = this.durable && this.objective ? trackingOf(this.objective) : undefined;
     const tracker = ExecutionTracker.fresh();
     tracker.beginTurn();
     let state = this.workspaceStateIdentity();
@@ -4450,11 +4463,16 @@ ${NEXUS_RUNTIME_IDENTITY}`;
 
     for (;;) {
       if (signal?.aborted) return { completed: false, summary: finalSummary, reason: "cancelled with the parent turn" };
+      const consumedTaskSteps = objectiveTracker?.data.cumulativeSteps ?? (currentStep - 1);
+      if (consumedTaskSteps >= maxTotalSteps) {
+        return { completed: false, summary: finalSummary, reason: `objective step budget exhausted (${consumedTaskSteps}/${maxTotalSteps}); no further subagent inference was submitted` };
+      }
       if (tracker.data.stepsWithoutProgress >= stagnationSteps) {
         const loops = tracker.loops().slice(0, 2).map((r) => `${r.action} ×${r.count}`).join("; ");
         return { completed: false, summary: finalSummary, reason: `no progress for ${tracker.data.stepsWithoutProgress} consecutive steps${loops ? ` (repeated: ${loops})` : ""}` };
       }
       const cumulativeStep = tracker.beginStep();
+      objectiveTracker?.beginStep();
       let assistantMessage: ChatMessage;
       const requestId = randomUUID();
       const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);

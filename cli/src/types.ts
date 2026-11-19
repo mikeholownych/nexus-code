@@ -151,14 +151,14 @@ export interface ExecutionResult {
 }
 
 /**
- * How an automatically continued turn ends. Progressing work has no step or time ceiling by default: it ends on
- * completion, cancellation, demonstrated lack of progress, or an actionable failure. A step or time limit applies
- * only when the operator sets one explicitly; each limit has its own termination reason.
+ * Bounds for automatically continued work. The total-step limit is cumulative across every invocation that continues
+ * the same durable objective; the wall-clock limit bounds one active invocation. Progress detection remains a separate
+ * early-stop mechanism, not a substitute for these hard ceilings.
  */
 export interface ContinuationBudget {
-  /** Operator-set total steps for one turn (STEP_BUDGET_EXHAUSTED); Infinity (the default) when none was set. */
+  /** Maximum steps for one objective across runs and resumes (STEP_BUDGET_EXHAUSTED). */
   maxTotalSteps: number;
-  /** Operator-set wall-clock minutes for one turn (TIME_BUDGET_EXHAUSTED); Infinity (the default) when none was set. */
+  /** Maximum wall-clock minutes for one invocation (TIME_BUDGET_EXHAUSTED). */
   maxTurnMinutes: number;
   /**
    * Consecutive steps without observed progress before the turn stops (STAGNATION_DETECTED). A repeated-state
@@ -176,12 +176,26 @@ export interface ContinuationBudget {
   verifierConvergenceAttempts?: number;
 }
 
+/** Hard upper bounds keep an operator override finite even when a config or direct API caller bypasses CLI parsing. */
+export const MAX_CONTINUATION_STEPS = 5_000;
+export const MAX_CONTINUATION_MINUTES = 4_320;
+
+export function assertValidContinuationBudget(budget: ContinuationBudget | undefined): void {
+  if (!budget) return;
+  if (!Number.isSafeInteger(budget.maxTotalSteps) || budget.maxTotalSteps < 1 || budget.maxTotalSteps > MAX_CONTINUATION_STEPS) {
+    throw new Error(`Invalid continuation step budget: expected an integer from 1 to ${MAX_CONTINUATION_STEPS}.`);
+  }
+  if (!Number.isFinite(budget.maxTurnMinutes) || budget.maxTurnMinutes < 1 / 60 || budget.maxTurnMinutes > MAX_CONTINUATION_MINUTES) {
+    throw new Error(`Invalid continuation time budget: expected a finite value from 1 second to ${MAX_CONTINUATION_MINUTES} minutes.`);
+  }
+}
+
 /** Failed verifier attempts on changing candidates that show no convergence before the turn stops (see ContinuationBudget). */
 export const DEFAULT_CONVERGENCE_ATTEMPTS = 3;
 
 export const DEFAULT_CONTINUATION: ContinuationBudget = {
-  maxTotalSteps: Number.POSITIVE_INFINITY,
-  maxTurnMinutes: Number.POSITIVE_INFINITY,
+  maxTotalSteps: 500,
+  maxTurnMinutes: 480,
   stagnationSteps: 12,
   maxRecoveries: 2,
   maxCompletionNudges: 2,

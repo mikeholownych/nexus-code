@@ -1,5 +1,5 @@
 /**
- * Compaction and task continuity: no step ceiling on progressing work, state-aware repetition, objective-scoped tracking
+ * Compaction and task continuity: finite task ceilings, state-aware repetition, objective-scoped tracking
  * that survives follow-ups, compaction and restart, a durable compaction boundary with queued operator /compact, and
  * optional provider capabilities with truthful token accounting. Every scenario runs the real agent loop against a
  * deterministic local gateway (scripted fixtures establish behaviour under those fixtures, not local-model quality).
@@ -55,17 +55,19 @@ async function phase(agent: AutonomousAgent, wanted: string, timeoutMs = 20_000)
   await waitUntil(() => agent.getTurnLifecycle()?.phase === wanted, timeoutMs);
 }
 
-describe("A. progressing work has no step ceiling", () => {
-  test("the default continuation budget sets no step or time limit; explicit operator limits still apply", () => {
+describe("A. progressing work has finite, durable budget ceilings", () => {
+  test("the default continuation budget is finite; explicit operator limits stay below hard ceilings", () => {
     const saved = { s: process.env.NEXUS_MAX_TOTAL_STEPS, m: process.env.NEXUS_MAX_TURN_MINUTES };
     delete process.env.NEXUS_MAX_TOTAL_STEPS;
     delete process.env.NEXUS_MAX_TURN_MINUTES;
     try {
       const b = continuationBudget({})!;
-      assert.equal(b.maxTotalSteps, Number.POSITIVE_INFINITY);
-      assert.equal(b.maxTurnMinutes, Number.POSITIVE_INFINITY);
+      assert.equal(b.maxTotalSteps, 500);
+      assert.equal(b.maxTurnMinutes, 480);
       assert.equal(continuationBudget({ maxTotalSteps: "40" })!.maxTotalSteps, 40);
       assert.equal(continuationBudget({ maxTurnMinutes: "5" })!.maxTurnMinutes, 5);
+      assert.throws(() => continuationBudget({ maxTotalSteps: "5001" }), /maximum is 5000/);
+      assert.throws(() => continuationBudget({ maxTurnMinutes: "4321" }), /maximum is 4320/);
     } finally {
       if (saved.s !== undefined) process.env.NEXUS_MAX_TOTAL_STEPS = saved.s;
       if (saved.m !== undefined) process.env.NEXUS_MAX_TURN_MINUTES = saved.m;
@@ -102,7 +104,7 @@ describe("A. progressing work has no step ceiling", () => {
     }
   });
 
-  test("a delegated helper has no step allowance: it runs past 15 steps while it progresses", { timeout: 120_000 }, async () => {
+  test("a delegated helper progresses beyond a short segment while consuming the shared task budget", { timeout: 120_000 }, async () => {
     const gw = await startGateway((n, body) => {
       const sub = allText(body).includes("[Subagent Objective]");
       if (!sub) return n === 1 ? { kind: "tools", calls: [{ name: "spawn_subagent", args: { prompt: "write s1..s20", max_steps: 2 } }] } : text("parent done");
@@ -113,7 +115,7 @@ describe("A. progressing work has no step ceiling", () => {
     const agent = quiet(new AutonomousAgent(cfg(gw.url, repo)));
     try {
       await agent.runTurn("Delegate writing s1..s20 to a helper.");
-      assert.ok(fs.existsSync(path.join(repo, "s", "s20.txt")), "the helper was not cut off by a step allowance");
+      assert.ok(fs.existsSync(path.join(repo, "s", "s20.txt")), "the helper should finish while the shared 500-step task budget remains");
     } finally {
       agent.shutdown();
       await gw.close();
