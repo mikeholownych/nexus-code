@@ -1,0 +1,52 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M7S9MKSRNQESYDJK9VVS2ECC",
+  "session_id": "01a1f090-96c7-7f02-ae7d-1a090d633b76",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-19T06:59:28.285578708Z",
+  "branch": "v1/p10-wp-p10-02-durable-budget",
+  "checkpoints_count": 4,
+  "save_step_count": 4,
+  "files_touched": [
+    "cli/src/agent.ts",
+    "cli/src/config.ts",
+    "cli/src/core/run_turn.ts",
+    "cli/src/index.ts",
+    "cli/src/types.ts",
+    "cli/test/compaction_continuity.test.ts",
+    "cli/test/objective_continuation.test.ts",
+    "docs/COMPACTION_AND_CONTINUITY.md",
+    "docs/USER_MANUAL.md"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6-luna",
+  "turn_id": "db39afe9b7eb",
+  "checkpoint_transcript_start": 3579,
+  "transcript_lines_at_start": 3579,
+  "compact_transcript_start": 519,
+  "token_usage": {
+    "input_tokens": 1093884,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 28807936,
+    "output_tokens": 105802,
+    "api_call_count": 208,
+    "subagent_tokens_complete": true
+  },
+  "redaction": {
+    "replacements": 167,
+    "layers": {
+      "betterleaks": 86,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 27,
+      "credentialed_uri": 12,
+      "entropy": 86,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 5
+  }
+}

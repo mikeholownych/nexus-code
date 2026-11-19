@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M7S9MKSRNQESYDJK9VVS2ECC",
+  "strategy": "manual-commit",
+  "branch": "v1/p10-wp-p10-02-durable-budget",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "cli/src/agent.ts",
+    "cli/src/config.ts",
+    "cli/src/core/run_turn.ts",
+    "cli/src/index.ts",
+    "cli/src/types.ts",
+    "cli/test/compaction_continuity.test.ts",
+    "cli/test/objective_continuation.test.ts",
+    "docs/COMPACTION_AND_CONTINUITY.md",
+    "docs/USER_MANUAL.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1093884,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 28807936,
+    "output_tokens": 105802,
+    "api_call_count": 208,
+    "subagent_tokens_complete": true
+  },
+  "redaction": {
+    "replacements": 167,
+    "layers": {
+      "betterleaks": 86,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 27,
+      "credentialed_uri": 12,
+      "entropy": 86,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
