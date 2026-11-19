@@ -691,16 +691,39 @@ export class OperationRunner {
   }
 }
 
+/** `run` was pointed at an id that already has a durable record: starting would overwrite its history. */
+export class OperationExistsError extends Error {
+  constructor(id: string) {
+    super(`Operation ${id} already exists in this workspace. Resume it with: nexus operation resume ${id} (or choose another id).`);
+    this.name = "OperationExistsError";
+  }
+}
+
 export interface DriveOptions extends Omit<OperationRunnerOptions, "persist"> {
   store: OperationStore;
   signal?: AbortSignal;
+  /**
+   * How the passed `state` relates to the stored record, decided under the driver lock. Omitted: the
+   * caller manages the record itself (library callers that hold an authoritative in-memory state).
+   * - "new": the record must not exist yet; an existing id is refused, never overwritten.
+   * - "existing": the stored record is re-read after the lock is held and replaces the passed snapshot, so a state
+   *   loaded before another driver finished cannot be written back over its result. `prepare` adjusts the fresh copy.
+   */
+  entry?: "new" | "existing";
+  prepare?: (fresh: DurableOperationState) => void;
 }
 
 /** Runs an operation under its driver lock, persisting every transition through the store. */
 export async function driveOperation(state: DurableOperationState, opts: DriveOptions): Promise<DurableOperationState> {
-  const { store, signal, ...runnerOpts } = opts;
+  const { store, signal, entry, prepare, ...runnerOpts } = opts;
   const release = store.acquire(state.id);
   try {
+    if (entry === "new") {
+      if (store.has(state.id)) throw new OperationExistsError(state.id);
+    } else if (entry === "existing") {
+      state = store.load(state.id);
+      prepare?.(state);
+    }
     return await new OperationRunner(state, { ...runnerOpts, persist: (s) => store.save(s) }).run(signal);
   } finally {
     release();
