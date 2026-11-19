@@ -834,7 +834,8 @@ error[E0308]: mismatched types
     let agent: AutonomousAgent | undefined;
     try {
       const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
-      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 3, temperature: 0, workspace: repo, shell: "bash", worktree: true, approvalMode: "auto", fullAccess: true });
+      // The parent spends one task-wide inference step before delegating; leave three for the child sequence.
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 4, temperature: 0, workspace: repo, shell: "bash", worktree: true, approvalMode: "auto", fullAccess: true });
       await agent.run("exercise child mutation boundary");
       const active = agent.getActiveWorktree();
       assert.ok(active, "unverified parent worktree remains recoverable");
@@ -910,7 +911,8 @@ error[E0308]: mismatched types
     let agent: AutonomousAgent | undefined;
     try {
       const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
-      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true, readOnly: true });
+      // The parent's delegation request consumes one step; reserve two more for the child's refusal and report.
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 3, temperature: 0, workspace: repo, shell: "bash", worktree: true, readOnly: true });
       await agent.run("keep subagent read-only");
       assert.strictEqual(childRequests, 2);
       assert.strictEqual(childDeniedWrite, true, "the child must receive the parent read-only tool policy");
@@ -1324,7 +1326,8 @@ error[E0308]: mismatched types
     let agent: AutonomousAgent | undefined;
     try {
       const port = await new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as any).port)));
-      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 2, temperature: 0, workspace: repo, shell: "bash", worktree: true, readOnly: true });
+      // The parent spends one step delegating; reserve two child steps for run_tests and its completion report.
+      agent = new AutonomousAgent({ endpoint: `http://127.0.0.1:${port}/v1`, model: "test", maxSteps: 3, temperature: 0, workspace: repo, shell: "bash", worktree: true, readOnly: true });
       await agent.run("delegate a read-only test request");
       const active = agent.getActiveWorktree();
       assert.strictEqual(childRequests, 2, "the subagent receives a run_tests tool result and then completes");

@@ -393,14 +393,19 @@ describe("recovery that preserves legitimate work", () => {
 });
 
 describe("recovery state continuity", () => {
-  /** Runs reads of f.txt until constrained recovery begins (4 steps), stopping on the operator's step limit. */
+  /** Runs four bounded single-step turns, leaving budget for a resume after constrained recovery begins. */
   async function constrainedSession(gwUrl: string, repo: string, sessions: SessionManager, sessionId: string) {
-    const agent = quiet(new AutonomousAgent(cfg(gwUrl, repo, { maxSteps: 4, continuation: { ...DEFAULT_CONTINUATION, stagnationSteps: 30, maxRecoveries: 2, maxTotalSteps: 4 } })));
+    const agent = quiet(new AutonomousAgent(cfg(gwUrl, repo, { maxSteps: 4, continuation: { ...DEFAULT_CONTINUATION, stagnationSteps: 30, maxRecoveries: 2, maxTotalSteps: 8 } })));
     const save = () =>
       sessions.saveSession({ id: sessionId, workspace: repo, model: "m", messages: agent.getMessages(), objective: agent.getObjective() ?? null, findings: agent.getFindings(), history: agent.getHistoryCompleteness() }, agent.getWorkspacePathIdentity());
     agent.setProgressListener(save);
-    const turn = await agent.runTurn("Look at f.txt.");
-    assert.equal(turn.reason, "STEP_BUDGET_EXHAUSTED", JSON.stringify(turn));
+    let turn = await agent.runTurn("Look at f.txt.", undefined, { step: true });
+    assert.equal(turn.reason, "STEP_PAUSED", JSON.stringify(turn));
+    for (let i = 1; i < 4; i++) {
+      turn = await agent.runTurn("[Nexus] Resume the interrupted turn.", undefined, { resume: true, step: true });
+      assert.equal(turn.reason, "STEP_PAUSED", JSON.stringify(turn));
+    }
+    assert.equal(agent.getObjective()?.execution?.cumulativeSteps, 4, "the resumed single-step turns share the durable task counter");
     assert.equal(recovery(agent).stage, "constrained");
     save();
     agent.setProgressListener(undefined);
