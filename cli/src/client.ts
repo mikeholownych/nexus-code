@@ -666,6 +666,8 @@ export class LocalLlmClient {
   private lastUsageReport?: UsageReport;
   /** Replies already asked about, so a credential-reload re-entry never asks twice for one reply. */
   private readonly askedAgain = new WeakSet<ChatMessage>();
+  /** A bounded warning when this connection keeps returning tool-call-shaped text after a required-call request. */
+  private warnedToolCallTextOnly = false;
   private pending?: PendingRequest;
   /** Ledger reservations taken by the request in progress (released when its receipt is recorded). */
   private reservations: string[] = [];
@@ -1763,6 +1765,10 @@ export class LocalLlmClient {
     }
     this.emitDiagnostic("error", pc.dim(`[nexus] ${this.conn.label} wrote the call as text again; asking once more with tool_choice=required.`));
     const forced = await ask("required");
+    if (forced && !forced.tool_calls?.length && !this.warnedToolCallTextOnly) {
+      this.warnedToolCallTextOnly = true;
+      this.emitDiagnostic("warn", pc.yellow(`[nexus] ${this.conn.label} (${this.model}) did not return a native tool call even when one was required; call-like text is never executed. Check that the selected model or server supports tool calls.`));
+    }
     return finish(forced?.tool_calls?.length ? { ...forced, toolCallSource: "required" } : response);
   }
 
