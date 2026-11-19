@@ -164,7 +164,7 @@ export class AutonomousAgent {
   private subagentObjective = "";
   /** VC-9: the operator's answers (`--answer id=approve|decline`), consumed when the run reaches the same decision. */
   private operatorAnswers = new Map<string, NeedsInputOption>();
-  private typecheckBaseline?: { command: string; signatures: Set<string> };
+  private typecheckBaseline = new Map<string, Set<string>>();
   /** VC-6: paths already changed in the workspace when the task began, so only later shell changes count as the candidate's. */
   private preTaskChanged?: Set<string>;
   /** Optional tool groups offered in this conversation (see core/tool_groups). */
@@ -944,7 +944,7 @@ export class AutonomousAgent {
     // resumed workspace with pending changes: an attacker could delete the field
     // and make candidate-edited tests look pristine.
     this.changeBaseline = undefined;
-    this.typecheckBaseline = undefined;
+    this.typecheckBaseline.clear();
     this.preTaskChanged = undefined;
     this.untrustedRecoveredBaseline = state.changeBaseline ?? undefined;
     this.recheckOnResume();

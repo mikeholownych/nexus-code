@@ -5,7 +5,7 @@ import { isWorkspaceTrusted } from "../workspace_trust.js";
 import { safeTerminal } from "../ui.js";
 import { workspaceChangedPaths } from "../git.js";
 import { buildNeedsInput } from "./needs_input.js";
-import { runTestSuiteWithExecutor, discoverTypecheck, runTypecheck, typecheckMode, discoverVerifier, describeVerifier, hasExecutedTests } from "../tester.js";
+import { runTestSuiteWithExecutor, discoverTypechecks, runTypecheck, typecheckMode, discoverVerifier, describeVerifier, hasExecutedTests } from "../tester.js";
 import { isInlineProgramVerifier, snapshotVerifierDefinitionWithReason, judgeWithoutCopy, prepareBaselineTestsCopy, snapshotTests, type ChangeBaseline, type Independence } from "./independent_check.js";
 import { TypecheckEvidence } from "./turn.js";
 import { createHash } from "node:crypto";
@@ -83,32 +83,11 @@ export async function runTypecheckOracleImpl(this: any, opts: {
     evidence: (this.lastTypecheck = { status: "NOT_APPLICABLE" as const, scope, candidateId: opts.candidateId, ...extra, at: at() }),
   });
   if (mode === "off") return skipped("disabled by NEXUS_TYPECHECK / typecheck setting");
-  const check = discoverTypecheck(this.config.workspace);
-  if (!check) return skipped("no tsconfig.json or Cargo.toml found");
-  const named = { tool: check.tool, command: check.command, configPath: check.configPath, configSha256: check.configSha256, ...(check.toolSha256 ? { toolSha256: check.toolSha256 } : {}) };
-  if (check.skipReason) return skipped(check.skipReason, named);
-  // Not installed: nothing was checked. Said plainly, with no approval prompt for a tool that cannot run, never a pass.
-  if (check.missingTool) {
-    return { evidence: (this.lastTypecheck = { status: "UNAVAILABLE" as const, scope: `${check.tool} is not installed, so nothing was type-checked under ${check.configPath}`, ...named, enforced: mode === "enforce", candidateId: opts.candidateId, at: at() }) };
-  }
+  const checks = discoverTypechecks(this.config.workspace);
+  if (!checks.length) return skipped("no configured type-check project found");
   const enforced = mode === "enforce";
   const ledger = this.objective;
   const current = opts.current;
-  const prior = ledger && current && enforced ? priorAttempt(ledger, check.command, current) : undefined;
-  if (ledger && current && prior?.status === "FAILED" && this.lastTypecheck?.command === check.command) {
-    recordAttempt(ledger, { command: check.command, ...current, status: "SKIPPED_UNCHANGED_INPUTS", ...(prior.failedCheck ? { failedCheck: prior.failedCheck } : {}) });
-    return {
-      evidence: this.lastTypecheck,
-      block: `Verification Oracle: ${check.command} already failed on these exact workspace inputs (attempt #${prior.n}); nothing it checks has changed, so it was not run again.\n${prior.failedCheck ? `Failed check: ${prior.failedCheck}\n` : ""}Fix the type errors, then call task_completed again.`,
-    };
-  }
-  // Only an enforced type-check can end the turn BLOCKED on a question; a record-only one is just not run.
-  if (!(await this.ensureVerifierApproved(check.command, opts.onConfirm, "type-check for the task", check.toolSha256, enforced))) {
-    return enforced
-      ? { evidence: (this.lastTypecheck = { status: "NOT_APPLICABLE" as const, scope: "type-check not approved", ...named, enforced, candidateId: opts.candidateId, at: at() }), block: `Verification Oracle: type-check execution was not approved by operator (${check.command}).` }
-      : skipped("type-check not approved", named);
-  }
-  this.activity("verifying", { tool: check.command });
   // Modified = what an edit tool touched plus what the workspace diff shows changed since the task began (a shell
   // command, a formatter or a generator edits files no edit tool reported).
   const modified = new Set<string>(this.modifiedFiles);
@@ -120,54 +99,75 @@ export async function runTypecheckOracleImpl(this: any, opts: {
       shellChanged.push(path.relative(this.config.workspace, file));
     }
   } catch {}
-  const baseline = this.typecheckBaseline?.command === check.command ? this.typecheckBaseline.signatures : undefined;
-  const run = await runTypecheck(
-    check,
-    (command, timeout_secs) => this.bridge.executeTool("run_command", { command, timeout_secs }),
-    this.config.workspace,
-    modified,
-    opts.budgetSecs,
-    baseline,
-  );
-  const excerpt = `(untrusted compiler output)\n${safeTerminal(foldVoluminousOutput(run.output || "", 30, 2000))}`;
-  const evidence: TypecheckEvidence = {
-    status: run.status,
-    enforced,
-    ...named,
-    ...(run.version ? { toolVersion: run.version } : {}),
-    exitCode: run.exitCode,
-    ...(run.errorCount !== undefined ? { errorCount: run.errorCount, firstDiagnostics: (run.firstDiagnostics ?? []).map((d) => safeTerminal(d)) } : {}),
-    ...(baseline ? { baselineErrorCount: baseline.size } : {}),
-    ...(run.introducedCount !== undefined ? { introducedCount: run.introducedCount } : {}),
-    ...(shellChanged.length ? { shellChangedFiles: shellChanged.slice(0, 20) } : {}),
-    scope: `under ${check.configPath}`,
-    ...(run.status === "PASSED" ? {} : { excerpt }),
-    candidateId: opts.candidateId,
-    at: at(),
-  };
-  this.lastTypecheck = evidence;
-  const blocking = run.status === "FAILED" || run.status === "TIMED_OUT";
-  if (ledger && current && (blocking || run.status === "PASSED")) {
-    recordAttempt(ledger, {
-      command: check.command,
-      ...current,
-      mutationSeq: this.mutationSeq,
+  const results: TypecheckEvidence[] = [];
+  const blockingMessages: string[] = [];
+  const typecheckDeadline = Date.now() + Math.max(0, opts.budgetSecs) * 1000;
+  for (const check of checks) {
+    const named = { tool: check.tool, command: check.command, configPath: check.configPath, configSha256: check.configSha256, ...(check.toolSha256 ? { toolSha256: check.toolSha256 } : {}) };
+    if (check.skipReason) {
+      results.push({ status: check.discoveryIncomplete ? "UNAVAILABLE" : "NOT_APPLICABLE", ...named, enforced, scope: check.skipReason, candidateId: opts.candidateId, at: at() });
+      if (check.discoveryIncomplete && enforced) blockingMessages.push(`workspace type-check discovery was incomplete: ${check.skipReason}`);
+      continue;
+    }
+    if (check.missingTool) {
+      results.push({ status: "UNAVAILABLE", ...named, enforced, scope: `${check.tool} is not installed, so nothing was type-checked under ${check.configPath}`, candidateId: opts.candidateId, at: at() });
+      continue;
+    }
+    const prior = ledger && current && enforced ? priorAttempt(ledger, check.command, current) : undefined;
+    if (ledger && current && prior?.status === "FAILED" && (this.lastTypecheck?.command === check.command || this.lastTypecheck?.projects?.some((project: TypecheckEvidence) => project.command === check.command))) {
+      recordAttempt(ledger, { command: check.command, ...current, status: "SKIPPED_UNCHANGED_INPUTS", ...(prior.failedCheck ? { failedCheck: prior.failedCheck } : {}) });
+      results.push(this.lastTypecheck);
+      blockingMessages.push(`${check.command} already failed on these exact inputs (attempt #${prior.n}).${prior.failedCheck ? ` Failed check: ${prior.failedCheck}` : ""}`);
+      continue;
+    }
+    if (!(await this.ensureVerifierApproved(check.command, opts.onConfirm, "type-check for the task", check.toolSha256, enforced))) {
+      const denied: TypecheckEvidence = { status: "NOT_APPLICABLE", ...named, enforced, scope: "type-check not approved", candidateId: opts.candidateId, at: at() };
+      results.push(denied);
+      if (enforced) blockingMessages.push(`type-check execution was not approved (${check.command})`);
+      continue;
+    }
+    this.activity("verifying", { tool: check.command });
+    const baseline = this.typecheckBaseline.get(check.command);
+    const remainingSecs = Math.ceil((typecheckDeadline - Date.now()) / 1000);
+    if (remainingSecs <= 0) {
+      const timedOut: TypecheckEvidence = { status: "TIMED_OUT", enforced, ...named, scope: `not run: aggregate type-check budget of ${opts.budgetSecs}s exhausted`, candidateId: opts.candidateId, at: at() };
+      results.push(timedOut);
+      if (enforced) blockingMessages.push(`${check.tool} type-check under ${check.configPath} was not run because the aggregate ${opts.budgetSecs}s type-check budget was exhausted.`);
+      continue;
+    }
+    const run = await runTypecheck(check, (command, timeout_secs) => this.bridge.executeTool("run_command", { command, timeout_secs }), this.config.workspace, modified, remainingSecs, baseline);
+    const excerpt = `(untrusted compiler output)\n${safeTerminal(foldVoluminousOutput(run.output || "", 30, 2000))}`;
+    const evidence: TypecheckEvidence = {
+      status: run.status, enforced, ...named,
+      ...(run.version ? { toolVersion: run.version } : {}),
+      exitCode: run.exitCode,
+      ...(run.errorCount !== undefined ? { errorCount: run.errorCount, firstDiagnostics: (run.firstDiagnostics ?? []).map((d) => safeTerminal(d)) } : {}),
+      ...(baseline ? { baselineErrorCount: baseline.size } : {}),
+      ...(run.introducedCount !== undefined ? { introducedCount: run.introducedCount } : {}),
+      ...(shellChanged.length ? { shellChangedFiles: shellChanged.slice(0, 20) } : {}),
+      scope: `under ${check.configPath}`,
+      ...(run.status === "PASSED" ? {} : { excerpt }), candidateId: opts.candidateId, at: at(),
+    };
+    results.push(evidence);
+    const blocking = run.status === "FAILED" || run.status === "TIMED_OUT";
+    if (ledger && current && (blocking || run.status === "PASSED")) recordAttempt(ledger, {
+      command: check.command, ...current, mutationSeq: this.mutationSeq,
       status: run.status === "PASSED" ? "PASSED" : run.status === "TIMED_OUT" ? "TIMED_OUT" : "FAILED",
-      ...(blocking
-        ? {
-            failedCheck: safeTerminal(run.firstDiagnostics?.[0] ?? run.status).slice(0, 240),
-            ...attemptEvidence(run.output, run.exitCode, { timedOut: run.status === "TIMED_OUT" }),
-            ...(run.status === "FAILED" ? { classification: "CANDIDATE_FAILED" as const, failingTests: (run.firstDiagnostics ?? []).map((d) => safeTerminal(d).slice(0, 240)) } : {}),
-          }
-        : {}),
+      ...(blocking ? {
+        failedCheck: safeTerminal(run.firstDiagnostics?.[0] ?? run.status).slice(0, 240),
+        ...attemptEvidence(run.output, run.exitCode, { timedOut: run.status === "TIMED_OUT" }),
+        ...(run.status === "FAILED" ? { classification: "CANDIDATE_FAILED" as const, failingTests: (run.firstDiagnostics ?? []).map((d) => safeTerminal(d).slice(0, 240)) } : {}),
+      } : {}),
     });
+    if (enforced && blocking) {
+      const what = run.status === "FAILED" ? "failed" : `timed out after ${opts.budgetSecs}s`;
+      blockingMessages.push(`${check.tool} type-check ${what} under ${check.configPath} (sha256 ${check.configSha256.slice(0, 12)}). Command: ${check.command}\n${excerpt}`);
+    }
   }
-  if (!enforced || !blocking) return { evidence };
-  const what = run.status === "FAILED" ? "failed" : `timed out after ${opts.budgetSecs}s`;
-  return {
-    evidence,
-    block: `Verification Oracle: tests passed, but the ${check.tool} type-check ${what} under ${check.configPath} (sha256 ${check.configSha256.slice(0, 12)}), so the changes are NOT verified.\nCommand: ${check.command}\n${excerpt}\nFix the type errors, then call task_completed again.`,
-  };
+  const primary = results.find((item) => item.status === "FAILED" || item.status === "TIMED_OUT") ?? results[0];
+  const evidence: TypecheckEvidence = { ...primary, scope: results.length === 1 ? primary.scope : `${results.length} project check(s)`, projects: results };
+  this.lastTypecheck = evidence;
+  return { evidence, ...(blockingMessages.length ? { block: `Verification Oracle: tests passed, but a mandatory project type-check did not complete successfully; changes are NOT verified.\n${blockingMessages.join("\n\n") }\nFix the type errors or resolve the unavailable approval, then call task_completed again.` } : {}) };
 }
 
 export async function captureChangeBaselineImpl(this: any, confirmHandler?: ConfirmHandler): Promise<void> {
@@ -288,12 +288,13 @@ export async function runRequirementVerifierImpl(this: any, requirement: { id: s
 export async function captureTypecheckBaselineImpl(this: any, confirmHandler: ConfirmHandler | undefined, deadlineSecs: number): Promise<void> {
   try {
     if (typecheckMode(this.config.typecheck, Boolean(this.config.authoritativeVerifierCommand?.trim())) === "off") return;
-    const check = discoverTypecheck(this.config.workspace);
-    if (!check || check.skipReason || check.missingTool || check.tool === "cargo") return;
-    if (!(await this.ensureVerifierApproved(check.command, confirmHandler, "type-check baseline (before the change)", check.toolSha256, false))) return;
-    this.activity("verifying", { tool: `${check.command} (before the change)` });
-    const run = await runTypecheck(check, (command, timeout_secs) => this.bridge.executeTool("run_command", { command, timeout_secs }), this.config.workspace, new Set(), deadlineSecs);
-    if (run.status === "PASSED") this.typecheckBaseline = { command: check.command, signatures: new Set() };
-    else if (run.status === "PREEXISTING") this.typecheckBaseline = { command: check.command, signatures: new Set(run.signatures ?? []) };
+    for (const check of discoverTypechecks(this.config.workspace)) {
+      if (check.skipReason || check.missingTool) continue;
+      if (!(await this.ensureVerifierApproved(check.command, confirmHandler, "type-check baseline (before the change)", check.toolSha256, false))) continue;
+      this.activity("verifying", { tool: `${check.command} (before the change)` });
+      const run = await runTypecheck(check, (command, timeout_secs) => this.bridge.executeTool("run_command", { command, timeout_secs }), this.config.workspace, new Set(), deadlineSecs);
+      if (run.status === "PASSED") this.typecheckBaseline.set(check.command, new Set());
+      else if (run.status === "PREEXISTING") this.typecheckBaseline.set(check.command, new Set(run.signatures ?? []));
+    }
   } catch {}
 }
