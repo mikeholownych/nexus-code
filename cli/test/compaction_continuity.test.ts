@@ -481,7 +481,7 @@ describe("C. persistence failures are truthful", () => {
       fs.rmSync(repo, { recursive: true, force: true });
     }
 
-    // Automatic compaction under pressure, with the session record failing: the turn stops before the next request.
+    // A failed session checkpoint stops before inference, so no workspace effect can occur without a resumable record.
     const repo2 = makeRepo();
     const big = "z".repeat(30_000);
     const gw2 = await startGateway((n) => (n <= 6 ? write(`big${n}.txt`, big) : text("done")));
@@ -495,7 +495,9 @@ describe("C. persistence failures are truthful", () => {
       const turn = await agent2.runTurn("Write big1..big6.");
       assert.equal(turn.execution, "FAILED", JSON.stringify({ reason: turn.reason, detail: turn.detail }));
       assert.equal(turn.reason, "PERSISTENCE_FAILED");
-      assert.match(turn.detail ?? "", /not durable: session failed/);
+      assert.match(turn.detail ?? "", /session record could not be saved/);
+      assert.equal(gw2.requests.length, 0, "no inference is submitted after the session checkpoint fails");
+      assert.equal(fs.readdirSync(repo2).filter((name) => /^big\d+\.txt$/.test(name)).length, 0, "no requested files are written after the session checkpoint fails");
       assert.ok(turn.persistence?.failures.length, "the result lists the failed writes");
     } finally {
       agent2.shutdown();

@@ -79,6 +79,7 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
   }
   this.completionSummary = undefined;
   this.turnPersistenceFailures = this.initialStatePersistenceFailure ? [this.initialStatePersistenceFailure] : [];
+  this.objectiveBudgetPersistenceFailure = undefined;
   this.turnMutations = 0;
   this.turnToolCallSyntax = { native: 0, trailing: 0, structural: 0, invalid: 0, schema: 0 };
   this.turnConfiguredVerifier = "NOT_RUN";
@@ -972,6 +973,12 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
           content: receipt.success ? this.toolResultContent(call, finalContent, currentStep, maxTotalSteps) : finalContent,
         });
         this.persistProgress({ messages: true });
+
+        if (this.objectiveBudgetPersistenceFailure) {
+          persistenceFailure = this.objectiveBudgetPersistenceFailure;
+          stopReason = "PERSISTENCE_FAILED";
+          stopDetail = this.objectiveBudgetPersistenceFailure;
+        }
 
         if (shouldExit) {
           modelStop = "TASK_COMPLETED_TOOL";

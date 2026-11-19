@@ -485,6 +485,7 @@ export function setupSpineHandlersImpl(this: any): void {
         inheritedWorktreeScope,
         { durable: false }
       );
+      subagent.inheritObjectiveBudget(this);
       subagent.inheritTraceContext(this);
       subagent.setOperatorAnswers(this.operatorAnswers);
       const subResult = await subagent.runSubagent(subPrompt, this.activeTurn?.onConfirm, this.activeTurn?.controller.signal);

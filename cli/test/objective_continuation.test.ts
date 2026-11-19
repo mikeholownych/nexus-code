@@ -205,6 +205,66 @@ describe("continuation beyond the per-segment step limit", () => {
     }
   });
 
+  test("a delegated helper consumes only the parent's remaining durable steps", { timeout: 60_000 }, async () => {
+    let writes = 0;
+    const gw = await startGateway((_n, body) => {
+      const subagent = (body.messages as any[]).some((message) => typeof message.content === "string" && message.content.includes("[Subagent Objective]"));
+      if (!subagent) return { kind: "tools", calls: [{ name: "spawn_subagent", args: { prompt: "write until stopped" } }] };
+      return write(`shared-${++writes}.txt`);
+    });
+    const repo = makeRepo();
+    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo, {
+      continuation: { ...DEFAULT_CONTINUATION, maxTotalSteps: 3 },
+    })));
+    try {
+      const turn = await agent.runTurn("Delegate an open-ended sequence of writes.");
+      assert.equal(turn.execution, "LIMIT_REACHED");
+      assert.equal(turn.reason, "STEP_BUDGET_EXHAUSTED");
+      assert.equal(turn.steps.used, 3);
+      assert.equal(agent.getObjective()!.execution!.cumulativeSteps, 3);
+      assert.equal(gw.requests.length, 3, "one parent request and exactly two delegated requests consumed the budget");
+      assert.equal(writes, 2);
+      assert.ok(fs.existsSync(path.join(repo, "shared-1.txt")));
+      assert.ok(fs.existsSync(path.join(repo, "shared-2.txt")));
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("a delegated inference is not sent when saving its shared budget fails", { timeout: 60_000 }, async () => {
+    const gw = await startGateway((n) => n === 1
+      ? { kind: "tools", calls: [{ name: "spawn_subagent", args: { prompt: "write a child file" } }] }
+      : text("parent must not get another request"));
+    const repo = makeRepo();
+    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo, {
+      continuation: { ...DEFAULT_CONTINUATION, maxTotalSteps: 2 },
+    })));
+    const stateManager = (agent as any).stateManager;
+    const recordProgress = stateManager.recordProgress.bind(stateManager);
+    let injected = false;
+    stateManager.recordProgress = (taskId: string, progress: any) => {
+      if (!injected && progress.objective?.execution?.cumulativeSteps === 2) {
+        injected = true;
+        throw new Error("simulated objective budget disk failure");
+      }
+      return recordProgress(taskId, progress);
+    };
+    try {
+      const turn = await agent.runTurn("Delegate one write.");
+      assert.equal(injected, true, "the child step budget checkpoint was attempted");
+      assert.equal(turn.execution, "FAILED");
+      assert.equal(turn.reason, "PERSISTENCE_FAILED");
+      assert.equal(gw.requests.length, 1, "only the parent request ran; no child inference or parent retry was submitted");
+      assert.ok(turn.persistence?.failures.some((failure: string) => /simulated objective budget disk failure/.test(failure)));
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   test("a failed durable budget checkpoint prevents the next inference request", { timeout: 60_000 }, async () => {
     const gw = await startGateway(() => write("must-not-run.txt"));
     const repo = makeRepo();
