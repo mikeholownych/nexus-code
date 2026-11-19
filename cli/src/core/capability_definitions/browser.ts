@@ -59,7 +59,7 @@ export const browserClickCapability: CanonicalCapability = {
   "id": "browser_interact",
   "modelToolName": "browser_click",
   "category": "browser",
-  "mutating": false,
+  "mutating": true,
   "effect": "egress",
   "sideEffectContract": "Simulate mouse click on DOM selector element",
   "backend": "ts_native",

@@ -131,6 +131,46 @@ describe("WP-01: ExecutionSpine & Invocation Pipeline (INC-02)", () => {
     assert.strictEqual(mutationEvents.length, 0);
   });
 
+  test("EXEC-010: Dry-run does not invoke persistent capability handlers", async () => {
+    const spine = new ExecutionSpine({ registry: createDefaultRegistry() });
+    let handlerCalled = false;
+    spine.registerHandler("manage_knowledge", async () => {
+      handlerCalled = true;
+      return { success: true, output: "persisted" };
+    });
+
+    const receipt = await spine.execute(
+      { toolName: "manage_knowledge", args: { action: "set", key: "k", value: "v" } },
+      { ...dummyContext, dryRun: true },
+    );
+
+    assert.strictEqual(handlerCalled, false, "persistent knowledge handler must not run during dry-run");
+    assert.strictEqual(receipt.success, true);
+    assert.strictEqual(receipt.simulated, true);
+    assert.match(receipt.output, /Nothing was executed/);
+  });
+
+  test("EXEC-010: Browser clicks are mutating capabilities and are suppressed during dry-run", async () => {
+    const registry = createDefaultRegistry();
+    const spine = new ExecutionSpine({ registry });
+    let handlerCalled = false;
+    spine.registerHandler("browser_click", async () => {
+      handlerCalled = true;
+      return { success: true, output: "clicked" };
+    });
+
+    const receipt = await spine.execute(
+      { toolName: "browser_click", args: { selector: "#submit" } },
+      { ...dummyContext, dryRun: true },
+    );
+
+    assert.strictEqual(registry.getByToolName("browser_click")?.mutating, true);
+    assert.strictEqual(handlerCalled, false, "browser interaction handler must not run during dry-run");
+    assert.strictEqual(receipt.success, true);
+    assert.strictEqual(receipt.simulated, true);
+    assert.match(receipt.output, /Nothing was executed/);
+  });
+
   test("FAIL-001: Negative Test — Unregistered tool fails closed with clean receipt", async () => {
     const registry = createDefaultRegistry();
     const spine = new ExecutionSpine({ registry });
