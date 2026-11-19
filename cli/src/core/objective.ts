@@ -858,13 +858,13 @@ export function priorAttempt(
   return undefined;
 }
 
-export function recordAttempt(ledger: ObjectiveLedger, attempt: Omit<VerificationAttempt, "n" | "at">, at = now()): VerificationAttempt {
+export function recordAttempt(ledger: ObjectiveLedger, attempt: Omit<VerificationAttempt, "n" | "at">, at = now(), obligationOutput?: string): VerificationAttempt {
   const lastN = ledger.verification.length > 0 ? (ledger.verification[ledger.verification.length - 1]?.n ?? 0) : 0;
   const parent = [...ledger.verification].reverse().find((v) => v.status !== "SKIPPED_UNCHANGED_INPUTS");
   const lineage = parent ? { parent: parent.n, diffHash: sha256(`${parent.inputs}\u0000${attempt.inputs}`) } : {};
   const record: VerificationAttempt = { n: lastN + 1, at, ...attempt, ...lineage };
   ledger.verification.push(record);
-  replayObligations(ledger, record);
+  replayObligations(ledger, record, obligationOutput);
   for (const old of ledger.verification.slice(0, -EXCERPT_RETAINED_ATTEMPTS)) delete old.excerpt;
   if (ledger.verification.length > 50) ledger.verification = ledger.verification.slice(-50);
   return record;

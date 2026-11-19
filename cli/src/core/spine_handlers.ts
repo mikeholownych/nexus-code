@@ -280,7 +280,7 @@ export function setupSpineHandlersImpl(this: any): void {
               ...(independence ? { independent: independence.independent } : {}),
               filtered: isFilteredVerifierCommand(verifierCommand),
               ...(testRes.success ? {} : { failedCheck: failedCheckFrom(testRes.rawOutput || ""), ...attemptEvidence(testRes.rawOutput || "", testRes.exitCode, { timedOut: testRes.timedOut, executorFailed: testRes.executorFailed }) }),
-            });
+            }, undefined, testRes.rawOutput || "");
           }
           if (testRes.timedOut) {
             const partial = foldVoluminousOutput(testRes.rawOutput || "(no output received)");
