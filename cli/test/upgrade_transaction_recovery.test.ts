@@ -8,7 +8,7 @@ import * as os from "node:os";
 import { spawnSync, spawn } from "node:child_process";
 import { CURRENT_STATE_SCHEMA_VERSION } from "../src/core/state.js";
 import { verifyInstalledRuntime } from "../src/upgrade_health.js";
-import { writeJournal, readJournal, recoverUpgrade, createPreMigrationBackup, restoreConfigBackup, acquireReclaimGuard, UpgradeJournalEntry, RecoveryOutcome } from "../src/upgrade_journal.js";
+import { writeJournal, readJournal, recoverUpgrade, createPreMigrationBackup, restoreConfigBackup, acquireReclaimGuard, currentUpgradeBootId, upgradeLockHolderLive, UpgradeJournalEntry, RecoveryOutcome } from "../src/upgrade_journal.js";
 import * as http from "node:http";
 import * as crypto from "node:crypto";
 import { generateCompatibilityMetadata } from "../src/compatibility.js";
@@ -189,6 +189,25 @@ describe("durable same-version transaction recovery",()=>{
     assert.equal(fs.existsSync(path.join(libRoot,".upgrade.lock")),false);
     assert.equal(fs.existsSync(path.join(libRoot,".upgrade.lock.guard")),true);
     assert.equal(readJournal(prefix)?.state,"rolled_back");
+  });
+  it("treats a lock from another boot as stale even if its PID is live",()=>{
+    const boot="boot-current";
+    const livePid=process.pid===1?2:1;
+    assert.equal(upgradeLockHolderLive({pid:livePid},boot),true,"old lock formats retain PID-only behavior");
+    assert.equal(upgradeLockHolderLive({pid:process.pid,boot},boot),true,"same boot and live PID remains active");
+    assert.equal(upgradeLockHolderLive({pid:process.pid,boot:`${boot}-previous`},boot),false,"different boot makes a reused PID stale");
+    assert.equal(upgradeLockHolderLive({pid:999999,boot},boot),false,"dead same-boot PID is stale");
+  });
+  it("reclaims a previous-boot lock whose PID is now this live process",(t)=>{
+    const boot=currentUpgradeBootId();
+    if (!boot) return t.skip("Linux boot identity is unavailable on this host");
+    writeJournal(prefix,entry);
+    const lock=path.join(prefix,"lib/nexus/.upgrade.lock");
+    fs.writeFileSync(lock,JSON.stringify({pid:process.pid,token:"old",boot:`${boot}-previous`}),{mode:0o600});
+    const result=recoverUpgrade(prefix);
+    assert.equal(result.recovered,true,result.details);
+    assert.equal(result.action,"rolled_back");
+    assert.equal(fs.existsSync(lock),false);
   });
   it("reports the guard path and stays back while a live reclaimer holds the kernel guard",async()=>{
     writeJournal(prefix,entry);
