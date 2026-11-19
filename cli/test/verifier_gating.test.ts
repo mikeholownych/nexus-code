@@ -59,6 +59,7 @@ describe("ACC-SAFE-09: Verifier Gating", () => {
 
     try {
       assert.equal(isWorkspaceTrusted(ws), true, "repo should be trusted");
+      assert.equal((agent as any).config.maxSteps, 30, "programmatic callers inherit the documented default step limit");
       assert.equal(agent.getApprovalMode(), "review");
     } finally {
       agent.shutdown();

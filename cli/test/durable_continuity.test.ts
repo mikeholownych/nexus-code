@@ -585,7 +585,7 @@ describe("V2: unverified changes survive retries, step limits, restarts and resu
     });
   });
 
-  test("ACC-CONT-04: resume a unit after two identical loops; a third repetition triggers recovery note", async () => {
+  test("ACC-CONT-04: an exhausted durable unit budget is not restored by operator continuation", async () => {
     await withHome(async () => {
       const gw = await gateway((b) => {
         // Repeat read_file("notes.txt") on unchanged workspace
@@ -631,17 +631,21 @@ describe("V2: unverified changes survive retries, step limits, restarts and resu
         assert.ok(rep, "must have recorded read_file repetition");
         assert.equal(rep.count, 2, "repetition count before resume must be 2");
 
-        // Now resume the unit in a second turn
-        // On the 3rd repetition (step 1 of resumed turn), tracker must see count = 3 and emit [Nexus recovery 1/3]
+        // Resume after exhausting the durable unit budget. The operator's continuation decision cannot reauthorize
+        // inference or reset the saved cumulative count.
         const more = decisionOf(op, "u1").options.find((o) => o.label === "continue with more steps")!;
         applyOperatorDecision(store, id, decisionOf(op, "u1").id, more.id);
+        const requestsBeforeResume = gw.requests.length;
         op = await muted(() =>
           driveOperation(store.load(id), { store, executor })
         );
 
-        // Check gateway requests: verify recovery note was received by the model
-        const recoveryReq = gw.requests.find((r) => allText(r).includes("[Nexus recovery") && allText(r).includes("3 times"));
-        assert.ok(recoveryReq, "model must receive recovery note stating action was called 3 times");
+        assert.equal(gw.requests.length, requestsBeforeResume, "resume must not submit inference after the two-step budget is exhausted");
+        assert.notEqual(op.status, "COMPLETE", "the work unit cannot complete without another authorized inference");
+        assert.notEqual(op.units[0].status, "COMPLETE");
+        const afterResume = new DurableStateManager({ baseDir: stateDir, workspacePaths: [WorkspacePath.fromSelectedWorkspace(repo)] }).loadTaskState(taskId);
+        const afterRep = afterResume.objective?.execution?.repetitions.find((r) => r.action.includes("read_file"));
+        assert.equal(afterRep?.count, 2, "blocked resume preserves the two recorded observations");
       } finally {
         await gw.close();
         fs.rmSync(repo, { recursive: true, force: true });

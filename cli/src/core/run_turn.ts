@@ -79,6 +79,7 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
   }
   this.completionSummary = undefined;
   this.turnPersistenceFailures = this.initialStatePersistenceFailure ? [this.initialStatePersistenceFailure] : [];
+  this.objectiveBudgetPersistenceFailure = undefined;
   this.turnMutations = 0;
   this.turnToolCallSyntax = { native: 0, trailing: 0, structural: 0, invalid: 0, schema: 0 };
   this.turnConfiguredVerifier = "NOT_RUN";
@@ -139,7 +140,7 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
   const providerRecoveries: ProviderRecoveryRecord[] = [];
   const budget = this.config.continuation;
   const segmentSteps = Math.max(1, this.config.maxSteps);
-  const maxTotalSteps = budget ? Math.max(budget.maxTotalSteps, segmentSteps) : segmentSteps;
+  const maxTotalSteps = budget ? budget.maxTotalSteps : segmentSteps;
   let segment = 1;
   const tracker = this.objective && this.durable ? trackingOf(this.objective) : ExecutionTracker.fresh();
 
@@ -217,11 +218,9 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
       content: "Cancelled by operator before execution. No action was taken.",
     });
 
-    // Continuation: `maxSteps` is a segment, a durable checkpoint. With a continuation budget (the default) the turn
-    // keeps going across segments while it makes progress, and stops on completion, cancellation, demonstrated lack of
-    // progress, an actionable failure, or a step/time limit the operator set explicitly — each with its own reason.
-    // There is no default step or time ceiling. Without a budget (`--no-continuation`, the operator's explicit choice),
-    // the first segment boundary ends the turn (LIMIT_REACHED, legacy).
+    // Continuation: `maxSteps` is a segment, a durable checkpoint. The total-step budget is objective-scoped and
+    // survives resumes; the active invocation also has a finite wall-clock limit. Without continuation
+    // (`--no-continuation`), the first segment boundary ends the turn (LIMIT_REACHED, legacy).
     const turnDeadline = budget && Number.isFinite(budget.maxTurnMinutes) ? Date.now() + budget.maxTurnMinutes * 60_000 : Number.POSITIVE_INFINITY;
     let stopReason: TurnReason | undefined;
     let stopDetail: string | undefined;
@@ -257,9 +256,14 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
         if (this.objective && this.turnConvergenceUpTo !== undefined) this.objective.convergenceResetAfter = this.turnConvergenceUpTo;
       }
       if (stopReason) break;
-      if (currentStep > maxTotalSteps) {
+      const taskStepLimitReached = budget
+        ? tracker.data.cumulativeSteps >= maxTotalSteps
+        : currentStep > maxTotalSteps;
+      if (taskStepLimitReached) {
         stopReason = budget ? "STEP_BUDGET_EXHAUSTED" : "STEP_LIMIT_REACHED";
-        stopDetail = budget ? `operator step limit ${maxTotalSteps}` : `--no-continuation: ${segmentSteps} steps`;
+        stopDetail = budget
+          ? `objective step limit ${maxTotalSteps} reached (${tracker.data.cumulativeSteps} steps consumed across runs)`
+          : `--no-continuation: ${segmentSteps} steps`;
         break;
       }
       if (Date.now() > turnDeadline) {
@@ -318,6 +322,13 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
       }
       const cumulativeStep = tracker.beginStep();
       if (this.objective && this.durable) this.objective.continuation.totalSteps = tracker.data.cumulativeSteps;
+      // Charge and persist this inference step before contacting a provider. If durable state cannot record the
+      // consumed budget, stop here: a resume must not repeat an unaccounted request.
+      if (this.durable && !this.persistProgress({ messages: true })) {
+        persistenceFailure = this.turnPersistenceFailures.at(-1) ?? "The objective step budget could not be saved before inference.";
+        stopReason = "PERSISTENCE_FAILED";
+        break;
+      }
       const stepStateBefore = stateNow;
       const verdicts: ObservationVerdict[] = [];
       /**
@@ -963,6 +974,12 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
         });
         this.persistProgress({ messages: true });
 
+        if (this.objectiveBudgetPersistenceFailure) {
+          persistenceFailure = this.objectiveBudgetPersistenceFailure;
+          stopReason = "PERSISTENCE_FAILED";
+          stopDetail = this.objectiveBudgetPersistenceFailure;
+        }
+
         if (shouldExit) {
           modelStop = "TASK_COMPLETED_TOOL";
           finalOutputComplete = true;
@@ -1016,7 +1033,7 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
       interruption,
       limitReached,
       capacityBlock,
-      stepsUsed: stepsUsed || Math.min(currentStep, maxTotalSteps),
+      stepsUsed: stopReason === "STEP_BUDGET_EXHAUSTED" ? tracker.data.cumulativeSteps : (stepsUsed || Math.min(currentStep, maxTotalSteps)),
       providerRecoveries,
       maxSteps: maxTotalSteps,
       stopReason,

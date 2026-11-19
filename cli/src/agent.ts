@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { randomUUID } from "node:crypto";
-import { ChatMessage, DEFAULT_CONTINUATION, EvaluationToolReceipt, HarnessConfig, ToolCall, ToolDefinition } from "./types.js";
+import { assertValidContinuationBudget, ChatMessage, DEFAULT_CONTINUATION, EvaluationToolReceipt, HarnessConfig, MAX_CONTINUATION_STEPS, ToolCall, ToolDefinition } from "./types.js";
 import { LocalLlmClient } from "./client.js";
 import { normalizeToolArguments } from "./core/tool_arguments.js";
 import { HARNESS_TOOLS, RustCoreBridge } from "./tools.js";
@@ -321,6 +321,10 @@ export class AutonomousAgent {
   private compactionQueue: Array<{ ids: string[]; llm: boolean; at: string }> = [];
   /** Durable-write failures during the running turn, reported on its result. */
   private turnPersistenceFailures: string[] = [];
+  /** A shared objective-budget checkpoint failed; no delegated execution may continue on unpersisted allowance. */
+  public objectiveBudgetPersistenceFailure?: string;
+  /** Parent-owned durable budget shared with this ephemeral helper for the duration of one delegation. */
+  private sharedObjectiveBudget?: { ledger: ObjectiveLedger; persist: () => boolean };
   /** A mid-turn progress save failed and no save has succeeded since (the notice is given once). */
   private progressSaveFailing = false;
   private sessionSaveFailing = false;
@@ -341,6 +345,12 @@ export class AutonomousAgent {
     options?: { durable?: boolean; role?: AgentRole; unitId?: string },
   ) {
     canonicalDurableProvenance.set(this, new WeakMap());
+    assertValidContinuationBudget(config.continuation);
+    // Programmatic and test callers may omit this CLI-facing setting; retain the documented default.
+    if (config.maxSteps === undefined) config = { ...config, maxSteps: 30 };
+    if (!Number.isSafeInteger(config.maxSteps) || config.maxSteps < 1 || config.maxSteps > MAX_CONTINUATION_STEPS) {
+      throw new Error(`Invalid --max-steps value: expected an integer from 1 to ${MAX_CONTINUATION_STEPS}.`);
+    }
     this.config = config;
     this.surface = config.surface || "headless";
     this.primaryWorkspacePathIdentity = WorkspacePath.fromSelectedWorkspace(path.resolve(config.workspace || process.cwd()));
@@ -1423,8 +1433,10 @@ export class AutonomousAgent {
     this.persistProgress({ verificationConfigAttempts: true });
   }
 
-  private persistProgress(progress: { verificationConfigAttempts?: boolean; messages?: boolean; unverifiedChangesPending?: boolean; changeBaseline?: ChangeBaseline | null }): void {
-    if (!this.durable || this.restoringConversation) return;
+  /** Save mid-turn progress and report whether every configured persistence sink succeeded. */
+  private persistProgress(progress: { verificationConfigAttempts?: boolean; messages?: boolean; unverifiedChangesPending?: boolean; changeBaseline?: ChangeBaseline | null }): boolean {
+    if (!this.durable || this.restoringConversation) return true;
+    let saved = true;
     try {
       if (this.stateManager && !this.stateManager.hasTaskState(this.currentTaskId)) this.checkpointDurableState();
       else this.stateManager?.recordProgress(this.currentTaskId, {
@@ -1469,6 +1481,7 @@ export class AutonomousAgent {
       });
       this.progressSaveFailing = false;
     } catch (err: any) {
+      saved = false;
       // Tolerated (the turn-end checkpoint writes the same state), but not silent: a crash before then would lose the
       // work since the last save. Said once until a save succeeds again.
       if (!this.progressSaveFailing) {
@@ -1483,6 +1496,7 @@ export class AutonomousAgent {
       this.progressListener?.();
       this.sessionSaveFailing = false;
     } catch (err: any) {
+      saved = false;
       // The host's session record (what /resume reads) failed: reported once until a save succeeds again.
       if (!this.sessionSaveFailing) {
         this.sessionSaveFailing = true;
@@ -1492,6 +1506,7 @@ export class AutonomousAgent {
         else console.warn(pc.yellow(text));
       }
     }
+    return saved;
   }
 
   /**
@@ -1501,7 +1516,10 @@ export class AutonomousAgent {
   public reportPersistenceFailure(kind: string, err: unknown): void {
     const message = redactSecrets(err instanceof Error ? err.message : String(err)).slice(0, 200);
     let text: string;
-    if (kind === "operation_start" || kind === "operation_end") {
+    if (kind === "objective_budget") {
+      text = `The delegated task budget could not be saved durably (${message}); no further delegated inference or tool execution is allowed.`;
+      this.objectiveBudgetPersistenceFailure = text;
+    } else if (kind === "operation_start" || kind === "operation_end") {
       text = `Tool operation record (${kind}) could not be written durably (${message}); crash recovery degraded.`;
     } else if (kind === "init") {
       text = `Initial durable task state was not persisted (${message}); restart recovery is unavailable until a later successful checkpoint.`;
@@ -1516,6 +1534,28 @@ export class AutonomousAgent {
       if (this.observer?.onNotice) this.observer.onNotice(text);
       else console.warn(pc.yellow(text));
     } catch {}
+  }
+
+  /** Persist only the shared objective ledger, never the subagent's temporary conversation. */
+  private persistObjectiveBudget(): boolean {
+    if (!this.durable) return true;
+    try {
+      if (!this.stateManager || !this.currentTaskId || !this.objective) throw new Error("durable objective state is unavailable");
+      this.stateManager.recordProgress(this.currentTaskId, { objective: this.objective });
+      return true;
+    } catch (err) {
+      this.reportPersistenceFailure("objective_budget", err);
+      return false;
+    }
+  }
+
+  /** Share the parent's ledger and durable checkpoint with an ephemeral delegated agent. */
+  public inheritObjectiveBudget(parent: AutonomousAgent): void {
+    if (!parent.durable || !parent.objective) return;
+    this.sharedObjectiveBudget = {
+      ledger: parent.objective,
+      persist: () => parent.persistObjectiveBudget(),
+    };
   }
 
   /**
@@ -4439,6 +4479,11 @@ ${NEXUS_RUNTIME_IDENTITY}`;
 
     const stagnationSteps = this.config.continuation?.stagnationSteps ?? DEFAULT_CONTINUATION.stagnationSteps;
     const maxRecoveries = this.config.continuation?.maxRecoveries ?? DEFAULT_CONTINUATION.maxRecoveries;
+    const maxTotalSteps = this.config.continuation?.maxTotalSteps ?? this.config.maxSteps;
+    // A subagent consumes the same objective-wide step allowance as its parent. The shared tracking data survives
+    // resume; the subagent's local tracker below is only for its own progress/stagnation decisions.
+    const budgetLedger = this.sharedObjectiveBudget?.ledger ?? (this.durable ? this.objective : undefined);
+    const objectiveTracker = budgetLedger ? trackingOf(budgetLedger) : undefined;
     const tracker = ExecutionTracker.fresh();
     tracker.beginTurn();
     let state = this.workspaceStateIdentity();
@@ -4450,11 +4495,25 @@ ${NEXUS_RUNTIME_IDENTITY}`;
 
     for (;;) {
       if (signal?.aborted) return { completed: false, summary: finalSummary, reason: "cancelled with the parent turn" };
+      const consumedTaskSteps = objectiveTracker?.data.cumulativeSteps ?? (currentStep - 1);
+      if (consumedTaskSteps >= maxTotalSteps) {
+        return { completed: false, summary: finalSummary, reason: `objective step budget exhausted (${consumedTaskSteps}/${maxTotalSteps}); no further subagent inference was submitted` };
+      }
       if (tracker.data.stepsWithoutProgress >= stagnationSteps) {
         const loops = tracker.loops().slice(0, 2).map((r) => `${r.action} ×${r.count}`).join("; ");
         return { completed: false, summary: finalSummary, reason: `no progress for ${tracker.data.stepsWithoutProgress} consecutive steps${loops ? ` (repeated: ${loops})` : ""}` };
       }
       const cumulativeStep = tracker.beginStep();
+      if (objectiveTracker) {
+        objectiveTracker.beginStep();
+        if (budgetLedger) budgetLedger.continuation.totalSteps = objectiveTracker.data.cumulativeSteps;
+        // The helper runs through this parent agent, so its extra inference steps must be in the durable objective
+        // ledger before any request is sent. Do not persist the helper's temporary message array as the parent chat.
+        const persisted = this.sharedObjectiveBudget ? this.sharedObjectiveBudget.persist() : this.persistObjectiveBudget();
+        if (!persisted) {
+          return { completed: false, summary: finalSummary, reason: "PERSISTENCE_FAILED: the shared objective budget could not be saved before delegated inference" };
+        }
+      }
       let assistantMessage: ChatMessage;
       const requestId = randomUUID();
       const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);

@@ -1,8 +1,8 @@
 # Compaction and task continuity
 
-How Nexus keeps a long task going: no step ceiling on progressing work, progress judged against workspace state,
-tracking that survives compaction, follow-ups and restart, a durable compaction boundary, and context sizing taken from
-the provider when it advertises it. Operator reference first, then the developer reference.
+How Nexus keeps a long task going: bounded automatic continuation, progress judged against workspace state, tracking
+that survives compaction, follow-ups and restart, a durable compaction boundary, and context sizing taken from the
+provider when it advertises it. Operator reference first, then the developer reference.
 
 Nexus works the same way with or without the homelab-ai gateway. When the gateway is the connection, Nexus reads the
 capacity it advertises and counts requests through it. Without it, Nexus uses the operator's configuration or its
@@ -10,10 +10,12 @@ labelled defaults. Neither product requires the other.
 
 ## Operator reference
 
-### Long tasks have no step ceiling
+### Long tasks have finite step and invocation-time limits
 
 `--max-steps` (default 30) is the length of a **segment**. At each segment boundary the turn writes a durable
-checkpoint and continues by itself. A turn ends for one of these reasons only:
+checkpoint and continues by itself. The default objective budget is 500 total steps and 480 minutes per invocation.
+The hard override ceilings are 5,000 steps and 4,320 minutes. The time limit is currently invocation-scoped, not
+accumulated across process restarts. A turn ends for one of these reasons:
 
 | Ends when | Reason on the result |
 | --- | --- |
@@ -26,17 +28,19 @@ checkpoint and continues by itself. A turn ends for one of these reasons only:
 | inference fails and provider recovery cannot wait it out | `INFERENCE_FAILED` |
 | the model's reply is cut off at the output limit twice in a row (see below) | `INFERENCE_FAILED` (`output_truncated/client`) |
 | a compaction (or another record the next action depends on) cannot be written | `PERSISTENCE_FAILED` |
-| **you** set `--max-total-steps N` or `--max-turn-minutes M` | `STEP_BUDGET_EXHAUSTED` / `TIME_BUDGET_EXHAUSTED` |
+| objective step budget is exhausted, or the invocation time budget is exhausted | `STEP_BUDGET_EXHAUSTED` / `TIME_BUDGET_EXHAUSTED` |
 
-There is no default total-step or time limit. Earlier versions stopped at 300 steps and 120 minutes; those defaults
-are gone. Explicit limits (`--max-total-steps`, `NEXUS_MAX_TOTAL_STEPS`, `--max-turn-minutes`,
-`NEXUS_MAX_TURN_MINUTES`) still apply. `--no-continuation` is your explicit choice of a turn that ends at `--max-steps`.
+Use `--max-total-steps`, `NEXUS_MAX_TOTAL_STEPS`, `--max-turn-minutes` or `NEXUS_MAX_TURN_MINUTES` to choose a lower
+or higher finite limit within the hard ceiling. `--no-continuation` is your explicit choice of a turn that ends at
+`--max-steps`.
 
 The model is never told that "steps are running out" unless you set a step limit. The live status line shows
 `step N` (and `step N of M` only under a limit you set).
 
-Delegated helpers (`spawn_subagent`) have no step allowance either. A helper stops when it delivers its report, when
-it shows no progress, or when its parent turn is cancelled.
+Delegated helpers (`spawn_subagent`) consume the parent objective's total-step budget. A helper stops when it delivers
+its report, when it shows no progress, when the shared step budget is exhausted, or when its parent turn is cancelled.
+Each model response can request at most 16 tool calls; Nexus rejects a larger batch before executing any of it. This
+caps single-response fan-out and works alongside the objective-wide step budget.
 
 ### A reply cut off at the output limit
 

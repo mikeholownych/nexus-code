@@ -14,7 +14,7 @@ import { DEFAULT_OPERATION_POLICY } from "./core/operation.js";
 import { setSandboxNetworkFlag } from "./sandbox_network.js";
 import { readSmallFile } from "./core/checkout_trust.js";
 import { resolveRepeatedCallSettings } from "./core/repeated_calls.js";
-import { ContinuationBudget, DEFAULT_CONTINUATION, DEFAULT_CONVERGENCE_ATTEMPTS, HarnessConfig, ApprovalMode } from "./types.js";
+import { ContinuationBudget, DEFAULT_CONTINUATION, DEFAULT_CONVERGENCE_ATTEMPTS, MAX_CONTINUATION_MINUTES, MAX_CONTINUATION_STEPS, HarnessConfig, ApprovalMode } from "./types.js";
 
 /** A project `.env` larger than this is ignored (it is repository-controlled). */
 const MAX_PROJECT_ENV_BYTES = 256 * 1024;
@@ -736,26 +736,27 @@ export function mergeOperationPolicy(
 
 /**
  * Continuation budgets: flags, then NEXUS_MAX_TOTAL_STEPS / NEXUS_MAX_TURN_MINUTES / NEXUS_STAGNATION_STEPS, then
- * defaults. There is no default step or time ceiling: progressing work continues until it completes, is cancelled,
- * stagnates or fails. A step or time limit exists only when the operator sets one. `--no-continuation` (or
- * NEXUS_CONTINUATION=0) is the operator's explicit choice of the single-segment turn that ends at --max-steps.
+ * finite defaults. Total steps are charged to the durable objective ledger, so resume does not reset them.
+ * `--no-continuation` (or NEXUS_CONTINUATION=0) is the operator's explicit choice of the single-segment turn that
+ * ends at --max-steps.
  */
 export function continuationBudget(options: any): ContinuationBudget | undefined {
   if (options.continuation === false || effectiveSetting("NEXUS_CONTINUATION") === "0") return undefined;
-  const positive = (flag: unknown, env: string | undefined, fallback: number): number => {
+  const positive = (flag: unknown, env: string | undefined, fallback: number, maximum = Number.POSITIVE_INFINITY): number => {
     for (const raw of [flag, env]) {
       if (raw === undefined || raw === null || raw === "") continue;
       const value = Number(raw);
       if (!Number.isFinite(value) || value <= 0) throw new Error(`Invalid continuation budget '${String(raw)}': expected a positive number.`);
+      if (value > maximum) throw new Error(`Invalid continuation budget '${String(raw)}': maximum is ${maximum}.`);
       return value;
     }
     return fallback;
   };
-  const steps = positive(options.maxTotalSteps, effectiveSetting("NEXUS_MAX_TOTAL_STEPS"), DEFAULT_CONTINUATION.maxTotalSteps);
+  const steps = positive(options.maxTotalSteps, effectiveSetting("NEXUS_MAX_TOTAL_STEPS"), DEFAULT_CONTINUATION.maxTotalSteps, MAX_CONTINUATION_STEPS);
   return {
     ...DEFAULT_CONTINUATION,
     maxTotalSteps: Number.isFinite(steps) ? Math.floor(steps) : steps,
-    maxTurnMinutes: positive(options.maxTurnMinutes, effectiveSetting("NEXUS_MAX_TURN_MINUTES"), DEFAULT_CONTINUATION.maxTurnMinutes),
+    maxTurnMinutes: positive(options.maxTurnMinutes, effectiveSetting("NEXUS_MAX_TURN_MINUTES"), DEFAULT_CONTINUATION.maxTurnMinutes, MAX_CONTINUATION_MINUTES),
     stagnationSteps: Math.floor(positive(options.stagnationSteps, effectiveSetting("NEXUS_STAGNATION_STEPS"), DEFAULT_CONTINUATION.stagnationSteps)),
     verifierConvergenceAttempts: Math.floor(positive(undefined, effectiveSetting("NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS"), DEFAULT_CONVERGENCE_ATTEMPTS)),
   };

@@ -8,6 +8,9 @@ const KNOWN_TOOLS = new Set<string>(HARNESS_TOOLS.map((t) => t.function.name));
 
 export type JsonRepairClass = "none" | "trailing" | "structural";
 
+/** Hard cap on tool fan-out from one model response; the objective step ceiling bounds total response batches. */
+export const MAX_TOOL_CALLS_PER_RESPONSE = 16;
+
 export function isWriteOrExecTool(name: string): boolean {
   const cap = defaultRegistry.getByToolName(name);
   if (cap) return cap.effect === "write_workspace" || cap.effect === "exec";
@@ -520,7 +523,16 @@ export function parseModelResponse(
 ): ParsedModelOutput {
   const syntax: ToolCallSyntaxCounts = { native: 0, trailing: 0, structural: 0, invalid: 0, schema: 0 };
   const parsed = parseModelResponseCounting(message, optionsOrOffered, syntax);
-  return syntax.native + syntax.trailing + syntax.structural + syntax.invalid + syntax.schema > 0 ? { ...parsed, toolCallSyntax: syntax } : parsed;
+  const result = syntax.native + syntax.trailing + syntax.structural + syntax.invalid + syntax.schema > 0 ? { ...parsed, toolCallSyntax: syntax } : parsed;
+  if (result.toolCalls.length <= MAX_TOOL_CALLS_PER_RESPONSE) return result;
+  return {
+    ...result,
+    toolCalls: [],
+    notices: [
+      ...(result.notices ?? []),
+      `Rejected ${result.toolCalls.length} tool calls in one model response; the limit is ${MAX_TOOL_CALLS_PER_RESPONSE} and none were executed.`,
+    ],
+  };
 }
 
 function parseModelResponseCounting(

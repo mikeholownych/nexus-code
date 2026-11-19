@@ -237,6 +237,11 @@ export interface ObjectiveLedger {
 /** The ledger's execution tracking, created (or completed, for a ledger restored from an earlier version) on first use. */
 export function trackingOf(ledger: ObjectiveLedger): ExecutionTracker {
   ledger.execution = normalizeTracking(ledger.execution);
+  // `ContinuationState.totalSteps` predates the richer execution record. Preserve its count when resuming a legacy
+  // task instead of normalizing a missing execution field to a false zero and granting fresh budget.
+  if (Number.isSafeInteger(ledger.continuation?.totalSteps) && ledger.continuation.totalSteps > ledger.execution.cumulativeSteps) {
+    ledger.execution.cumulativeSteps = ledger.continuation.totalSteps;
+  }
   return new ExecutionTracker(ledger.execution);
 }
 

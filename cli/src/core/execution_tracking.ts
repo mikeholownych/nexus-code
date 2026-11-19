@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import { covered, mergeIntervals, overlaps, readRequests, type ReadCoverage } from "./observation_identity.js";
 
 /**
- * Objective-scoped execution tracking: how many steps the work has taken (observability only, never a termination
- * condition), what counted as progress, which actions recurred without it, what failed, and what Nexus did about it.
+ * Objective-scoped execution tracking: how many steps the work has taken (also used by configured continuation
+ * budgets), what counted as progress, which actions recurred without it, what failed, and what Nexus did about it.
  * It lives in the objective ledger, so compaction (which rewrites the conversation only), follow-up turns on the same
  * objective (which amend the ledger) and restart (which restores the ledger) all keep it. A new objective starts a new
  * ledger and so new tracking; `/requirements clear` and `/clear` reset it explicitly.
@@ -166,7 +166,7 @@ export interface RecoveryState {
 
 export interface ExecutionTracking {
   version: number;
-  /** Steps run against this objective across all turns (observability; no limit is derived from it). */
+  /** Steps charged to this objective across turns and in-turn delegated agents. */
   cumulativeSteps: number;
   turns: number;
   /** Consecutive steps without progress, across turns; operator input resets it. */

@@ -348,6 +348,16 @@ const realScheduler: StallScheduler = {
 const DEFAULT_STALL_NOTICE_MS = 30_000;
 /** Longest delay a Node timer takes; above it the timer fires at once. */
 const MAX_TIMER_MS = 2_147_483_647;
+/** Whole-inference deadline, including streams that continue sending chunks and never become idle. */
+export const DEFAULT_INFERENCE_TOTAL_TIMEOUT_MS = 900_000;
+export const MAX_INFERENCE_TOTAL_TIMEOUT_MS = 3_600_000;
+
+export function inferenceTotalTimeoutMs(raw: string | undefined = process.env.LOCAL_LLM_TIMEOUT_MS): number {
+  const configured = raw === undefined || raw === "" ? Number.NaN : Number(raw);
+  return Number.isFinite(configured) && configured > 0
+    ? Math.min(configured, MAX_INFERENCE_TOTAL_TIMEOUT_MS)
+    : DEFAULT_INFERENCE_TOTAL_TIMEOUT_MS;
+}
 
 /**
  * Watchdog for inference requests (first-byte, idle between chunks, and optional total timeout).
@@ -1122,8 +1132,7 @@ export class LocalLlmClient {
   /** The clock of the resend budget; a test replaces it. */
   public resendClock: () => number = Date.now;
 
-  private createWatchdog(operatorSignal?: AbortSignal, currentEp?: string, streaming = false): StreamWatchdog {
-    const disclosure = this.disclosureOf(currentEp ?? this.endpoint);
+  private createWatchdog(operatorSignal?: AbortSignal, _currentEp?: string, streaming = false): StreamWatchdog {
     const parseNum = (k: string) => {
       const raw = process.env[k];
       if (raw === undefined || raw === "") return undefined;
@@ -1132,8 +1141,9 @@ export class LocalLlmClient {
     };
     const firstByteMs = parseNum("LOCAL_LLM_FIRST_BYTE_TIMEOUT_MS") ?? 120_000;
     const idleMs = parseNum("LOCAL_LLM_IDLE_TIMEOUT_MS") ?? 120_000;
-    const defaultTotal = disclosure === "cloud" ? 900_000 : 0;
-    const totalMs = parseNum("LOCAL_LLM_TIMEOUT_MS") ?? defaultTotal;
+    // A zero or invalid setting cannot disable the whole-request deadline. Keep the first-byte and idle
+    // watchdogs independent; clamp operator overrides below Node's maximum timer and the documented hard ceiling.
+    const totalMs = inferenceTotalTimeoutMs();
     const notify = this.onStreamStall;
     const stallMs = parseNum("LOCAL_LLM_STALL_NOTICE_MS") ?? DEFAULT_STALL_NOTICE_MS;
     return new StreamWatchdog(

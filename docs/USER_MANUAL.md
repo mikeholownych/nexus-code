@@ -342,19 +342,27 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
 - **Process Group Termination (REQ-AGT-109, REQ-SEC-106):** Cancellation terminates the entire process group (`killpg`) of in-flight commands: `SIGTERM` is sent immediately, followed by `SIGKILL` after a 2-second grace period. The turn reaches an idle state within 5 seconds.
 - **Repeated Cancel Input:** While cancelling, a second `Esc` has no effect. A second `Ctrl-C` force-quits the TUI and sidecar, initiating an automatic shutdown sweep that terminates all child processes.
 - **Background Services:** Commands launched with `run_command { background: true, service_name }` (such as background dev servers) are registered as managed services. They survive turn cancellation and are listed in `/status`. On client exit or application shutdown, all registered background services are cleaned up. Background processes spawned without registration (`cmd &`) are terminated on turn cancellation.
+- **Inference deadlines:** A model request has a 15-minute whole-request deadline, including streams that keep sending chunks. First-byte and idle-between-chunks timeouts remain separate. The operator may set `LOCAL_LLM_TIMEOUT_MS` up to 60 minutes; zero or an invalid value uses the 15-minute default and cannot disable the deadline. Cancellation aborts the in-flight request.
 - **Notification Gating (REQ-AGT-109a):** Turn completion notifications (desktop `notify-send` and terminal `BEL` `\x07`) are gated to interactive TTY environments running on the REPL or TUI surface. Headless runs (`nexus run --json`) emit no BEL characters and spawn no notifications.
 
-### Long tasks: no step ceiling
+### Long tasks: bounded automatic continuation
 
 `--max-steps` (default 30) is a segment: at each segment boundary the turn writes a durable checkpoint and continues
-on its own. Progressing work has no step or time ceiling: a turn stops on completion, cancellation, demonstrated lack
+on its own. The objective has a finite default ceiling of 500 total steps and each invocation has a 480-minute ceiling.
+Operator overrides are bounded at 5,000 steps and 4,320 minutes. A turn also stops on completion, cancellation, demonstrated lack
 of progress (`--stagnation-steps`, default 12 consecutive steps without progress, or a repeated action on an unchanged
 workspace after two recovery notes), an actionable failure, or a limit **you** set (`--max-total-steps`,
 `--max-turn-minutes`). Progress is judged against workspace content, not tool-call equality: plan edits, identical
 rewrites and timestamp-only output changes do not count, and a retry after a real change is legitimate. Polls and
 transient failures are spaced with backoff instead of being treated as loops. `--no-continuation` restores the
 single-segment turn. Tracking (cumulative steps, loops, failed approaches, compactions) belongs to the objective and
-survives compaction, follow-ups ("continue") and `/resume`. See `docs/COMPACTION_AND_CONTINUITY.md`.
+survives compaction, follow-ups ("continue") and `/resume`; the total-step budget is shared with in-turn delegated
+helpers. The time limit currently applies to each active invocation and is not accumulated across process restarts.
+See `docs/COMPACTION_AND_CONTINUITY.md`.
+
+A single model response may request at most 16 tool calls. A larger batch is rejected in full before any of its calls
+run, and Nexus reports the rejection in the next model context. This bounds tool fan-out from one response; it does
+not replace the objective-wide step budget.
 
 A second, independent brake watches the verifier itself: when `task_completed` fails the same verifier
 `NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS` times in a row (default 3; a check-only failure with no test names needs one

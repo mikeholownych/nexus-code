@@ -12,9 +12,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AutonomousAgent } from "../src/agent.js";
-import { DEFAULT_CONTINUATION, HarnessConfig } from "../src/types.js";
+import { DEFAULT_CONTINUATION, HarnessConfig, MAX_CONTINUATION_MINUTES, MAX_CONTINUATION_STEPS } from "../src/types.js";
 import { startGateway, makeRepo, Reply } from "./helpers/fixtures.js";
-import { createLedger, seedRequirements, applyRequirementUpdates, isNewObjective, failedCheckFrom, renderPinnedLedger, acceptDescoping, requirementDone, readObjective, invalidateVerified, queueSteering, amendObjective } from "../src/core/objective.js";
+import { createLedger, seedRequirements, applyRequirementUpdates, isNewObjective, failedCheckFrom, renderPinnedLedger, acceptDescoping, requirementDone, readObjective, invalidateVerified, queueSteering, amendObjective, trackingOf } from "../src/core/objective.js";
 import { stableToolCallId, redactTaskStateForPersistence } from "../src/core/persistence_protection.js";
 import { SessionManager } from "../src/session.js";
 import { WorkspacePath } from "../src/core/workspace_path.js";
@@ -50,6 +50,39 @@ const userMessages = (body: any) => (body.messages as any[]).filter((m) => m.rol
 const systemText = (body: any) => (body.messages as any[]).filter((m) => m.role === "system").map((m) => String(m.content)).join("\n");
 
 describe("continuation beyond the per-segment step limit", () => {
+  test("automatic continuation has finite default step and invocation time ceilings", () => {
+    assert.equal(DEFAULT_CONTINUATION.maxTotalSteps, 500);
+    assert.equal(DEFAULT_CONTINUATION.maxTurnMinutes, 480);
+    assert.ok(Number.isFinite(DEFAULT_CONTINUATION.maxTotalSteps));
+    assert.ok(Number.isFinite(DEFAULT_CONTINUATION.maxTurnMinutes));
+  });
+
+  test("legacy objective continuation counts are not reset when the execution tracker is missing or stale", () => {
+    const ledger = createLedger("Continue the existing task.");
+    ledger.continuation.totalSteps = 17;
+    delete ledger.execution;
+    assert.equal(trackingOf(ledger).data.cumulativeSteps, 17);
+
+    ledger.execution!.cumulativeSteps = 9;
+    assert.equal(trackingOf(ledger).data.cumulativeSteps, 17);
+  });
+
+  test("direct agent construction rejects step or time limits above the hard ceilings", () => {
+    const repo = makeRepo();
+    try {
+      assert.throws(
+        () => new AutonomousAgent(cfg("http://127.0.0.1:9/v1", repo, { continuation: { ...DEFAULT_CONTINUATION, maxTotalSteps: MAX_CONTINUATION_STEPS + 1 } })),
+        /expected an integer from 1 to 5000/,
+      );
+      assert.throws(
+        () => new AutonomousAgent(cfg("http://127.0.0.1:9/v1", repo, { continuation: { ...DEFAULT_CONTINUATION, maxTurnMinutes: MAX_CONTINUATION_MINUTES + 1 } })),
+        /expected a finite value from 1 second to 4320 minutes/,
+      );
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   test("a progressing task runs past 30 steps without the operator typing continue", { timeout: 60_000 }, async () => {
     const gw = await startGateway((n) => (n <= 34 ? write(`f${n}.txt`) : text("All files written.")));
     const repo = makeRepo();
@@ -141,6 +174,132 @@ describe("continuation beyond the per-segment step limit", () => {
       assert.equal(turn.steps.max, 12);
       assert.equal(turn.continuation?.segments, 3);
       assert.equal(gw.requests.length, 12);
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("the total step budget is shared by durable resume instead of resetting per invocation", { timeout: 60_000 }, async () => {
+    const gw = await startGateway((n) => write(`resume-${n}.txt`));
+    const repo = makeRepo();
+    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo, {
+      maxSteps: 30,
+      continuation: { ...DEFAULT_CONTINUATION, maxTotalSteps: 2 },
+    })));
+    try {
+      const first = await agent.runTurn("Keep writing distinct files.");
+      assert.equal(first.reason, "STEP_BUDGET_EXHAUSTED");
+      assert.equal(first.steps.used, 2);
+      assert.equal(gw.requests.length, 2);
+
+      const resumed = await agent.runTurn("", undefined, { resume: true });
+      assert.equal(resumed.execution, "LIMIT_REACHED");
+      assert.equal(resumed.reason, "STEP_BUDGET_EXHAUSTED");
+      assert.equal(gw.requests.length, 2, "resume at an exhausted budget submits no new inference request");
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("a delegated helper consumes only the parent's remaining durable steps", { timeout: 60_000 }, async () => {
+    let writes = 0;
+    const gw = await startGateway((_n, body) => {
+      const subagent = (body.messages as any[]).some((message) => typeof message.content === "string" && message.content.includes("[Subagent Objective]"));
+      if (!subagent) return { kind: "tools", calls: [{ name: "spawn_subagent", args: { prompt: "write until stopped" } }] };
+      return write(`shared-${++writes}.txt`);
+    });
+    const repo = makeRepo();
+    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo, {
+      continuation: { ...DEFAULT_CONTINUATION, maxTotalSteps: 3 },
+    })));
+    try {
+      const turn = await agent.runTurn("Delegate an open-ended sequence of writes.");
+      assert.equal(turn.execution, "LIMIT_REACHED");
+      assert.equal(turn.reason, "STEP_BUDGET_EXHAUSTED");
+      assert.equal(turn.steps.used, 3);
+      assert.equal(agent.getObjective()!.execution!.cumulativeSteps, 3);
+      assert.equal(gw.requests.length, 3, "one parent request and exactly two delegated requests consumed the budget");
+      assert.equal(writes, 2);
+      assert.ok(fs.existsSync(path.join(repo, "shared-1.txt")));
+      assert.ok(fs.existsSync(path.join(repo, "shared-2.txt")));
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("a delegated inference is not sent when saving its shared budget fails", { timeout: 60_000 }, async () => {
+    const gw = await startGateway((n) => n === 1
+      ? { kind: "tools", calls: [{ name: "spawn_subagent", args: { prompt: "write a child file" } }] }
+      : text("parent must not get another request"));
+    const repo = makeRepo();
+    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo, {
+      continuation: { ...DEFAULT_CONTINUATION, maxTotalSteps: 2 },
+    })));
+    const stateManager = (agent as any).stateManager;
+    const recordProgress = stateManager.recordProgress.bind(stateManager);
+    let injected = false;
+    stateManager.recordProgress = (taskId: string, progress: any) => {
+      if (!injected && progress.objective?.execution?.cumulativeSteps === 2) {
+        injected = true;
+        throw new Error("simulated objective budget disk failure");
+      }
+      return recordProgress(taskId, progress);
+    };
+    try {
+      const turn = await agent.runTurn("Delegate one write.");
+      assert.equal(injected, true, "the child step budget checkpoint was attempted");
+      assert.equal(turn.execution, "FAILED");
+      assert.equal(turn.reason, "PERSISTENCE_FAILED");
+      assert.equal(gw.requests.length, 1, "only the parent request ran; no child inference or parent retry was submitted");
+      assert.ok(turn.persistence?.failures.some((failure: string) => /simulated objective budget disk failure/.test(failure)));
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("a failed durable budget checkpoint prevents the next inference request", { timeout: 60_000 }, async () => {
+    const gw = await startGateway(() => write("must-not-run.txt"));
+    const repo = makeRepo();
+    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo, {
+      continuation: { ...DEFAULT_CONTINUATION, maxTotalSteps: 2 },
+    })));
+    const stateManager = (agent as any).stateManager;
+    stateManager.recordProgress = () => { throw new Error("simulated durable store failure"); };
+    try {
+      const turn = await agent.runTurn("Write the requested file.");
+      assert.equal(turn.execution, "FAILED");
+      assert.equal(turn.reason, "PERSISTENCE_FAILED");
+      assert.equal(gw.requests.length, 0, "no inference is submitted after the budget checkpoint fails");
+      assert.ok(turn.persistence?.failures.some((failure: string) => /simulated durable store failure/.test(failure)));
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("a model response exceeding the tool fan-out ceiling executes none of its calls", { timeout: 60_000 }, async () => {
+    const batch = Array.from({ length: 17 }, (_, i) => ({
+      name: "write_file",
+      args: { path: `fanout-${i}.txt`, content: `write ${i}` },
+    }));
+    const gw = await startGateway((n) => n === 1 ? { kind: "tools", calls: batch } : text("The oversized batch was rejected."));
+    const repo = makeRepo();
+    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo)));
+    try {
+      const turn = await agent.runTurn("Write a small set of files.");
+      assert.equal(turn.execution, "COMPLETED");
+      assert.equal(gw.requests.length, 2);
+      for (let i = 0; i < batch.length; i++) assert.equal(fs.existsSync(path.join(repo, `fanout-${i}.txt`)), false);
+      assert.ok(agent.getMessages().some((message) => String(message.content ?? "").includes("none were executed")));
     } finally {
       agent.shutdown();
       await gw.close();
