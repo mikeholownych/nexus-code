@@ -1,0 +1,54 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M7TGHECW3XE8QK2EK9VMPFZ8",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "AGENTS.md",
+    "docs/agents/domain.md",
+    "docs/agents/issue-tracker.md",
+    "docs/agents/triage-labels.md",
+    "docs/reviews/evidence/v1/AUDIT_skills_architecture_2026-11-18/GOVERNED_SKILLS_ARCHITECTURE.md",
+    "docs/reviews/evidence/v1/AUDIT_skills_architecture_2026-11-18/GOVERNED_SKILLS_IMPLEMENTATION_PLAN.md",
+    "docs/reviews/evidence/v1/AUDIT_skills_architecture_2026-11-18/README.md",
+    "docs/reviews/evidence/v1/AUDIT_skills_architecture_2026-11-18/SKILLS_ARCHITECTURE_AUDIT.md",
+    "docs/reviews/evidence/v1/AUDIT_skills_architecture_2026-11-18/SKILLS_AUDIT_DECISION.md",
+    "docs/reviews/evidence/v1/AUDIT_skills_architecture_2026-11-18/SKILLS_AUDIT_EVIDENCE.md",
+    "docs/reviews/evidence/v1/AUDIT_skills_architecture_2026-11-18/SKILLS_AUDIT_FINDINGS.json",
+    "docs/reviews/evidence/v1/AUDIT_skills_architecture_2026-11-18/SKILLS_THREAT_MODEL.md",
+    "docs/reviews/evidence/v1/AUDIT_skills_architecture_2026-11-18/adversarial/run_adv.mjs",
+    "tasks/lessons.md",
+    "tasks/todo.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 175489,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 3718528,
+    "output_tokens": 10201,
+    "api_call_count": 1
+  },
+  "redaction": {
+    "replacements": 1,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 1,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
