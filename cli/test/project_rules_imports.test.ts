@@ -6,8 +6,8 @@ import test from "node:test";
 import { getProjectRules } from "../src/git.js";
 import { MAX_IMPORT_DEPTH } from "../src/project_rules.js";
 
-function ws(files: Record<string, string>): { dir: string; outside: string } {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "rules-"));
+function ws(files: Record<string, string>, tempRoot = os.tmpdir()): { dir: string; outside: string } {
+  const base = fs.mkdtempSync(path.join(tempRoot, "rules-"));
   const dir = path.join(base, "ws");
   const outside = path.join(base, "outside");
   fs.mkdirSync(dir);
@@ -29,6 +29,21 @@ test("an import of AGENTS.md from CLAUDE.md loads the content once and lists the
   assert.equal(count(rules, "@AGENTS.md"), 0);
 });
 
+test("all non-empty project instruction files are loaded in the documented precedence order", () => {
+  const { dir } = ws({
+    "AGENTS.md": "AGENT-RULE",
+    "CLAUDE.md": "CLAUDE-RULE",
+    "CODEX.md": "\n ",
+    ".nexusrules": "NEXUS-RULE",
+  });
+  const rules = getProjectRules(dir, { trusted: true }) ?? "";
+  const agent = rules.indexOf("AGENT-RULE");
+  const claude = rules.indexOf("CLAUDE-RULE");
+  const nexus = rules.indexOf("NEXUS-RULE");
+  assert.ok(agent >= 0 && claude > agent && nexus > claude, rules);
+  assert.doesNotMatch(rules, /loaded from CODEX\.md/);
+});
+
 test("a shared import is read once", () => {
   const { dir } = ws({ "AGENTS.md": "@docs/a.md and @docs/a.md again", "docs/a.md": "UNIQUE-MARK" });
   const rules = getProjectRules(dir, { trusted: true }) ?? "";
@@ -40,17 +55,41 @@ test("an import outside the workspace is not read, by path or by symlink", () =>
   const { dir, outside } = ws({ "AGENTS.md": "@../outside/secret.md\n@link.md\n" });
   fs.writeFileSync(path.join(outside, "secret.md"), "SECRET-OUT");
   fs.symlinkSync(path.join(outside, "secret.md"), path.join(dir, "link.md"));
+  fs.appendFileSync(path.join(dir, "AGENTS.md"), `\n@${path.join(outside, "secret.md")}\n`);
   const rules = getProjectRules(dir, { trusted: true }) ?? "";
   assert.doesNotMatch(rules, /SECRET-OUT/);
   assert.match(rules, /@\.\.\/outside\/secret\.md/);
   assert.doesNotMatch(rules, /imports:/);
 });
 
+test("home-relative and absolute imports work when their real paths stay inside the trusted workspace", () => {
+  const { dir } = ws({ "AGENTS.md": "PLACEHOLDER" }, os.homedir());
+  const tildeFile = path.join(dir, "tilde.md");
+  const absoluteFile = path.join(dir, "absolute.md");
+  fs.writeFileSync(tildeFile, "TILDE-IMPORT");
+  fs.writeFileSync(absoluteFile, "ABSOLUTE-IMPORT");
+  const tildeImport = `@~/${path.relative(os.homedir(), tildeFile)}`;
+  fs.writeFileSync(path.join(dir, "AGENTS.md"), `${tildeImport}\n@${absoluteFile}`);
+
+  const rules = getProjectRules(dir, { trusted: true }) ?? "";
+  assert.match(rules, /TILDE-IMPORT/);
+  assert.match(rules, /ABSOLUTE-IMPORT/);
+  assert.match(rules, /imports: .*tilde\.md, .*absolute\.md/);
+});
+
 test("an untrusted workspace expands nothing", () => {
-  const { dir } = ws({ "AGENTS.md": "@docs/a.md", "docs/a.md": "UNIQUE-MARK" });
+  const { dir } = ws({ "AGENTS.md": "PLACEHOLDER", "docs/a.md": "UNIQUE-MARK" }, os.homedir());
+  const absoluteFile = path.join(dir, "absolute.md");
+  const tildeFile = path.join(dir, "tilde.md");
+  fs.writeFileSync(absoluteFile, "ABSOLUTE-MARK");
+  fs.writeFileSync(tildeFile, "TILDE-MARK");
+  fs.writeFileSync(path.join(dir, "AGENTS.md"), `@docs/a.md\n@${absoluteFile}\n@~/${path.relative(os.homedir(), tildeFile)}`);
   const rules = getProjectRules(dir, { trusted: false }) ?? "";
   assert.doesNotMatch(rules, /UNIQUE-MARK/);
+  assert.doesNotMatch(rules, /ABSOLUTE-MARK|TILDE-MARK/);
   assert.match(rules, /@docs\/a\.md/);
+  assert.match(rules, new RegExp(`@${absoluteFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.match(rules, new RegExp(`@~/${path.relative(os.homedir(), tildeFile).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
 });
 
 test("a cycle terminates with each file once", () => {

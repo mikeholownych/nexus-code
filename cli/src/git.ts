@@ -119,12 +119,13 @@ export function getGitInfo(workspace: string): GitInfo {
 }
 
 /**
- * The first non-empty project instruction file, with `@path` imports expanded when the workspace is trusted (see
- * project_rules.ts). The heading names the file and every import that was read, so the loaded set is visible.
+ * Every non-empty project instruction file, in precedence order, with `@path` imports expanded when the workspace is
+ * trusted (see project_rules.ts). Each heading names the file and every import that was read, so the loaded set is visible.
  */
 export function getProjectRules(workspace: string, options: { trusted?: boolean } = {}): string | null {
   const candidates = ["AGENTS.md", "CLAUDE.md", "CODEX.md", ".nexusrules"];
   const trusted = options.trusted ?? isWorkspaceTrusted(workspace);
+  const sections: string[] = [];
 
   for (const filename of candidates) {
     const fullPath = path.join(workspace, filename);
@@ -134,7 +135,7 @@ export function getProjectRules(workspace: string, options: { trusted?: boolean 
         if (raw) {
           const { text, imports } = expandImports(fullPath, raw, workspace, trusted);
           const loaded = imports.length ? `${filename}; imports: ${imports.join(", ")}` : filename;
-          return `### Project Instructions (loaded from ${loaded}):\n${text.trim()}`;
+          sections.push(`### Project Instructions (loaded from ${loaded}):\n${text.trim()}`);
         }
       } catch {
         // ignore read error
@@ -142,7 +143,7 @@ export function getProjectRules(workspace: string, options: { trusted?: boolean 
     }
   }
 
-  return null;
+  return sections.length ? sections.join("\n\n") : null;
 }
 
 export function scaffoldProjectRules(workspace: string): string {
