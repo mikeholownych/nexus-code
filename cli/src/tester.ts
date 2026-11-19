@@ -220,10 +220,11 @@ export function discoverTypechecks(workspace: string): DiscoveredTypecheck[] {
     try { real = fs.realpathSync(project); } catch { continue; }
     if (seen.has(real) || (real !== root && !real.startsWith(`${root}${path.sep}`))) continue;
     seen.add(real);
-    const check = discoverTypecheckAtRoot(root, project);
-    if (check) {
-      if (result.length >= maxChecks) { capped = true; break; }
-      result.push(check);
+    const checks = discoverTypechecksAtRoot(root, project);
+    if (checks.length) {
+      const available = maxChecks - result.length;
+      result.push(...checks.slice(0, available));
+      if (checks.length > available) { capped = true; break; }
     }
     let entries: fs.Dirent[];
     try { entries = fs.readdirSync(project, { withFileTypes: true }); } catch { continue; }
@@ -244,6 +245,10 @@ export function discoverTypecheck(workspace: string): DiscoveredTypecheck | null
 }
 
 function discoverTypecheckAtRoot(root: string, project: string): DiscoveredTypecheck | null {
+  return discoverTypechecksAtRoot(root, project)[0] ?? null;
+}
+
+function discoverTypechecksAtRoot(root: string, project: string): DiscoveredTypecheck[] {
   const projectRelative = path.relative(root, project).split(path.sep).join("/");
   const prefix = projectRelative ? `cd ${shellQuote(projectRelative)} && ` : "";
   const read = (rel: string): string | null => {
@@ -254,13 +259,14 @@ function discoverTypecheckAtRoot(root: string, project: string): DiscoveredTypec
     }
   };
   const sha = (text: string) => createHash("sha256").update(text).digest("hex");
+  const checks: DiscoveredTypecheck[] = [];
   const tsconfig = read("tsconfig.json");
   if (tsconfig !== null) {
     const local = path.join(project, "node_modules/.bin/tsc");
     const useLocal = fs.existsSync(local);
     const tsc = useLocal ? "./node_modules/.bin/tsc" : "tsc";
     const solution = /"(?:references|composite)"\s*:/.test(tsconfig);
-    return {
+    checks.push({
       tool: "tsc",
       probe: `${prefix}${tsc} --version`,
       command: `${prefix}${tsc} --noEmit --incremental false -p tsconfig.json`,
@@ -270,30 +276,29 @@ function discoverTypecheckAtRoot(root: string, project: string): DiscoveredTypec
       toolSha256: sha256File(useLocal ? local : resolveOnPath("tsc") ?? ""),
       ...(useLocal || resolveOnPath("tsc") ? {} : { missingTool: true }),
       ...(solution ? { skipReason: "tsconfig.json is solution-style or composite (references/composite), so a plain tsc run does not check it" } : {}),
-    };
+    });
   }
-  for (const rel of ["Cargo.toml"]) {
-    const text = read(rel);
-    if (text !== null) {
-      const target = path.join(os.tmpdir(), `nexus-typecheck-${sha(project).slice(0, 16)}`);
-      const manifestPath = [projectRelative, rel].filter(Boolean).join("/");
-      const manifestArg = projectRelative ? ` --manifest-path ${shellPath(manifestPath)}` : "";
-      return {
-        tool: "cargo",
-        probe: "cargo --version",
-        command: `CARGO_TARGET_DIR=${shellQuote(target)} cargo check --offline --locked${manifestArg}`,
-        configPath: manifestPath,
-        ...(projectRelative ? { projectRoot: projectRelative } : {}),
-        configSha256: sha(text),
-        toolSha256: sha256File(resolveOnPath("cargo") ?? ""),
-        ...(resolveOnPath("cargo") ? {} : { missingTool: true }),
-      };
-    }
+  const cargo = read("Cargo.toml");
+  if (cargo !== null) {
+    const target = path.join(os.tmpdir(), `nexus-typecheck-${sha(project).slice(0, 16)}`);
+    const manifestPath = [projectRelative, "Cargo.toml"].filter(Boolean).join("/");
+    const manifestArg = projectRelative ? ` --manifest-path ${shellPath(manifestPath)}` : "";
+    const executable = resolveOnPath("cargo");
+    checks.push({
+      tool: "cargo",
+      probe: "cargo --version",
+      command: `CARGO_TARGET_DIR=${shellQuote(target)} cargo check --offline --locked${manifestArg}`,
+      configPath: manifestPath,
+      ...(projectRelative ? { projectRoot: projectRelative } : {}),
+      configSha256: sha(cargo),
+      toolSha256: sha256File(executable ?? ""),
+      ...(executable ? {} : { missingTool: true }),
+    });
   }
   const gomod = read("go.mod");
   if (gomod !== null) {
     const go = resolveOnPath("go");
-    return {
+    checks.push({
       tool: "go",
       probe: `${prefix}go version`,
       // Offline: a module that is not already downloaded is an environment problem, never a fetch.
@@ -303,21 +308,22 @@ function discoverTypecheckAtRoot(root: string, project: string): DiscoveredTypec
       configSha256: sha(gomod),
       toolSha256: sha256File(go ?? ""),
       ...(go ? {} : { missingTool: true }),
-    };
+    });
   }
-  const python = discoverPythonTypecheck(project, read, sha);
-  if (!python) return null;
-  return {
-    ...python,
-    probe: `${prefix}${python.probe}`,
-    command: `${prefix}${python.command}`,
-    configPath: [projectRelative, python.configPath].filter(Boolean).join("/"),
-    ...(projectRelative ? { projectRoot: projectRelative } : {}),
-  };
+  for (const python of discoverPythonTypechecks(project, read, sha)) {
+    checks.push({
+      ...python,
+      probe: `${prefix}${python.probe}`,
+      command: `${prefix}${python.command}`,
+      configPath: [projectRelative, python.configPath].filter(Boolean).join("/"),
+      ...(projectRelative ? { projectRoot: projectRelative } : {}),
+    });
+  }
+  return checks;
 }
 
 /** Python is checked only when the project configures pyright or mypy; the tool comes from the project's virtualenv or PATH. */
-function discoverPythonTypecheck(root: string, read: (rel: string) => string | null, sha: (text: string) => string): DiscoveredTypecheck | null {
+function discoverPythonTypechecks(root: string, read: (rel: string) => string | null, sha: (text: string) => string): DiscoveredTypecheck[] {
   const pyproject = read("pyproject.toml") ?? "";
   const setupCfg = read("setup.cfg") ?? "";
   const candidates: Array<{ tool: "pyright" | "mypy"; configPath: string; text: string }> = [];
@@ -330,20 +336,20 @@ function discoverPythonTypecheck(root: string, read: (rel: string) => string | n
   }
   if (/^\[tool\.mypy\]/m.test(pyproject)) candidates.push({ tool: "mypy", configPath: "pyproject.toml", text: pyproject });
   if (/^\[mypy\]/m.test(setupCfg)) candidates.push({ tool: "mypy", configPath: "setup.cfg", text: setupCfg });
-  const chosen = candidates[0];
-  if (!chosen) return null;
-  const local = [".venv/bin", "venv/bin"].map((d) => path.join(root, d, chosen.tool)).find((f) => fs.existsSync(f));
-  const resolved = local ?? resolveOnPath(chosen.tool);
-  const launcher = local ? `./${path.relative(root, local)}` : chosen.tool;
-  return {
-    tool: chosen.tool,
-    probe: `${launcher} --version`,
-    command: chosen.tool === "mypy" ? `${launcher} .` : launcher,
-    configPath: chosen.configPath,
-    configSha256: sha(chosen.text),
-    toolSha256: sha256File(resolved ?? ""),
-    ...(resolved ? {} : { missingTool: true }),
-  };
+  return candidates.map((candidate) => {
+    const local = [".venv/bin", "venv/bin"].map((d) => path.join(root, d, candidate.tool)).find((f) => fs.existsSync(f));
+    const resolved = local ?? resolveOnPath(candidate.tool);
+    const launcher = local ? `./${path.relative(root, local)}` : candidate.tool;
+    return {
+      tool: candidate.tool,
+      probe: `${launcher} --version`,
+      command: candidate.tool === "mypy" ? `${launcher} .` : launcher,
+      configPath: candidate.configPath,
+      configSha256: sha(candidate.text),
+      toolSha256: sha256File(resolved ?? ""),
+      ...(resolved ? {} : { missingTool: true }),
+    };
+  });
 }
 
 export interface TypecheckDiagnostics {

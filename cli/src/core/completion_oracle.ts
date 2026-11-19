@@ -106,11 +106,14 @@ export async function runTypecheckOracleImpl(this: any, opts: {
     const named = { tool: check.tool, command: check.command, configPath: check.configPath, configSha256: check.configSha256, ...(check.toolSha256 ? { toolSha256: check.toolSha256 } : {}) };
     if (check.skipReason) {
       results.push({ status: check.discoveryIncomplete ? "UNAVAILABLE" : "NOT_APPLICABLE", ...named, enforced, scope: check.skipReason, candidateId: opts.candidateId, at: at() });
-      if (check.discoveryIncomplete && enforced) blockingMessages.push(`workspace type-check discovery was incomplete: ${check.skipReason}`);
+      if (enforced) blockingMessages.push(check.discoveryIncomplete
+        ? `workspace type-check discovery was incomplete: ${check.skipReason}`
+        : `${check.tool} type-check under ${check.configPath} was not run: ${check.skipReason}`);
       continue;
     }
     if (check.missingTool) {
       results.push({ status: "UNAVAILABLE", ...named, enforced, scope: `${check.tool} is not installed, so nothing was type-checked under ${check.configPath}`, candidateId: opts.candidateId, at: at() });
+      if (enforced) blockingMessages.push(`${check.tool} type-check under ${check.configPath} is unavailable because ${check.tool} is not installed.`);
       continue;
     }
     const prior = ledger && current && enforced ? priorAttempt(ledger, check.command, current) : undefined;
@@ -164,7 +167,8 @@ export async function runTypecheckOracleImpl(this: any, opts: {
       blockingMessages.push(`${check.tool} type-check ${what} under ${check.configPath} (sha256 ${check.configSha256.slice(0, 12)}). Command: ${check.command}\n${excerpt}`);
     }
   }
-  const primary = results.find((item) => item.status === "FAILED" || item.status === "TIMED_OUT") ?? results[0];
+  const priority: TypecheckEvidence["status"][] = ["FAILED", "TIMED_OUT", "UNAVAILABLE", "NOT_APPLICABLE", "ENVIRONMENT", "PREEXISTING", "PASSED"];
+  const primary = priority.map((status) => results.find((item) => item.status === status)).find((item) => item !== undefined) ?? results[0];
   const evidence: TypecheckEvidence = { ...primary, scope: results.length === 1 ? primary.scope : `${results.length} project check(s)`, projects: results };
   this.lastTypecheck = evidence;
   return { evidence, ...(blockingMessages.length ? { block: `Verification Oracle: tests passed, but a mandatory project type-check did not complete successfully; changes are NOT verified.\n${blockingMessages.join("\n\n") }\nFix the type errors or resolve the unavailable approval, then call task_completed again.` } : {}) };

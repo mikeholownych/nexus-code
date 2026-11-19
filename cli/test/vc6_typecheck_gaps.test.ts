@@ -74,7 +74,7 @@ function repo(files: Record<string, string>): string {
 }
 
 /** A PATH holding only the basics plus the named tools: `tsc` is the real compiler, any other name a fake script. */
-function toolPath(tools: Record<string, string | "real-tsc">): string {
+function toolPath(tools: Record<string, string | "real-tsc">, hideTools: string[] = []): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-vc6-bin-"));
   fs.symlinkSync(process.execPath, path.join(dir, "node"));
   for (const t of ["env", "bash", "sh", "git", "dirname", "ls", "cat", "grep", "printf", "rm", "mkdir", "npm"]) {
@@ -90,13 +90,14 @@ function toolPath(tools: Record<string, string | "real-tsc">): string {
   return dir;
 }
 
-async function withAgent<T>(files: Record<string, string>, opts: { tools: Record<string, string>; steps: Reply[]; env?: Record<string, string>; config?: Partial<HarnessConfig>; prepare?: (root: string) => void }, body: (agent: AutonomousAgent, root: string) => Promise<T>): Promise<T> {
+async function withAgent<T>(files: Record<string, string>, opts: { tools: Record<string, string>; hideTools?: string[]; steps: Reply[]; env?: Record<string, string>; config?: Partial<HarnessConfig>; prepare?: (root: string) => void }, body: (agent: AutonomousAgent, root: string) => Promise<T>): Promise<T> {
   const root = repo(files);
   opts.prepare?.(root);
   const saved = { HOME: process.env.HOME, PATH: process.env.PATH, NEXUS_TYPECHECK: process.env.NEXUS_TYPECHECK };
-  const bin = toolPath(opts.tools);
+  const bin = toolPath(opts.tools, opts.hideTools);
   // The ambient PATH minus any directory that provides go, pyright, mypy or tsc: only the fakes below exist.
-  const ambient = (saved.PATH ?? "").split(path.delimiter).filter((d) => d && !["go", "pyright", "mypy", "tsc"].some((t) => fs.existsSync(path.join(d, t))));
+  const hidden = new Set(["go", "pyright", "mypy", "tsc", ...(opts.hideTools ?? [])]);
+  const ambient = (saved.PATH ?? "").split(path.delimiter).filter((d) => d && ![...hidden].some((t) => fs.existsSync(path.join(d, t))));
   process.env.PATH = [bin, ...ambient].join(path.delimiter);
   process.env.HOME = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-vc6-home-"));
   delete process.env.NEXUS_TYPECHECK;
@@ -174,6 +175,15 @@ describe("VC-6: every configured project in a workspace is checked", () => {
     }
   });
 
+  test("discovers multiple typecheck configurations in one project", () => {
+    const root = repo({ "tsconfig.json": TSCONFIG, "Cargo.toml": "[package]\nname = \"root\"\nversion = \"0.1.0\"\nedition = \"2021\"\n" });
+    try {
+      assert.deepEqual(discoverTypechecks(root).map((check) => check.configPath), ["tsconfig.json", "Cargo.toml"]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("reports incomplete discovery after the bounded project scan limit", () => {
     const root = repo({});
     try {
@@ -198,6 +208,15 @@ describe("VC-6: every configured project in a workspace is checked", () => {
     assert.equal(checks?.[0]?.status, "PASSED");
     assert.equal(checks?.[1]?.status, "FAILED");
     assert.equal(turn.verification?.typecheck?.status, "FAILED");
+    assert.notEqual(turn.outcome, "VERIFIED");
+  });
+
+  test("an unavailable nested typechecker blocks even when the root typecheck passes", { timeout: 120_000 }, async () => {
+    const files = { "tsconfig.json": TSCONFIG, "types.ts": "export const n: number = 1;\n", "native/Cargo.toml": "[package]\nname = \"native\"\nversion = \"0.1.0\"\nedition = \"2021\"\n" };
+    const turn = await turnOf(files, { tools: { tsc: "real-tsc" }, hideTools: ["cargo"], steps: [fix, done], config: { authoritativeVerifierCommand: NODE_VERIFIER }, env: { NEXUS_TYPECHECK: "enforce" } });
+    const checks = turn.verification?.typecheck?.projects;
+    assert.deepEqual(checks?.map((check) => check.status), ["PASSED", "UNAVAILABLE"]);
+    assert.equal(turn.verification?.typecheck?.status, "UNAVAILABLE");
     assert.notEqual(turn.outcome, "VERIFIED");
   });
 });
