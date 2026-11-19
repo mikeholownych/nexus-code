@@ -653,7 +653,7 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
           filtered,
           status: parsed.passed === true && receipt.success && hasExecuted ? "PASSED" : "FAILED",
           ...(parsed.passed === true ? {} : { failedCheck: failedCheckFrom(`${rawOutput}\n${receipt.error ?? ""}`), ...attemptEvidence(`${rawOutput}\n${receipt.error ?? ""}`, typeof parsed.exitCode === "number" ? parsed.exitCode : undefined, { timedOut: parsed.timedOut === true, executorFailed: parsed.executorFailed === true }) }),
-        });
+        }, undefined, rawOutput);
         // VC-7: the DV-2 stop signal is judged on this path too, so a loop that only edits and calls run_tests (never
         // task_completed) ends BLOCKED with its attempt history instead of waiting for the step limit.
         if (this.objective && !this.turnConvergence) {

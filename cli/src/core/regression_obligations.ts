@@ -6,8 +6,9 @@
  * later minimisation keeps what was first seen. Each later verifier attempt of the obligation's command is a replay.
  * An edit that removes, skips or thins the obligation's test is recorded (never silently allowed, never blocked here).
  *
- * Limits: a replay says the verifier's output did or did not name the test as failing; a verifier that never runs the
- * test passes it vacuously, which Nexus cannot see. Pure data and pure functions; the agent owns persistence.
+ * A replay passes only when the verifier output contains a recognised result line for the exact obligated test.
+ * Overall suite success is not enough: the test may have been excluded or skipped. Pure data and pure functions; the
+ * agent owns persistence.
  */
 import type { ObjectiveLedger, VerificationAttempt } from "./objective.js";
 import { normalizeOutcomeText } from "./execution_tracking.js";
@@ -24,7 +25,7 @@ export interface RegressionObligation {
   /** Earlier forms, oldest first, kept when the obligation was minimised. */
   history: Array<{ at: string; attempt: number; from: { testName: string; command: string }; to: { testName: string; command: string } }>;
   status: "active" | "retired";
-  replays: Array<{ attempt: number; at: string; outcome: "pass" | "fail" }>;
+  replays: Array<{ attempt: number; at: string; outcome: "pass" | "fail" | "unobserved"; observedTestName?: string }>;
   weakenings: Array<{ at: string; path: string; kind: WeakeningKind; detail: string }>;
 }
 
@@ -105,9 +106,13 @@ export function replayCommands(ledger: ObjectiveLedger): string[] {
   return [...new Set(active(ledger).map((o) => o.command))];
 }
 
-/** Active obligations whose latest replay is not a pass (including never replayed). */
+/** Active obligations without a pass bound to the exact test name (including never replayed or older unbound passes). */
 export function unmetObligations(ledger: ObjectiveLedger): RegressionObligation[] {
-  return active(ledger).filter((o) => o.replays.at(-1)?.outcome !== "pass");
+  return active(ledger).filter((o) => {
+    const last = o.replays.at(-1);
+    // Older persisted "pass" records have no binding to the exact obligated test and must not survive this change.
+    return last?.outcome !== "pass" || last.observedTestName !== o.testName;
+  });
 }
 
 /**
@@ -119,23 +124,71 @@ export function unmetObligationsMessage(ledger: ObjectiveLedger | undefined): st
   if (!unmet.length) return undefined;
   const lines = unmet.map((o) => {
     const last = o.replays.at(-1);
-    return `  ${o.id}: test ${JSON.stringify(o.testName)} (${last ? `last replay: ${last.outcome}` : "not replayed yet"}); replay it with: ${o.command}`;
+    const replay = !last ? "not replayed yet" : last.outcome === "unobserved" || (last.outcome === "pass" && last.observedTestName !== o.testName)
+      ? "the last verifier output did not show this test executing"
+      : `last replay: ${last.outcome}`;
+    return `  ${o.id}: test ${JSON.stringify(o.testName)} (${replay}); replay it with: ${o.command}`;
   });
   return `Not complete: the operator authorised regression obligations that are not met.\n${lines.join("\n")}\n` +
-    `Run each command above on your current change and make the named test pass; a passing run of that command is what discharges the obligation. ` +
+    `Run each command above on your current change and make the named test pass; verifier output must show a recognised result for that exact test. ` +
     `Do not remove, skip or thin the test: such an edit is recorded against the obligation. Only the operator can retire it.`;
 }
 
-/** Called for every recorded attempt: a replay is an attempt of the obligation's command that can say whether its test failed. */
-export function replayObligations(ledger: ObjectiveLedger, attempt: VerificationAttempt): void {
+/** Return results only for recognised runner lines naming one of the exact obligated tests. */
+function observedTestResults(output: string | undefined, testNames: ReadonlySet<string>): Map<string, "pass" | "fail"> {
+  const results = new Map<string, "pass" | "fail">();
+  if (!output || !testNames.size) return results;
+  const text = output.replace(/\u001b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b\\))/g, "");
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    let name: string | undefined;
+    let status: string | undefined;
+    const tap = line.match(/^(ok|not ok)\s+\d+\s+-\s+(.+?)(?:\s+#\s*(SKIP|TODO)\b.*)?$/i);
+    if (tap) {
+      name = tap[2];
+      status = tap[3] ? "skip" : tap[1].toLowerCase() === "ok" ? "pass" : "fail";
+    }
+    const spec = line.match(/^([✔✓√✖×✕])\s+(.+?)(?:\s+\([\d.]+\s*(?:ms|s)\))?$/);
+    if (!name && spec) {
+      name = spec[2];
+      status = "✔✓√".includes(spec[1]) ? "pass" : "fail";
+    }
+    const pytest = line.match(/^(.+?)\s+(PASSED|FAILED|SKIPPED|XFAIL|XPASS)(?:\s+.*)?$/i);
+    if (!name && pytest) {
+      name = pytest[1];
+      status = /^(PASSED)$/i.test(pytest[2]) ? "pass" : /^(FAILED)$/i.test(pytest[2]) ? "fail" : "skip";
+    }
+    const cargo = line.match(/^test\s+(\S+)\s+\.\.\.\s+(ok|FAILED|ignored)$/i);
+    if (!name && cargo) {
+      name = cargo[1];
+      status = cargo[2].toLowerCase() === "ok" ? "pass" : cargo[2].toLowerCase() === "failed" ? "fail" : "skip";
+    }
+    const go = line.match(/^---\s+(PASS|FAIL|SKIP):\s+(\S+)/);
+    if (!name && go) {
+      name = go[2];
+      status = go[1].toLowerCase() === "pass" ? "pass" : go[1].toLowerCase() === "fail" ? "fail" : "skip";
+    }
+    const unittest = line.match(/^(\S+(?:\s+\([^)]+\))?)\s+\.\.\.\s+(ok|FAIL|ERROR|skipped(?:\s+.*)?)$/i);
+    if (!name && unittest) {
+      name = unittest[1];
+      status = /^ok$/i.test(unittest[2]) ? "pass" : /^(FAIL|ERROR)$/i.test(unittest[2]) ? "fail" : "skip";
+    }
+    if (!name || !testNames.has(name)) continue;
+    if (status === "fail") results.set(name, "fail");
+    else if (status === "pass" && !results.has(name)) results.set(name, "pass");
+  }
+  return results;
+}
+
+/** Called for every recorded attempt; a successful command alone is not proof that this obligation's test ran. */
+export function replayObligations(ledger: ObjectiveLedger, attempt: VerificationAttempt, output?: string): void {
   if (attempt.status === "SKIPPED_UNCHANGED_INPUTS" || attempt.status === "TIMED_OUT" || attempt.classification === "ENVIRONMENT" || attempt.filtered) return;
-  for (const ob of active(ledger)) {
-    if (ob.command !== attempt.command) continue;
-    let outcome: "pass" | "fail" | undefined;
-    if (attempt.status === "PASSED") outcome = "pass";
-    else if (attempt.failingTests?.length && !attempt.failingTruncated) outcome = attempt.failingTests.includes(ob.testName) ? "fail" : "pass";
-    else if (attempt.failingTests?.includes(ob.testName)) outcome = "fail";
-    if (outcome) ob.replays.push({ attempt: attempt.n, at: attempt.at, outcome });
+  const obligations = active(ledger).filter((ob) => ob.command === attempt.command);
+  const observed = observedTestResults(output, new Set(obligations.map((ob) => ob.testName)));
+  for (const ob of obligations) {
+    const result = observed.get(ob.testName);
+    const outcome = result ?? "unobserved";
+    ob.replays.push({ attempt: attempt.n, at: attempt.at, outcome, ...(result ? { observedTestName: ob.testName } : {}) });
   }
 }
 

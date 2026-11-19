@@ -28,7 +28,7 @@ const done = call("task_completed", { summary: "done" });
 const TEST_NAME = "adds numbers";
 const TEST_PATH = "test/adds.test.js";
 const TEST_BODY = `const t = require("node:test");\nconst assert = require("node:assert");\nt("${TEST_NAME}", () => { assert.equal(1 + 1, 2); });\n`;
-const MAKEFILE = "test:\n\t@echo 'ok 1 - adds numbers'\n\t@echo 'ℹ tests 1'\n";
+const MAKEFILE = ".PHONY: test\ntest:\n\t@echo 'ok 1 - adds numbers'\n\t@echo 'ℹ tests 1'\n";
 const COMMAND = "make test";
 
 /** A ledger holding one authorised obligation on a test that failed once under COMMAND. */
@@ -69,11 +69,22 @@ describe("DV-3 completion is refused while an authorised obligation is unmet", (
   });
 
   test("a recorded passing replay lets completion proceed", { timeout: 90_000 }, async () => {
-    await withAgent({ Makefile: MAKEFILE, [TEST_PATH]: TEST_BODY }, [call("write_file", { path: "a.txt", content: "a\n" }), done], ledgerWithObligation(), async (agent) => {
+    await withAgent({ Makefile: MAKEFILE, [TEST_PATH]: TEST_BODY }, [call("run_tests", {}), done], ledgerWithObligation(), async (agent) => {
       await agent.runTurn("continue");
       const ob = agent.getObjective()!.obligations![0];
-      assert.equal(ob.replays.at(-1)?.outcome, "pass", "the completion verifier replayed it");
+      assert.equal(ob.replays.at(-1)?.outcome, "pass", "the run_tests verifier replayed the exact named test");
       assert.match(completions(agent).at(-1).content, /"status":"completed"/);
+    });
+  });
+
+  test("a green suite that does not report the obligated test cannot complete", { timeout: 90_000 }, async () => {
+    const unrelated = ".PHONY: test\ntest:\n\t@echo 'ok 1 - unrelated test'\n\t@echo 'ℹ tests 1'\n";
+    await withAgent({ Makefile: unrelated, [TEST_PATH]: TEST_BODY }, [call("run_tests", {}), done], ledgerWithObligation(), async (agent) => {
+      await agent.runTurn("continue");
+      const obligation = agent.getObjective()!.obligations![0];
+      assert.equal(obligation.replays.at(-1)?.outcome, "unobserved");
+      assert.match(completions(agent).at(-1).content, /did not show this test executing/);
+      assert.doesNotMatch(completions(agent).at(-1).content, /"status":"completed"/);
     });
   });
 

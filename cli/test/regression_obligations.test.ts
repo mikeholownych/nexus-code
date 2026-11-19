@@ -2,15 +2,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createLedger, recordAttempt, type ObjectiveLedger } from "../src/core/objective.js";
 import {
-  authoriseObligation, minimiseObligation, recordTestEdit, replayCommands, unmetObligations,
+  authoriseObligation, minimiseObligation, recordTestEdit, replayCommands, unmetObligations, unmetObligationsMessage,
   authoriseReference, agreementStatement, differentialStatus,
 } from "../src/core/regression_obligations.js";
 
 const CMD = "npm test";
 const failing = (ledger: ObjectiveLedger, tests: string[], inputs: string, extra: object = {}) =>
-  recordAttempt(ledger, { command: CMD, inputs, status: "FAILED", classification: "CANDIDATE_FAILED", exitCode: 1, failingTests: tests, failedCheck: tests[0], ...extra });
+  recordAttempt(ledger, { command: CMD, inputs, status: "FAILED", classification: "CANDIDATE_FAILED", exitCode: 1, failingTests: tests, failedCheck: tests[0], ...extra }, undefined,
+    tests.map((name, i) => `not ok ${i + 1} - ${name}`).join("\n"));
 const passing = (ledger: ObjectiveLedger, inputs: string, command = CMD) =>
-  recordAttempt(ledger, { command, inputs, status: "PASSED" });
+  recordAttempt(ledger, { command, inputs, status: "PASSED" }, undefined, "ok 1 - parses empty input\n# tests 1\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n");
 
 test("an unauthorised promotion cannot happen", () => {
   const ledger = createLedger("fix it");
@@ -47,7 +48,46 @@ test("an authorised obligation keeps its failure record and is replayed on the n
   assert.equal(ob.replays.at(-1)?.outcome, "pass");
   assert.equal(unmetObligations(ledger).length, 0);
   failing(ledger, ["something else"], "c6");
-  assert.equal(ob.replays.at(-1)?.outcome, "pass", "the obligation's own test still passes when another fails");
+  assert.equal(ob.replays.at(-1)?.outcome, "unobserved", "an unrelated failure does not prove this test ran");
+});
+
+test("a passing suite that does not report the obligated test is not a replay pass", () => {
+  const ledger = createLedger("fix it");
+  const a = failing(ledger, ["parses empty input"], "c1");
+  authoriseObligation(ledger, { authority: "operator", attempt: a.n, testName: "parses empty input" });
+  recordAttempt(ledger, { command: CMD, inputs: "c2", status: "PASSED" }, undefined,
+    "ok 1 - unrelated test\n# tests 1\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n");
+  assert.equal(ledger.obligations![0].replays.at(-1)?.outcome, "unobserved");
+  assert.equal(unmetObligations(ledger).length, 1);
+});
+
+test("a recognised pass line for the exact obligated test discharges it", () => {
+  const ledger = createLedger("fix it");
+  const a = failing(ledger, ["parses empty input"], "c1");
+  authoriseObligation(ledger, { authority: "operator", attempt: a.n, testName: "parses empty input" });
+  recordAttempt(ledger, { command: CMD, inputs: "c2", status: "PASSED" }, undefined,
+    "✓ parses empty input (2ms)\nTests 1 passed\n");
+  assert.equal(ledger.obligations![0].replays.at(-1)?.outcome, "pass");
+  assert.equal(unmetObligations(ledger).length, 0);
+});
+
+test("legacy passes without the observed test name do not discharge an obligation", () => {
+  const ledger = createLedger("fix it");
+  const a = failing(ledger, ["parses empty input"], "c1");
+  authoriseObligation(ledger, { authority: "operator", attempt: a.n, testName: "parses empty input" });
+  ledger.obligations![0].replays.push({ attempt: 2, at: "2026-01-01T00:00:00.000Z", outcome: "pass" });
+  assert.equal(unmetObligations(ledger).length, 1);
+  assert.match(unmetObligationsMessage(ledger)!, /did not show this test executing/);
+});
+
+test("a skipped result for the exact obligated test does not discharge it", () => {
+  const ledger = createLedger("fix it");
+  const a = failing(ledger, ["parses empty input"], "c1");
+  authoriseObligation(ledger, { authority: "operator", attempt: a.n, testName: "parses empty input" });
+  recordAttempt(ledger, { command: CMD, inputs: "c2", status: "PASSED" }, undefined,
+    "ok 1 - parses empty input # SKIP intentionally\n# tests 1\n# pass 0\n# fail 0\n# cancelled 0\n# skipped 1\n# todo 0\n");
+  assert.equal(ledger.obligations![0].replays.at(-1)?.outcome, "unobserved");
+  assert.equal(unmetObligations(ledger).length, 1);
 });
 
 test("minimising keeps the original failure record", () => {
@@ -161,9 +201,11 @@ test("the completion refusal names each unmet obligation and its replay command,
   assert.match(msg, /RO1/);
   assert.match(msg, /parses empty input/);
   assert.match(msg, /npm test/);
-  failing(ledger, ["parses empty input"], "c2");
+  recordAttempt(ledger, { command: CMD, inputs: "c2", status: "PASSED" }, undefined, "ok 1 - unrelated test\n# tests 1\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n");
+  assert.match(unmetObligationsMessage(ledger)!, /did not show this test executing/);
+  failing(ledger, ["parses empty input"], "c3");
   assert.match(unmetObligationsMessage(ledger)!, /last replay: fail/);
-  passing(ledger, "c3");
+  passing(ledger, "c4");
   assert.equal(unmetObligationsMessage(ledger), undefined);
 });
 
