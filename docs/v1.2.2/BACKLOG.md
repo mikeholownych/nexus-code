@@ -6,9 +6,9 @@ What the v1.2.1 plan ([`docs/v1.2.1/PLAN.md`](../v1.2.1/PLAN.md)) did not finish
 
 | Unit | Not done | Needs | First step |
 |---|---|---|---|
-| MQ-1, MQ-2 | Benchmark adapter (Harbor / Terminal-Bench) and the false-completion report (pass rate, claimed-done-but-wrong, verified-but-wrong, Wilson intervals, peer comparison) | Containers, a pinned task subset, a model-cost budget (decisions D3, D4) | Pick the subset and budget; build the adapter against a mock gateway first. No external measurement is published for v1.2.1. |
+| MQ-1, MQ-2 | Benchmark adapter (Harbor / Terminal-Bench) and the false-completion report (pass rate, claimed-done-but-wrong, verified-but-wrong, Wilson intervals, peer comparison) | Containerized benchmark environment, an owner-selected pinned subset, and a concrete inference-spend ceiling. D3/D4 already decide the publication rule (publish nothing before a result) and measurement class (small self-run E1); they do not set the actual subset or spend cap. | Build the adapter against a mock gateway; before live inference, select the subset and approve its spend ceiling. |
 | MQ-4 | Scheduled gateway conformance: the job script, claim protocol and alert path are built and tested (`scripts/gateway_conformance.mjs`, `docs/GATEWAY_CONFORMANCE.md`) | A local scheduler on the host that can reach the gateway (a timer unit example is documented, nothing is installed) and a first live run with a prepared config | Install the timer (via Ansible if the host is managed that way), keep a `last-good-result.json` baseline, run once by hand |
-| RD-1, RD-2 | macOS and arm64/musl artifacts | A macOS runner and an arm64 or musl runner (decision D6, runner cost) | Decide runner cost; reuse `release.yml` packaging |
+| RD-1, RD-2 | macOS and arm64/musl artifacts | A macOS runner and an arm64 or musl runner. D6 currently accepts Linux x86_64 only; expanding supported release targets requires a new owner go/no-go and runner-cost decision. | If expanding platforms, decide which target and runner cost; reuse `release.yml` packaging. |
 | PC-1 | Median PR CI under 40 minutes (measured 37 to 45 minutes) | Time on the runners | Shard the CLI suite and cache toolchains; the parallel `linux-x86_64` job is already in place |
 
 ## Partly done: what is left
