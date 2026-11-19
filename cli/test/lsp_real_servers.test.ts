@@ -228,7 +228,8 @@ const NAV: NavCase[] = [
     files: {
       "tsconfig.json": JSON.stringify({ compilerOptions: { strict: true, noEmit: true, target: "es2022", module: "esnext", moduleResolution: "bundler" }, include: ["*.ts"] }),
       "lib.ts": "export function greet(name: string): string {\n  return name;\n}\n",
-      "use.ts": 'import { greet } from "./lib";\nexport const msg: string = greet("a");\n',
+      "service.ts": 'export { greet } from "./lib";\n',
+      "use.ts": 'import { greet } from "./service";\nexport const msg: string = greet("a");\n',
     },
     at: { file: "use.ts", line: 2, character: 30 },
     definedIn: "lib.ts",
@@ -239,7 +240,8 @@ const NAV: NavCase[] = [
     files: {
       "pyrightconfig.json": JSON.stringify({ typeCheckingMode: "basic" }),
       "lib.py": "def greet(name: str) -> str:\n    return name\n",
-      "use.py": 'from lib import greet\n\nmsg: str = greet("a")\n',
+      "service.py": "from lib import greet\n",
+      "use.py": 'from service import greet\n\nmsg: str = greet("a")\n',
     },
     at: { file: "use.py", line: 3, character: 13 },
     definedIn: "lib.py",
@@ -249,10 +251,11 @@ const NAV: NavCase[] = [
     id: "rust",
     files: {
       "Cargo.toml": '[package]\nname = "lspnav"\nversion = "0.0.0"\nedition = "2021"\n',
-      "src/main.rs": 'mod util;\nfn main() {\n    let _ = util::greet("a");\n}\n',
       "src/util.rs": "pub fn greet(name: &str) -> String {\n    name.to_string()\n}\n",
+      "src/service.rs": "pub use crate::util::greet;\n",
+      "src/main.rs": 'mod service;\nmod util;\nfn main() {\n    let _ = service::greet("a");\n}\n',
     },
-    at: { file: "src/main.rs", line: 3, character: 20 },
+    at: { file: "src/main.rs", line: 4, character: 25 },
     definedIn: "src/util.rs",
     hoverMentions: /greet/,
   },
@@ -261,11 +264,12 @@ const NAV: NavCase[] = [
     files: {
       "go.mod": "module lspnav\n\ngo 1.21\n",
       "lib.go": "package main\n\nfunc greet(name string) string {\n\treturn name\n}\n",
-      "main.go": 'package main\n\nfunc main() {\n\t_ = greet("a")\n}\n',
+      "service.go": "package main\n\nfunc welcome(name string) string {\n\treturn greet(name)\n}\n",
+      "main.go": 'package main\n\nfunc main() {\n\t_ = welcome("a")\n}\n',
     },
     at: { file: "main.go", line: 4, character: 7 },
-    definedIn: "lib.go",
-    hoverMentions: /greet/,
+    definedIn: "service.go",
+    hoverMentions: /welcome/,
   },
 ];
 
