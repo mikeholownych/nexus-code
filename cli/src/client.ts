@@ -1877,10 +1877,15 @@ export class LocalLlmClient {
     });
   }
 
-  /** A chat answer that is not a complete one: a provider error finish or a cut-off at the output limit. */
+  /** A chat answer that is not complete: provider refusal/filter, provider error, stream gap or output-limit cutoff. */
   private refuseChatFinish(result: NativeResult, requestId: string, streamed = false): void {
     if (this.conn.providerId && result.finishReason === "error") {
       throw new InferenceError("provider_error_frame", "provider", `Provider ended the ${streamed ? "stream" : "response"} with finish_reason=error.`, { requestId, partialText: result.text });
+    }
+    // The provider withheld or cut the answer; remaining text is not a complete response. Do not retry or fail over:
+    // filtering is not an outage, and another endpoint would be asked the same question.
+    if (result.finishReason === "content_filter") {
+      throw new InferenceError("protocol_error", "provider", `Provider withheld the ${streamed ? "stream" : "response"} (finish_reason=content_filter); refusing to treat it as a complete answer.`, { requestId, partialText: result.text, failoverEligible: false });
     }
     if (streamed && result.finish === "incomplete") {
       throw new InferenceError("stream_incomplete", "transport", "Inference stream ended without a finish_reason or [DONE]; response is incomplete.", { requestId, partialText: result.text });
