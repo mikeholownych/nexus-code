@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 
 /** Imports nest at most this deep (the instruction file itself is depth 0). */
@@ -14,7 +15,7 @@ export interface ExpandedRules {
 }
 
 /** `@path` at the start of a token; the path must contain a dot or a slash so `@mentions` are left alone. Linear: no nested quantifiers. */
-const IMPORT_TOKEN = /(^|[\s(])@([A-Za-z0-9_.\-/]+)/g;
+const IMPORT_TOKEN = /(^|[\s(])@([A-Za-z0-9_.\-/~]+)/g;
 
 function isInside(root: string, target: string): boolean {
   return target === root || target.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
@@ -67,7 +68,10 @@ export function expandImports(rootFile: string, content: string, workspace: stri
       if (depth >= MAX_IMPORT_DEPTH) return match;
       let real: string;
       try {
-        real = fs.realpathSync(path.resolve(dir, rel));
+        const target = rel.startsWith("~/")
+          ? path.resolve(os.homedir(), rel.slice(2))
+          : path.isAbsolute(rel) ? path.resolve(rel) : path.resolve(dir, rel);
+        real = fs.realpathSync(target);
         if (!isInside(realWorkspace, real) || !fs.statSync(real).isFile()) return match;
       } catch {
         return match;
