@@ -263,6 +263,14 @@ function validateToolArguments(
   return { valid: true };
 }
 
+/** Capabilities whose dry-run behavior is implemented by the workspace bridge. */
+const BRIDGE_SIMULATED_CATEGORIES = new Set(["fs", "proc", "orchestration"]);
+
+/** Mutating capabilities outside the bridge must be simulated by the spine itself. */
+export function dryRunMustSimulate(capability: Pick<CanonicalCapability, "mutating" | "category">): boolean {
+  return capability.mutating && !BRIDGE_SIMULATED_CATEGORIES.has(capability.category);
+}
+
 export class ExecutionSpine {
   private readonly registry: CapabilityRegistry;
   private readonly hooks: Required<SpineHooks>;
@@ -555,7 +563,18 @@ export class ExecutionSpine {
         this.registry.getHandler(toolName) ||
         capability.handler;
 
-      if (handler) {
+      if (context.dryRun && dryRunMustSimulate(capability)) {
+        // These handlers may write persistent state or cause external effects. The workspace bridge cannot
+        // simulate them, so do not invoke them while the receipt reports a dry run.
+        result = {
+          success: true,
+          output: JSON.stringify({
+            dry_run: true,
+            action: toolName,
+            message: `[DRY-RUN SIMULATION] Would run ${toolName}. Nothing was executed.`,
+          }),
+        };
+      } else if (handler) {
         result = await handler(effectiveArgs, context);
       } else if (context.defaultHandler) {
         result = await context.defaultHandler(toolName, effectiveArgs, context);
