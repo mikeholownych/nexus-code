@@ -1372,6 +1372,15 @@ Exit codes:
     await upgradeCommand(options);
   });
 
+program
+  .command("uninstall")
+  .description("Remove this managed Nexus installation")
+  .option("--purge", "Also remove Nexus task/session state and operator configuration")
+  .action(async (options: any) => {
+    const { uninstallCommand } = await import("./uninstall.js");
+    uninstallCommand(options);
+  });
+
 registerOperationCommands(program);
 registerProviderCommands(program);
 
