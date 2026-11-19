@@ -226,6 +226,27 @@ describe("continuation beyond the per-segment step limit", () => {
     }
   });
 
+  test("a model response exceeding the tool fan-out ceiling executes none of its calls", { timeout: 60_000 }, async () => {
+    const batch = Array.from({ length: 17 }, (_, i) => ({
+      name: "write_file",
+      args: { path: `fanout-${i}.txt`, content: `write ${i}` },
+    }));
+    const gw = await startGateway((n) => n === 1 ? { kind: "tools", calls: batch } : text("The oversized batch was rejected."));
+    const repo = makeRepo();
+    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo)));
+    try {
+      const turn = await agent.runTurn("Write a small set of files.");
+      assert.equal(turn.execution, "COMPLETED");
+      assert.equal(gw.requests.length, 2);
+      for (let i = 0; i < batch.length; i++) assert.equal(fs.existsSync(path.join(repo, `fanout-${i}.txt`)), false);
+      assert.ok(agent.getMessages().some((message) => String(message.content ?? "").includes("none were executed")));
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   test("an in-process conversation reset preserves trusted verifier state, while changing workspace invalidates it", () => {
     const repo = makeRepo();
     const otherWorkspace = makeRepo();

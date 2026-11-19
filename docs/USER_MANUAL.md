@@ -359,6 +359,10 @@ survives compaction, follow-ups ("continue") and `/resume`; the total-step budge
 helpers. The time limit currently applies to each active invocation and is not accumulated across process restarts.
 See `docs/COMPACTION_AND_CONTINUITY.md`.
 
+A single model response may request at most 16 tool calls. A larger batch is rejected in full before any of its calls
+run, and Nexus reports the rejection in the next model context. This bounds tool fan-out from one response; it does
+not replace the objective-wide step budget.
+
 A second, independent brake watches the verifier itself: when `task_completed` fails the same verifier
 `NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS` times in a row (default 3; a check-only failure with no test names needs one
 more) with the same failing tests across changed workspace states, with the failure alternating between two sets

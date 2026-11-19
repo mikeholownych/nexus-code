@@ -39,6 +39,8 @@ The model is never told that "steps are running out" unless you set a step limit
 
 Delegated helpers (`spawn_subagent`) consume the parent objective's total-step budget. A helper stops when it delivers
 its report, when it shows no progress, when the shared step budget is exhausted, or when its parent turn is cancelled.
+Each model response can request at most 16 tool calls; Nexus rejects a larger batch before executing any of it. This
+caps single-response fan-out and works alongside the objective-wide step budget.
 
 ### A reply cut off at the output limit
 
