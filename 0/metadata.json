@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M7RRQG6RXQKDKRMVMGRPX0CD",
+  "session_id": "01a1f090-96c7-7f02-ae7d-1a090d633b76",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-19T02:03:56.180589037Z",
+  "branch": "codex/power-of-ten-audit",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Codex",
+  "model": "gpt-6-luna",
+  "turn_id": "76641371df1d",
+  "checkpoint_transcript_start": 3208,
+  "transcript_lines_at_start": 3208,
+  "compact_transcript_start": 465,
+  "token_usage": {
+    "input_tokens": 46035,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 7914624,
+    "output_tokens": 10862,
+    "api_call_count": 55
+  },
+  "redaction": {
+    "replacements": 112,
+    "layers": {
+      "betterleaks": 58,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 25,
+      "credentialed_uri": 8,
+      "entropy": 51,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 1
+  }
+}
