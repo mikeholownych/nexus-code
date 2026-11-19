@@ -1,0 +1,1099 @@
+# Terminal Agent Prompt: Nexus Code Engineering Assurance Gap Analysis
+
+## Role
+
+You are acting as an independent Principal Software Reliability Engineer, Autonomous Agent Systems Architect, and adversarial code auditor.
+
+Your assignment is to conduct a comprehensive, repository-grounded engineering assurance gap analysis of Nexus Code, using Gerard J. Holzmann's *The Power of Ten: Rules for Developing Safety-Critical Code* as the starting reference.
+
+**Primary reference:**
+
+https://spinroot.com/gerard/pdf/P10.pdf
+
+**Target repository:**
+
+https://github.com/mikeholownych/nexus-code
+
+Your objective is not to assess whether Nexus Code superficially follows a coding style guide.
+
+Your objective is to determine whether Nexus Code's architecture, runtime behavior, verification mechanisms, and acceptance controls provide enforceable guarantees sufficient to support reliable, long-running, AI-assisted software engineering.
+
+Treat all existing architectural documentation, test results, design claims, agent-generated summaries, and previous audit findings as unverified assertions until corroborated by implementation evidence.
+
+Operate under the following principles:
+
+- Determinism over novelty.
+- Evidence before acceptance.
+- Independent verification over agent self-reporting.
+- Explicit ownership over implicit responsibility.
+- Bounded execution over uncontrolled autonomy.
+- Fail closed when mandatory verification cannot be completed.
+- No compliance theater.
+- No unsupported claims of correctness.
+
+Do not equate the absence of observed failure with evidence of correctness.
+
+---
+
+# 1. Mission Objectives
+
+Conduct an independent assessment answering the following questions.
+
+1. Which principles from Holzmann's original ten rules are directly applicable to Nexus Code?
+2. Which rules require adaptation for modern programming languages, asynchronous execution, external APIs, and autonomous agent orchestration?
+3. Which applicable requirements are already implemented?
+4. Which implementations are actually enforced at runtime?
+5. Which controls exist only as documentation, prompts, conventions, or advisory checks?
+6. Which controls have meaningful automated verification?
+7. Which existing verification mechanisms could be bypassed, disabled, spoofed, or invalidated?
+8. Which gaps could permit false-success reporting, uncontrolled execution, unrecoverable state, or acceptance of incorrect code?
+9. Which gaps require remediation, and what is the most defensible implementation sequence?
+10. Which proposed controls would add unnecessary complexity or duplicate existing mechanisms?
+
+The result must be actionable against the actual Nexus repository.
+
+Do not generate a generic list of software engineering best practices.
+
+---
+
+# 2. Scope and Authority
+
+You are explicitly authorized to:
+
+- Inspect the entire repository.
+- Inspect Git history, branches, tags, and relevant pull requests when accessible.
+- Examine dependency and build configurations.
+- Execute existing unit, integration, and end-to-end tests.
+- Execute static analysis and type checking.
+- Construct temporary adversarial probes and fault-injection tests.
+- Inspect agent orchestration and execution paths.
+- Inspect persistence, recovery, compaction, and fallback mechanisms.
+- Run controlled experiments using available local inference endpoints.
+- Measure resource consumption and execution behavior.
+- Create audit documentation and supporting evidence.
+- Develop concrete remediation specifications.
+
+Do not modify production implementation code in this assessment.
+
+Temporary test harnesses and isolated experimental changes are permitted, provided they do not contaminate the working tree or alter production configuration.
+
+Do not modify or consume live user workspaces without demonstrating that the activity is safe.
+
+Do not execute destructive tests against production data or shared infrastructure.
+
+Prefer disposable worktrees, temporary directories, isolated fixtures, and test-specific configurations.
+
+If meaningful verification requires unavailable infrastructure, record the limitation precisely. Do not substitute an assumption for an executed test.
+
+---
+
+# 3. Establish a Verifiable Baseline
+
+Before assessing compliance with any rule, establish the exact repository state.
+
+Record:
+
+- Repository URL and remote configuration.
+- Current branch.
+- HEAD commit SHA.
+- Working tree status.
+- Runtime and programming languages.
+- Package managers and lockfiles.
+- Supported operating systems.
+- Test frameworks.
+- Static-analysis tools.
+- CI/CD workflows.
+- Major architectural subsystems.
+- Recent release and version markers.
+- Current roadmap and outstanding known limitations.
+
+Identify existing project guidance, including applicable AGENTS.md files and repository-specific development instructions.
+
+Read these instructions, but do not treat them as authoritative evidence of implementation.
+
+Inspect the actual dependency graph and source code.
+
+Produce an architecture inventory covering, where applicable:
+
+| Subsystem | Investigation focus |
+|---|---|
+| Agent orchestration | State machine, scheduling, delegation |
+| Tool execution | Dispatch, permissions, argument handling, results |
+| Session management | Lifecycle, isolation, ownership |
+| Persistence | Durable state, atomicity, integrity |
+| Compaction | Context reduction and state preservation |
+| Recovery | Resume, retry, interrupted execution |
+| Model routing | Local inference, escalation, fallback |
+| Verification | Tests, validation, independent review |
+| Acceptance | Completion decisions and success reporting |
+| Evidence | Provenance, audit records, artifact binding |
+| Configuration | Runtime limits, policies, overrides |
+| User interface | Error reporting and operator visibility |
+
+Do not assume these subsystems correspond to existing modules.
+
+Discover the actual implementation boundaries.
+
+For each subsystem, identify primary source files, entry points, relevant interfaces, tests, and enforcement dependencies.
+
+## Required baseline evidence
+
+Capture commands and outputs demonstrating the baseline state.
+
+Use the repository's native tooling wherever possible.
+
+Record environmental failures separately from implementation defects.
+
+---
+
+# 4. Analyze the Original Power of Ten Rules
+
+Use Holzmann's original paper as the primary source.
+
+Do not rely exclusively on derivative articles or interpretations.
+
+Distinguish:
+
+1. Original rule.
+2. Original rationale.
+3. Direct applicability to Nexus.
+4. Appropriate modern adaptation.
+5. Proposed measurable invariant.
+6. Applicable enforcement mechanism.
+7. Evidence needed to demonstrate enforcement.
+
+Assess the following rules.
+
+## Rule 1: Restrict complex control flow
+
+Original concern:
+
+Unnecessarily complex control flow makes software difficult to analyze and verify.
+
+Nexus investigation:
+
+- Agent state transitions.
+- Recursive agent delegation.
+- Nested orchestrator execution.
+- Retry and escalation transitions.
+- Tool dispatch indirection.
+- Exception-driven control flow.
+- Compaction and recovery transitions.
+- Cancellation behavior.
+- Hidden asynchronous execution paths.
+
+Determine whether the agent execution lifecycle can be represented as an explicit finite-state model.
+
+Identify transitions that lack explicit ownership, termination conditions, or observable outcomes.
+
+Investigate whether invalid state transitions are rejected at runtime.
+
+Do not assume all recursion is unacceptable.
+
+Determine where recursion is bounded, necessary, or dangerous.
+
+## Rule 2: Give all loops a fixed upper bound
+
+This is a critical requirement for Nexus.
+
+Inspect:
+
+- Agent turn loops.
+- Tool invocation loops.
+- Retry loops.
+- Model fallback loops.
+- Deep escalation.
+- Delegation.
+- Context compaction.
+- Recovery and resume.
+- Polling.
+- Streaming.
+- Background tasks.
+- Network retries.
+
+Determine whether execution has limits on:
+
+- Total agent turns.
+- Total tool invocations.
+- Maximum retry attempts.
+- Maximum delegation depth.
+- Maximum compaction attempts.
+- Maximum fallback transitions.
+- Total inference tokens.
+- Context utilization.
+- Wall-clock execution time.
+- Individual external call duration.
+- Aggregate resource consumption.
+
+Distinguish between configured limits and actually enforced limits.
+
+Trace how limits propagate across nested or resumed execution.
+
+Determine whether retries, fallbacks, or session recovery can accidentally reset budgets.
+
+Test termination at relevant boundaries.
+
+Required adversarial cases:
+
+1. Model repeatedly requests the same tool.
+2. Tool repeatedly returns recoverable errors.
+3. Model emits malformed responses indefinitely.
+4. Compaction repeatedly fails to reduce context.
+5. Deep escalation falls back to the original model.
+6. Resume occurs with a nearly exhausted budget.
+7. A tool hangs indefinitely.
+8. Cancellation arrives during an external call.
+
+Measure observed behavior wherever practical.
+
+## Rule 3: Restrict dynamic resource allocation
+
+Do not interpret this as an unconditional prohibition on runtime allocation.
+
+Translate the principle into explicit resource ownership and bounded consumption.
+
+Inspect:
+
+- Session memory.
+- Context buffers.
+- Queues.
+- Cached prompts.
+- Temporary files.
+- Subprocesses.
+- Network connections.
+- File descriptors.
+- Persistent state.
+- Model inference requests.
+- Background tasks.
+- Parallel agent execution.
+
+Determine:
+
+- Who owns each resource?
+- What are its limits?
+- How is it released?
+- What happens during failures?
+- Can cancelled tasks retain resources?
+- Can parallel sessions exceed shared capacity?
+- Are admission controls implemented?
+- Are resources released after interruption or restart?
+
+Test resource cleanup on failure paths.
+
+Pay particular attention to long-running sessions and repeated recovery cycles.
+
+## Rule 4: Keep functions short and understandable
+
+Inventory unusually large or complex functions in critical execution paths.
+
+Measure, where tooling permits:
+
+- Function length.
+- Cyclomatic complexity.
+- Cognitive complexity.
+- Nesting depth.
+- Responsibility concentration.
+
+Avoid applying arbitrary global thresholds without first establishing the repository baseline.
+
+Identify functions where complexity creates concrete correctness or maintenance risks.
+
+Prioritize orchestration, persistence, recovery, tool execution, authorization, and acceptance code.
+
+Do not recommend decomposition merely for aesthetic reasons.
+
+## Rule 5: Use meaningful assertions
+
+Identify existing runtime invariants.
+
+Investigate:
+
+- Session state validity.
+- State transition legality.
+- Tool argument contracts.
+- Tool result contracts.
+- Persistence invariants.
+- Evidence integrity.
+- Resume compatibility.
+- Resource budget invariants.
+- Verification prerequisites.
+- Acceptance preconditions.
+
+Distinguish between:
+
+- Untrusted input validation.
+- Recoverable operational errors.
+- Internal invariant violations.
+- Programmer errors.
+
+Do not recommend using language-level assertions for security-sensitive validation if they can be disabled in production.
+
+Determine whether failed invariants stop unsafe progression.
+
+Identify invariants currently enforced only through prompts or documentation.
+
+## Rule 6: Restrict scope and ownership of state
+
+Inspect:
+
+- Global mutable state.
+- Module-level caches.
+- Shared session objects.
+- Configuration overrides.
+- Agent memory.
+- Tool registry state.
+- Background workers.
+- Cross-session data access.
+- Concurrent writes.
+- Recovery state ownership.
+
+Assess whether mutable state is explicitly owned.
+
+Identify race conditions, unintended cross-session sharing, and stale-state hazards.
+
+Determine whether session isolation is enforced rather than assumed.
+
+## Rule 7: Check return values and parameters
+
+Investigate every critical boundary where Nexus interacts with external systems.
+
+Examples:
+
+- Model API responses.
+- Local inference gateway.
+- Tool execution.
+- Shell commands.
+- Git operations.
+- Filesystem operations.
+- Persistent storage.
+- Subprocess execution.
+- Network operations.
+- Verification tools.
+
+Determine whether callers distinguish:
+
+- Successful execution.
+- Explicit failure.
+- Timeout.
+- Cancellation.
+- Partial completion.
+- Invalid output.
+- Unknown outcome.
+
+Specifically investigate whether a successful API call can be confused with successful completion of the requested engineering task.
+
+Search for swallowed exceptions, ignored return values, and ambiguous success defaults.
+
+## Rule 8: Restrict unsafe abstraction and configuration mechanisms
+
+The original rule concerns preprocessor usage.
+
+Adapt it cautiously to modern runtime configuration and indirection.
+
+Inspect:
+
+- Dynamic configuration.
+- Environment variable overrides.
+- Runtime policy loading.
+- Plugin registration.
+- Tool registries.
+- Reflection or dynamic imports.
+- Conditional execution paths.
+- Feature flags.
+
+Determine whether configuration changes can bypass mandatory execution or verification controls.
+
+Identify configurations that materially alter safety-critical behavior without corresponding evidence or authorization.
+
+Do not classify ordinary dependency injection or modular architecture as inherently unsafe.
+
+## Rule 9: Limit indirection
+
+The original rule concerns pointer usage.
+
+For Nexus, examine traceability through:
+
+- Agent delegation.
+- Model routing.
+- Tool registries.
+- Middleware.
+- Callbacks.
+- Event dispatch.
+- Dynamic tool invocation.
+- Execution wrappers.
+- Reviewer agents.
+
+Determine whether an investigator can reconstruct the complete execution chain.
+
+Assess whether responsibility for tool invocation and acceptance remains clear across abstractions.
+
+Identify cases where the system cannot reliably explain what executed and why.
+
+## Rule 10: Compile with all warnings enabled and use static analysis
+
+Inspect existing enforcement of:
+
+- Linters.
+- Type checkers.
+- Compiler warnings.
+- Security analyzers.
+- Dependency checks.
+- Test suites.
+- CI gates.
+- Formatting checks.
+- Coverage reporting.
+
+Determine which checks are:
+
+- Available.
+- Configured.
+- Executed locally.
+- Executed in CI.
+- Mandatory.
+- Advisory.
+- Bypassable.
+
+Inspect warning suppressions and exclusions.
+
+Determine whether CI configurations can be modified to disable mandatory checks in the same change they are expected to evaluate.
+
+Recommend appropriate controls without assuming every existing warning must immediately block development.
+
+---
+
+# 5. Extend the Assessment to AI-Assisted Engineering
+
+The original paper predates modern autonomous coding agents.
+
+Assess the following additional requirements separately.
+
+Clearly identify them as Nexus-specific adaptations rather than original Holzmann rules.
+
+## A. Independent verification
+
+Determine whether Nexus accepts agent-produced declarations of success.
+
+Trace how these statements are treated:
+
+- "Tests passed."
+- "Implementation complete."
+- "Build successful."
+- "No errors found."
+- "Ready to merge."
+- "All requirements satisfied."
+
+Determine whether acceptance depends on independently executed verification commands and trustworthy results.
+
+Investigate whether the same agent can create, execute, interpret, and approve its own tests without independent validation.
+
+Assess reviewer independence at both the model and evidence levels.
+
+Different models alone do not establish independence if both consume the same unverified claims.
+
+## B. Evidence-bound acceptance
+
+Determine whether acceptance evidence is bound to:
+
+- Exact source revision.
+- Relevant workspace content.
+- Test configuration.
+- Tool versions.
+- Verification commands.
+- Execution environment.
+- Exit codes.
+- Test artifacts.
+- Execution timestamps.
+- Applicable acceptance policy.
+
+Investigate whether verification evidence becomes invalid after source modifications.
+
+Test whether older successful evidence can be reused after an unverified change.
+
+Identify any paths by which a test summary can be substituted for actual test output.
+
+## C. Immutable or tamper-evident execution evidence
+
+Inspect logging and evidence persistence.
+
+Determine whether Nexus can establish:
+
+- What action was requested.
+- Which actor initiated it.
+- Which model or worker was involved.
+- Which tool was invoked.
+- Which arguments were supplied.
+- What result was observed.
+- What verification followed.
+- Why a task was accepted or rejected.
+
+Distinguish ordinary logging from tamper-evident records.
+
+Do not describe evidence as immutable unless the architecture actually supports that guarantee.
+
+Assess redaction, retention, integrity, and potential exposure of secrets.
+
+## D. Verification policy enforcement
+
+Determine whether mandatory checks are enforced outside the model-controlled execution path.
+
+Investigate whether an agent can:
+
+- Modify its own acceptance criteria.
+- Change verification configuration.
+- Skip required tests.
+- Suppress failed test results.
+- Rewrite evidence.
+- Disable static analysis.
+- Replace verification scripts.
+- Mark incomplete work as complete.
+
+Identify the trust boundaries between agent, workspace, verification executor, and acceptance authority.
+
+A prompt instruction telling the agent not to bypass verification is not an enforcement boundary.
+
+## E. Long-running autonomous execution
+
+Assess recovery integrity under:
+
+- Process termination.
+- Host restart.
+- Inference timeout.
+- Gateway outage.
+- Tool timeout.
+- Context exhaustion.
+- Compaction failure.
+- Persistent storage failure.
+- Interrupted Git operations.
+- Partial file writes.
+- Concurrent session execution.
+
+Determine whether execution can resume without losing required state or incorrectly repeating irreversible actions.
+
+Evaluate idempotency and unknown-outcome handling for side-effectful operations.
+
+Do not claim exactly-once execution unless demonstrably guaranteed.
+
+---
+
+# 6. Perform Adversarial Validation
+
+Documentation inspection is insufficient.
+
+For each high-risk control, attempt to construct a practical negative test demonstrating whether the control is enforced.
+
+Prioritize experiments involving:
+
+1. Unbounded agent execution.
+2. Retry budget reset.
+3. Recursive fallback.
+4. Stale verification evidence.
+5. False-success reporting.
+6. Incomplete tool execution.
+7. Interrupted persistence.
+8. Recovery from inconsistent state.
+9. Cross-session contamination.
+10. Agent-controlled verification bypass.
+11. Failure to release resources.
+12. Cancellation during side-effectful execution.
+
+For every experiment, record:
+
+- Hypothesis.
+- Test setup.
+- Exact commands or harness.
+- Preconditions.
+- Expected safe behavior.
+- Actual observed behavior.
+- Relevant logs.
+- Exit status.
+- Source revision.
+- Interpretation.
+- Reproduction instructions.
+
+Classify experiments as:
+
+- PASS: Expected enforcement observed.
+- FAIL: A control violation was reproduced.
+- INCONCLUSIVE: Execution did not establish the outcome.
+- NOT TESTED: Experiment could not be performed.
+
+Do not interpret an inconclusive result as a pass.
+
+If tests require model inference, prefer the repository's configured local inference environment.
+
+Avoid unnecessary cloud inference costs.
+
+Do not modify live infrastructure merely to make a test pass.
+
+---
+
+# 7. Establish a Control Maturity Classification
+
+Classify each control using the following maturity levels.
+
+| Level | Classification | Meaning |
+|---|---|---|
+| M0 | Absent | No relevant control identified |
+| M1 | Documented | Requirement exists only in documentation or instructions |
+| M2 | Implemented | Code exists, but enforcement is incomplete or unproven |
+| M3 | Enforced | Mandatory behavior is implemented and traceable |
+| M4 | Verified | Automated tests demonstrate expected enforcement, including negative cases |
+| M5 | Operationally evidenced | Enforcement demonstrated in representative execution with durable, attributable evidence |
+
+Maturity classifications require specific evidence.
+
+Do not assign M4 solely because a test file exists.
+
+Do not assign M5 solely because logging code exists.
+
+Where evidence is incomplete, state the highest demonstrable level and explain what remains unproven.
+
+Evaluate separate execution paths independently where necessary.
+
+For example, a control may be M4 for a single-agent run but only M2 for resumed, delegated execution.
+
+---
+
+# 8. Assess Operational Risk
+
+For each identified gap, assess:
+
+**Severity**
+
+- Critical: Can undermine trust boundaries, permit unauthorized execution, or invalidate mandatory acceptance.
+- High: Can cause uncontrolled execution, unrecoverable state, false-success reporting, or significant integrity failures.
+- Medium: Creates meaningful reliability, maintainability, or observability deficiencies.
+- Low: Localized deficiency with limited operational consequence.
+
+**Likelihood**
+
+Estimate based on reachable execution paths, observed behavior, and plausible operating conditions.
+
+Do not assign numerical probabilities without evidence.
+
+**Blast radius**
+
+Identify whether the issue affects:
+
+- One tool invocation.
+- One agent turn.
+- One session.
+- Multiple sessions.
+- Shared workspace.
+- Repository integrity.
+- External systems.
+- Acceptance or evidence integrity.
+
+**Detection**
+
+Determine whether a failure would be:
+
+- Immediately detected.
+- Detected after execution.
+- Detectable only through forensic analysis.
+- Potentially silent.
+
+**Recovery**
+
+Determine whether the failure is:
+
+- Automatically recoverable.
+- Operator recoverable.
+- Recoverable only from backup.
+- Potentially irreversible.
+
+Prioritize issues using their operational consequences, not just code complexity.
+
+---
+
+# 9. Identify Existing Capabilities Before Proposing New Ones
+
+Nexus Code has previously invested in functionality involving:
+
+- Long-running sessions.
+- Durable context.
+- Compaction.
+- Recovery and resume.
+- Multi-profile agents.
+- Model routing.
+- Deep escalation.
+- Cloud fallback.
+- Independent review.
+- Acceptance validation.
+- Continuous Evaluation and Regression Intelligence.
+
+Treat these as areas requiring investigation, not as proof of completed features.
+
+For each proposed remediation:
+
+1. Search for existing implementation.
+2. Search for related tests.
+3. Identify existing interfaces and abstractions.
+4. Determine whether the capability is already sufficient.
+5. Determine whether an existing subsystem can be extended.
+6. Avoid creating parallel enforcement mechanisms.
+7. Identify architectural conflicts and migration requirements.
+
+Prefer strengthening existing controls over introducing additional frameworks.
+
+Do not recommend a new policy engine, orchestration layer, or evidence system without demonstrating why existing mechanisms are insufficient.
+
+---
+
+# 10. Produce a Prioritized Remediation Roadmap
+
+After completing the gap analysis, produce a concrete implementation plan.
+
+Organize recommendations into dependency-aware work packages.
+
+Suggested prioritization:
+
+### P0: Integrity and containment
+
+Issues involving:
+
+- Acceptance bypass.
+- False-success reporting.
+- Unbounded execution.
+- Unauthorized or uncontrolled tool execution.
+- Evidence tampering.
+- Corrupt or unrecoverable session state.
+
+### P1: Reliability and recovery
+
+Issues involving:
+
+- Resource cleanup.
+- Cancellation.
+- Retry and fallback correctness.
+- Recovery invariants.
+- Persistence integrity.
+- Session isolation.
+- Unknown-outcome handling.
+
+### P2: Engineering assurance
+
+Issues involving:
+
+- Static analysis.
+- Complexity enforcement.
+- Contract validation.
+- Verification coverage.
+- Test isolation.
+- CI hardening.
+
+### P3: Maintainability and refinement
+
+Issues involving:
+
+- Noncritical complexity.
+- Advisory diagnostics.
+- Documentation improvements.
+- Optional developer tooling.
+
+These categories are starting hypotheses.
+
+Assign the actual priority based on observed evidence.
+
+For each work package, provide:
+
+- Unique identifier.
+- Gap being addressed.
+- Evidence supporting the gap.
+- Affected files and subsystems.
+- Proposed design.
+- Existing components to reuse.
+- Implementation steps.
+- Dependencies.
+- Migration considerations.
+- Required tests.
+- Failure-injection scenarios.
+- Explicit acceptance criteria.
+- Rollback considerations.
+- Residual risks.
+
+Make acceptance criteria mechanically verifiable wherever possible.
+
+Avoid requirements such as "improve reliability" or "ensure proper handling" without observable conditions.
+
+---
+
+# 11. Required Deliverables
+
+Create the following audit artifacts under an appropriate repository documentation directory.
+
+Do not overwrite unrelated existing files.
+
+## A. Engineering Assurance Gap Analysis
+
+`POWER_OF_TEN_GAP_ANALYSIS.md`
+
+Include:
+
+1. Executive assessment.
+2. Repository baseline.
+3. Architecture inventory.
+4. Original ten-rule applicability analysis.
+5. Nexus-specific autonomous engineering controls.
+6. Evidence-backed maturity classifications.
+7. Critical control weaknesses.
+8. Adversarial test results.
+9. Operational risk assessment.
+10. Existing capability reuse.
+11. Proposed enforcement architecture.
+12. Uncertainty and verification limitations.
+13. Recommended next steps.
+
+## B. Control Matrix
+
+`POWER_OF_TEN_CONTROL_MATRIX.md`
+
+For each control, include:
+
+| Field | Required content |
+|---|---|
+| Control ID | Stable identifier |
+| Source | Original rule or Nexus adaptation |
+| Requirement | Testable expectation |
+| Applicability | Relevant Nexus subsystem |
+| Enforcement | Actual implementation mechanism |
+| Source evidence | File and line references |
+| Test evidence | Test names and execution results |
+| Maturity | M0–M5 |
+| Risk | Operational consequence |
+| Gap | Missing enforcement or proof |
+| Recommendation | Concrete remediation |
+| Priority | P0–P3 |
+
+## C. Adversarial Test Report
+
+`POWER_OF_TEN_ADVERSARIAL_TESTS.md`
+
+Include exact reproduction instructions, observations, and evidence.
+
+Clearly distinguish completed tests from proposed future tests.
+
+## D. Implementation Specification
+
+`POWER_OF_TEN_IMPLEMENTATION_PLAN.md`
+
+Produce a dependency-aware remediation specification suitable for execution by a separate terminal agent.
+
+Include:
+
+- Work packages.
+- Required changes.
+- Integration points.
+- Test requirements.
+- Acceptance gates.
+- Dependencies.
+- Estimated complexity.
+- Risks.
+- Rollback strategy.
+
+Do not assign arbitrary delivery dates.
+
+## E. Machine-Readable Findings
+
+`POWER_OF_TEN_FINDINGS.json`
+
+Each finding must contain at minimum:
+
+```json
+{
+  "id": "P10-001",
+  "source_rule": "Rule 2",
+  "subsystem": "agent_orchestration",
+  "severity": "high",
+  "maturity": "M2",
+  "status": "confirmed",
+  "description": "Example finding",
+  "source_locations": [],
+  "test_evidence": [],
+  "operational_impact": "",
+  "recommended_action": "",
+  "priority": "P0"
+}
+```
+
+Use `confirmed`, `suspected`, `inconclusive`, or `not_tested` for finding status as appropriate.
+
+Do not populate the final findings file with fabricated examples.
+
+---
+
+# 12. Audit Integrity Requirements
+
+The audit must itself meet the following requirements.
+
+## Evidence provenance
+
+Every confirmed finding must reference specific implementation evidence or reproduced behavior.
+
+File references must include the inspected Git revision.
+
+Line references must correspond to the inspected source, not an assumed version.
+
+## No fabricated coverage
+
+Do not claim that a subsystem has been audited unless its relevant implementation and execution paths were examined.
+
+Do not claim a test passed unless it was actually executed successfully.
+
+Do not invent command output, measurements, test counts, or tool results.
+
+## Independent judgment
+
+Do not adopt the repository's existing roadmap as the audit conclusion.
+
+Do not assume previous AI-generated reviews are correct.
+
+Challenge architectural claims when implementation evidence contradicts them.
+
+## Confidence management
+
+Where a conclusion depends on assumptions, explicitly identify those assumptions.
+
+Separate confirmed defects from theoretical failure modes.
+
+Avoid equating an inability to reproduce a defect with proof that it cannot occur.
+
+## Scope control
+
+Do not turn this analysis into an unsolicited broad refactoring effort.
+
+Do not implement the proposed roadmap during this assignment.
+
+---
+
+# 13. Completion and Reporting
+
+Before declaring the audit complete:
+
+1. Confirm the repository baseline has been captured.
+2. Confirm all ten original rules have been assessed for applicability.
+3. Confirm Nexus-specific controls have been assessed independently.
+4. Confirm each maturity classification has evidence.
+5. Confirm high-risk findings have reproducible tests where feasible.
+6. Confirm untested paths are clearly identified.
+7. Confirm proposed remediations reuse existing architecture where appropriate.
+8. Confirm implementation work packages have measurable acceptance criteria.
+9. Validate the findings JSON against its expected structure.
+10. Confirm no unintended production changes occurred.
+
+Run a final working-tree inspection.
+
+Report any remaining modifications explicitly.
+
+## Final terminal response
+
+Provide:
+
+### 1. Executive verdict
+
+Is Nexus Code's current engineering assurance architecture sufficient for its intended autonomous coding workflows?
+
+Answer with one of:
+
+- SUFFICIENT_WITH_EVIDENCE
+- CONDITIONALLY_SUFFICIENT
+- INSUFFICIENT
+- NOT_DEMONSTRATED
+
+Support the classification.
+
+### 2. Most consequential findings
+
+List the five highest-impact gaps.
+
+Include severity, maturity, evidence, and operational consequence.
+
+### 3. Existing strengths
+
+Identify controls that are genuinely implemented and verified.
+
+### 4. Verification limitations
+
+State what could not be tested and why.
+
+### 5. Recommended implementation sequence
+
+Identify the first remediation work packages and their dependencies.
+
+### 6. Artifact locations
+
+Provide paths to all generated reports.
+
+### 7. Repository status
+
+Report the final Git state and any uncommitted files.
+
+---
+
+# Final Directive
+
+Treat this as an independent engineering assurance investigation, not a coding-standard adoption exercise.
+
+The central question is:
+
+**Can Nexus Code demonstrate, with independently verifiable evidence, that autonomous engineering execution remains bounded, state-consistent, recoverable, and subject to mandatory acceptance controls even when the model, tools, infrastructure, or verification process behaves incorrectly?**
+
+If the answer is not demonstrated, identify precisely which missing guarantees prevent that conclusion.
+
+Do not soften findings to align with existing project claims.
+
+Do not overstate weaknesses where evidence supports a working control.
+
+Do not implement fixes before completing the gap analysis.
+
+Produce a report that a skeptical engineering reviewer can reproduce, challenge, and use to authorize the next engineering phase.
+
+---
+
+review origin/main
+
+---
+
+implementation plan approved
+
+---
+
+<send_user_message_question_reply>
+[{"questionItemId":"[\"request_user_input_async\",\"call_af0eb1d343cc43498714f182bb2afe3d\",0]","question":"WP-P10-01 reviewer","answer":"Name/add a second maintainer (Recommended)"}]
+</send_user_message_question_reply>
+
+---
+
+also ensure any outstanding work that claude was working on is completed. The claude agent has run out of weekly token usage allotment
+
+---
+
+<send_user_message_question_reply>
+[{"questionItemId":"[\"request_user_input_async\",\"call_9331bc9c1d214fd7a300c4a60f0cd44d\",0]","question":"What GitHub login should be added as the second maintainer for WP-P10-01? I need the exact account before requesting collaborator access and enforcing independent approval.","answer":"nexus-code-agent"}]
+</send_user_message_question_reply>
+
+---
+
+<send_user_message_question_reply>
+[{"questionItemId":"[\"request_user_input_async\",\"call_b0a89021f1e04977aff304e424398929\",0]","question":"GitHub shows `nexus-code-agent` was created today, has no name or public repositories, and currently has no maintain permission. Is this a separate human maintainer who will independently review changes? I need that confirmation before granting write access or treating it as an independent approval authority.","answer":"yes"}]
+</send_user_message_question_reply>
+
+---
+
+That account has indeed been suspended... with no notification
+
+---
+
+there's no one else
+
+---
+
+this is a single user repo at the moment.
+
+---
+
+I don't have anyone else to review\.. and I've only been met with requests for payment by asking... so not going to keep going down that road. It will remain a single user repo until something changes down the road.
+
+---
+
+nor should that hold up work being published.
