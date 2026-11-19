@@ -109,6 +109,18 @@ Nexus maintains a transaction journal (`$PREFIX/lib/nexus/.upgrade-journal.json`
 
 Inside the interactive live TUI, run `/upgrade` or `/upgrade --check`. The TUI displays the installed vs target version, destination, and requires deliberate modal confirmation before modifying any files. Running TUI sessions continue uninterrupted on their loaded code and notify when a restart is required.
 
+### Uninstalling Nexus Code (`nexus uninstall`)
+
+From a managed installer installation, run:
+
+```bash
+nexus uninstall
+```
+
+Uninstall holds the installer upgrade lock while it verifies every installed package against its `MANIFEST.sha256` and removes the managed packages and launcher. If an upgrade is active, a package is modified, unlisted files are present, or an upgrade is incomplete, uninstall stops before removing packages; resolve an interrupted upgrade with `nexus upgrade --recover` first. Development checkouts and package-manager installations are not removed by this command.
+
+By default, task/session state and operator configuration remain in `~/.nexus` and `~/.config/nexus`. To remove those paths too, use `nexus uninstall --purge`. This does not remove workspace files. A custom `NEXUS_STATE_DIR` is left untouched.
+
 ---
 
 
