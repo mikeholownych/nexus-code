@@ -15,6 +15,7 @@ let repo: string;
 let stateDir: string;
 let home: string;
 let previousHome: string | undefined;
+let previousTrust: string | undefined;
 let agents: AutonomousAgent[] = [];
 let bridges: RustCoreBridge[] = [];
 
@@ -53,6 +54,9 @@ const attempts = (agent: AutonomousAgent) => (agent as any).bridge.getSecurityMa
 
 beforeEach(() => {
   previousHome = process.env.HOME;
+  previousTrust = process.env.NEXUS_TRUST_WORKSPACE;
+  // Existing policy tests exercise settings authored by the operator for this workspace.
+  process.env.NEXUS_TRUST_WORKSPACE = "1";
   home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-vg-home-"));
   process.env.HOME = home;
   repo = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-vg-repo-"));
@@ -74,6 +78,33 @@ afterEach(() => {
   for (const d of [repo, stateDir, home]) fs.rmSync(d, { recursive: true, force: true });
   if (previousHome === undefined) delete process.env.HOME;
   else process.env.HOME = previousHome;
+  if (previousTrust === undefined) delete process.env.NEXUS_TRUST_WORKSPACE;
+  else process.env.NEXUS_TRUST_WORKSPACE = previousTrust;
+});
+
+describe("repository verification policy in an untrusted workspace", () => {
+  test("off, record, and allow cannot weaken verification protection", () => {
+    delete process.env.NEXUS_TRUST_WORKSPACE;
+    for (const verificationPaths of [
+      { mode: "off" },
+      { mode: "record" },
+      { mode: "approve", allow: ["Makefile"] },
+    ]) {
+      write(".nexus-security.json", JSON.stringify({ verificationPaths }));
+      const decision = new SecurityManager(repo).verificationEditDecision("write_file", { path: "Makefile", content: "x" }, {});
+      assert.ok(decision && decision.action !== "allow", `untrusted policy ${JSON.stringify(verificationPaths)} must not allow a Makefile edit`);
+    }
+  });
+
+  test("untrusted policy may tighten protection, and trusted policy may record edits", () => {
+    delete process.env.NEXUS_TRUST_WORKSPACE;
+    write(".nexus-security.json", JSON.stringify({ verificationPaths: { mode: "block" } }));
+    assert.equal(new SecurityManager(repo).verificationEditDecision("write_file", { path: "Makefile", content: "x" }, {})?.action, "deny");
+
+    process.env.NEXUS_TRUST_WORKSPACE = "1";
+    write(".nexus-security.json", JSON.stringify({ verificationPaths: { mode: "record" } }));
+    assert.equal(new SecurityManager(repo).verificationEditDecision("write_file", { path: "Makefile", content: "x" }, {})?.label, "auto-recorded");
+  });
 });
 
 describe("verification config guard", () => {

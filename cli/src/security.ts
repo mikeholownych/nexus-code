@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { egressPolicyFromEnv, workspaceRelaxesEgress, type EgressPolicy } from "./core/egress_policy.js";
 import { isTestPath } from "./tester.js";
+import { isWorkspaceTrusted } from "./workspace_trust.js";
 import { FILE_EDIT_TOOLS } from "./file_diff.js";
 
 export type VerificationMode = "off" | "record" | "approve" | "block";
@@ -217,13 +218,21 @@ function verificationSections(text: string): Record<string, string[]> {
   return found;
 }
 
-function parseVerificationPolicy(raw: unknown): VerificationPathsPolicy {
+/**
+ * Repository policy may tighten verification protection in any workspace. Only an operator-trusted workspace may
+ * use `off`, `record`, or `allow`, since those settings can weaken protection over the repository's own verifier.
+ */
+function parseVerificationPolicy(raw: unknown, trusted = true): VerificationPathsPolicy {
   const value = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const strings = (v: unknown): string[] | undefined => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.length > 0) : undefined);
   return {
-    mode: VERIFICATION_MODES.includes(value.mode as VerificationMode) ? (value.mode as VerificationMode) : "approve",
+    mode:
+      VERIFICATION_MODES.includes(value.mode as VerificationMode) &&
+      (trusted || value.mode === "approve" || value.mode === "block")
+        ? (value.mode as VerificationMode)
+        : "approve",
     extra: strings(value.extra),
-    allow: strings(value.allow),
+    allow: trusted ? strings(value.allow) : undefined,
   };
 }
 
@@ -344,7 +353,7 @@ export class SecurityManager {
             ...(Array.isArray(parsed.protectedPaths) ? parsed.protectedPaths : []),
           ],
           allowedDomains: Array.isArray(parsed.allowedDomains) ? parsed.allowedDomains : undefined,
-          verificationPaths: parseVerificationPolicy(parsed.verificationPaths),
+          verificationPaths: parseVerificationPolicy(parsed.verificationPaths, isWorkspaceTrusted(this.workspace)),
           egressInspector: egressPolicyFromEnv(),
         };
       } catch {
