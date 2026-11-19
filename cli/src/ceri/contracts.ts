@@ -108,6 +108,52 @@ export interface RunManifest {
   status: RunStatus;
   terminationReason?: string;
   mandatoryComparabilityKeys: string[];
+  /** Hash-only request provenance. Raw prompts, context and tool schemas are never persisted here. */
+  requestContext?: RequestContextManifest;
+  /** Installed-runner and result-file identity checked by the MQ-7D adapter. */
+  installedEvaluator?: InstalledEvaluatorEvidence;
+  /** Verified prior-run links used when a CERI evaluation is resumed. */
+  recoveryReferences?: RecoveryReference[];
+  /** Aggregate execution envelope for a bounded campaign run. */
+  campaign?: CampaignRunIdentity;
+}
+
+export interface RequestContextManifest {
+  schemaVersion: 1;
+  sha256: string;
+  requestCount: number;
+  messageCount: number | null;
+  toolCount: number | null;
+  serializedBytes: number;
+}
+
+export interface InstalledEvaluatorEvidence {
+  packageSha256: string;
+  executableSha256: string;
+  datasetManifestSha256: string;
+  runnerManifestSha256: string;
+  resultsSha256: string;
+  scoreSha256: string;
+  resultCount: number;
+  evaluatorVersion: string;
+  requestContext: RequestContextManifest;
+}
+
+export interface RecoveryReference {
+  evaluationId: string;
+  runId: string;
+  manifestSha256: string;
+  expectedStatus?: "COMPLETED" | "FAILED";
+}
+
+export interface CampaignRunIdentity {
+  campaignId: string;
+  planSha256: string;
+  index: number;
+  plannedRuns: number;
+  maxAggregateSteps: number;
+  maxAggregateMinutes: number;
+  maxAggregateTokens: number;
 }
 
 export type ComparativeOutcome =
@@ -132,6 +178,7 @@ export interface BaselineIdentity {
   evaluatorVersion: string;
   fixtureSha256?: string;
   toolchainVersions: Record<string, string>;
+  requestContextSha256?: string;
 }
 
 /**

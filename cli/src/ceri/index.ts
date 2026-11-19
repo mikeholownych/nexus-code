@@ -6,3 +6,4 @@ export * from "./remediation.js";
 export * from "./reporting.js";
 export * from "./runner.js";
 export * from "./fixture_identity.js";
+export * from "./mq7_extensions.js";

@@ -100,6 +100,9 @@ recorded per run.
 - **Model proxy.** Every agent reaches the model through a per-run forwarder (`eval/model_proxy.mjs`) that `run.mjs`
   starts. Each record carries `model: { requests, answered, upstreamFailures, firstRequestAt, firstAnswerAt }`. Set
   `"proxy": false` in a config to connect agents directly; such runs are then scored only by the legacy rule below.
+- Each proxied inference request also carries a hash-only request-context record: request index, exact request-body
+  SHA-256, byte count and message/tool counts when present. Raw request bodies, prompts and tool schemas are not saved.
+  Qualification CERI ingestion requires these records and binds their ordered digests into the run manifest.
 - **Infrastructure reruns** (`eval/infra.mjs`). A run is rerun only when the model never answered *and* the endpoint
   was observed failing, or when the harness itself errored. The rule is the same for every agent. A run in which the
   model answered is always scored: a crash is a failure (and counts towards the crash rate), not a rerun. Records from

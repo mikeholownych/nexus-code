@@ -1,12 +1,12 @@
 // A per-run forwarder between an agent and the model endpoint. Every agent reaches the model through it the same way,
 // so the harness itself observes whether the model was reachable during a run (REQ-QUAL-106): how many requests were
 // made, how many got an answer, and how many failed upstream (connection errors and 502/503/504 from the endpoint).
-// Bodies are streamed through unchanged unless a fault is scheduled for a request (T4, REQ-QUAL-105); nothing is
-// logged.
+// Bodies are streamed through unchanged unless a fault is scheduled for a request (T4, REQ-QUAL-105). The runner
+// retains only a SHA-256 and message/tool counts for each request; it never logs raw prompt or tool-schema content.
 import http from "node:http";
 import https from "node:https";
 import fs from "node:fs";
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 
 const UPSTREAM_DOWN = new Set([502, 503, 504]);
 
@@ -92,7 +92,7 @@ export async function startModelProxy({ upstream, caFile, faults = [], profile, 
   ]);
   const client = target.protocol === "https:" ? https : http;
   const ca = caFile ? fs.readFileSync(caFile) : undefined;
-  const stats = { requests: 0, chatRequests: 0, activeInferenceRequests: 0, cancelledRequests: 0, profileContextLookups: 0, requestedCompletionTokens: 0, answered: 0, upstreamFailures: 0, faultsInjected: [], firstRequestAt: null, firstAnswerAt: null };
+  const stats = { requests: 0, chatRequests: 0, activeInferenceRequests: 0, cancelledRequests: 0, profileContextLookups: 0, requestedCompletionTokens: 0, answered: 0, upstreamFailures: 0, faultsInjected: [], requestContexts: [], firstRequestAt: null, firstAnswerAt: null };
 
   /** The upstream /models entries (for an emulated profile's context answers). */
   const upstreamModels = () => new Promise((resolve) => {
@@ -216,6 +216,24 @@ export async function startModelProxy({ upstream, caFile, faults = [], profile, 
     }
     stats.firstRequestAt ??= new Date().toISOString();
     const chatIndex = routeKind === "inference" ? ++stats.chatRequests : 0;
+    if (chatIndex) {
+      let messageCount = null;
+      let toolCount = null;
+      try {
+        const body = JSON.parse(requestBody.toString("utf8"));
+        if (Array.isArray(body.messages)) messageCount = body.messages.length;
+        if (Array.isArray(body.tools)) toolCount = body.tools.length;
+      } catch {
+        // The raw-byte digest still binds malformed JSON without retaining any request text.
+      }
+      stats.requestContexts.push({
+        requestIndex: chatIndex,
+        sha256: createHash("sha256").update(requestBody).digest("hex"),
+        serializedBytes: requestBody.length,
+        messageCount,
+        toolCount,
+      });
+    }
     const fault = chatIndex ? faults.find((f) => f.atRequest === chatIndex) : undefined;
     if (fault) stats.faultsInjected.push({ kind: fault.kind, atRequest: chatIndex });
 
@@ -337,7 +355,7 @@ export async function startModelProxy({ upstream, caFile, faults = [], profile, 
   return {
     url,
     socketPath: socketPath ?? null,
-    stats: () => ({ ...stats, faultsInjected: [...stats.faultsInjected] }),
+    stats: () => ({ ...stats, faultsInjected: [...stats.faultsInjected], requestContexts: stats.requestContexts.map((item) => ({ ...item })) }),
     close: () => new Promise((resolve) => {
       server.closeAllConnections?.();
       server.close(() => {
