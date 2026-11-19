@@ -29,7 +29,7 @@ export interface RegressionObligation {
   weakenings: Array<{ at: string; path: string; kind: WeakeningKind; detail: string }>;
 }
 
-export type WeakeningKind = "removed" | "skipped" | "fewer-assertions";
+export type WeakeningKind = "removed" | "skipped" | "fewer-assertions" | "unverifiable-change";
 
 export interface ReferenceDeclaration { requirementId: string; reference: string; authorisedAt: string }
 
@@ -205,6 +205,14 @@ export function recordTestEdit(ledger: ObjectiveLedger, edit: { path: string; be
     else if (count(edit.after, SKIP_MARKER) > count(edit.before, SKIP_MARKER)) weakening = { kind: "skipped", detail: "a skip marker was added" };
     else if (count(edit.after, ASSERTION) < count(edit.before, ASSERTION)) weakening = { kind: "fewer-assertions", detail: `assertions ${count(edit.before, ASSERTION)} -> ${count(edit.after, ASSERTION)}` };
     if (weakening) ob.weakenings.push({ at: edit.at ?? now(), path: edit.path, ...weakening });
+  }
+}
+
+/** Record a detected test-file change when bounded snapshots cannot establish whether an authorised test was weakened. */
+export function recordUnverifiableTestEdit(ledger: ObjectiveLedger, path: string, detail: string, at?: string): void {
+  for (const ob of active(ledger)) {
+    if (ob.weakenings.some((w) => w.kind === "unverifiable-change" && w.path === path && w.detail === detail)) continue;
+    ob.weakenings.push({ at: at ?? now(), path, kind: "unverifiable-change", detail });
   }
 }
 

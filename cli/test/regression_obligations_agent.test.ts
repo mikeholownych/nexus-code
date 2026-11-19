@@ -135,6 +135,30 @@ describe("DV-3 weakening edits are recorded by the dispatch hook", () => {
     });
   });
 
+  test("a shell edit to a test larger than the retained snapshot is recorded as unverifiable", { timeout: 90_000 }, async () => {
+    const largeTest = `${TEST_BODY}${"// padding\n".repeat(7000)}`;
+    await withAgent({ Makefile: MAKEFILE, [TEST_PATH]: largeTest }, [call("run_command", { command: `sed -i 's/${TEST_NAME}/renamed test/' ${TEST_PATH}` })], ledgerWithObligation(), async (agent) => {
+      await agent.runTurn("continue");
+      const w = agent.getObjective()!.obligations![0].weakenings;
+      assert.equal(w.length, 1);
+      assert.equal(w[0].kind, "unverifiable-change");
+      assert.equal(w[0].path, TEST_PATH);
+    });
+  });
+
+  test("an incomplete workspace scan is recorded against active obligations", { timeout: 90_000 }, async () => {
+    await withAgent({ Makefile: MAKEFILE, [TEST_PATH]: TEST_BODY }, [call("run_command", { command: "echo unchanged" })], ledgerWithObligation(), async (agent, repo) => {
+      const overflow = path.join(repo, "scan-overflow");
+      fs.mkdirSync(overflow);
+      for (let i = 0; i < 20_010; i++) fs.writeFileSync(path.join(overflow, `entry-${i}`), "x");
+      await agent.runTurn("continue");
+      const w = agent.getObjective()!.obligations![0].weakenings;
+      assert.equal(w.length, 1);
+      assert.equal(w[0].kind, "unverifiable-change");
+      assert.equal(w[0].path, "<workspace-scan>");
+    });
+  });
+
   test("a shell command that changes nothing the obligation names records nothing", { timeout: 90_000 }, async () => {
     await withAgent({ Makefile: MAKEFILE, [TEST_PATH]: TEST_BODY }, [call("run_command", { command: "echo hi > note.txt" })], ledgerWithObligation(), async (agent, repo) => {
       await agent.runTurn("continue");
