@@ -68,6 +68,7 @@ export class CeriBaselineComparator {
       evaluatorVersion: manifest.harnessVersion,
       fixtureSha256: manifest.fixtureSha256,
       toolchainVersions: manifest.toolchainVersions,
+      requestContextSha256: manifest.requestContext?.sha256,
     };
   }
 
@@ -152,6 +153,7 @@ export class CeriBaselineComparator {
         ["evaluator.evaluationId", "evaluation id", baseline.evaluationId, manifest.evaluationId],
         ["evaluator.evaluationVersion", "evaluation version", baseline.evaluationVersion, manifest.evaluationVersion],
         ["toolchainVersions", "toolchain versions", bound.toolchainVersions, currentIdentity.toolchainVersions],
+        ["requestContextSha256", "request context", bound.requestContextSha256, currentIdentity.requestContextSha256],
       ];
       for (const [field, label, b, c] of diffs) {
         if (canonicalJson(b) !== canonicalJson(c)) {

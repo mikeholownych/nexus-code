@@ -9,11 +9,16 @@ import {
   type ModelMetadata,
   type BaselineSpecification,
   type BaselineComparisonResult,
+  type InstalledEvaluatorEvidence,
+  type RequestContextManifest,
+  type RecoveryReference,
+  type CampaignRunIdentity,
   validateEvaluationDefinition,
 } from "./contracts.js";
 import { CeriEvidenceStore } from "./evidence_store.js";
 import { CeriBaselineComparator, type PriorRun } from "./baseline.js";
 import { hashFixture } from "./fixture_identity.js";
+import { checkRecoveryReferences, runBoundedCampaign, type BoundedCampaignLimits, type BoundedCampaignRun } from "./mq7_extensions.js";
 
 export interface EvaluationRunnerOptions {
   model: ModelMetadata;
@@ -30,6 +35,10 @@ export interface EvaluationRunnerOptions {
    * baseline, a regression is CONFIRMED_REGRESSION; there is no caller flag for that.
    */
   priorRunId?: string;
+  requestContext?: RequestContextManifest;
+  installedEvaluator?: InstalledEvaluatorEvidence;
+  recoveryReferences?: RecoveryReference[];
+  campaign?: CampaignRunIdentity;
 }
 
 export interface EvaluationExecutionResult {
@@ -40,6 +49,22 @@ export interface EvaluationExecutionResult {
 }
 
 export class CeriEvaluationRunner {
+  /** Run a prevalidated, sequential campaign and persist its campaign identity in every CERI run manifest. */
+  static runCampaign(
+    definitions: EvaluationDefinition[],
+    limits: BoundedCampaignLimits,
+    optionsFor: (definition: EvaluationDefinition) => EvaluationRunnerOptions,
+    assertionExecutorFor: (definition: EvaluationDefinition) => (id: string, definition: EvaluationDefinition) => Promise<boolean>,
+    campaignId?: string,
+  ): Promise<BoundedCampaignRun<EvaluationExecutionResult>[]> {
+    return runBoundedCampaign({
+      definitions,
+      limits,
+      campaignId,
+      run: (definition, campaign) => this.runEvaluation(definition, { ...optionsFor(definition), campaign }, assertionExecutorFor(definition)),
+    });
+  }
+
   /**
    * Captures runtime environment metadata.
    */
@@ -88,6 +113,21 @@ export class CeriEvaluationRunner {
     // Validate structural schema of the evaluation definition first
     validateEvaluationDefinition(definition);
 
+    const requestContext = options.requestContext ?? options.installedEvaluator?.requestContext;
+    if (requestContext && (!/^[a-f0-9]{64}$/.test(requestContext.sha256) || requestContext.schemaVersion !== 1 ||
+        !Number.isSafeInteger(requestContext.requestCount) || requestContext.requestCount < 0 ||
+        (requestContext.messageCount !== null && (!Number.isSafeInteger(requestContext.messageCount) || requestContext.messageCount < 0)) ||
+        (requestContext.toolCount !== null && (!Number.isSafeInteger(requestContext.toolCount) || requestContext.toolCount < 0)) ||
+        !Number.isSafeInteger(requestContext.serializedBytes) || requestContext.serializedBytes < 0)) {
+      throw new Error("request context manifest is malformed");
+    }
+    if (options.installedEvaluator && [options.installedEvaluator.packageSha256, options.installedEvaluator.executableSha256,
+      options.installedEvaluator.datasetManifestSha256, options.installedEvaluator.runnerManifestSha256,
+      options.installedEvaluator.resultsSha256, options.installedEvaluator.scoreSha256].some((hash) => !/^[a-f0-9]{64}$/.test(hash)) ||
+      (options.installedEvaluator && (!Number.isSafeInteger(options.installedEvaluator.resultCount) || options.installedEvaluator.resultCount < 1 || !options.installedEvaluator.evaluatorVersion))) {
+      throw new Error("installed evaluator evidence is malformed");
+    }
+
     const gitInfo = CeriEvaluationRunner.getGitProvenance();
     const runId = `run-${definition.id}-${Date.now()}-${randomBytes(3).toString("hex")}`;
     const startedAt = new Date().toISOString();
@@ -112,7 +152,24 @@ export class CeriEvaluationRunner {
       startedAt,
       status: "RUNNING",
       mandatoryComparabilityKeys: ["evaluationId", "evaluationVersion", "model.name"],
+      ...(requestContext ? { requestContext } : {}),
+      ...(options.installedEvaluator ? { installedEvaluator: options.installedEvaluator } : {}),
+      ...(options.recoveryReferences ? { recoveryReferences: options.recoveryReferences } : {}),
+      ...(options.campaign ? { campaign: options.campaign } : {}),
     };
+
+    if (options.campaign && (!options.campaign.campaignId || !/^[a-f0-9]{64}$/.test(options.campaign.planSha256) || !Number.isSafeInteger(options.campaign.index) || options.campaign.index < 1 ||
+        !Number.isSafeInteger(options.campaign.plannedRuns) || options.campaign.plannedRuns < options.campaign.index ||
+        !Number.isSafeInteger(options.campaign.maxAggregateSteps) || options.campaign.maxAggregateSteps < 1 ||
+        !Number.isSafeInteger(options.campaign.maxAggregateMinutes) || options.campaign.maxAggregateMinutes < 1 ||
+        !Number.isSafeInteger(options.campaign.maxAggregateTokens) || options.campaign.maxAggregateTokens < 1)) {
+      throw new Error("campaign run identity is malformed");
+    }
+    if (options.recoveryReferences?.length) {
+      const checks = checkRecoveryReferences(options.evidenceStore, options.recoveryReferences, { evaluationId: definition.id, startedAt });
+      const failures = checks.filter((check) => !check.ok);
+      if (failures.length) throw new Error(`CERI recovery references rejected: ${failures.map((failure) => failure.reason).join("; ")}`);
+    }
 
     // 1. Initialize run in evidence store
     options.evidenceStore.initRun(manifest);

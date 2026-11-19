@@ -26,3 +26,14 @@ What it does detect: accidental corruption, truncation, a partial write, a file 
 `CONFIRMED_REGRESSION` requires a certifying comparison plus a different, verified earlier run that regressed the same assertion against the same baseline. A caller flag cannot produce it. Comparisons made with caller-supplied assertions or manifests stay non-certifying.
 
 "Certifying" here means bound to local evidence under the limits above; it does not mean externally attested.
+
+## MQ-7 D–G helpers
+
+`cli/src/ceri/mq7_extensions.ts` extends the same evidence model; it does not create a second store or a new CLI command.
+
+- **D — installed evaluator:** `bindInstalledEvaluatorEvidence` verifies that the run used the expected installed executable and expected package digest, that the versioned dataset digest matches, and that the result file contains exactly one valid row per task/run in the runner manifest. It records hashes for the installed executable, runner manifest, results and score. The expected package digest must already have come from verified release-asset/checksum/attestation handling; this helper does not verify attestations.
+- **E — request context:** the evaluation model proxy records a SHA-256 of the exact request body plus byte, message and tool counts for every inference request; it never retains the body text. The installed-evaluator adapter binds the ordered request digests into one CERI request-context manifest. `createRequestContextManifest` also hashes canonical messages, tool schemas and sampling parameters for direct CERI callers. Context identity is part of baseline comparison, so a changed request context makes the comparison non-certifying.
+- **F — recovery references:** `checkRecoveryReferences` requires an integrity-valid, earlier terminal run of the same evaluation whose manifest digest and expected status match. A missing, edited, nonterminal or later run is rejected.
+- **G — bounded campaigns:** `runBoundedCampaign` requires explicit maximum run, step, elapsed-minute and token ceilings, validates all run budgets before starting, rejects duplicate evaluation ids and runs sequentially without retry. Each callback receives a campaign identity that can be stored on its CERI `RunManifest`.
+
+These are local same-user controls. The helpers produce attributable hashes and reject inconsistent references, but they do not provide signatures or external custody. Campaign limits reject excessive declared budgets and number of runs before starting; per-run limits and actual tool/model enforcement remain the responsibility of the evaluation executor and installed runner.
