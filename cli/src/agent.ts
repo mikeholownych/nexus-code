@@ -346,6 +346,8 @@ export class AutonomousAgent {
   ) {
     canonicalDurableProvenance.set(this, new WeakMap());
     assertValidContinuationBudget(config.continuation);
+    // Programmatic and test callers may omit this CLI-facing setting; retain the documented default.
+    if (config.maxSteps === undefined) config = { ...config, maxSteps: 30 };
     if (!Number.isSafeInteger(config.maxSteps) || config.maxSteps < 1 || config.maxSteps > MAX_CONTINUATION_STEPS) {
       throw new Error(`Invalid --max-steps value: expected an integer from 1 to ${MAX_CONTINUATION_STEPS}.`);
     }
