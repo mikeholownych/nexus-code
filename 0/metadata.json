@@ -1,0 +1,74 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M7WB18K9C5BT6XGCEYAP5ZHS",
+  "session_id": "43bcbb67-2cff-4fa8-a05e-f8aa598df73b",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-20T11:21:35.848873601Z",
+  "branch": "v1/invariants-audit",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "eval/tasks/cc-no-side-effect/repo/logs/app.log"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5-5",
+  "turn_id": "dd8cba2b94d7",
+  "checkpoint_transcript_start": 5043,
+  "transcript_lines_at_start": 5043,
+  "compact_transcript_start": 534,
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 602874,
+    "cache_read_tokens": 7177904,
+    "output_tokens": 6393,
+    "api_call_count": 14,
+    "subagent_tokens": {
+      "input_tokens": 0,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 0,
+      "output_tokens": 0,
+      "api_call_count": 0
+    }
+  },
+  "redaction": {
+    "replacements": 19,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 8,
+      "credentialed_uri": 3,
+      "entropy": 8,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-goal-2026-11-17T13:29:00.367810413Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "goal"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "fd06631d1244",
+      "timestamp": "2026-11-17T13:29:00.367810413Z",
+      "native": {
+        "command": "/goal"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/goal",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 51
+  }
+}
