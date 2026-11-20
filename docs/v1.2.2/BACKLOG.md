@@ -6,7 +6,7 @@ What the v1.2.1 plan ([`docs/v1.2.1/PLAN.md`](../v1.2.1/PLAN.md)) did not finish
 
 | Unit | Not done | Constraint | If donated or already available locally at no cost |
 |---|---|---|---|
-| MQ-1, MQ-2 live benchmark | Empirical false-completion report (pass rate, claimed-done-but-wrong, verified-but-wrong, Wilson intervals, peer comparison) | No paid inference or benchmark service is planned. D3/D4 decide the publication rule (publish nothing before a result) and measurement class (small self-run E1); the pinned subset remains an owner choice. | Run a live subset only using donated capacity or an existing local endpoint that does not incur paid usage; otherwise keep live results unpublished and out of scope. |
+| MQ-1, MQ-2 live benchmark | Empirical false-completion report (pass rate, claimed-done-but-wrong, verified-but-wrong, Wilson intervals, peer comparison) | No paid inference or benchmark service is planned. D3 and D4 are already answered in `docs/v1.2.1/PLAN.md`: publish nothing before a result; use a small pinned self-run E1 subset. The pinned subset is still an owner choice, but no paid infrastructure is planned now or in the future unless donated. | Run a live subset only using donated capacity or an existing local endpoint that does not incur paid usage; otherwise keep live results unpublished and out of scope. |
 | RD-1, RD-2 | macOS and arm64/musl artifacts | D6 currently accepts Linux x86_64 only. Expanding release targets requires suitable donated or already-owned hardware and an owner go/no-go. | If suitable hardware is donated or already available locally, choose the target and reuse `release.yml`; otherwise keep Linux x86_64 as the supported target. |
 | CX-6 | Live Anthropic/Bedrock cache validation and provider-matrix updates | No paid API usage is planned. The existing cache option remains opt-in; no claim of live provider validation is made. | Validate only with donated credits or an existing account with no paid usage; otherwise leave live validation out of scope. |
 
@@ -16,7 +16,7 @@ What the v1.2.1 plan ([`docs/v1.2.1/PLAN.md`](../v1.2.1/PLAN.md)) did not finish
 |---|---|---|
 | MQ-1, MQ-2 mock adapter | **Done for synthetic coverage**: mock gateway adapters and scorer cover correct and wrong deliverables, false `VERIFIED`, and Wilson intervals (`cli/test/eval_harness.test.ts`, `eval/score.mjs`). No live benchmark result exists; do not publish empirical claims without a live run. | CI ran the synthetic harness on Node 22, Node 24, and Linux for PR #644. Live results remain contingent on donated capacity or an existing local endpoint with no paid usage. |
 | MQ-4 | Scheduled gateway conformance: the job script, claim protocol and alert path are built and tested (`scripts/gateway_conformance.mjs`, `docs/GATEWAY_CONFORMANCE.md`); this host has no `gateway_conformance` user timer and no first live run is evidenced. | Install a timer and record a run only if a no-cost gateway configuration is available and the owner chooses to enable it. Do not make paid infrastructure a prerequisite. |
-| PC-1 | Median PR CI under 40 minutes. The four latest completed PR workflows took 42m30s–46m38s, with a median of 45m48s. | A removal experiment was rejected by CI: `release_workflow_parity.test.ts` requires the Linux package job to run the CLI suite, and `security_gates.test.ts` requires the SBOM tools during that suite. Both controls are restored. Next, profile for an optimization that preserves these checks and their existing job names; then collect the 20 PR runs required by the v1.2.1 plan. No paid infrastructure or extra runner jobs are planned. |
+| PC-1 | Median PR CI under 40 minutes. The pre-optimization baseline across the latest 20 completed, non-cancelled PR workflow executions has a 42m19s median (33m41s–47m11s); see [`docs/evidence/v1.2.2/PC-1_BASELINE_2026-11-20.md`](../evidence/v1.2.2/PC-1_BASELINE_2026-11-20.md). | A removal experiment was rejected by CI: `release_workflow_parity.test.ts` requires the Linux package job to run the CLI suite, and `security_gates.test.ts` requires the SBOM tools during that suite. Both controls are restored. Next, profile for an optimization that preserves these checks and their existing job names; then collect a new 20-run sample after optimization for the v1.2.1 acceptance criterion. No paid infrastructure or extra runner jobs are planned. |
 
 ## Partly done: what is left
 
@@ -45,9 +45,11 @@ What the v1.2.1 plan ([`docs/v1.2.1/PLAN.md`](../v1.2.1/PLAN.md)) did not finish
 - **VC-2** bounded shell snapshots (PR #642): incomplete or oversized verification snapshots now record uncertainty; `verificationPaths.mode=block` refuses the affected shell edit before side effects. The separate workspace-controlled test-output authenticity limit remains.
 - **CS-6** pinned real-server workflow (PR #643): hosted run [44670790609](https://github.com/mikeholownych/nexus-code/actions/runs/44670790609) passed all four server cases. The remaining real-server test limits are listed in the CS-6 row.
 
+- **RD-7** (done): `nexus uninstall` for managed installations verifies installed packages against their SHA-256 manifests, serializes against upgrades, and preserves sessions/configuration by default. PR #629 merged at `e9761040e1c22e2f8299bc4d3ca87b3d18cf3819`; focused uninstall tests passed (6/6). The full suite timed out on five files, so it was not reported as passing.
+
 ## Not started / deferred in their rows
 
-CS-9 (per-command approval rules), CS-10 (RPC worker isolation), VC-8 (per-role tool allowlists beyond reviewer and researcher), VC-10 (steering semantic judge, gated), RD-5 (superseded by v1.3 AC-1), RD-7 (`nexus uninstall`), MT-2 (split the two ~5.4k-line TUI files), PC-5 (settled by v1.3 GV-4).
+CS-9 (per-command approval rules), CS-10 (RPC worker isolation), VC-8 (per-role tool allowlists beyond reviewer and researcher), VC-10 (steering semantic judge, gated), RD-5 (superseded by v1.3 AC-1), MT-2 (split the two ~5.4k-line TUI files), PC-5 (settled by v1.3 GV-4).
 
 ## Release-note items for the next release
 
