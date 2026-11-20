@@ -87,7 +87,7 @@ jobs:
           curl -fsSL https://github.com/CycloneDX/cyclonedx-cli/releases/download/v0.33.1/cyclonedx-linux-x64 -o "$CARGO_HOME/bin/cyclonedx"
           chmod +x "$CARGO_HOME/bin/cyclonedx"
       - name: Run the CLI suite with a hang bound
-        # Normal runs take about 25-30 minutes; a test process that never exits must fail the job, not hold it for 6 hours.
+        # Recent runs take about 32-34 minutes; a hung test process must fail the job, not hold it for 6 hours.
         timeout-minutes: 45
         run: npm --prefix cli test
 
@@ -175,7 +175,7 @@ jobs:
       - run: cargo test --locked --manifest-path core/Cargo.toml
       - run: cargo build --locked --release --manifest-path core/Cargo.toml --bin harness-core --bin nexus-tui
       - name: Run the CLI suite with a hang bound
-        # Normal runs take about 25-30 minutes; a test process that never exits must fail the job, not hold it for 6 hours.
+        # Keep release packaging parity with the release workflow and test-matrix jobs.
         timeout-minutes: 45
         run: npm --prefix cli test
       - run: bash scripts/security_gates.sh

@@ -2,21 +2,21 @@
 
 What the v1.2.1 plan ([`docs/v1.2.1/PLAN.md`](../v1.2.1/PLAN.md)) did not finish, with the reason and the first step for each. Nothing here is scheduled by date; the owner chooses what ships. Units marked **needs** cannot be finished by writing code alone.
 
-## External-capacity limits; no paid infrastructure is planned
+## External-capacity limits; no paid infrastructure is planned now or in the future unless donated
 
-| Unit | Not done | Constraint | If donated or otherwise available at no cost |
+| Unit | Not done | Constraint | If donated or already available locally at no cost |
 |---|---|---|---|
-| MQ-1, MQ-2 live benchmark | Empirical false-completion report (pass rate, claimed-done-but-wrong, verified-but-wrong, Wilson intervals, peer comparison) | No paid inference or benchmark service. D3/D4 already decide the publication rule (publish nothing before a result) and measurement class (small self-run E1); the pinned subset remains an owner choice. | Run a live subset only on donated capacity or an available no-cost local endpoint; otherwise keep live results unpublished and out of scope. |
-| RD-1, RD-2 | macOS and arm64/musl artifacts | No paid runners. D6 currently accepts Linux x86_64 only; expanding release targets needs suitable donated or otherwise no-cost hardware and an owner go/no-go. | If suitable hardware is donated or already available at no cost, choose the target and reuse `release.yml`; otherwise keep Linux x86_64 as the supported target. |
-| CX-6 | Live Anthropic/Bedrock cache validation and provider-matrix updates | No paid API usage. The existing cache option remains opt-in; no claim of live provider validation is made. | Validate only with donated credits or an already available no-cost account; otherwise leave live validation out of scope. |
+| MQ-1, MQ-2 live benchmark | Empirical false-completion report (pass rate, claimed-done-but-wrong, verified-but-wrong, Wilson intervals, peer comparison) | No paid inference or benchmark service is planned. D3/D4 decide the publication rule (publish nothing before a result) and measurement class (small self-run E1); the pinned subset remains an owner choice. | Run a live subset only using donated capacity or an existing local endpoint that does not incur paid usage; otherwise keep live results unpublished and out of scope. |
+| RD-1, RD-2 | macOS and arm64/musl artifacts | D6 currently accepts Linux x86_64 only. Expanding release targets requires suitable donated or already-owned hardware and an owner go/no-go. | If suitable hardware is donated or already available locally, choose the target and reuse `release.yml`; otherwise keep Linux x86_64 as the supported target. |
+| CX-6 | Live Anthropic/Bedrock cache validation and provider-matrix updates | No paid API usage is planned. The existing cache option remains opt-in; no claim of live provider validation is made. | Validate only with donated credits or an existing account with no paid usage; otherwise leave live validation out of scope. |
 
 ## No-cost work that remains actionable
 
 | Unit | Not done | First step |
 |---|---|---|
-| MQ-1, MQ-2 adapter | Benchmark adapter and false-completion report; no live benchmark result exists. | Build and test the adapter against a mock gateway with synthetic results. This does not require paid inference; publish no empirical claims until a live no-cost or donated run exists. |
-| MQ-4 | Scheduled gateway conformance: the job script, claim protocol and alert path are built and tested (`scripts/gateway_conformance.mjs`, `docs/GATEWAY_CONFORMANCE.md`); the local scheduler and first live run are not installed or evidenced. | Check whether a user scheduler and gateway configuration are already available. If so, add the timer and record one run; do not make paid infrastructure a prerequisite. |
-| PC-1 | Median PR CI under 40 minutes (measured 37 to 45 minutes) | Measure the current required checks, then shard the CLI suite and cache toolchains if it reduces elapsed time; the parallel `linux-x86_64` job is already in place. |
+| MQ-1, MQ-2 mock adapter | **Done for synthetic coverage**: mock gateway adapters and scorer cover correct and wrong deliverables, false `VERIFIED`, and Wilson intervals (`cli/test/eval_harness.test.ts`, `eval/score.mjs`). No live benchmark result exists; do not publish empirical claims without a live run. | CI ran the synthetic harness on Node 22, Node 24, and Linux for PR #644. Live results remain contingent on donated capacity or an existing local endpoint with no paid usage. |
+| MQ-4 | Scheduled gateway conformance: the job script, claim protocol and alert path are built and tested (`scripts/gateway_conformance.mjs`, `docs/GATEWAY_CONFORMANCE.md`); this host has no `gateway_conformance` user timer and no first live run is evidenced. | Install a timer and record a run only if a no-cost gateway configuration is available and the owner chooses to enable it. Do not make paid infrastructure a prerequisite. |
+| PC-1 | Median PR CI under 40 minutes. The four latest completed PR workflows took 42m30s–46m38s, with a median of 45m48s. | A removal experiment was rejected by CI: `release_workflow_parity.test.ts` requires the Linux package job to run the CLI suite, and `security_gates.test.ts` requires the SBOM tools during that suite. Both controls are restored. Next, profile for an optimization that preserves these checks and their existing job names; then collect the 20 PR runs required by the v1.2.1 plan. No paid infrastructure or extra runner jobs are planned. |
 
 ## Partly done: what is left
 
