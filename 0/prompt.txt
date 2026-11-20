@@ -1,0 +1,1155 @@
+# Terminal Agent: Nexus Code Delegation, Orchestration and Workflow Implementation
+
+## Mission
+
+You are the principal engineer responsible for implementing and qualifying production-grade delegation, multi-agent orchestration, and durable workflow execution in Nexus Code.
+
+Repository: https://github.com/mikeholownych/nexus-code
+
+Your task is to investigate the existing architecture, implement the required functionality, execute tests, resolve defects, and produce independently reviewable evidence.
+
+**This is an implementation assignment, not merely a research, gap-analysis, or planning exercise.**
+
+You are authorized to make the necessary changes in Nexus Code, including source code, schemas, migrations, tests, CLI/TUI interfaces, configuration, and documentation.
+
+Do not stop after producing a specification. Proceed through implementation and validation unless an actual dependency, unsafe operation, or required owner authorization prevents it.
+
+Follow the repository's AGENTS.md, concurrency rules, branch/worktree requirements, verification procedures, and release authority restrictions.
+
+Do not merge, publish, or tag releases without explicit owner authorization.
+
+---
+
+# 1. Non-negotiable architectural requirements
+
+## 1.1 Nexus Code is provider-independent
+
+Nexus Code is a coding client and autonomous engineering harness.
+
+Inference providers are external dependencies, not components of Nexus Code.
+
+The system must operate correctly with standards-compliant inference endpoints without requiring provider modifications, additional headers, custom APIs, specialized routing logic, or Nexus-specific server behavior.
+
+Supported provider categories include:
+
+- Local OpenAI-compatible inference servers.
+- llama.cpp-compatible endpoints.
+- vLLM-compatible endpoints.
+- Hosted OpenAI-compatible services.
+- Anthropic-compatible services through existing adapters.
+- Existing supported cloud providers.
+- Future inference providers implementing recognized API contracts.
+
+Do not make homelab-ai, its gateway, hardware, or deployment topology a dependency of client functionality.
+
+No implementation may require changes to the homelab-ai repository.
+
+### Provider contract
+
+Establish or preserve a transport-neutral provider abstraction.
+
+The client may use optional capabilities discovered at runtime, including:
+
+- Token counting.
+- Context-window metadata.
+- Output-token limits.
+- Tool-calling support.
+- Streaming.
+- Structured-output support.
+- Rate-limit and retry metadata.
+- Queue or capacity telemetry.
+- Prefix caching metadata.
+- Model identity and version metadata.
+
+Every optional capability must have a defined fallback.
+
+Missing provider extensions must not disable ordinary delegation, orchestration, `/loop`, `/goal`, or `/batch`.
+
+Do not infer capabilities solely from provider names or model-name patterns.
+
+Where capability discovery is unavailable, use documented configuration, bounded conservative assumptions, and explicit uncertainty.
+
+Never represent estimates as observed measurements.
+
+Provider-native tool calling and text-based tool invocation must preserve equivalent tool authorization and execution semantics.
+
+An endpoint that supports only a narrower transport contract may provide reduced optimization, but its supported functions must remain correct.
+
+### Provider neutrality acceptance test
+
+The complete supported workflow must execute against a minimal mock inference provider that implements only the standard wire contract required by its adapter.
+
+Repeat against the existing local and cloud provider fixtures.
+
+Verify that no provider-specific changes are necessary.
+
+---
+
+# 2. Mandatory repository discovery
+
+Before writing code, inspect the current repository and establish what is already implemented.
+
+At minimum, examine:
+
+- `AGENTS.md`
+- `cli/src/agent.ts`
+- `cli/src/core/scheduler.ts`
+- `cli/src/core/operation.ts`
+- `cli/src/core/operation_runner.ts`
+- `cli/src/core/operation_schema.ts`
+- `cli/src/core/resources.ts`
+- `cli/src/core/specialist_profiles.ts`
+- `cli/src/core/independent_review.ts`
+- `cli/src/core/capabilities.ts`
+- `cli/src/core/capability_definitions/orchestration.ts`
+- `cli/src/core/skill_activation.ts`
+- `cli/src/core/provider_capabilities.ts`
+- `cli/src/core/provider_recovery.ts`
+- `cli/src/slash/catalog.ts`
+- `cli/src/slash/router.ts`
+- `cli/src/slash/session_commands.ts`
+- `cli/src/slash/workspace_commands.ts`
+- `cli/src/slash/extension_commands.ts`
+- `cli/src/repl.ts`
+- `cli/src/operation_cli.ts`
+- `cli/src/team.ts`
+- `core/src/bin/nexus_tui/slash.rs`
+- Existing context, recovery, delegation, loop detection, and concurrency tests.
+- Current v1.2.1 and v1.3.0 plans and active requirements ledgers.
+
+These paths describe the previously inspected repository. Reconcile them against the actual checkout and current HEAD.
+
+Identify all current entry points for:
+
+1. Interactive agent turns.
+2. In-turn subagent spawning.
+3. Durable operations.
+4. Scheduled work units.
+5. Role/specialist execution.
+6. Model inference.
+7. Tool dispatch and authorization.
+8. Recovery and cancellation.
+9. Slash-command parsing and routing.
+10. TUI command completion and rendering.
+
+Determine whether equivalent capabilities already exist before creating anything new.
+
+Preserve existing public interfaces unless a documented migration is justified.
+
+Produce a concise baseline matrix identifying:
+
+- Implemented and verified.
+- Implemented but incomplete.
+- Unimplemented.
+- Duplicated or conflicting.
+- Blocked or requiring architectural change.
+
+Use exact file references, symbols, tests, and observed behavior.
+
+Do not trust existing documentation as proof of runtime behavior.
+
+---
+
+# 3. Unified delegation contracts
+
+Extend the existing delegation mechanisms without creating a competing orchestration engine.
+
+Nexus currently distinguishes between transient in-turn subagents and durable scheduled work units. Preserve this distinction while standardizing their authority and outcome semantics.
+
+Introduce or extend a structured delegation contract containing:
+
+```typescript
+interface DelegationContract {
+  id: string;
+  parentId: string;
+  objective: string;
+
+  profile: string;
+
+  inputs: Record<string, unknown>;
+
+  authorizedScope: string[];
+  permittedCapabilities: string[];
+
+  executionMode: "transient" | "durable";
+
+  contextBudget?: number;
+  outputBudget?: number;
+  executionDeadlineMs?: number;
+
+  modelRequirements?: {
+    capabilities?: string[];
+    minimumContext?: number;
+    qualification?: string;
+    independentOf?: string[];
+  };
+
+  dependencies?: string[];
+
+  expectedOutputSchema?: string;
+
+  requiresVerification: boolean;
+  requiresIndependentReview: boolean;
+}
+```
+
+This is a conceptual contract, not a mandatory exact schema. Reconcile it with existing types and migration requirements.
+
+## 3.1 Authority inheritance
+
+Effective child authority must be an intersection of:
+
+- Parent authority.
+- Role/profile authority.
+- Task-specific restrictions.
+- Session security policy.
+- Workspace and execution boundary.
+- Operator approval constraints.
+
+A child must never be able to enlarge its own authority through a model-generated contract.
+
+The parent cannot delegate authority it does not possess.
+
+A child cannot grant permissions to another child.
+
+Introduce explicit recursive delegation limits covering:
+
+- Maximum depth.
+- Maximum children per parent.
+- Maximum aggregate active children.
+- Maximum total resource budget.
+- Maximum delegated execution duration.
+
+These limits must be independently configurable, conservatively defaulted, and enforced at admission.
+
+## 3.2 Delegation tool interface
+
+Upgrade `spawn_subagent` to support explicit, validated delegation metadata.
+
+Maintain compatibility with the existing prompt-only invocation.
+
+For prompt-only calls, apply a conservative default profile and derive no new authority from the prompt itself.
+
+Avoid giving the model direct control over permission grants, unrestricted tool sets, or trust boundaries.
+
+## 3.3 Structured outcomes
+
+Every child execution must produce a typed outcome that distinguishes:
+
+- COMPLETED.
+- FAILED.
+- BLOCKED.
+- CANCELLED.
+- INTERRUPTED.
+- UNKNOWN_EFFECT.
+
+Represent evidence, uncertainty, actual resource usage, and outstanding obligations separately.
+
+The parent must not interpret absence of an error as proof of successful completion.
+
+---
+
+# 4. Complete mediation of tool authority
+
+Audit every effectful execution path.
+
+This includes:
+
+- Native tools.
+- Rust RPC.
+- JavaScript extensions.
+- Plugins.
+- MCP tools.
+- Shell and subprocess execution.
+- Filesystem modification.
+- Network access.
+- Browser automation.
+- Nested delegation.
+- Skill-activated tool calls.
+
+All paths must pass an authoritative capability check before the effect occurs.
+
+A tool omitted from a model-visible schema is not sufficient enforcement.
+
+A denied tool must also be denied when invoked through an internal dispatcher or alternate tool representation.
+
+An agent declared read-only must not gain write authority indirectly through permitted shell commands.
+
+Where unrestricted subprocess execution prevents enforcing read-only guarantees, either introduce a real execution boundary or refuse the operation.
+
+Do not claim sandbox isolation where none exists.
+
+Record authorization decisions using normalized capability identities and canonical arguments.
+
+Test privilege-escalation attempts through every supported adapter.
+
+---
+
+# 5. Agent profiles and independent context
+
+Reuse `specialist_profiles.ts` and the existing role architecture.
+
+Do not introduce an unrelated agent configuration subsystem.
+
+Support declarative profiles for:
+
+- Semantic explorer.
+- Call-site analyzer.
+- Documentation researcher.
+- Failure debugger.
+- Implementer.
+- Tester.
+- Security reviewer.
+- Independent acceptance reviewer.
+
+Profiles should define:
+
+- Objective type.
+- Inputs.
+- Permitted tools.
+- Execution restrictions.
+- Model qualification requirements.
+- Context budget.
+- Output schema.
+- Escalation criteria.
+- Verification requirements.
+- Delegation eligibility.
+
+## 5.1 Context isolation
+
+Each child must have its own active conversational context.
+
+Do not copy the entire parent transcript into each child.
+
+Provide only:
+
+- Delegated objective.
+- Relevant requirements.
+- Authorized context.
+- Explicit dependencies.
+- Required source material.
+- Necessary evidence references.
+
+Return bounded, structured results rather than the full child transcript.
+
+Preserve detailed transcripts in durable evidence storage when required.
+
+## 5.2 Independent review
+
+Use the existing independent-review implementation.
+
+A reviewer's input must include objective evidence rather than implementer self-assessment.
+
+Record independence across:
+
+- Conversation context.
+- Model identity.
+- Implementation participation.
+- Source evidence.
+- Workspace state.
+- Execution environment.
+
+Different model names alone do not establish independence.
+
+Verification failures, incomplete evidence, unauthorized modifications, and unproven acceptance requirements must prevent a successful acceptance verdict.
+
+---
+
+# 6. Mandatory slash commands
+
+Implement and fully integrate these three commands:
+
+- `/loop`
+- `/goal`
+- `/batch`
+
+They are required product functionality.
+
+They must be available consistently through the existing terminal interfaces.
+
+Do not merely add catalogue entries or aliases that generate prompts.
+
+Each command needs a real lifecycle, durable state where appropriate, cancellation, recovery, observability, and tested execution semantics.
+
+Inspect existing mechanisms before implementing them.
+
+The definitions below establish the intended behavior.
+
+---
+
+# 7. `/loop`: bounded iterative execution
+
+## Purpose
+
+`/loop` repeatedly evaluates or executes a task according to a defined completion condition.
+
+It is suitable for iterative debugging, testing, evaluation, and controlled improvement.
+
+It must not be an unrestricted infinite agent loop.
+
+## Required interface
+
+Support, at minimum:
+
+```text
+/loop <objective>
+/loop --until <condition> <objective>
+/loop --max-iterations <n> <objective>
+/loop --max-duration <duration> <objective>
+/loop status [id]
+/loop pause [id]
+/loop resume [id]
+/loop stop [id]
+```
+
+Define exact flag ordering, quoting, escaping, and conflict semantics in documentation and tests.
+
+### Required execution semantics
+
+Each iteration must:
+
+1. Load the durable loop state.
+2. Determine the next permitted action.
+3. Validate available execution and resource budgets.
+4. Execute the task.
+5. Collect objective evidence.
+6. Evaluate the completion condition.
+7. Check for lack of progress.
+8. Persist the iteration outcome.
+9. Continue, pause, complete, or block.
+
+Completion conditions must support deterministic checks, such as:
+
+- Specific test command succeeds.
+- Configured verifier passes.
+- Required artifact exists and passes validation.
+- Explicit acceptance criteria are satisfied.
+- Maximum iteration count is reached.
+- Maximum duration is reached.
+
+Natural-language conditions may be interpreted by an agent, but an agent's assertion must not substitute for required deterministic proof.
+
+### Safety and recovery
+
+Implement:
+
+- Bounded iteration count.
+- Bounded execution duration.
+- Cancellation.
+- Pause/resume.
+- Stagnation detection.
+- Repeated failure detection.
+- Provider recovery.
+- Durable state checkpoints.
+- Unknown-effect reconciliation.
+- Resource accounting.
+
+Integrate with existing execution tracking and loop detection.
+
+Do not duplicate existing repetition detectors.
+
+### Acceptance
+
+An interrupted loop must resume from the last trustworthy state without silently duplicating an effectful operation.
+
+A repeated failing verifier must not execute indefinitely.
+
+A loop must never mark itself successful solely because its maximum iteration count was reached.
+
+---
+
+# 8. `/goal`: durable objective-driven execution
+
+## Purpose
+
+`/goal` manages a durable engineering objective across multiple tasks, iterations, and interruptions.
+
+It is not simply a long-running prompt.
+
+It should reuse the existing objective ledger, operation scheduler, durable state, and acceptance system.
+
+## Required interface
+
+Support, at minimum:
+
+```text
+/goal <objective>
+/goal status [id]
+/goal list
+/goal show <id>
+/goal pause [id]
+/goal resume [id]
+/goal cancel [id]
+/goal requirements [id]
+/goal evidence [id]
+```
+
+The default target for omitted IDs must be unambiguous.
+
+If multiple goals are eligible and no active goal can be resolved safely, request explicit selection rather than choosing arbitrarily.
+
+### Required semantics
+
+A goal contains:
+
+- Immutable original objective.
+- Requirement ledger.
+- Authorized scope.
+- Work-unit graph.
+- Task dependencies.
+- Resource requirements.
+- Progress evidence.
+- Verification obligations.
+- Outstanding operator decisions.
+- Completion status.
+
+The system must distinguish:
+
+- Work attempted.
+- Work implemented.
+- Work verified.
+- Work accepted.
+- Work blocked.
+
+Do not conflate these states.
+
+### Goal decomposition
+
+Nexus may decompose a goal into independent work units.
+
+The scheduler must validate dependency graphs, including cycle detection.
+
+Independent work can run concurrently when authority, workspace isolation, and resource admission permit it.
+
+A completed subtask does not imply completion of the parent goal.
+
+### Goal completion
+
+A goal is successful only when:
+
+1. Required work units are complete.
+2. Required verification gates pass.
+3. Evidence is available and current.
+4. Authorized scope has not been violated.
+5. Required independent review is complete.
+6. No blocking decisions remain.
+7. The objective ledger supports a successful disposition.
+
+Operator-approved descoping must use existing explicit authority mechanisms.
+
+The model cannot silently reduce requirements.
+
+### Recovery
+
+A goal must survive process termination and restart.
+
+Recover the dependency graph, operation state, context references, approvals, outstanding tasks, and verification obligations.
+
+Maintain compatibility with existing durable operation records.
+
+Do not silently reinterpret older records under different semantics.
+
+---
+
+# 9. `/batch`: controlled parallel or sequential task execution
+
+## Purpose
+
+`/batch` executes a declared collection of independent or dependent tasks under one bounded execution policy.
+
+It must support both sequential and parallel execution.
+
+A batch is not equivalent to spawning as many agents as possible.
+
+## Required interface
+
+Support, at minimum:
+
+```text
+/batch <spec-file>
+/batch run <spec-file>
+/batch validate <spec-file>
+/batch status [id]
+/batch list
+/batch pause [id]
+/batch resume [id]
+/batch cancel [id]
+/batch results [id]
+```
+
+The specification format must be documented and schema-validated.
+
+Reuse the existing operation-specification format if practical.
+
+Avoid introducing a second incompatible workflow language.
+
+### Batch task model
+
+Each task should support:
+
+- Unique ID.
+- Objective.
+- Dependencies.
+- Specialist profile.
+- Authorized scope.
+- Required capabilities.
+- Preferred execution mode.
+- Verification criteria.
+- Expected output schema.
+- Resource requirements.
+
+### Required scheduling behavior
+
+Implement:
+
+- Dependency-aware scheduling.
+- Bounded concurrency.
+- Fair resource admission.
+- Per-resource concurrency constraints.
+- Retry and backoff.
+- Failure propagation.
+- Cancellation.
+- Independent workspace handling.
+- Aggregated results.
+- Durable execution state.
+
+The batch must not exceed safe workspace concurrency merely because inference capacity is available.
+
+Likewise, separate worktrees do not imply that unlimited inference parallelism is beneficial.
+
+### Workspace conflict protection
+
+Tasks modifying overlapping files or shared execution resources must not run concurrently unless the existing isolation and merge mechanisms can safely support that operation.
+
+Use the repository's worktree, ownership, claim, and boundary mechanisms.
+
+Conflicting outputs must be reconciled explicitly.
+
+Do not resolve conflicting edits with last-writer-wins semantics.
+
+### Batch outcomes
+
+Support explicit terminal states including:
+
+- COMPLETE.
+- PARTIAL.
+- BLOCKED.
+- CANCELLED.
+- FAILED.
+
+A batch with one successful task and one blocked required task must not report COMPLETE.
+
+Preserve individual task receipts.
+
+### Optional execution modes
+
+Support or provide a clearly scoped design for:
+
+- Fail-fast.
+- Continue-independent.
+- Sequential.
+- Dependency-parallel.
+
+Defaults must be documented and tested.
+
+---
+
+# 10. Slash-command integration
+
+Integrate the commands into every relevant existing interface.
+
+Audit:
+
+- Slash-command catalogue.
+- Router.
+- Handler registration.
+- Readline REPL.
+- TUI command completion.
+- Sidecar protocol.
+- Cancellation behavior.
+- Help output.
+- Status and progress presentation.
+- Session persistence.
+- Recovery workflows.
+
+Do not create a command that works only through one interface while appearing in another interface's help catalogue.
+
+The commands must preserve identical execution semantics regardless of which supported interface initiates them.
+
+Long-running operations must report progress without blocking unrelated safe UI actions.
+
+Ensure command parsing handles whitespace, escaped arguments, Unicode, invalid flags, nonexistent IDs, and ambiguous targets.
+
+If command execution requires operator approval, route through existing approval machinery.
+
+---
+
+# 11. Resource-aware scheduling without provider coupling
+
+Extend the existing resource registry and convergence scheduler.
+
+Do not build a second scheduler.
+
+Distinguish:
+
+1. Number of active agents.
+2. Number of admitted inference requests.
+3. Number of available inference resources.
+4. Number of effectful workspace operations.
+5. Available context capacity.
+6. Provider rate or concurrency limits.
+
+Concurrency must be governed by available evidence and configured limits.
+
+Do not assume a fixed relationship between GPU count and inference concurrency.
+
+### Admission policy
+
+Consider:
+
+- Provider eligibility.
+- Advertised or configured concurrency limits.
+- Observed rate limiting.
+- Available model context.
+- Required capabilities.
+- Model qualification.
+- Active operation dependencies.
+- Workspace exclusivity.
+- Configured cost and execution budgets.
+
+Provider-specific queue, cache, and device metrics may improve decisions if available.
+
+They are optional inputs, not prerequisites.
+
+Without reliable capacity telemetry, operate conservatively using client-observed latency, failures, explicit configured limits, and bounded adaptive admission.
+
+A provider's lack of token-counting support must not produce fabricated exact usage.
+
+### Adaptive scheduling
+
+Investigate whether adaptive concurrency improves task throughput.
+
+If implemented, make it bounded, reversible, and backed by measurable signals.
+
+Measure both throughput and correctness.
+
+Do not maximize requests per second at the expense of successful engineering outcomes.
+
+---
+
+# 12. Recovery and lifecycle correctness
+
+Audit and reconcile the transient and durable execution paths.
+
+Introduce consistent semantics for:
+
+- Cancellation requested.
+- Cancellation acknowledged.
+- Interrupted execution.
+- Process termination.
+- Provider timeout.
+- Unknown side-effect outcome.
+- Work-unit retry.
+- Parent termination.
+- Child completion after parent cancellation.
+- State persistence failure.
+- Restart and recovery.
+
+A cancelled request is not proof that its effect was cancelled.
+
+Where an action may have executed before interruption, record UNKNOWN_EFFECT until reconciliation determines whether it is safe to retry.
+
+Prevent stale child outcomes from completing a cancelled or superseded parent.
+
+Use durable execution identities, idempotency markers, or reconciliation procedures where appropriate.
+
+Do not pretend that arbitrary shell commands are intrinsically idempotent.
+
+Avoid replaying irreversible actions without sufficient evidence or explicit operator authorization.
+
+Preserve the original objective and acceptance ledger across recovery.
+
+---
+
+# 13. Skills and path-scoped behavior
+
+Reuse the existing skills infrastructure.
+
+Implement or finish path-scoped skill eligibility where it provides measurable value.
+
+Support declarative rules describing which paths, task classes, or repository areas make a skill relevant.
+
+Keep these separate:
+
+- Discovery.
+- Eligibility.
+- Activation.
+- Qualification.
+- Permission enforcement.
+
+A matched path may make a skill eligible; it must not grant new authority.
+
+Skill instructions must not override higher-priority execution restrictions.
+
+Review existing optional enforcement controls and introduce a clearly defined governed-execution profile.
+
+Ensure skills, plugins, and subagents share the same underlying authority model.
+
+Avoid global context inflation from unnecessarily loading every skill.
+
+---
+
+# 14. Required automated tests
+
+Implement deterministic tests with isolated fixtures and mock providers.
+
+At minimum, cover the following categories.
+
+## Delegation
+
+- Prompt-only backward compatibility.
+- Structured delegation.
+- Profile selection.
+- Context isolation.
+- Unauthorized tool invocation.
+- Recursive delegation limit.
+- Parent cancellation.
+- Child cancellation.
+- Child completion after cancellation.
+- Ambiguous child effects.
+- Evidence return and validation.
+
+## Provider neutrality
+
+- Minimal OpenAI-compatible fixture.
+- Existing Anthropic-compatible adapter fixture.
+- Provider without token-counting extension.
+- Provider without native structured output.
+- Provider with limited or absent capability metadata.
+- Provider returning 429.
+- Provider returning 5xx.
+- Provider timeout.
+- Connection interruption.
+- Malformed tool response.
+- Streaming interruption.
+- Model context rejection.
+
+Where an adapter cannot support a test scenario, document the exact unsupported wire capability rather than silently skipping the test.
+
+## `/loop`
+
+- Successful convergence.
+- Verifier never passes.
+- Maximum iterations reached.
+- Maximum duration reached.
+- Stagnation.
+- Pause/resume.
+- SIGKILL/restart.
+- Cancel.
+- Ambiguous side effect.
+- State persistence failure.
+
+## `/goal`
+
+- Goal creation.
+- Requirement preservation.
+- Dependency scheduling.
+- Independent work execution.
+- Blocked required task.
+- Partial completion.
+- Recovery.
+- Explicit operator descoping.
+- Verification failure.
+- Independent review rejection.
+- Successful acceptance.
+
+## `/batch`
+
+- Sequential execution.
+- Parallel independent tasks.
+- Dependency ordering.
+- Cyclic dependency rejection.
+- Workspace conflicts.
+- Resource contention.
+- Fail-fast.
+- Continue-independent.
+- Cancellation.
+- Recovery.
+- Partial results.
+- Correct aggregate status.
+
+## Interface parity
+
+Verify `/loop`, `/goal`, and `/batch` across:
+
+- Catalogue.
+- Help.
+- Command dispatch.
+- REPL.
+- TUI.
+- Sidecar.
+- Cancellation.
+- Status views.
+- Recovery.
+
+Do not rely solely on handler-level unit tests.
+
+## Security and adversarial cases
+
+Test:
+
+- Read-only agent attempts to write through shell.
+- Restricted agent invokes a plugin.
+- Nested agent attempts permission escalation.
+- Symlink path escapes authorized scope.
+- Child modifies files after cancellation.
+- Two workers race on the same file.
+- Reviewer receives truncated evidence.
+- Skill digest changes during execution.
+- Provider lies or omits capability metadata.
+- Persisted operation state is corrupt.
+- Persisted operation schema is newer than the running client.
+
+All required tests must be part of the normal regression suite.
+
+---
+
+# 15. Comparative evaluation
+
+Implement a repeatable evaluation protocol comparing:
+
+A. Single-agent serial execution.
+
+B. Multiple independent agents.
+
+C. Specialist-assisted execution.
+
+D. Durable goal-oriented execution.
+
+E. Bounded batch execution.
+
+Use identical engineering objectives, repositories, acceptance criteria, and provider configurations where comparisons are meaningful.
+
+Collect:
+
+- Task completion rate.
+- Deterministic verifier success.
+- Independent acceptance result.
+- Wall-clock completion time.
+- Inference request count.
+- Measured or estimated tokens, clearly labeled.
+- Retry count.
+- Tool-call count.
+- Context compaction count.
+- Resource contention.
+- Recovery success.
+- Unauthorized-effect attempts.
+- Regression rate.
+
+Use held-out tasks where possible.
+
+Do not claim an orchestration improvement based only on increased throughput or reduced latency.
+
+A configuration that is faster but less accurate must not be promoted as superior.
+
+Preserve failed runs.
+
+Publish reproducible evaluation manifests and evidence.
+
+---
+
+# 16. Implementation and repository workflow
+
+Follow the repository's existing development and concurrency rules.
+
+Read the XERJ reference-coding guidance before nontrivial implementation work, as required by AGENTS.md.
+
+Reuse mature existing designs where appropriate, but respect licensing and provenance.
+
+Work in isolated branches/worktrees and claim affected file scopes.
+
+Avoid simultaneous modification of shared hot files by independent agents.
+
+Recommended implementation order:
+
+1. Baseline discovery and authoritative gap identification.
+2. Tests that reproduce actual deficiencies.
+3. Shared delegation contract and outcome types.
+4. Capability enforcement corrections.
+5. Durable lifecycle/recovery integration.
+6. `/loop`.
+7. `/goal`.
+8. `/batch`.
+9. CLI/TUI interface parity.
+10. Resource-aware scheduling.
+11. Skills and scoped activation improvements.
+12. Comparative qualification.
+13. Independent review and final documentation.
+
+These are logical work packages, not authorization to create an unnecessarily large monolithic change.
+
+Use bounded pull requests with explicit dependencies when appropriate.
+
+After each meaningful work package:
+
+- Compile.
+- Run affected tests.
+- Record results.
+- Review architectural compatibility.
+- Verify no provider coupling was introduced.
+- Update the implementation evidence.
+
+Run the repository's prescribed full validation before declaring the integrated implementation ready.
+
+Do not modify inference providers.
+
+Do not change homelab-ai to make Nexus tests pass.
+
+---
+
+# 17. Definition of done
+
+The assignment is complete only when all mandatory conditions are satisfied.
+
+### Architecture
+
+- Existing orchestration remains authoritative.
+- No duplicate scheduler or incompatible state engine is introduced.
+- Provider neutrality is preserved.
+- Optional provider metadata remains optional.
+- Authority inheritance is enforced.
+- Delegation results are typed and bounded.
+
+### Commands
+
+- `/loop` exists and executes.
+- `/goal` exists and executes.
+- `/batch` exists and executes.
+- All required lifecycle subcommands work.
+- Commands are documented.
+- REPL/TUI integration is complete.
+- Recovery behavior is validated.
+
+### Reliability
+
+- Parent/child cancellation is coherent.
+- Unknown effects are reconciled.
+- Durable tasks survive process termination.
+- Work-unit dependency rules hold.
+- Concurrency respects resource and workspace constraints.
+- Required verification gates cannot be bypassed.
+
+### Testing
+
+- Existing regressions pass.
+- New deterministic tests pass.
+- Provider-neutral fixtures pass.
+- Fault-injection tests pass.
+- Comparative evaluation is documented.
+- No known blocking defect remains unresolved.
+
+### Evidence
+
+Produce:
+
+1. Baseline implementation matrix.
+2. Architecture decisions.
+3. Changed-file inventory.
+4. Test results.
+5. Provider compatibility matrix.
+6. Recovery evidence.
+7. Concurrency evaluation.
+8. Security and authority test evidence.
+9. Independent-review findings.
+10. Remaining limitations.
+
+---
+
+# 18. Required final report
+
+At completion, provide:
+
+## A. Implementation summary
+
+What changed and why.
+
+## B. Existing architecture reused
+
+Identify the existing components retained and extended.
+
+## C. Slash-command status
+
+For `/loop`, `/goal`, and `/batch`, provide command syntax, implemented behaviors, tests, and remaining limitations.
+
+## D. Provider independence
+
+Demonstrate which supported provider contracts were tested and identify any optional optimizations.
+
+Explicitly confirm whether any inference-provider modification was required.
+
+## E. Reliability evidence
+
+Report recovery, concurrency, cancellation, and unknown-effect outcomes.
+
+## F. Verification results
+
+Include exact test commands, pass/fail counts, build status, and relevant artifact or commit references.
+
+## G. Independent review
+
+Report the independent review verdict, unresolved defects, and remediation.
+
+## H. Remaining risks
+
+Separate confirmed defects, unverified behavior, and optional future enhancements.
+
+## I. Delivery status
+
+Use one of:
+
+- COMPLETE_VERIFIED
+- IMPLEMENTED_QUALIFICATION_PENDING
+- PARTIAL_BLOCKED
+- FAILED_VERIFICATION
+
+Do not report COMPLETE_VERIFIED without the required evidence.
+
+---
+
+# 19. Execution instructions
+
+Begin by inspecting the actual repository state, current plans, and existing implementations.
+
+Determine the shortest defensible path to a coherent implementation.
+
+You are explicitly authorized to implement, refactor, test, and resolve the required Nexus Code changes.
+
+Do not stop at architecture proposals or request authorization for routine development operations.
+
+Avoid unnecessary questions when the answer can be established from code, tests, repository history, or existing requirements.
+
+When a design decision is necessary, choose the solution that preserves correctness, provider independence, backward compatibility, and recoverability.
+
+**Critical priorities, in order:**
+
+1. Correctness and enforceable authority.
+2. Durable recovery and lifecycle integrity.
+3. Provider independence.
+4. Functional completeness of `/loop`, `/goal`, and `/batch`.
+5. Independent verification.
+6. Measured execution efficiency.
+7. Usability and documentation.
+
+Do not trade away the higher priorities to optimize a lower priority.
+
+The intended result is a coding client that can operate autonomously and reliably across heterogeneous inference providers without making those providers accommodate Nexus-specific behavior.
+
+Proceed with implementation.
+
+---
+
+new trail as part of v1.3.0 roadmap.
+
+---
+
+continue
