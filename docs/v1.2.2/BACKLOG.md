@@ -45,9 +45,11 @@ What the v1.2.1 plan ([`docs/v1.2.1/PLAN.md`](../v1.2.1/PLAN.md)) did not finish
 - **VC-2** bounded shell snapshots (PR #642): incomplete or oversized verification snapshots now record uncertainty; `verificationPaths.mode=block` refuses the affected shell edit before side effects. The separate workspace-controlled test-output authenticity limit remains.
 - **CS-6** pinned real-server workflow (PR #643): hosted run [44670790609](https://github.com/mikeholownych/nexus-code/actions/runs/44670790609) passed all four server cases. The remaining real-server test limits are listed in the CS-6 row.
 
+- **RD-7** (done): `nexus uninstall` for managed installations verifies installed packages against their SHA-256 manifests, serializes against upgrades, and preserves sessions/configuration by default. PR #629 merged at `e9761040e1c22e2f8299bc4d3ca87b3d18cf3819`; focused uninstall tests passed (6/6). The full suite timed out on five files, so it was not reported as passing.
+
 ## Not started / deferred in their rows
 
-CS-9 (per-command approval rules), CS-10 (RPC worker isolation), VC-8 (per-role tool allowlists beyond reviewer and researcher), VC-10 (steering semantic judge, gated), RD-5 (superseded by v1.3 AC-1), RD-7 (`nexus uninstall`), MT-2 (split the two ~5.4k-line TUI files), PC-5 (settled by v1.3 GV-4).
+CS-9 (per-command approval rules), CS-10 (RPC worker isolation), VC-8 (per-role tool allowlists beyond reviewer and researcher), VC-10 (steering semantic judge, gated), RD-5 (superseded by v1.3 AC-1), MT-2 (split the two ~5.4k-line TUI files), PC-5 (settled by v1.3 GV-4).
 
 ## Release-note items for the next release
 
