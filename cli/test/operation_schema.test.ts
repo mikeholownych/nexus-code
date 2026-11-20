@@ -118,6 +118,10 @@ test("a non-integer or impossible version is an invalid record, not a newer one"
 test("structural invariants name the field and the unit", () => {
   const base = state();
   const cases: Array<[string, (op: DurableOperationState) => void, RegExp]> = [
+    ["operation status", (op) => { (op as any).status = "FINISHED"; }, /invalid status \(FINISHED\)/],
+    ["unit status", (op) => { (op.units[0] as any).status = "DONE"; }, /unit 'impl' has an invalid status \(DONE\)/],
+    ["applied decision action", (op) => { (op as any).decisions = [{ action: { kind: "execute_shell" } }]; }, /unknown decision action \(execute_shell\)/],
+    ["offered decision action", (op) => { (op.units[0] as any).blocked = { decision: { options: [{ action: { kind: "execute_shell" } }] } }; }, /unknown decision action \(execute_shell\)/],
     ["duplicate id", (op) => { op.units[1].id = op.units[0].id; }, /duplicate work unit id 'impl'/],
     ["unknown dependency", (op) => { op.units[1].dependsOn = ["nope"]; }, /depends on unknown unit 'nope'/],
     ["zero budget", (op) => { op.units[0].contextBudget = 0; }, /unit 'impl' has an invalid contextBudget/],
@@ -130,6 +134,32 @@ test("structural invariants name the field and the unit", () => {
     mutate(op);
     assert.throws(() => validateOperationState(op), expected, label);
   }
+});
+
+test("operation store refuses invalid lifecycle state before persisting it", (t) => {
+  const dir = tmpdir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const store = new OperationStore(dir, path.join(dir, "tasks"), dir);
+  const op = state();
+  (op.units[0] as any).status = "DONE";
+
+  assert.throws(() => store.save(op), InvalidOperationStateError);
+  assert.equal(store.has(op.id), false, "invalid operation state must never become a durable unreadable record");
+});
+
+test("operation store quarantines an invalid persisted unit status on load", (t) => {
+  const dir = tmpdir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const store = new OperationStore(dir, path.join(dir, "tasks"), dir);
+  const op = state();
+  store.save(op);
+  const file = store.manager.getStateFilePath(op.id);
+  const raw = JSON.parse(fs.readFileSync(file, "utf-8"));
+  raw.operation.units[0].status = "DONE";
+  fs.writeFileSync(file, JSON.stringify(raw), { mode: 0o600 });
+
+  assert.throws(() => store.load(op.id), /invalid status \(DONE\).*quarantined to/);
+  assert.ok(!fs.existsSync(file), "invalid operation state must not remain live after failed load");
 });
 
 test("a resource slot count out of range is refused at creation, so the record can always be reloaded", (t) => {

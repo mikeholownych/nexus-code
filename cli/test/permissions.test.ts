@@ -79,6 +79,7 @@ describe("PLAN-08 PR-8b: Persistence hygiene & permissions (REQ-PER-101, ACC-PER
             workspacePath: testWs,
             messages: [{ role: "user", content: "Do work" } as any],
             schemaVersion: 1,
+            status: "pending",
           },
           [wsIdentity]
         );

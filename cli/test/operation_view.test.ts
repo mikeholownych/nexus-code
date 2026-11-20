@@ -519,7 +519,6 @@ test("ordinary status sanitizes blocked decision identifiers", (t) => {
   const record = JSON.parse(fs.readFileSync(file, "utf8"));
   record.operation.blocked.decisions[0].id = "decision\u001b]52;c;cGF5bG9hZA==\u0007\u001b[2J\u001b[31m";
   record.operation.blocked.decisions[0].options[0].id = "option\u001b]52;c;cGF5bG9hZA==\u0007\u001b[2J";
-  record.operation.units[1].status = "BLOCKED\u001b[2J";
   fs.writeFileSync(file, JSON.stringify(record));
 
   const result = runCli(["operation", "status", "op-cli-decision"], fixture);

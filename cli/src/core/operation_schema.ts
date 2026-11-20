@@ -28,6 +28,21 @@ export const CURRENT_OPERATION_SCHEMA_VERSION = 2;
 /** The operation document version every released 1.0.0 build wrote. */
 export const LEGACY_OPERATION_SCHEMA_VERSION = 1;
 
+const OPERATION_STATUSES = new Set(["RUNNING", "WAITING", "BLOCKED", "COMPLETE", "CANCELLED"]);
+const WORK_UNIT_STATUSES = new Set(["RUNNABLE", "RUNNING", "PARKED", "WAITING_ON_DEPENDENCY", "COMPLETE", "BLOCKED"]);
+const DECISION_ACTION_KINDS = new Set([
+  "retry",
+  "keep_waiting",
+  "assign",
+  "revise",
+  "replace_task",
+  "set_inputs",
+  "lift_context_budget",
+  "drop",
+  "cancel_operation",
+  "accept_no_change",
+]);
+
 /** The largest concurrency an operation may request. A cost bound, not a capacity claim. */
 export const MAX_CONCURRENT_UNITS = 64;
 
@@ -95,6 +110,9 @@ export function effectiveConcurrency(state: Pick<DurableOperationState, "policy"
  * confusing crash mid-run from a hand-edited or truncated file.
  */
 export function validateOperationState(state: DurableOperationState): void {
+  if (!OPERATION_STATUSES.has(state.status)) {
+    throw new InvalidOperationStateError(`operation ${state.id}: invalid status (${String(state.status)})`);
+  }
   if (!Array.isArray(state.units)) throw new InvalidOperationStateError("operation record has no units array");
   for (const field of ["resources", "conditions", "events"] as const) {
     if (!Array.isArray(state[field])) throw new InvalidOperationStateError(`operation ${state.id}: ${field} is not an array`);
@@ -116,6 +134,9 @@ export function validateOperationState(state: DurableOperationState): void {
   for (const unit of state.units) {
     if (!unit || typeof unit !== "object") throw new InvalidOperationStateError(`operation ${state.id}: a work unit is not an object`);
     if (typeof unit.id !== "string" || !unit.id) throw new InvalidOperationStateError(`operation ${state.id}: a work unit has no id`);
+    if (!WORK_UNIT_STATUSES.has(unit.status)) {
+      throw new InvalidOperationStateError(`operation ${state.id}: unit '${unit.id}' has an invalid status (${String(unit.status)})`);
+    }
     if (ids.has(unit.id)) throw new InvalidOperationStateError(`operation ${state.id}: duplicate work unit id '${unit.id}'`);
     ids.add(unit.id);
     if (unit.contextBudget !== undefined && (!Number.isInteger(unit.contextBudget) || unit.contextBudget <= 0)) {
@@ -124,6 +145,26 @@ export function validateOperationState(state: DurableOperationState): void {
     if (unit.inputs !== undefined) {
       const problem = specialistInputsProblem(unit.inputs);
       if (problem) throw new InvalidOperationStateError(`operation ${state.id}: unit '${unit.id}': ${problem}`);
+    }
+    validateAppliedDecisions(state.id, `unit '${unit.id}'`, unit.decisions);
+    if (unit.blocked !== undefined) {
+      const options = unit.blocked?.decision?.options;
+      if (!Array.isArray(options)) {
+        throw new InvalidOperationStateError(`operation ${state.id}: unit '${unit.id}' blocked decision has no options array`);
+      }
+      for (const option of options) validateDecisionAction(state.id, `unit '${unit.id}' blocked option`, option?.action);
+    }
+  }
+  validateAppliedDecisions(state.id, "operation", state.decisions);
+  if (state.blocked !== undefined) {
+    if (!Array.isArray(state.blocked?.decisions)) {
+      throw new InvalidOperationStateError(`operation ${state.id}: blocked decisions is not an array`);
+    }
+    for (const decision of state.blocked.decisions) {
+      if (!Array.isArray(decision?.options)) {
+        throw new InvalidOperationStateError(`operation ${state.id}: blocked decision has no options array`);
+      }
+      for (const option of decision.options) validateDecisionAction(state.id, "blocked option", option?.action);
     }
   }
   for (const unit of state.units) {
@@ -163,6 +204,18 @@ export function validateOperationState(state: DurableOperationState): void {
         throw new InvalidOperationStateError(`operation ${state.id}: an integration receipt is missing its unitId or integratedCommit`);
       }
     }
+  }
+}
+
+function validateAppliedDecisions(operationId: string, owner: string, decisions: unknown): void {
+  if (decisions === undefined) return;
+  if (!Array.isArray(decisions)) throw new InvalidOperationStateError(`operation ${operationId}: ${owner} decisions is not an array`);
+  for (const decision of decisions) validateDecisionAction(operationId, `${owner} applied decision`, decision?.action);
+}
+
+function validateDecisionAction(operationId: string, owner: string, action: unknown): void {
+  if (!action || typeof action !== "object" || Array.isArray(action) || !DECISION_ACTION_KINDS.has((action as any).kind)) {
+    throw new InvalidOperationStateError(`operation ${operationId}: ${owner} has an unknown decision action (${String((action as any)?.kind)})`);
   }
 }
 
