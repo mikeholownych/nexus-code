@@ -48,6 +48,7 @@ test("MCP HTTP tools/call is not resent after the server receives it and drops t
 
     assert.deepEqual(toolCalls(seen).map((call) => call.path), ["/message"]);
     assert.equal(result.success, false);
+    assert.equal(result.outcomeUnknown, true);
     assert.match(result.error ?? "", /outcome unknown/i);
     assert.match(result.error ?? "", /check its effect before retrying/i);
   });
@@ -85,6 +86,7 @@ test("MCP HTTP tools/call does not retry a server error that may follow an effec
 
     assert.deepEqual(toolCalls(seen).map((call) => call.path), ["/message"]);
     assert.equal(result.success, false);
+    assert.equal(result.outcomeUnknown, true);
     assert.match(result.error ?? "", /outcome unknown/i);
   });
 });
@@ -102,6 +104,7 @@ test("MCP HTTP tools/call with an unreadable response is reported as unknown wit
 
     assert.deepEqual(toolCalls(seen).map((call) => call.path), ["/message"]);
     assert.equal(result.success, false);
+    assert.equal(result.outcomeUnknown, true);
     assert.match(result.error ?? "", /outcome unknown/i);
   });
 });
@@ -129,6 +132,7 @@ test("MCP HTTP tools/call timeout reports unknown and is not sent again", async 
 
     assert.deepEqual(toolCalls(seen).map((call) => call.path), ["/message"]);
     assert.equal(result.success, false);
+    assert.equal(result.outcomeUnknown, true);
     assert.match(result.error ?? "", /outcome unknown/i);
   });
 });

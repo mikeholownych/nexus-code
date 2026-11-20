@@ -45,6 +45,34 @@ describe("RustCoreBridge hello handshake (REQ-REL-103)", () => {
     assert.deepEqual(info2, info);
   });
 
+  test("a mutating RPC disconnect has an explicit unknown outcome", async () => {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-handshake-outcome-unknown-"));
+    cleanupDirs.push(ws);
+
+    const mockScript = makeMockEngine(`
+const readline = require('node:readline');
+const rl = readline.createInterface({ input: process.stdin });
+rl.on('line', (line) => {
+  const req = JSON.parse(line);
+  if (req.method === 'hello') {
+    process.stdout.write(JSON.stringify({ id: req.id, result: { version: '${getBuildIdentity().version}', protocol: ${CORE_PROTOCOL_VERSION} } }) + '\\n');
+  } else if (req.method === 'write_file') {
+    // The executor may have performed a side effect before its response was lost.
+    process.exit(0);
+  }
+});
+`);
+    cleanupDirs.push(path.dirname(mockScript));
+
+    const bridge = new RustCoreBridge(ws, "bash", mockScript);
+    activeBridges.push(bridge);
+
+    const result = await bridge.executeTool("write_file", { path: "partial.txt", content: "possibly written" });
+    assert.equal(result.success, false);
+    assert.equal(result.outcomeUnknown, true);
+    assert.match(result.error || "", /RPC daemon disconnected/);
+  });
+
   test("handshake fails actionably when protocol mismatches", async () => {
     const ws = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-handshake-proto-"));
     cleanupDirs.push(ws);

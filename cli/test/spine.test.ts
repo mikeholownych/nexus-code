@@ -218,7 +218,7 @@ describe("WP-01: ExecutionSpine & Invocation Pipeline (INC-02)", () => {
     assert.ok(receipt.error?.includes("Missing required parameter 'path'"), "Error must report missing parameter");
   });
 
-  test("FAIL-001: Exception in handler fails closed gracefully without crashing", async () => {
+  test("an exception from a mutating handler is reported as an unknown outcome", async () => {
     const registry = createDefaultRegistry();
     const spine = new ExecutionSpine({ registry });
 
@@ -234,8 +234,9 @@ describe("WP-01: ExecutionSpine & Invocation Pipeline (INC-02)", () => {
     const receipt = await spine.execute(req, dummyContext);
 
     assert.strictEqual(receipt.success, false);
-    assert.strictEqual(receipt.status, "FAILED");
-    assert.ok(receipt.error?.includes("FAIL-001"), "Error must report FAIL-001 on exception");
+    assert.strictEqual(receipt.status, "UNKNOWN");
+    assert.strictEqual(receipt.outcomeUnknown, true);
+    assert.ok(receipt.error?.includes("OUTCOME UNKNOWN"), "Error must preserve the uncertain outcome");
     assert.ok(receipt.error?.includes("Simulated backend crash"), "Receipt must contain original error message");
   });
 

@@ -618,6 +618,7 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
       this.stateManager.recordOperationEnd(durableTaskId, call.id, {
         success: receipt.success,
         error: receipt.error,
+        outcomeUnknown: receipt.outcomeUnknown,
       }, operationSeq);
     } catch (err: any) {
       this.reportPersistenceFailure("operation_end", err);
