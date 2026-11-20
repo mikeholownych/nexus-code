@@ -1,0 +1,19 @@
+$impeccable audit
+
+---
+
+update it
+
+---
+
+<send_user_message_question_reply>
+[{"questionItemId":"[\"request_user_input_async\",\"call_0469f93d8d6f43ac89f6bc068d9dd186\",0]","question":"A newer Impeccable v4.10.0 is available. Update it, or keep v4.0.2 for this audit? I’ll continue either way.","answer":"Update to v4.10.0"}]
+</send_user_message_question_reply>
+
+---
+
+$impeccable colorize
+
+---
+
+$impeccable harden
