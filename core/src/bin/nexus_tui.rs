@@ -359,7 +359,7 @@ fn render_activity(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot, stat
                             Style::default().fg(color).add_modifier(Modifier::BOLD),
                         ),
                         Span::styled(
-                            &event.title,
+                            diff_view::safe_text(&event.title),
                             Style::default()
                                 .fg(Color::Reset)
                                 .add_modifier(Modifier::BOLD),
@@ -416,7 +416,7 @@ fn render_context(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot) {
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    validation,
+                    diff_view::safe_text(validation),
                     Style::default().fg(if validation == "PASSED" {
                         Color::Green
                     } else {
@@ -451,7 +451,7 @@ fn render_context(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot) {
             Color::Red
         };
         lines.push(Line::from(Span::styled(
-            format!("  {}", validation.status),
+            format!("  {}", diff_view::safe_text(&validation.status)),
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         )));
         if let Some(id) = &validation.candidate_id {
@@ -510,7 +510,7 @@ fn render_context(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot) {
             .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(Span::styled(
-        format!("  {}", data.context),
+        format!("  {}", diff_view::safe_text(&data.context)),
         Style::default().fg(MUTED),
     )));
     lines.push(Line::from(Span::styled(
@@ -547,23 +547,36 @@ fn render_detail(frame: &mut ratatui::Frame, data: &Snapshot, state: &AppState) 
         return;
     };
     let detail_width = 84usize.saturating_sub(4).max(1);
-    let detail_rows = item
+    let detail = item
         .detail
-        .lines()
-        .map(|line| line.chars().count().div_ceil(detail_width))
+        .split('\n')
+        .map(diff_view::safe_text)
+        .collect::<Vec<_>>();
+    let detail_rows = detail
+        .iter()
+        .map(|line| {
+            unicode_width::UnicodeWidthStr::width(line.as_str())
+                .max(1)
+                .div_ceil(detail_width)
+        })
         .sum::<usize>();
     let detail_height = detail_rows.saturating_add(4).clamp(7, 18) as u16;
     let area = centered(frame.area(), 84, detail_height);
     frame.render_widget(Clear, area);
     frame.render_widget(
-        Paragraph::new(item.detail.as_str())
+        Paragraph::new(Text::from(
+            detail
+                .iter()
+                .map(|line| Line::from(line.as_str()))
+                .collect::<Vec<_>>(),
+        ))
             .scroll((state.scroll, 0))
             .wrap(Wrap { trim: false })
             .block(
                 Block::default()
                     .title(format!(
                         "  {} · evidence · Esc close · ↑↓ scroll  ",
-                        item.title
+                        diff_view::safe_text(&item.title)
                     ))
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(theme_accent(&data.theme)))
@@ -579,9 +592,9 @@ fn render_validation(frame: &mut ratatui::Frame, data: &Snapshot, state: &AppSta
     };
     let content = format!(
         "Status: {}\nCandidate: {}\nVerifier: {}\n\nA validation receipt describes a check bound to a candidate. A passed receipt does not claim that unrun checks passed.",
-        receipt.status,
-        receipt.candidate_id.as_deref().unwrap_or("unavailable"),
-        receipt.verifier.as_deref().unwrap_or("unavailable")
+        diff_view::safe_text(&receipt.status),
+        diff_view::safe_text(receipt.candidate_id.as_deref().unwrap_or("unavailable")),
+        diff_view::safe_text(receipt.verifier.as_deref().unwrap_or("unavailable"))
     );
     let area = centered(frame.area(), 72, 14);
     frame.render_widget(Clear, area);
@@ -702,6 +715,37 @@ mod tests {
             .find(|row| row.contains("VALIDATION"))
             .expect("validation summary remains visible");
         assert!(validation_row.find("VALIDATION").unwrap() >= 96);
+    }
+
+    #[test]
+    fn snapshot_titles_and_evidence_show_terminal_controls_visibly() {
+        let mut data = fixture();
+        data.activity[0].title = "Review\u{1b}[31m \u{202e}result".into();
+        data.activity[0].detail = "Evidence\u{1b}[31m\nSecond line \u{202e}tail".into();
+        let mut state = AppState {
+            overlay: Overlay::Detail,
+            ..AppState::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &data, &mut state))
+            .unwrap();
+        let rendered = terminal.backend().to_string();
+        assert!(rendered.contains("␛[31m"), "{rendered}");
+        assert!(rendered.contains("<U+202E>"), "{rendered}");
+        assert!(!rendered.contains('\u{1b}') && !rendered.contains('\u{202e}'));
+
+        let receipt = data.validation.as_mut().unwrap();
+        receipt.status = "PASSED\u{1b}[31m".into();
+        receipt.verifier = Some("cargo test \u{202e}ignored".into());
+        state.overlay = Overlay::Validation;
+        terminal
+            .draw(|frame| render(frame, &data, &mut state))
+            .unwrap();
+        let rendered = terminal.backend().to_string();
+        assert!(rendered.contains("␛[31m"), "{rendered}");
+        assert!(rendered.contains("<U+202E>"), "{rendered}");
+        assert!(!rendered.contains('\u{1b}') && !rendered.contains('\u{202e}'));
     }
 
     #[test]
