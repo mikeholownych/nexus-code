@@ -85,6 +85,8 @@ export interface InFlightOperationRecord {
   toolName: string;
   targetResources?: string[];
   argsSummary?: string;
+  /** sha256 of tool name and canonical arguments; absent in records written before reissue detection existed. */
+  argsHash?: string;
   startedAt: string;
   completedAt?: string;
   status: OperationLifecycleStatus;
@@ -757,6 +759,7 @@ export class DurableStateManager {
       toolName: string;
       targetResources?: string[];
       argsSummary?: string;
+      argsHash?: string;
     }
   ): DurableTaskState {
     return withStateStoreGuard(this.baseDir, () => {
@@ -767,6 +770,7 @@ export class DurableStateManager {
         toolName: operation.toolName,
         targetResources: operation.targetResources,
         argsSummary: operation.argsSummary,
+        ...(operation.argsHash ? { argsHash: operation.argsHash } : {}),
         startedAt: new Date().toISOString(),
         status: "in_flight",
       };

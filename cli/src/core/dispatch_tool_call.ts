@@ -3,6 +3,7 @@ import { ToolCall } from "../types.js";
 import { normalizeToolArguments } from "./tool_arguments.js";
 import { forbiddenDeletion } from "../tools.js";
 import { type EffectClass } from "./capabilities.js";
+import { argsFingerprint } from "./operation_identity.js";
 import { PolicyContext } from "./approval_policy.js";
 import { isWorkspaceTrusted } from "../workspace_trust.js";
 import { ExecutionReceipt, InvocationContext, extractTargetResources } from "./spine.js";
@@ -353,7 +354,13 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
     };
   }
   const injectionAsk = Boolean(onConfirm) && this.injectionApprovalNeeded(effect, currentStep);
-  const askOperator = this.approvalPolicy.requiresDecision(effect, policyContext) || verificationEdit?.action === "ask" || injectionAsk;
+  const reissuesInterrupted = this.interruptedCall !== undefined
+    && (this.interruptedCall.toolName === "*" || this.interruptedCall.toolName === toolName)
+    && (this.interruptedCall.argsHash === undefined || this.interruptedCall.argsHash === argsFingerprint(toolName, args));
+  const askOperator = this.approvalPolicy.requiresDecision(effect, policyContext)
+    || verificationEdit?.action === "ask"
+    || injectionAsk
+    || reissuesInterrupted;
 
   if (toolName === "activate_skill") {
     const skillName = args?.name;
@@ -389,7 +396,9 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
   if (askOperator && !onConfirm) {
     toolQuestion = buildNeedsInput(
       "tool_approval",
-      `Allow ${toolName} (${effect})${egressOrigin ? ` to ${egressOrigin}` : ""}: ${JSON.stringify(args).slice(0, 160)}?`,
+      reissuesInterrupted
+        ? `This call matches '${toolName}' interrupted with an unknown outcome and may already have taken effect. Inspect before retrying. Allow it to run again?`
+        : `Allow ${toolName} (${effect})${egressOrigin ? ` to ${egressOrigin}` : ""}: ${JSON.stringify(args).slice(0, 160)}?`,
       { tool: toolName, effect, ...(egressOrigin ? { origin: egressOrigin } : {}), arguments: JSON.stringify(args).slice(0, 200) },
       toolName,
       JSON.stringify(args),
@@ -404,7 +413,9 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
       const approvalGuidance = effect === "egress"
         ? "Run with --yes to explicitly allow egress without an operator prompt."
         : "Run with --yes or --mode auto to explicitly select automatic approvals.";
-      const cancelMsg = `Error: Tool '${toolName}' requires operator approval (${effect}), but no operator is present (headless execution). ${approvalGuidance}${toolQuestion ? (declined ? " The operator declined this action." : ` needs_input ${toolQuestion.id}: the run ends BLOCKED so the operator can decide.`) : ""}`;
+      const cancelMsg = reissuesInterrupted
+        ? `Error: this '${toolName}' call matches one interrupted with an unknown outcome and may already have taken effect. It is not repeated without an explicit operator decision; inspect its effects first.${toolQuestion ? (declined ? " The operator declined this action." : ` needs_input ${toolQuestion.id}: the run ends BLOCKED so the operator can decide.`) : ""}`
+        : `Error: Tool '${toolName}' requires operator approval (${effect}), but no operator is present (headless execution). ${approvalGuidance}${toolQuestion ? (declined ? " The operator declined this action." : ` needs_input ${toolQuestion.id}: the run ends BLOCKED so the operator can decide.`) : ""}`;
       const receipt: ExecutionReceipt = {
         invocationId: call.id,
         taskId: this.activeWorktree?.taskId || this.currentTaskId,
@@ -446,7 +457,8 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
       const networkNotice = sandboxNetworkNotice(String(args?.command ?? ""), Boolean(this.config.sandbox) && this.config.sandbox !== "none");
       if (networkNotice) console.log(`⚠️ ${networkNotice}`);
     }
-    const approved = await onConfirm(toolName, args);
+    if (reissuesInterrupted) console.log(`⚠️ ${toolName} matches a call interrupted with unknown outcome; it may already have taken effect.`);
+    const approved = await onConfirm(toolName, args, undefined, reissuesInterrupted ? { requireOperatorDecision: true } : undefined);
     if (verificationEdit?.action === "ask") {
       if (approved) verificationAuthority.approved = { path: verificationEdit.path };
       else {
@@ -459,8 +471,9 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
     if (!approved) {
       this.turnDenials++;
       console.log(`⚠️ Tool execution cancelled by user.`);
-      const cancelMsg =
-        "Error: Execution was rejected by the user. Ask the user for clarification or proceed with an alternative approach.";
+      const cancelMsg = reissuesInterrupted
+        ? "Error: The operator did not approve retrying this interrupted call. Its outcome remains unknown; inspect its effects before trying again."
+        : "Error: Execution was rejected by the user. Ask the user for clarification or proceed with an alternative approach.";
       const receipt: ExecutionReceipt = {
         invocationId: call.id,
         taskId: this.activeWorktree?.taskId || this.currentTaskId,
@@ -494,7 +507,6 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
       return { receipt, shouldExit: false };
     }
   }
-
   this.ui.startSpinner(`Executing ${toolName}...`);
   await this.pluginManager.notifyToolCall(toolName, args);
 
@@ -546,7 +558,9 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
         toolName,
         targetResources: args.path ? [args.path] : (args.target_file ? [args.target_file] : undefined),
         argsSummary: JSON.stringify(args).slice(0, 200),
+        argsHash: argsFingerprint(toolName, args),
       });
+      if (reissuesInterrupted) this.interruptedCall = undefined;
     } catch (err: any) {
       this.reportPersistenceFailure("operation_start", err);
     }

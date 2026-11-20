@@ -33,6 +33,7 @@ import { homeDir } from "./worktrunk/core.js";
 import { openRepo, currentEntry, NotARepositoryError } from "./worktrunk/repo.js";
 import { replacedWorktreeReason, verifyCheckout } from "./core/checkout_trust.js";
 import { WORKTREE_BINDING_VERSION } from "./core/state.js";
+import { argsFingerprint } from "./core/operation_identity.js";
 import { isSandboxAvailable } from "./sandbox.js";
 import { discoverVerifier, verifierTimeoutSecs } from "./tester.js";
 import { ENABLE_TOOLS_CAPABILITY, TOOL_GROUPS, groupsTriggeredBy, toolGroupOf } from "./core/tool_groups.js";
@@ -110,6 +111,8 @@ export class AutonomousAgent {
    */
   private recoveredUnboundVerifier?: { command: string; reason: string };
   private recoveredOperation?: DurableTaskState["operation"];
+  /** A tool call interrupted before its result was durable; an identical replay needs an operator decision. */
+  private interruptedCall?: { toolName: string; argsHash?: string };
   private extensionPosture?: { workspace: string; readOnly: boolean };
   /** Full-access intent captured at construction; effective only while the mode permits it and read-only is off. */
   private configuredFullAccess: boolean = false;
@@ -950,6 +953,16 @@ export class AutonomousAgent {
     if (this.objective?.execution) this.objective.execution = normalizeTracking(this.objective.execution);
     this.activeProviderRecovery = state.providerRecovery ?? null;
     this.recoveredOperation = state.operation;
+    const interruptedOp = recoveryResult.interruptedOperation
+      ?? (state.currentOperation?.status === "interrupted" ? state.currentOperation : undefined);
+    this.interruptedCall = interruptedOp
+      ? {
+          toolName: typeof interruptedOp.toolName === "string" && interruptedOp.toolName ? interruptedOp.toolName : "*",
+          ...(typeof interruptedOp.argsHash === "string" && /^[0-9a-f]{64}$/i.test(interruptedOp.argsHash)
+            ? { argsHash: interruptedOp.argsHash }
+            : {}),
+        }
+      : undefined;
     this.rememberResumedProviderWait(state.lastTurn);
     this.adoptRecordedModel(state.model, state.endpoint);
     // Durable task state is writable by the same local user who can run candidate
