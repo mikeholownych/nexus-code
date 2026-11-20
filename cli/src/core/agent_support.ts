@@ -29,7 +29,13 @@ export const MAY_OUTLIVE_COMMAND = /(?<![&>])&(?![&>])|\b(?:nohup|setsid|disown|
 export const DEFAULT_VERIFIER_TIMEOUT_SECS = 300;
 
 /** `signal` aborts when the question no longer applies (a decision about steering whose turn has ended). */
-export type ConfirmHandler = (toolName: string, args: Record<string, any>, signal?: AbortSignal) => Promise<boolean>;
+export type ConfirmHandler = (
+  toolName: string,
+  args: Record<string, any>,
+  signal?: AbortSignal,
+  /** When true, approval-mode auto must still obtain a direct operator answer; headless callers must refuse. */
+  options?: { requireOperatorDecision?: boolean },
+) => Promise<boolean>;
 
 /** Structured projection of turn activity for non-terminal surfaces such as the TUI sidecar. Observers must not throw. */
 /** Outcome of in-turn delegation (spawn_subagent). `summary` is whatever report exists, even when not completed. */

@@ -201,7 +201,7 @@ export class InteractiveRepl {
     // Work done so far, and changes still awaiting verification, survive the process ending mid-turn.
     this.agent.setProgressListener(() => this.saveCurrentSession(label));
     try {
-      result = await this.agent.runTurn(prompt, (tool, args, question) => this.confirmAction(tool, args, question), options);
+      result = await this.agent.runTurn(prompt, (tool, args, question, confirmOptions) => this.confirmAction(tool, args, question, confirmOptions), options);
     } finally {
       this.agent.setProgressListener(undefined);
       // Persist even if the turn threw, so the transcript of work done so far is not lost (synced: the turn ended).
@@ -511,9 +511,15 @@ export class InteractiveRepl {
     return answer !== null && ["y", "yes"].includes(answer.trim().toLowerCase());
   }
 
-  private async confirmAction(toolName: string, args: Record<string, any>, question?: AbortSignal): Promise<boolean> {
+  private async confirmAction(
+    toolName: string,
+    args: Record<string, any>,
+    question?: AbortSignal,
+    options?: { requireOperatorDecision?: boolean },
+  ): Promise<boolean> {
     if (toolName === "steering_conflict") return this.confirmSteeringConflict(args, question);
-    if (this.approvalMode === "auto") return true;
+    if (options?.requireOperatorDecision && !this.rl) return false;
+    if (this.approvalMode === "auto" && !options?.requireOperatorDecision) return true;
     if (!this.rl) return true;
 
     console.log(pc.bold(pc.yellow(`\n⚠️  Action Approval Required:`)));
