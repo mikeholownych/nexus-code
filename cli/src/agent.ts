@@ -10,6 +10,7 @@ import { CapabilityRegistry, createDefaultRegistry, changesWorkspace, type Effec
 import { fenceSuspected, scanForInjection } from "./core/injection_scanner.js";
 import { ApprovalPolicy, defaultApprovalPolicy, ApprovalMode } from "./core/approval_policy.js";
 import { ExecutionSpine, ExecutionReceipt } from "./core/spine.js";
+import { extensionCapability, isExtensionCapability } from "./core/extension_capabilities.js";
 import { SkillActivationRegistry } from "./core/skill_activation.js";
 import { AuthorityAdmissionEngine } from "./core/authority.js";
 import { CandidateTracker, ValidationReceipt, computeCandidateIdentitySync } from "./core/candidate.js";
@@ -1031,11 +1032,32 @@ export class AutonomousAgent {
     return this.surface;
   }
 
+  /**
+   * Registers the connected MCP tools and loaded plugin tools in the capability registry so the spine can execute them
+   * (otherwise every call is refused as unregistered, FAIL-001). Rebuilt from scratch each time: a reconnect or a
+   * posture change may have removed tools. A name that already belongs to a built-in capability is never replaced.
+   */
+  private syncExtensionCapabilities(): void {
+    for (const capability of this.capabilityRegistry.listCapabilities()) {
+      if (isExtensionCapability(capability)) this.capabilityRegistry.unregister(capability.modelToolName);
+    }
+    const add = (definition: ToolDefinition, origin: Parameters<typeof extensionCapability>[1]): void => {
+      if (this.capabilityRegistry.getByToolName(definition.function.name)) return;
+      this.capabilityRegistry.register(extensionCapability(definition, origin));
+    };
+    for (const definition of this.mcpManager.getToolDefinitions()) {
+      const server = this.mcpManager.getToolServer(definition.function.name);
+      add(definition, { kind: "mcp", serverName: server?.serverName ?? "unknown", url: server?.url, command: server?.command });
+    }
+    for (const definition of this.pluginManager.getCustomToolDefinitions()) add(definition, { kind: "plugin" });
+  }
+
   public async initExtensibility(): Promise<void> {
     if (this.extensibilityInitialized) return;
     try {
       await this.pluginManager.loadPlugins();
       await this.mcpManager.loadAndConnect();
+      this.syncExtensionCapabilities();
       this.extensibilityInitialized = true;
       const readOnly = this.isReadOnly();
       const skipped = untrustedWorkspaceExtensions(this.config.workspace, readOnly);
