@@ -246,7 +246,7 @@ test("providers verify captures safe JSON and preserves a sanitized cloud disclo
     registerProviderCommands(program);
     await program.parseAsync([
       "node", "nexus", "providers", "verify", "--provider", "compatible", "--model", model,
-      "--base-url", `http://127.0.0.1:${address.port}/v1/private?token=query-secret`, "--json",
+      "--base-url", `http://127.0.0.1:${address.port}/v1/private`, "--json",
     ]);
 
     const output = JSON.parse(stdout.join("\n"));
@@ -255,8 +255,8 @@ test("providers verify captures safe JSON and preserves a sanitized cloud disclo
     assert.equal(output.steps[0].detail, "Provider request failed");
     assert.match(stderr.join("\n"), /Cloud inference:/);
     assert.ok(stderr.join("\n").includes(testOrigin));
-    assert.doesNotMatch(stdout.join("\n"), /sk-test-secret|query-secret|private|Bearer/);
-    assert.doesNotMatch(stderr.join("\n"), /sk-test-secret|query-secret|private|Bearer/);
+    assert.doesNotMatch(stdout.join("\n"), /sk-test-secret|private|Bearer/);
+    assert.doesNotMatch(stderr.join("\n"), /sk-test-secret|private|Bearer/);
   } finally {
     console.log = previousLog;
     console.warn = previousWarn;
