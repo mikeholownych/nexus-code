@@ -68,6 +68,15 @@ describe("mode block: a shell command cannot change how work is verified", () =>
     assert.equal(fs.existsSync(path.join(repo, "test/new.test.js")), true);
   });
 
+  test("block mode refuses shell execution when a verification file exceeds the fingerprint bound", async () => {
+    write("test/large.test.js", "x".repeat(2 * 1024 * 1024 + 1));
+    const r = await run(bridge("block"), "echo executed > should-not-exist.txt");
+    assert.equal(r.success, false);
+    assert.equal(r.denialReason, VERIFICATION_CONFIG_PROTECTED);
+    assert.match(r.error ?? "", /snapshot is incomplete/);
+    assert.equal(fs.existsSync(path.join(repo, "should-not-exist.txt")), false);
+  });
+
   test("ordinary commands are unaffected, including a dependency bump in package.json (not a verification key)", async () => {
     const b = bridge("block");
     const plain = await run(b, "echo hello > src/out.txt && echo done");

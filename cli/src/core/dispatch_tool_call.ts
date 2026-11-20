@@ -15,7 +15,7 @@ import { toolGroupOf } from "./tool_groups.js";
 import { judgeWithoutCopy, trustedDeliverablesFromBaseline } from "./independent_check.js";
 import { createHash } from "node:crypto";
 import { failedCheckFrom, attemptEvidence, recordAttempt, convergenceSignal, convergenceHistory } from "./objective.js";
-import { recordTestEdit } from "./regression_obligations.js";
+import { recordTestEdit, recordUnverifiableTestEdit } from "./regression_obligations.js";
 import { FILE_EDIT_TOOLS, describeChange, editTarget, snapshot } from "../file_diff.js";
 import { roleToolAllowList } from "./roles.js";
 import { MAY_OUTLIVE_COMMAND, ConfirmHandler, observationKey, egressOriginOf, READ_ONLY_TOOLS, logAudit } from "./agent_support.js";
@@ -288,9 +288,17 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
   };
   const verificationSecurity = this.bridge.getSecurityManager();
   // DV-3: a test edited through the shell is recorded against the obligation that names it (the CS-2 snapshot and diff).
-  verificationSecurity.setShellChangeObserver(this.objective?.obligations?.length ? (changes: VerificationShellChange[]) => {
+  verificationSecurity.setShellChangeObserver(this.objective?.obligations?.length ? (changes: VerificationShellChange[], scan: { complete: boolean }) => {
+    if (!this.objective) return;
+    if (!scan.complete) {
+      recordUnverifiableTestEdit(this.objective, "<workspace-scan>", "The bounded shell snapshot did not cover the entire workspace; verification-file edits may be missing.");
+    }
     for (const c of changes) {
-      if (!this.objective || c.beforeText === undefined) continue;
+      if (c.class !== "test_file") continue;
+      if (c.beforeText === undefined) {
+        recordUnverifiableTestEdit(this.objective, c.path, "The changed test file exceeded the retained snapshot size, so weakening could not be assessed.");
+        continue;
+      }
       recordTestEdit(this.objective, { path: c.path, before: c.beforeText, after: c.afterText ?? "" });
     }
   } : undefined);
