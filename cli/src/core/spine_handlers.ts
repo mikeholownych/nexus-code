@@ -3,7 +3,6 @@ import { HarnessConfig } from "../types.js";
 import { registerBridgeCapabilities } from "../tools.js";
 import { PolicyContext } from "./approval_policy.js";
 import { isWorkspaceTrusted } from "../workspace_trust.js";
-import { hashContent } from "./candidate.js";
 import { MAX_SKILL_MATCHES, oneLine } from "../skills.js";
 import { formatDiagnosticHints } from "../diagnostics.js";
 import { captureVerificationState, recordVerificationIfEligible } from "../worktrunk/verification.js";
@@ -21,6 +20,10 @@ import pc from "picocolors";
 import { collectMaterialDependencies } from "../material_deps.js";
 import { DEFAULT_VERIFIER_TIMEOUT_SECS, foldVoluminousOutput, externalInputsFingerprint, RESUMED_WINDOW_REASON } from "./agent_support.js";
 import type { AutonomousAgent } from "../agent.js";
+
+function sha256Digest(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
 
 export function setupSpineHandlersImpl(this: any): void {
   registerBridgeCapabilities(this.capabilityRegistry, this.bridge);
@@ -360,7 +363,10 @@ export function setupSpineHandlersImpl(this: any): void {
     // needs a verification for the exact state it merges. Recording never affects the task outcome. Recording runs
     // host-side Git in the worktree, so its `.git` pointer is verified first (the agent could have rewritten it).
     const recordableWorktree = this.isRecordableWorktree();
-    const isVerified = this.verificationEvidence?.definitionBound !== false &&
+    // A validation receipt must identify the actual verifier output. If the digest is missing or malformed, retain the
+    // worktree without issuing a receipt; a status/command pair alone cannot bind the evidence to a verifier run.
+    const verifierOutputHash = this.verificationEvidence?.outputSha256;
+    const isVerified = sha256Digest(verifierOutputHash) && this.verificationEvidence?.definitionBound !== false &&
       (this.verificationEvidence?.source === "configured" || this.verificationEvidence?.independent === true);
     recordVerificationIfEligible(this.config.workspace, {
       unrecordableWorktree: !recordableWorktree || this.receiptBaselineUntrusted,
@@ -385,7 +391,7 @@ export function setupSpineHandlersImpl(this: any): void {
         !this.config.dryRun &&
         !this.isReadOnly();
 
-      if (canValidate) {
+      if (canValidate && sha256Digest(verifierOutputHash)) {
         try {
           const candidateWorkspace = this.activeWorktree.worktreePath;
           const candidateIdentity = this.candidateTracker.computeCandidateIdentitySync(candidateWorkspace);
@@ -393,7 +399,7 @@ export function setupSpineHandlersImpl(this: any): void {
             candidateId: candidateIdentity.candidateId,
             verifierCommand: this.config.authoritativeVerifierCommand?.trim() || "authoritative_verifier",
             exitCode: 0,
-            stdoutHash: hashContent("VERIFIED_BY_TASK_COMPLETED"),
+            stdoutHash: verifierOutputHash,
             status: "PASSED",
             evaluatorBinding: {
               evaluatorId: "authoritative_verifier",
