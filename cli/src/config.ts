@@ -10,6 +10,7 @@ import { readProvidersFile } from "./provider_file.js";
 import { parseLocalOrigins } from "./core/egress.js";
 import { providerApiKey } from "./credentials.js";
 import { validateBranchName } from "./worktrunk/paths.js";
+import { validateBaseUrl } from "./provider_safety.js";
 import { DEFAULT_OPERATION_POLICY } from "./core/operation.js";
 import { setSandboxNetworkFlag } from "./sandbox_network.js";
 import { readSmallFile } from "./core/checkout_trust.js";
@@ -343,9 +344,11 @@ export function providerBaseUrl(id: string, flag?: string): string {
   if (!url || !originOf(url)) {
     throw new Error(`Provider '${id}' needs a base URL: pass --base-url or set ${baseUrlSetting(id)} in ~/.config/nexus/config.env${def?.auth === "gcp-adc" ? " (or set GOOGLE_CLOUD_LOCATION)" : ""}.`);
   }
-  const parsed = new URL(url.trim());
-  if (parsed.username || parsed.password) throw new Error(`Provider '${id}' base URL must not contain credentials; the key is sent as a header.`);
-  return url.trim().replace(/\/+$/, "");
+  return validateBaseUrl(
+    url,
+    `Provider '${id}' base URL`,
+    parseLocalOrigins(operatorSetting("NEXUS_LOCAL_ORIGINS") ?? process.env.NEXUS_LOCAL_ORIGINS),
+  );
 }
 
 /**
