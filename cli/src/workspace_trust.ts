@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { writePrivateFile } from "./core/durable_file.js";
 
 /** Workspace files that configure MCP servers, and directories plugins are loaded from: used only when trusted. */
 export const WORKSPACE_MCP_FILES = [".mcp.json", "mcp.json"];
@@ -68,11 +69,8 @@ export function setWorkspaceTrusted(workspace: string, trusted: boolean): string
   const resolved = path.resolve(workspace);
   const realWs = fs.existsSync(resolved) ? fs.realpathSync(resolved) : resolved;
   const storePath = getTrustStorePath();
-  fs.mkdirSync(path.dirname(storePath), { recursive: true, mode: 0o700 });
   const list = listTrustedWorkspaces().filter((p) => p !== realWs);
   if (trusted) list.push(realWs);
-  const temp = `${storePath}.${process.pid}.tmp`;
-  fs.writeFileSync(temp, JSON.stringify({ trustedPaths: list }, null, 2), { mode: 0o600 });
-  fs.renameSync(temp, storePath);
+  writePrivateFile(storePath, JSON.stringify({ trustedPaths: list }, null, 2), { durable: true });
   return realWs;
 }

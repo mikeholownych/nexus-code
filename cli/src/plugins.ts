@@ -259,7 +259,9 @@ export class PluginManager {
     for (const p of this.plugins.values()) {
       if (p.onToolCall) {
         try {
-          await p.onToolCall({ toolName, args });
+          // This hook observes an approved call; it must not be able to mutate the arguments
+          // that the executor will use after notification completes.
+          await p.onToolCall({ toolName, args: structuredClone(args) });
         } catch {}
       }
     }

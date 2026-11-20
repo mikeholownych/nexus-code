@@ -35,6 +35,8 @@ import {
   syncDirectory,
   acquireReclaimGuard,
   releaseReclaimGuard,
+  currentUpgradeBootId,
+  upgradeLockHolderLive,
 } from "./upgrade_journal.js";
 
 export const CANONICAL_REPO = "mikeholownych/nexus-code";
@@ -985,7 +987,7 @@ export async function performUpgrade(
   const lockToken = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const writeOwnedLock = () => {
     lockFd = fs.openSync(lockFile, "wx", 0o600);
-    fs.writeFileSync(lockFd, JSON.stringify({ pid:process.pid, token:lockToken }));
+    fs.writeFileSync(lockFd, JSON.stringify({ pid:process.pid, token:lockToken, boot:currentUpgradeBootId() }));
     fs.fsyncSync(lockFd);
     lockIno = fs.fstatSync(lockFd).ino;
   };
@@ -998,11 +1000,7 @@ export async function performUpgrade(
         const existing = JSON.parse(fs.readFileSync(lockFile, "utf8"));
         if (!Number.isSafeInteger(existing.pid) || existing.pid < 1) throw new Error("Upgrade lock owner is invalid");
         const staleStat = fs.lstatSync(lockFile), staleIno = staleStat.ino;
-        try { process.kill(existing.pid, 0); throw new Error(`Another upgrade process (PID ${existing.pid}) is currently running.`); }
-        catch (probeErr: any) {
-          if (probeErr.code === "EPERM") throw new Error(`Another upgrade process (PID ${existing.pid}) is currently running.`);
-          if (probeErr.code !== "ESRCH") throw probeErr;
-        }
+        if (upgradeLockHolderLive(existing)) throw new Error(`Another upgrade process (PID ${existing.pid}) is currently running.`);
         const guardPath = `${lockFile}.guard`;
         let guard = acquireReclaimGuard(guardPath);
         if (!guard) {

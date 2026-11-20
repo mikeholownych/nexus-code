@@ -16,6 +16,7 @@ import { buildConfig } from "../src/config.js";
 import {
   DOCTOR_EXIT,
   DoctorReport,
+  acquireLock,
   doctorExitCode,
   proposedRepairs,
   redactDiagnostic,
@@ -809,6 +810,39 @@ describe("controlled repairs", () => {
       holder.kill();
       assert.ok(locked.repairs!.length > 0 && locked.repairs!.every((r) => r.status === "skipped" && /holds/.test(r.detail)), JSON.stringify(locked.repairs));
       assert.equal(mode(sessions), 0o777, "nothing changed while another doctor --fix held the lock");
+    } finally {
+      fs.rmSync(h, { recursive: true, force: true });
+    }
+  });
+
+  test("a recent empty doctor lock is not stolen during the create-to-pid-write window", () => {
+    const h = tmp("nexus-doctor-lock-window-");
+    try {
+      const dir = path.join(h, ".nexus");
+      fs.mkdirSync(dir, { mode: 0o700 });
+      const lock = path.join(dir, "doctor.lock");
+      fs.writeFileSync(lock, "", { mode: 0o600 });
+
+      assert.equal(acquireLock(h, lock), undefined);
+      assert.equal(fs.readFileSync(lock, "utf8"), "", "the possible writer's lock remains untouched");
+    } finally {
+      fs.rmSync(h, { recursive: true, force: true });
+    }
+  });
+
+  test("an old empty doctor lock can be safely taken over", () => {
+    const h = tmp("nexus-doctor-stale-lock-");
+    try {
+      const dir = path.join(h, ".nexus");
+      fs.mkdirSync(dir, { mode: 0o700 });
+      const lock = path.join(dir, "doctor.lock");
+      fs.writeFileSync(lock, "", { mode: 0o600 });
+      const old = new Date(Date.now() - 60_000);
+      fs.utimesSync(lock, old, old);
+
+      const identity = acquireLock(h, lock);
+      assert.ok(identity, "the old empty file is stale");
+      assert.equal(fs.readFileSync(lock, "utf8"), String(process.pid));
     } finally {
       fs.rmSync(h, { recursive: true, force: true });
     }

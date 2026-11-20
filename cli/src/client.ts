@@ -36,8 +36,9 @@ import { wireProtocol } from "./protocols/index.js";
 import { GcpAuthError, gcpTokenSource, resolveVertexTarget, vertexPath } from "./protocols/gcp_adc.js";
 import { buildChatRequest, chatStreamParser, chatUsage, ChatErrorFrame, parseChatResponse, readChatStream } from "./protocols/openai_chat.js";
 import { UsageLedger, type UsageReport } from "./usage.js";
-import { localEndpointCredential, localEndpointCredentials, resolveCredential, saveCredential, type StoredCredential } from "./credentials.js";
-import { COPILOT_HEADERS, copilotToken, refreshOAuth } from "./oauth.js";
+import { localEndpointCredential, localEndpointCredentials, resolveCredential, type StoredCredential } from "./credentials.js";
+import { COPILOT_HEADERS, copilotToken } from "./oauth.js";
+import { refreshStoredSignIn } from "./oauth_shared_refresh.js";
 import { providerDefinition } from "./providers.js";
 import { ServerKindCache } from "./core/server_kind_cache.js";
 import { persistableEndpoint } from "./core/endpoint_identity.js";
@@ -1083,8 +1084,7 @@ export class LocalLlmClient {
     if (!fresh(cred) || force) {
       try {
         if (found.refreshable) {
-          cred = (await refreshOAuth(id, cred)) as OAuthCredential;
-          saveCredential(id, cred);
+          cred = await refreshStoredSignIn(id, cred, cred.access);
         } else if (id === "copilot" && cred.refresh) {
           if (force || !fresh(this.exchangedToken) || this.exchangedToken?.refresh !== cred.refresh) {
             this.exchangedToken = (await copilotToken(cred.refresh)) as OAuthCredential;

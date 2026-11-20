@@ -1511,7 +1511,9 @@ export async function runRepairs(report: DoctorReport, options: RepairOptions): 
  * that no longer exists is taken over. Returns the lock's identity (for a verified removal), or undefined when a live
  * process holds it.
  */
-function acquireLock(home: string, lock: string): Identity | undefined {
+const DOCTOR_LOCK_WRITE_WINDOW_MS = 5_000;
+
+export function acquireLock(home: string, lock: string): Identity | undefined {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       return writeExclusiveVerified(home, lock, String(process.pid));
@@ -1526,6 +1528,12 @@ function acquireLock(home: string, lock: string): Identity | undefined {
         }
       } catch {}
       if (alive) return undefined;
+      // Creation and pid write are separate syscalls. A fresh empty/unreadable lock can belong to a writer in that
+      // window, so leave it untouched until it is old enough to be confidently stale.
+      if (!(pid > 0)) {
+        const stat = fs.lstatSync(lock, { throwIfNoEntry: false });
+        if (stat && Date.now() - stat.mtimeMs < DOCTOR_LOCK_WRITE_WINDOW_MS) return undefined;
+      }
       const stale = identityOf(lock);
       if (stale) unlinkVerified(home, lock, stale);
     }

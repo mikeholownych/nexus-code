@@ -32,6 +32,24 @@ import { baseUrlSetting, originOf, providerDefinition } from "./providers.js";
 import { providerApiKey } from "./credentials.js";
 import type { HarnessConfig } from "./types.js";
 
+/** Persist the operator's conversation restore in the operation event journal. */
+export function recordCheckpointRestored(
+  state: DurableOperationState,
+  unitId: string,
+  name: string,
+  restored: { record: { messages: number }; backupDir?: string },
+  now: () => number = Date.now,
+): void {
+  const at = now();
+  const registry = new ResourceRegistry(state.resources, state.conditions, { now: () => at, random: Math.random });
+  new ConvergenceScheduler(state, registry, () => at).emit(
+    "CHECKPOINT_RESTORED",
+    `Restored ${unitId} from checkpoint ${name} (${restored.record.messages} messages).`,
+    { unitId, detail: { checkpoint: name, messages: restored.record.messages, ...(restored.backupDir ? { previousStateKept: restored.backupDir } : {}) } },
+  );
+  state.updatedAt = new Date(at).toISOString();
+}
+
 interface OperationSpec {
   id?: string;
   objective: string;
@@ -509,6 +527,7 @@ export function registerOperationCommands(program: Command): void {
         try {
           const state = store.load(id);
           const restored = restoreContextCheckpoint(store.manager, state, unitId, name);
+          recordCheckpointRestored(state, unitId, name, restored);
           store.save(state);
           console.log(pc.bold(`Restored ${unitId} from ${name}`) + pc.dim(` — ${restored.record.messages} messages`));
           if (restored.backupDir) console.log(pc.dim(`  previous task state kept at ${restored.backupDir}`));

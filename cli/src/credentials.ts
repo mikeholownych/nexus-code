@@ -15,6 +15,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { credentialStorageHome } from "./client.js";
 import { acquireFileGuard, releaseFileGuard } from "./core/file_guard.js";
+import { writePrivateFile } from "./core/durable_file.js";
 
 export type StoredCredential =
   | { type: "api"; key: string; label?: string; savedAt: string }
@@ -175,11 +176,7 @@ function readStoreForWrite(): StoreFile {
 /** Atomic, owner-only write: a credential file is never briefly world-readable or half-written. */
 function writeStore(store: StoreFile): void {
   const file = credentialsPath();
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(store, null, 2) + "\n", { mode: 0o600 });
-  fs.renameSync(tmp, file);
-  fs.chmodSync(file, 0o600);
+  writePrivateFile(file, JSON.stringify(store, null, 2) + "\n", { durable: true });
 }
 
 function withCredentialStoreGuard<T>(callback: () => T): T {

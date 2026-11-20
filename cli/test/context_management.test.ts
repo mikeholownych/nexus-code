@@ -641,6 +641,13 @@ test("the CLI checkpoints, lists and restores a unit conversation", () => {
     assert.match(restored.stdout, /Restored u1 from cli-cp/);
     assert.match(restored.stdout, /recovered as unverified/);
     assert.equal(JSON.parse(fs.readFileSync(taskFile, "utf8")).messages.length, 2);
+    const restoredOperation = store.load(state.id);
+    const restoreEvent = restoredOperation.events.at(-1);
+    assert.equal(restoreEvent?.type, "CHECKPOINT_RESTORED");
+    assert.equal(restoreEvent?.unitId, "u1");
+    assert.equal(restoreEvent?.detail?.checkpoint, "cli-cp");
+    assert.equal(restoreEvent?.detail?.messages, 2);
+    assert.equal(typeof restoreEvent?.detail?.previousStateKept, "string", "the restore's backup remains traceable after persistence redaction");
 
     const rejected = runCli(["operation", "checkpoint", state.id, "u1", "--name", "../escape", "-w", workspace], env);
     assert.equal(rejected.status, 2);

@@ -287,6 +287,30 @@ describe("signed-in providers in the client", () => {
     } finally { await tokens.close(); await backend.close(); }
   });
 
+  test("concurrent Nexus-owned refreshes use one rotating refresh token and both clients get the new access token", async () => {
+    let consumed = false;
+    const tokens = await mock((_s, res) => {
+      if (consumed) return json(res, 400, { error: "invalid_grant" });
+      consumed = true;
+      setTimeout(() => json(res, 200, { access_token: "at-SHARED", refresh_token: "rt-2", expires_in: 3600 }), 40);
+    });
+    const backend = await mock((_s, res) => sse(res, responsesDone("hi")));
+    try {
+      setOAuthEndpoints({ chatgptIssuer: tokens.url });
+      saveCredential("chatgpt", { type: "oauth", access: "at-OLD", refresh: "rt-1", expiresAt: Date.now() - 1000, savedAt: "t" });
+      const clients = [0, 1].map(() => new LocalLlmClient(cfg({ provider: "chatgpt", endpoint: backend.url, model: "gpt-5-codex" })));
+
+      const results = await Promise.all(clients.map((client) => client.chatCompletion([{ role: "user", content: "x" }], [])));
+
+      assert.equal(results.length, 2);
+      assert.equal(tokens.seen.length, 1, "a rotating refresh token is submitted only once per process");
+      assert.equal(backend.seen.length, 2);
+      assert.ok(backend.seen.every((request) => request.headers.authorization === "Bearer at-SHARED"));
+      const stored = JSON.parse(fs.readFileSync(credentialsPath(), "utf8")).providers.chatgpt;
+      assert.equal(stored.refresh, "rt-2");
+    } finally { await tokens.close(); await backend.close(); }
+  });
+
   test("ChatGPT via Codex CLI: an expired token is never refreshed by Nexus and nothing is sent", async () => {
     const tokens = await mock((_s, res) => json(res, 200, {}));
     const backend = await mock((_s, res) => sse(res, responsesDone("x")));

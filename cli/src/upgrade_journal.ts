@@ -386,6 +386,23 @@ export function releaseReclaimGuard(guard: ReclaimGuard | null): void {
   releaseFileGuard(guard);
 }
 
+/** Linux boot identity distinguishes a PID reused after restart from the process that wrote an upgrade lock. */
+export function currentUpgradeBootId(): string | undefined {
+  try { return fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() || undefined; }
+  catch { return undefined; }
+}
+
+/** Old locks without boot metadata retain the previous PID-only behavior. */
+export function upgradeLockHolderLive(holder: { pid: number; boot?: unknown }, boot = currentUpgradeBootId()): boolean {
+  if (typeof holder.boot === "string" && boot && holder.boot !== boot) return false;
+  try { process.kill(holder.pid, 0); return true; }
+  catch (error: any) {
+    if (error.code === "EPERM") return true;
+    if (error.code === "ESRCH") return false;
+    throw error;
+  }
+}
+
 /**
  * Idempotent crash recovery: inspects journal and restores working installation or finalizes transition.
  */
@@ -400,7 +417,7 @@ export function recoverUpgrade(prefix: string, options: { forceRollback?: boolea
   const inProgress: RecoveryOutcome = { recovered:false, action:"upgrade_in_progress", details:"An upgrade transaction is currently in progress." };
   const acquire = () => {
     const fd = fs.openSync(lock, "wx", 0o600);
-    try { fs.writeFileSync(fd, JSON.stringify({ pid:process.pid, token })); fs.fsyncSync(fd); ownedIno = fs.fstatSync(fd).ino; }
+    try { fs.writeFileSync(fd, JSON.stringify({ pid:process.pid, token, boot:currentUpgradeBootId() })); fs.fsyncSync(fd); ownedIno = fs.fstatSync(fd).ino; }
     finally { fs.closeSync(fd); }
     owned = true;
   };
@@ -410,10 +427,8 @@ export function recoverUpgrade(prefix: string, options: { forceRollback?: boolea
       const staleStat = fs.lstatSync(lock), staleIno = staleStat.ino;
       const holder = JSON.parse(fs.readFileSync(lock, "utf8"));
       if (!Number.isSafeInteger(holder.pid) || holder.pid < 1) throw new Error("Upgrade lock is invalid");
-      if (holder.pid === process.pid && !options.lockHeld) return inProgress;
-      if (holder.pid !== process.pid) {
-        try { process.kill(holder.pid, 0); return inProgress; }
-        catch (error:any) { if (error.code === "EPERM") return inProgress; if (error.code !== "ESRCH") throw error; }
+      if (!options.lockHeld && upgradeLockHolderLive(holder)) return inProgress;
+      if (!upgradeLockHolderLive(holder)) {
         options.onStaleLockObserved?.();
         const guardPath = `${lock}.guard`;
         let guard = acquireReclaimGuard(guardPath);
