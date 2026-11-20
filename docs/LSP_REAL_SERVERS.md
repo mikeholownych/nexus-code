@@ -21,7 +21,7 @@ cd cli && node scripts/run_tests.mjs test/lsp_real_servers.test.ts
 NEXUS_LSP_REQUIRE=1 node scripts/run_tests.mjs test/lsp_real_servers.test.ts   # missing server = failure
 ```
 
-The suite runs under a throwaway HOME, so a tool installed only for the current user (`pip install --user`, `~/.cargo/bin` reached through the real HOME) is invisible. The workflow installs with `npm -g`, and sets `RUSTUP_HOME` and `CARGO_HOME` for the rustup proxy.
+The suite runs under a throwaway HOME, so a tool installed only for the current user (`pip install --user`, `~/.cargo/bin` reached through the real HOME) is invisible. The workflow installs with `npm -g`, and sets `RUSTUP_HOME` and `CARGO_HOME` for the rustup proxy. The real-server workflow pins Node 22.22.1, Go 1.27.4, Rust 1.95.0 with its rust-analyzer component, gopls v0.24.0, TypeScript 5.6.3, typescript-language-server 4.3.4, and pyright 1.1.390. All four servers are required; an installation or startup failure fails the run.
 
 ## What it found
 
@@ -38,3 +38,7 @@ The first real run showed the default launch commands for TypeScript, JavaScript
 - **Three-file navigation extension:** hosted run [44606102675](https://github.com/mikeholownych/nexus-code/actions/runs/44606102675) on commit `99c6049f` (2026-11-19) passed all 10 tests with `NEXUS_LSP_REQUIRE=typescript,python,go,rust`: all four real servers passed the diagnostics and navigation cases, with 0 failures, skips, or todos. This is a small three-source-file chain, not evidence for large-project behavior.
 - **Hover and definition (CS-6 follow-up):** each real server is asked, through the product, to hover and go to the definition through a three-source-file project (positions are 1-based, as `lsp_hover` and `lsp_definition` take them); the call is retried until the case timeout because servers answer only after analysis, and the definition must point into the defining file. This checks a small import/re-export chain; it does not establish behavior on large projects.
 - **Cost and limit:** a first Rust diagnostics call on a large crate can take as long as the project load, and is bounded by the caller's timeout, after which the existing "published no diagnostics" `unavailable` applies. Later calls return as soon as progress is quiet. A change to an already-open file is not waited on separately: the latest published list is returned.
+
+## Pinned hosted environment (2026-11-20)
+
+The workflow now pins the Go toolchain and gopls to Go 1.27.4 and gopls v0.24.0, matching hosted run [44606741719](https://github.com/mikeholownych/nexus-code/actions/runs/44606741719), which resolved those versions and passed all four real-server cases. It installs Rust 1.95.0 with the rust-analyzer component and makes that the default toolchain because the product starts rustup's proxy from fixture directories outside the repository. The workflow makes TypeScript, Python, Go, and Rust mandatory, so setup drift cannot silently turn a missing server into a skipped test. The updated workflow itself still requires a fresh hosted run before this change is considered verified.

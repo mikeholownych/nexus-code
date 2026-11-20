@@ -5,9 +5,8 @@ name: LSP real servers
 # The ordinary suite exercises the client only against a fake server. Not a required check. See docs/LSP_REAL_SERVERS.md
 # for what it covers and what it does not.
 #
-# typescript-language-server and pyright are installed with npm at pinned versions and are REQUIRED here
-# (NEXUS_LSP_REQUIRE): a missing one fails the job. rust-analyzer and gopls are best-effort installs; if one cannot be
-# installed its case skips with a reason in the log.
+# All four real servers and their language toolchains are pinned and REQUIRED here (NEXUS_LSP_REQUIRE): a missing or
+# unusable server fails the job instead of silently reducing coverage.
 on:
   schedule:
     - cron: "17 4 * * 1"
@@ -29,26 +28,25 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22.22.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.27.4
       # Installed system-wide (npm -g puts them on an absolute PATH entry): the tests run under a throwaway HOME, where
       # per-user installs (pip --user) are invisible (the MQ-3 first-run failure).
       - name: Install typescript-language-server and pyright
         run: npm install --global --no-audit --no-fund typescript@5.6.3 typescript-language-server@4.3.4 pyright@1.1.390
-      - name: Install rust-analyzer (best effort)
-        continue-on-error: true
+      - name: Install pinned rust-analyzer toolchain
         run: |
-          # The product launches the server in a fixture directory outside this repository, where rustup uses the DEFAULT toolchain,
-          # not the one the repository's rust-toolchain.toml pins: add the component there (from a directory with no override).
-          (cd "$RUNNER_TEMP" && rustup component add rust-analyzer)
+          # The product launches the server in a fixture outside this repository. Pin its default rustup toolchain there too.
+          rustup toolchain install 1.95.0 --profile minimal --component rust-analyzer
+          rustup default 1.95.0
           # The rustup proxy finds its toolchain through RUSTUP_HOME / CARGO_HOME; the tests' throwaway HOME hides the defaults.
           echo "RUSTUP_HOME=$(rustup show home)" >> "$GITHUB_ENV"
           echo "CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}" >> "$GITHUB_ENV"
-      - name: Install gopls (best effort)
-        continue-on-error: true
+      - name: Install pinned gopls
         run: |
-          # Not pinned: an old gopls stops building when the runner image moves to a newer Go (gopls v0.16.2 failed to build on 2026-11-18); this job exists to meet the current servers.
-          # @latest may need a newer Go than the runner has and download that toolchain; the proxy can fail transiently (a stream error on 2026-11-18), so retry.
           for attempt in 1 2 3; do
-            GOBIN="$RUNNER_TEMP/gobin" go install golang.org/x/tools/gopls@latest && break
+            GOBIN="$RUNNER_TEMP/gobin" go install golang.org/x/tools/gopls@v0.24.0 && break
             [ "$attempt" = 3 ] && exit 1
             sleep 15
           done
