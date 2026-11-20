@@ -12,6 +12,7 @@ import {
   DurableTaskState,
   CURRENT_STATE_SCHEMA_VERSION,
   CorruptStateError,
+  TaskStateWriteError,
   UnsupportedSchemaVersionError,
   TaskStateNotFoundError,
   TaskIdentityMismatchError,
@@ -106,6 +107,74 @@ describe("WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PE
     const updated = manager.loadTaskState(taskId);
     assert.strictEqual(updated.activePlan[1].status, "completed");
     assert.strictEqual(updated.milestones.length, 2);
+  });
+
+  test("completed task status is terminal and invalid lifecycle values cannot be written", () => {
+    const manager = new DurableStateManager({ baseDir: tasksDir, workspacePaths: [WorkspacePath.fromSelectedWorkspace(gitRepoDir)] });
+    const taskId = "task-terminal-status";
+    const state: DurableTaskState = {
+      schemaVersion: CURRENT_STATE_SCHEMA_VERSION,
+      taskId,
+      sessionId: taskId,
+      id: taskId,
+      title: "Terminal status",
+      workspacePath: gitRepoDir,
+      workspace: gitRepoDir,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      status: "completed",
+      activePlan: [{ name: "Verify", status: "completed" }],
+      milestones: [],
+      validationReceipts: [],
+      messages: [],
+    };
+    manager.saveTaskState(state);
+
+    assert.throws(
+      () => manager.saveTaskState({ ...state, status: "in_progress" }),
+      (error: Error) => error instanceof TaskStateWriteError && /Completed task status cannot regress/.test(error.message),
+    );
+    assert.throws(
+      () => manager.saveTaskState({ ...state, status: "done" as any }),
+      (error: Error) => error instanceof TaskStateWriteError && /invalid lifecycle status/.test(error.message),
+    );
+    assert.throws(
+      () => manager.saveTaskState({ ...state, activePlan: [{ name: "Verify", status: "done" }] }),
+      (error: Error) => error instanceof TaskStateWriteError && /activePlan\[0\].*invalid status/.test(error.message),
+    );
+    assert.equal(manager.loadTaskState(taskId).status, "completed", "a rejected downgrade must leave completed state on disk");
+  });
+
+  test("an invalid persisted task lifecycle status is quarantined on load", () => {
+    const manager = new DurableStateManager({ baseDir: tasksDir, workspacePaths: [WorkspacePath.fromSelectedWorkspace(gitRepoDir)] });
+    const taskId = "task-invalid-status";
+    const state: DurableTaskState = {
+      schemaVersion: CURRENT_STATE_SCHEMA_VERSION,
+      taskId,
+      sessionId: taskId,
+      id: taskId,
+      title: "Invalid status",
+      workspacePath: gitRepoDir,
+      workspace: gitRepoDir,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      status: "pending",
+      activePlan: [],
+      milestones: [],
+      validationReceipts: [],
+      messages: [],
+    };
+    manager.saveTaskState(state);
+    const filePath = manager.getStateFilePath(taskId);
+    const raw = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    raw.status = "succeeded";
+    fs.writeFileSync(filePath, JSON.stringify(raw));
+
+    assert.throws(
+      () => manager.loadTaskState(taskId),
+      (error: Error) => error instanceof CorruptStateError && /invalid lifecycle status \(succeeded\)/.test(error.message) && !!error.quarantinedPath,
+    );
+    assert.ok(!fs.existsSync(filePath), "the invalid record must not remain loadable as live state");
   });
 
   test("PERS-001 & Multi-task: Task identity isolation", () => {

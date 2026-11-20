@@ -46,6 +46,15 @@ export type TaskLifecycleStatus =
   | "failed"
   | "interrupted";
 
+const TASK_LIFECYCLE_STATUSES = new Set<TaskLifecycleStatus>([
+  "pending",
+  "in_progress",
+  "completed",
+  "failed",
+  "interrupted",
+]);
+const PLAN_PHASE_STATUSES = new Set(["pending", "in_progress", "completed", "failed"]);
+
 export type OperationLifecycleStatus =
   | "not_started"
   | "in_flight"
@@ -565,6 +574,8 @@ export class DurableStateManager {
     }
     state.updatedAt = new Date().toISOString();
     if (state.schemaVersion > CURRENT_STATE_SCHEMA_VERSION) throw new UnsupportedSchemaVersionError(state.schemaVersion);
+    const lifecycleProblem = taskLifecycleProblem(state);
+    if (lifecycleProblem) throw new TaskStateWriteError(state.taskId, lifecycleProblem);
     state.schemaVersion = CURRENT_STATE_SCHEMA_VERSION;
     // Maintain compatibility aliases
     state.id = state.sessionId || state.taskId;
@@ -605,6 +616,14 @@ export class DurableStateManager {
       const previous = this.readStoredRecord(safeTaskId, true);
       if (previous?.parsed.taskId && previous.parsed.taskId !== safeTaskId) {
         throw new TaskIdentityMismatchError(safeTaskId, previous.parsed.taskId);
+      }
+      if (previous) {
+        const previousState = this.migrateIfLegacy(previous.parsed, safeTaskId);
+        const previousProblem = taskLifecycleProblem(previousState);
+        if (previousProblem) throw new CorruptStateError(safeTaskId, previousProblem, this.quarantineFile(previous.filePath));
+        if (previousState.status === "completed" && state.status !== "completed") {
+          throw new TaskStateWriteError(safeTaskId, "Completed task status cannot regress");
+        }
       }
       if (previous) this.backupBeforeMigration(previous);
       const parent: TaskMessageCursor | null = previous?.version === 2 ? previous.parsed.messageLog : null;
@@ -648,6 +667,8 @@ export class DurableStateManager {
     // Schema version check (fails closed on unsupported future versions) is performed before reading any messages.
     // Migrate legacy session file if necessary with pre-migration backup; publication below creates the backup first.
     const state: DurableTaskState = this.migrateIfLegacy(record.parsed, taskId);
+    const lifecycleProblem = taskLifecycleProblem(state);
+    if (lifecycleProblem) throw new CorruptStateError(taskId, lifecycleProblem, this.quarantineFile(record.filePath));
     this.normalizeWorktreeBinding(state, taskId, record);
 
     // Verify task identity binding
@@ -1214,4 +1235,20 @@ export class DurableStateManager {
 
     return migrated;
   }
+}
+
+function taskLifecycleProblem(state: DurableTaskState): string | undefined {
+  if (!TASK_LIFECYCLE_STATUSES.has(state.status)) {
+    return `Task has an invalid lifecycle status (${String(state.status)})`;
+  }
+  if (state.activePlan !== undefined) {
+    if (!Array.isArray(state.activePlan)) return "Task activePlan is not an array";
+    for (let index = 0; index < state.activePlan.length; index++) {
+      const phase = state.activePlan[index];
+      if (!phase || typeof phase !== "object" || !PLAN_PHASE_STATUSES.has(phase.status)) {
+        return `Task activePlan[${index}] has an invalid status (${String(phase?.status)})`;
+      }
+    }
+  }
+  return undefined;
 }

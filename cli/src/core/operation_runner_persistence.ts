@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { credentialStorageHome } from "../client.js";
 import { AccountIdentityError, createOperationAccountIdentity, isLegacyCredentialFingerprint, type OperationAccountIdentity } from "./account_identity.js";
 import type { DurableOperationState } from "./operation.js";
-import { CURRENT_OPERATION_SCHEMA_VERSION, InvalidOperationStateError, LEGACY_OPERATION_SCHEMA_VERSION, migrateOperationState, needsMigrationBackup, UnsupportedOperationSchemaError } from "./operation_schema.js";
+import { CURRENT_OPERATION_SCHEMA_VERSION, InvalidOperationStateError, LEGACY_OPERATION_SCHEMA_VERSION, migrateOperationState, needsMigrationBackup, UnsupportedOperationSchemaError, validateOperationState } from "./operation_schema.js";
 import { writePrivateFile } from "./durable_file.js";
 import { CURRENT_STATE_SCHEMA_VERSION, DurableStateManager, type DurableTaskState, UnsupportedSchemaVersionError } from "./state.js";
 import { WorkspacePath } from "./workspace_path.js";
@@ -52,6 +52,7 @@ export class OperationStore {
 
   save(op: DurableOperationState): void {
     this.preflightFutureVersion(op.id);
+    validateOperationState(op);
     op = migrateLegacyAccountIdentities(op, createOperationAccountIdentity(this.accountIdentityHome));
     const existing = this.manager.hasTaskState(op.id) ? this.manager.loadTaskState(op.id) : undefined;
     // A newer operation document is never overwritten by an older build. Writing over it would destroy the only copy
