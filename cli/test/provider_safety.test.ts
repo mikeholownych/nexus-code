@@ -14,6 +14,7 @@ test("base URLs: https required for public hosts, no userinfo or fragment, local
   assert.equal(validateBaseUrl("http://127.0.0.1:8080/v1"), "http://127.0.0.1:8080/v1");
   assert.throws(() => validateBaseUrl("http://api.example.com/v1"), /baseUrl: http is allowed only for local/);
   assert.throws(() => validateBaseUrl("https://user:pw@api.example.com"), /credentials in the URL/);
+  assert.throws(() => validateBaseUrl("https://api.example.com/v1?tenant=secret"), /query is not allowed/);
   assert.throws(() => validateBaseUrl("https://api.example.com/#x"), /fragment/);
   assert.throws(() => validateBaseUrl("ftp://api.example.com"), /only http and https/);
   assert.throws(() => validateBaseUrl("not a url"), /not a valid absolute URL/);
@@ -45,6 +46,14 @@ test("operator-declared header names join the redaction list lowercased", () => 
 
 test("a configured provider base URL with embedded credentials is refused", async () => {
   const { providerBaseUrl } = await import("../src/config.js");
-  assert.throws(() => providerBaseUrl("compatible", "https://user:secret@api.example.com/v1"), /must not contain credentials/);
+  assert.throws(() => providerBaseUrl("compatible", "https://user:secret@api.example.com/v1"), /credentials in the URL are not allowed/);
   assert.equal(providerBaseUrl("compatible", "https://api.example.com/v1/"), "https://api.example.com/v1");
+});
+
+test("an operator base-URL override uses the provider safety rules", async () => {
+  const { providerBaseUrl } = await import("../src/config.js");
+  assert.throws(() => providerBaseUrl("compatible", "http://api.example.com/v1"), /http is allowed only for local destinations/);
+  assert.throws(() => providerBaseUrl("compatible", "https://api.example.com/v1?tenant=secret"), /query is not allowed/);
+  assert.throws(() => providerBaseUrl("compatible", "https://api.example.com/v1#fragment"), /fragment/);
+  assert.equal(providerBaseUrl("compatible", "http://127.0.0.1:8080/v1/"), "http://127.0.0.1:8080/v1");
 });

@@ -42,6 +42,7 @@ export function validateBaseUrl(raw: unknown, field = "baseUrl", localOrigins: r
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error(`${field}: only http and https URLs are allowed`);
   if (url.username || url.password) throw new Error(`${field}: credentials in the URL are not allowed`);
+  if (url.search || raw.trim().includes("?")) throw new Error(`${field}: a URL query is not allowed`);
   if (url.hash) throw new Error(`${field}: a URL fragment is not allowed`);
   if (url.protocol === "http:") {
     const boundary = classifyDestination(url.toString(), undefined, { localOrigins });
