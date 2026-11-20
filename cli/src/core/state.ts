@@ -621,9 +621,6 @@ export class DurableStateManager {
         const previousState = this.migrateIfLegacy(previous.parsed, safeTaskId);
         const previousProblem = taskLifecycleProblem(previousState);
         if (previousProblem) throw new CorruptStateError(safeTaskId, previousProblem, this.quarantineFile(previous.filePath));
-        if (previousState.status === "completed" && state.status !== "completed") {
-          throw new TaskStateWriteError(safeTaskId, "Completed task status cannot regress");
-        }
       }
       if (previous) this.backupBeforeMigration(previous);
       const parent: TaskMessageCursor | null = previous?.version === 2 ? previous.parsed.messageLog : null;

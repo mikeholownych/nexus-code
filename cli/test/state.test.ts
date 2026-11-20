@@ -109,7 +109,7 @@ describe("WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PE
     assert.strictEqual(updated.milestones.length, 2);
   });
 
-  test("completed task status is terminal and invalid lifecycle values cannot be written", () => {
+  test("a later turn can resume a completed task and invalid lifecycle values cannot be written", () => {
     const manager = new DurableStateManager({ baseDir: tasksDir, workspacePaths: [WorkspacePath.fromSelectedWorkspace(gitRepoDir)] });
     const taskId = "task-terminal-status";
     const state: DurableTaskState = {
@@ -130,19 +130,16 @@ describe("WP-07: Durable Task State Persistence & Milestone Recovery (INC-08, PE
     };
     manager.saveTaskState(state);
 
-    assert.throws(
-      () => manager.saveTaskState({ ...state, status: "in_progress" }),
-      (error: Error) => error instanceof TaskStateWriteError && /Completed task status cannot regress/.test(error.message),
-    );
+    manager.saveTaskState({ ...state, status: "in_progress" });
     assert.throws(
       () => manager.saveTaskState({ ...state, status: "done" as any }),
       (error: Error) => error instanceof TaskStateWriteError && /invalid lifecycle status/.test(error.message),
     );
     assert.throws(
-      () => manager.saveTaskState({ ...state, activePlan: [{ name: "Verify", status: "done" }] }),
+      () => manager.saveTaskState({ ...state, status: "in_progress", activePlan: [{ name: "Verify", status: "done" }] }),
       (error: Error) => error instanceof TaskStateWriteError && /activePlan\[0\].*invalid status/.test(error.message),
     );
-    assert.equal(manager.loadTaskState(taskId).status, "completed", "a rejected downgrade must leave completed state on disk");
+    assert.equal(manager.loadTaskState(taskId).status, "in_progress", "a rejected invalid update must preserve the resumed task state");
   });
 
   test("an invalid persisted task lifecycle status is quarantined on load", () => {
