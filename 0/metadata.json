@@ -1,0 +1,43 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M7WDWXW67P4FP6C1MHE454FZ",
+  "session_id": "01a1f54f-2cb2-7201-ad27-acf2d9bbd90e",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-20T12:11:37.172320418Z",
+  "branch": "v1/mcp-extension-capabilities",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "cli/src/agent.ts",
+    "cli/test/mcp_tool_through_spine.test.ts"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6-luna",
+  "turn_id": "e52b855518fc",
+  "checkpoint_transcript_start": 4856,
+  "transcript_lines_at_start": 4856,
+  "compact_transcript_start": 681,
+  "token_usage": {
+    "input_tokens": 21836,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 1362560,
+    "output_tokens": 2881,
+    "api_call_count": 21
+  },
+  "redaction": {
+    "replacements": 97,
+    "layers": {
+      "betterleaks": 70,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 9,
+      "credentialed_uri": 10,
+      "entropy": 43,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 11
+  }
+}
