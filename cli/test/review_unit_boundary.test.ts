@@ -503,6 +503,20 @@ test("R8: the review instructions name the scope only when one is declared", () 
   assert.match(prompt, /against the objective requirements/);
 });
 
+test("review evidence carries operation-declared unresolved assumptions to the prompt", () => {
+  const dir = repo();
+  fs.writeFileSync(path.join(dir, "math.js"), "export const add = (a, b) => a + b;\n");
+  const executor = new AgentWorkUnitExecutor({ baseConfig: {} as HarnessConfig });
+  const assumptions = ["Existing callers rely on the current error shape."];
+  const reviewUnit = { ...unit, unresolvedAssumptions: assumptions };
+  const ctx = { objective: "Fix add", workspace: dir, startCommit: head(dir), dependencies: [] };
+  const pkg = internals(executor).reviewEvidence(reviewUnit, ctx, dir);
+  assert.deepEqual(pkg.unresolvedAssumptions, assumptions);
+  const prompt = internals(executor).initialPrompt(reviewUnit, ctx, undefined, pkg);
+  assert.match(prompt, /Existing callers rely on the current error shape/);
+  assert.match(prompt, /Treat unresolved assumptions as unverified claims/);
+});
+
 test("an unbound dependency pass is surfaced to the reviewer even when a bound pass comes first", () => {
   const dir = repo();
   fs.writeFileSync(path.join(dir, "math.js"), "export const add = (a, b) => a + b;\n");
