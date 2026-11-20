@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M7WC8X8AY8F9GD7DC910MPTX",
+  "strategy": "manual-commit",
+  "branch": "v1/v1.2x-backlog-rd7-sync",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "docs/v1.2.2/BACKLOG.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 254689,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 22012032,
+    "output_tokens": 28254,
+    "api_call_count": 181,
+    "subagent_tokens_complete": true
+  },
+  "redaction": {
+    "replacements": 78,
+    "layers": {
+      "betterleaks": 56,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 8,
+      "credentialed_uri": 8,
+      "entropy": 34,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
