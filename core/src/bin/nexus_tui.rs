@@ -45,16 +45,15 @@ mod live_view;
 #[path = "nexus_tui/live.rs"]
 mod live;
 
-const ACCENT: Color = Color::Rgb(103, 232, 249);
-const MUTED: Color = Color::Rgb(125, 145, 158);
-const SURFACE: Color = Color::Rgb(18, 27, 37);
+const ACCENT: Color = Color::Cyan;
+const MUTED: Color = Color::Reset;
+const SURFACE: Color = Color::Reset;
 
 fn theme_accent(theme: &str) -> Color {
     match theme {
-        "catppuccin" => Color::Rgb(137, 220, 235),
-        "nord" => Color::Rgb(136, 192, 208),
-        "dracula" => Color::Rgb(189, 147, 249),
-        "monochrome" => Color::White,
+        "catppuccin" | "nord" => Color::Cyan,
+        "dracula" => Color::Magenta,
+        "monochrome" => Color::Reset,
         _ => ACCENT,
     }
 }
@@ -291,7 +290,7 @@ fn render_header(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot) {
         ),
         Span::styled(
             short_path(&data.workspace, if area.width < 82 { 16 } else { 28 }),
-            Style::default().fg(Color::White),
+            Style::default().fg(Color::Reset),
         ),
     ];
     if area.width >= 82 {
@@ -324,7 +323,7 @@ fn render_header(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot) {
             ),
             Span::styled(
                 one_line(&data.objective, area.width.saturating_sub(14) as usize),
-                Style::default().fg(Color::White),
+                Style::default().fg(Color::Reset),
             ),
         ])),
         rows[1],
@@ -348,7 +347,7 @@ fn render_activity(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot, stat
                     "warning" => ("!", Color::Yellow),
                     "change" => ("▸", theme_accent(&data.theme)),
                     "tool" => ("·", MUTED),
-                    _ => ("◦", Color::White),
+                    _ => ("◦", Color::Reset),
                 };
                 let marker = if index == state.selected { "›" } else { " " };
                 ListItem::new(vec![
@@ -360,7 +359,7 @@ fn render_activity(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot, stat
                         Span::styled(
                             &event.title,
                             Style::default()
-                                .fg(Color::White)
+                                .fg(Color::Reset)
                                 .add_modifier(Modifier::BOLD),
                         ),
                     ]),
@@ -379,7 +378,7 @@ fn render_activity(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot, stat
         .block(
             Block::default()
                 .borders(Borders::LEFT)
-                .border_style(Style::default().fg(Color::DarkGray))
+                .border_style(Style::default().fg(MUTED))
                 .title(Span::styled(
                     "  RECENT SIGNAL  ",
                     Style::default()
@@ -387,7 +386,7 @@ fn render_activity(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot, stat
                         .add_modifier(Modifier::BOLD),
                 )),
         )
-        .highlight_style(Style::default().bg(SURFACE));
+        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
     let mut list_state =
         ListState::default().with_selected((!data.activity.is_empty()).then_some(state.selected));
     frame.render_stateful_widget(list, area, &mut list_state);
@@ -430,7 +429,7 @@ fn render_context(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot) {
                 ),
                 Span::styled(
                     one_line(active, area.width.saturating_sub(8) as usize),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(Color::Reset),
                 ),
             ]),
         ]);
@@ -496,7 +495,7 @@ fn render_context(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot) {
                 Span::styled(format!("  {glyph} "), Style::default().fg(color)),
                 Span::styled(
                     one_line(&item.name, area.width.saturating_sub(8) as usize),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(Color::Reset),
                 ),
             ]));
         }
@@ -692,5 +691,16 @@ mod tests {
     fn selected_theme_changes_the_primary_accent() {
         assert_ne!(theme_accent("default"), theme_accent("dracula"));
         assert_eq!(theme_accent("unknown"), ACCENT);
+    }
+
+    #[test]
+    fn terminal_themes_use_configured_surfaces_and_ansi_accents() {
+        assert_eq!(ACCENT, Color::Cyan);
+        assert_eq!(MUTED, Color::Reset);
+        assert_eq!(SURFACE, Color::Reset);
+        assert_eq!(theme_accent("catppuccin"), Color::Cyan);
+        assert_eq!(theme_accent("nord"), Color::Cyan);
+        assert_eq!(theme_accent("dracula"), Color::Magenta);
+        assert_eq!(theme_accent("monochrome"), Color::Reset);
     }
 }

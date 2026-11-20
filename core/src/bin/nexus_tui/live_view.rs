@@ -22,7 +22,12 @@ use std::time::Duration;
 use crate::models::{Connect, Fetch, Picker, Row, Step};
 use crate::protocol::{ReceiptSection, SlashSpec};
 use crate::review::LineKind;
-use crate::{ACCENT, MUTED, SURFACE};
+
+// Keep the live view readable on both light and dark terminal themes. Meaningful colors are terminal palette roles;
+// neutral text and surfaces inherit the user's configured foreground and background.
+const ACCENT: Color = Color::Cyan;
+const MUTED: Color = Color::Reset;
+const SURFACE: Color = Color::Reset;
 
 pub const MIN_WIDTH: u16 = 40;
 pub const MIN_HEIGHT: u16 = 10;
@@ -30,8 +35,6 @@ const MAX_COMPOSER_ROWS: u16 = 6;
 /// Same cap as the inference failure line in `TerminalUI.turnSummary` (`cli/src/ui.ts`).
 const MAX_FAILURE_CHARS: usize = 300;
 const TAGLINE: &str = "Understand the work. Inspect the evidence. Keep the decision yours.";
-/// Background of the selected tool call in the transcript.
-const SELECTED: Color = Color::Rgb(38, 52, 66);
 /// Spinner frames; one per `FRAME` of wall-clock time, so the animation never depends on model output.
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 pub const FRAME: Duration = Duration::from_millis(100);
@@ -206,7 +209,7 @@ pub fn render_live(frame: &mut Frame, state: &LiveState) -> LiveLayout {
     };
     let mut block = Block::default()
         .borders(Borders::TOP)
-        .border_style(Style::default().fg(Color::DarkGray))
+        .border_style(Style::default().fg(MUTED))
         .title(Span::styled(
             hint_text,
             Style::default().fg(MUTED),
@@ -304,7 +307,7 @@ fn render_checkpoint_choice(
     );
     for (index, option) in options.iter().enumerate() {
         let marker = if selected == Some(index) { "▸" } else { " " };
-        let style = Style::default().fg(Color::White);
+        let style = Style::default().fg(Color::Reset);
         lines.extend(markdown::wrap(
             vec![Span::styled(
                 format!("{marker} {}. {option}", index + 1),
@@ -338,7 +341,7 @@ fn render_review(frame: &mut Frame, area: Rect, state: &LiveState, review: &Diff
     let pal = diff_view::palette(state.depth);
     let muted = Style::default().fg(MUTED);
     let key = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
-    // The whole transcript area: tinted transcript rows never show beside the panel.
+    // The whole transcript area: transcript rows never show beside the panel.
     let rect = area;
     let (title, between) = match &review.scope {
         ReviewScope::Operation { .. } => (" Edit diff · this operation only ", "edit"),
@@ -383,7 +386,7 @@ fn render_review(frame: &mut Frame, area: Rect, state: &LiveState, review: &Diff
                 let (added, removed) = content.patch.files.iter().map(diff_view::FilePatch::counts).fold((0, 0), |a, c| (a.0 + c.0, a.1 + c.1));
                 let files = content.patch.files.len();
                 head.extend(wrap_line(Line::from(vec![
-                    Span::styled(format!("{files} file{} changed  ", if files == 1 { "" } else { "s" }), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!("{files} file{} changed  ", if files == 1 { "" } else { "s" }), Style::default().fg(Color::Reset).add_modifier(Modifier::BOLD)),
                     Span::styled(format!("+{added}"), Style::default().fg(pal.add_fg)),
                     Span::raw(" "),
                     Span::styled(format!("{}{removed}", diff_view::MINUS), Style::default().fg(pal.del_fg)),
@@ -496,7 +499,7 @@ fn render_paste(frame: &mut Frame, area: Rect, state: &LiveState, number: u32, s
                 .map(|(index, row)| {
                     Line::from(vec![
                         Span::styled(format!("{:>4} ", index + 1), muted),
-                        Span::styled(expand_tabs(row).into_owned(), Style::default().fg(Color::White)),
+                        Span::styled(expand_tabs(row).into_owned(), Style::default().fg(Color::Reset)),
                     ])
                 })
                 .collect::<Vec<_>>(),
@@ -637,8 +640,8 @@ fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: th
     // What is proposed, and the target.
     let mut head = markdown::wrap(
         vec![
-            Span::styled(diff_view::approval_safe_text(&tool_verb(&approval.tool)), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-            Span::styled(format!(" {}", diff_view::approval_safe_text(&approval.subject)), Style::default().fg(Color::White)),
+            Span::styled(diff_view::approval_safe_text(&tool_verb(&approval.tool)), Style::default().fg(Color::Reset).add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" {}", diff_view::approval_safe_text(&approval.subject)), Style::default().fg(Color::Reset)),
         ],
         width,
         Vec::new(),
@@ -665,7 +668,7 @@ fn render_approval(frame: &mut Frame, area: Rect, approval: &Approval, depth: th
         let style = if focused {
             Style::default().fg(Color::Black).bg(ACCENT).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White).bg(SURFACE)
+            Style::default().fg(Color::Reset).bg(SURFACE)
         };
         let marker = if focused { "▸" } else { " " };
         vec![Span::styled(format!("{marker}{hotkey} {label} "), style), Span::raw(" ")]
@@ -843,9 +846,9 @@ fn line_style(kind: LineKind) -> Style {
         LineKind::Hunk => Style::default().fg(Color::Cyan),
         LineKind::Meta => Style::default().fg(MUTED),
         LineKind::Command => Style::default()
-            .fg(Color::White)
+            .fg(Color::Reset)
             .add_modifier(Modifier::BOLD),
-        LineKind::Context => Style::default().fg(Color::White),
+        LineKind::Context => Style::default().fg(Color::Reset),
     }
 }
 
@@ -891,7 +894,7 @@ fn render_completion(frame: &mut Frame, area: Rect, found: &[&SlashSpec], pick: 
             let style = if index == pick {
                 Style::default().fg(Color::Black).bg(ACCENT)
             } else {
-                Style::default().fg(Color::White).bg(SURFACE)
+                Style::default().fg(Color::Reset).bg(SURFACE)
             };
             let position = if index == pick { format!(" {}/{} ", pick + 1, found.len()) } else { String::new() };
             let room = usize::from(area.width).saturating_sub(width + 4 + position.chars().count());
@@ -923,9 +926,9 @@ fn render_help(
 ) -> (usize, usize) {
     let key = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
     let heading = Style::default()
-        .fg(Color::White)
+        .fg(Color::Reset)
         .add_modifier(Modifier::BOLD);
-    let white = Style::default().fg(Color::White);
+    let white = Style::default().fg(Color::Reset);
     let help_width = usize::from(area.width.saturating_sub(2).min(96).saturating_sub(4));
     let mut lines: Vec<Line> = help_rows(shift_enter, mouse)
         .into_iter()
@@ -1046,7 +1049,7 @@ fn render_detail(frame: &mut Frame, area: Rect, detail: &Detail) -> (usize, usiz
         Span::styled(
             tool_verb(&detail.tool),
             Style::default()
-                .fg(Color::White)
+                .fg(Color::Reset)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(format!(" {}", detail.subject), muted),
@@ -1081,9 +1084,9 @@ fn render_detail(frame: &mut Frame, area: Rect, detail: &Detail) -> (usize, usiz
 
 fn record_lines(record: &ToolRecord) -> Vec<Line<'_>> {
     let heading = Style::default()
-        .fg(Color::White)
+        .fg(Color::Reset)
         .add_modifier(Modifier::BOLD);
-    let white = Style::default().fg(Color::White);
+    let white = Style::default().fg(Color::Reset);
     let mut lines = vec![Line::from(Span::styled("Arguments", heading))];
     lines.extend(
         record
@@ -1146,7 +1149,7 @@ fn render_receipt(frame: &mut Frame, area: Rect, panel: &ReceiptPanel) -> (usize
 
 fn receipt_lines(sections: &[ReceiptSection]) -> Vec<Line<'_>> {
     let heading = Style::default()
-        .fg(Color::White)
+        .fg(Color::Reset)
         .add_modifier(Modifier::BOLD);
     let muted = Style::default().fg(MUTED);
     let mut lines = Vec::new();
@@ -1178,7 +1181,7 @@ fn verdict_color(value: &str) -> Color {
         "FAILED" | "INVALIDATED" | "NOT_ESTABLISHED" | "INTERRUPTED" | "BLOCKED"
         | "LIMIT_REACHED" | "failure" => Color::Red,
         "UNVERIFIED" | "REGRESSION_FREE" => Color::Yellow,
-        _ => Color::White,
+        _ => Color::Reset,
     }
 }
 
@@ -1247,7 +1250,7 @@ fn render_status(frame: &mut Frame, area: Rect, state: &LiveState) {
         Link::Crashed { .. } => spans.push(Span::styled("  agent stopped — not running", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))),
         _ => {
             // (priority, spans, fuller wording used when room is left over): lower numbers are kept first.
-            let mut segments: Vec<(u8, Vec<Span>, Option<Vec<Span>>)> = vec![(0, vec![Span::styled(format!("  {}", session.workspace_name), Style::default().fg(Color::White).add_modifier(Modifier::BOLD))], None)];
+            let mut segments: Vec<(u8, Vec<Span>, Option<Vec<Span>>)> = vec![(0, vec![Span::styled(format!("  {}", session.workspace_name), Style::default().fg(Color::Reset).add_modifier(Modifier::BOLD))], None)];
             if let Some(branch) = &session.branch {
                 let mut branch_spans = vec![Span::styled(format!("  ⎇ {branch}"), muted)];
                 if session.dirty > 0 {
@@ -1255,14 +1258,14 @@ fn render_status(frame: &mut Frame, area: Rect, state: &LiveState) {
                 }
                 segments.push((4, branch_spans, None));
             }
-            segments.push((2, vec![Span::styled("  model ", muted), Span::styled(session.model.clone(), Style::default().fg(Color::White))], None));
+            segments.push((2, vec![Span::styled("  model ", muted), Span::styled(session.model.clone(), Style::default().fg(Color::Reset))], None));
             // The session id (what /resume takes) is kept only when there is room for it.
             if let Some(id) = &session.session_id {
                 segments.push((6, vec![Span::styled(format!("  {id}"), muted)], None));
             }
             // The mode is kept at every width: whether changes need approval is never hidden.
             if let Some(posture) = &session.posture {
-                let mode_color = if posture.mode == "review" { Color::Yellow } else { Color::White };
+                let mode_color = if posture.mode == "review" { Color::Yellow } else { Color::Reset };
                 segments.push((1, vec![Span::styled(format!("  mode: {}", posture.mode), Style::default().fg(mode_color))], None));
                 let trust_str = if posture.trusted { "trusted" } else { "untrusted" };
                 segments.push((5, vec![
@@ -1575,7 +1578,7 @@ fn prose(pal: &Palette, dim: bool) -> Prose {
     if dim {
         return Prose { text: MUTED, heading: MUTED, muted: MUTED, code: MUTED, link: MUTED };
     }
-    Prose { text: Color::White, heading: ACCENT, muted: MUTED, code: string, link: ACCENT }
+    Prose { text: Color::Reset, heading: ACCENT, muted: MUTED, code: string, link: ACCENT }
 }
 
 /// Lines of output shown under a command in the transcript before its omission line.
@@ -1617,7 +1620,7 @@ fn quiet_block(text: &str, total: u64, limit: usize, width: usize, pal: &Palette
     }
     let skip = if end == Shown::Tail { rows.len() - shown } else { 0 };
     for row in rows.iter().skip(skip).take(limit) {
-        for (mut spans, used) in diff_view::content_rows(row, None, room, Fit::Wrap, pal, Color::Rgb(196, 204, 212), pal.code_bg) {
+        for (mut spans, used) in diff_view::content_rows(row, None, room, Fit::Wrap, pal, pal.text, pal.code_bg) {
             let mut line = vec![bar.clone()];
             line.append(&mut spans);
             if used < room {
@@ -1634,10 +1637,10 @@ fn quiet_block(text: &str, total: u64, limit: usize, width: usize, pal: &Palette
 
 /// Lines for one transcript entry. Entries that open with a blank separator drop it when they come first.
 fn entry_lines<'a>(entry: &'a Entry, ctx: &EntryContext<'_>) -> Vec<Line<'a>> {
-    let white = Style::default().fg(Color::White);
+    let white = Style::default().fg(Color::Reset);
     let muted = Style::default().fg(MUTED);
     let prompt = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
-    let highlight = Style::default().bg(SELECTED).add_modifier(Modifier::BOLD);
+    let highlight = Style::default().add_modifier(Modifier::REVERSED).add_modifier(Modifier::BOLD);
     let width = usize::from(ctx.width);
     let detail_hint = if ctx.selected { "enter for the full output" } else { "tab, [ ] then enter for the full output" };
     let card_context = |glyph: (&'static str, Color)| CardContext {
@@ -1950,7 +1953,7 @@ fn render_crash(frame: &mut Frame, area: Rect, code: Option<i32>, reason: &str, 
     };
     let detail = Line::from(Span::styled(
         detail_text,
-        Style::default().fg(Color::White),
+        Style::default().fg(Color::Reset),
     ));
     let recovery = [
         Line::from(vec![
@@ -3134,7 +3137,8 @@ mod tests {
         let column = lines[added].find("+ B").unwrap();
         let x = u16::try_from(lines[added][..column].chars().count()).unwrap();
         let cell = &terminal.backend().buffer()[(x, u16::try_from(added).unwrap())];
-        assert_eq!(cell.bg, Color::Rgb(22, 56, 36), "the added row is tinted by the shared diff palette");
+        assert_eq!(cell.bg, Color::Reset, "the added row follows the user's terminal background");
+        assert_eq!(cell.fg, Color::Green, "the plus marker and semantic color both identify additions");
     }
 
     #[test]
@@ -3289,8 +3293,8 @@ mod tests {
         );
         let lines = rows(&screen);
         for (text, color) in [
-            ("+ new", Color::Rgb(126, 231, 135)),
-            ("− old", Color::Rgb(255, 138, 138)),
+            ("+ new", Color::Green),
+            ("− old", Color::Red),
             ("Commit failed", Color::Red),
         ] {
             let row = lines.iter().position(|line| line.contains(text)).unwrap();
@@ -3434,13 +3438,13 @@ mod tests {
         let mut state = with_tool("e1");
         press_key(&mut state, KeyCode::Tab);
         press_key(&mut state, KeyCode::Char('['));
-        assert_eq!(cell_at(&state, 80, 20, "a.ts").0, SELECTED);
+        assert!(cell_at(&state, 80, 20, "a.ts").2.contains(Modifier::REVERSED));
         assert!(
             cell_at(&state, 80, 20, "a.ts").2.contains(Modifier::BOLD),
             "the selection shows without colour too"
         );
         press_key(&mut state, KeyCode::Tab);
-        assert_ne!(cell_at(&state, 80, 20, "a.ts").0, SELECTED);
+        assert!(!cell_at(&state, 80, 20, "a.ts").2.contains(Modifier::REVERSED));
     }
 
     #[test]
@@ -3817,7 +3821,7 @@ fn render_models(frame: &mut Frame, area: Rect, picker: &Picker) {
     let query = if picker.query.is_empty() {
         Span::styled("type to filter by provider or model", Style::default().fg(MUTED))
     } else {
-        Span::styled(format!("{}▏", picker.query), Style::default().fg(Color::White))
+        Span::styled(format!("{}▏", picker.query), Style::default().fg(Color::Reset))
     };
     frame.render_widget(Paragraph::new(Line::from(vec![prompt, query])), search);
     frame.render_widget(
@@ -3848,12 +3852,12 @@ fn render_models(frame: &mut Frame, area: Rect, picker: &Picker) {
                 .enumerate()
                 .map(|(index, row)| {
                     let highlight = Some(index) == selected;
-                    let base = if highlight { Style::default().fg(Color::Black).bg(ACCENT) } else { Style::default().fg(Color::White) };
+                    let base = if highlight { Style::default().fg(Color::Black).bg(ACCENT) } else { Style::default().fg(Color::Reset) };
                     match row {
                         Row::Header { title, detail } => {
                             in_recent = title == "Recent";
                             Line::from(vec![
-                                Span::styled(approval_safe_text(title), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                                Span::styled(approval_safe_text(title), Style::default().fg(Color::Reset).add_modifier(Modifier::BOLD)),
                                 Span::styled(if detail.is_empty() { String::new() } else { format!("  {}", approval_safe_text(detail)) }, Style::default().fg(MUTED)),
                             ])
                         }
@@ -3888,7 +3892,7 @@ fn render_connect(frame: &mut Frame, area: Rect, flow: &Connect) {
     if inner.height < 3 {
         return;
     }
-    let white = Style::default().fg(Color::White);
+    let white = Style::default().fg(Color::Reset);
     let muted = Style::default().fg(MUTED);
     let warn = Style::default().fg(Color::Yellow);
     let selected = Style::default().fg(Color::Black).bg(ACCENT);
