@@ -301,30 +301,68 @@ impl Syntax {
     }
 }
 
-/// The diff palette follows the terminal's configured foreground and background at every colour depth. Semantic
-/// ANSI colors provide accents without assuming a dark canvas; `+` and `−` markers carry the meaning as well.
+/// The diff palette follows the terminal's configured foreground at truecolor and 16-colour depths. 256-colour
+/// terminals have enough palette range for restrained row tints, while `+` and `−` markers keep meaning explicit.
 pub fn palette(depth: Depth) -> Palette {
-    let mono = depth == Depth::Mono;
-    Palette {
-        add_bg: None,
-        del_bg: None,
-        add_fg: if mono { Color::Reset } else { Color::Green },
-        del_fg: if mono { Color::Reset } else { Color::Red },
-        number: Color::Reset,
-        add_number: if mono { Color::Reset } else { Color::Green },
-        del_number: if mono { Color::Reset } else { Color::Red },
-        bar: Color::Reset,
-        text: Color::Reset,
-        meta: Color::Reset,
-        code_bg: None,
-        mono,
-        syntax: (!mono).then_some(Syntax {
-            keyword: Color::Magenta,
-            string: Color::Yellow,
-            comment: Color::Reset,
-            number: Color::LightYellow,
-            type_name: Color::Cyan,
-        }),
+    match depth {
+        Depth::Ansi256 => Palette {
+            add_bg: Some(Color::Indexed(22)),
+            del_bg: Some(Color::Indexed(52)),
+            add_fg: Color::Indexed(120),
+            del_fg: Color::Indexed(217),
+            number: Color::Indexed(244),
+            add_number: Color::Indexed(151),
+            del_number: Color::Indexed(181),
+            bar: Color::Indexed(239),
+            text: Color::Indexed(254),
+            meta: Color::Indexed(247),
+            // Code and command surfaces remain the terminal's own background.
+            code_bg: None,
+            mono: false,
+            syntax: Some(Syntax {
+                keyword: Color::Magenta,
+                string: Color::Yellow,
+                comment: Color::Reset,
+                number: Color::LightYellow,
+                type_name: Color::Cyan,
+            }),
+        },
+        Depth::TrueColor | Depth::Ansi16 => Palette {
+            add_bg: None,
+            del_bg: None,
+            add_fg: Color::Green,
+            del_fg: Color::Red,
+            number: Color::Reset,
+            add_number: Color::Green,
+            del_number: Color::Red,
+            bar: Color::Reset,
+            text: Color::Reset,
+            meta: Color::Reset,
+            code_bg: None,
+            mono: false,
+            syntax: Some(Syntax {
+                keyword: Color::Magenta,
+                string: Color::Yellow,
+                comment: Color::Reset,
+                number: Color::LightYellow,
+                type_name: Color::Cyan,
+            }),
+        },
+        Depth::Mono => Palette {
+            add_bg: None,
+            del_bg: None,
+            add_fg: Color::Reset,
+            del_fg: Color::Reset,
+            number: Color::Reset,
+            add_number: Color::Reset,
+            del_number: Color::Reset,
+            bar: Color::Reset,
+            text: Color::Reset,
+            meta: Color::Reset,
+            code_bg: None,
+            mono: true,
+            syntax: None,
+        },
     }
 }
 
@@ -1307,7 +1345,7 @@ diff --git a/new.rs b/new.rs\nnew file mode 100644\n--- /dev/null\n+++ b/new.rs\
 
     #[test]
     fn terminal_palette_uses_the_users_default_surfaces_and_semantic_ansi_colors() {
-        for depth in [Depth::TrueColor, Depth::Ansi256, Depth::Ansi16] {
+        for depth in [Depth::TrueColor, Depth::Ansi16] {
             let pal = palette(depth);
             assert_eq!(pal.add_bg, None, "{depth:?}: diff meaning must not assume a dark canvas");
             assert_eq!(pal.del_bg, None, "{depth:?}: diff meaning must not assume a dark canvas");
@@ -1319,6 +1357,13 @@ diff --git a/new.rs b/new.rs\nnew file mode 100644\n--- /dev/null\n+++ b/new.rs\
             assert_eq!(pal.del_fg, Color::Red);
             assert!(!pal.mono, "{depth:?}: color-capable terminals keep semantic color");
         }
+        let indexed = palette(Depth::Ansi256);
+        assert_eq!(indexed.add_bg, Some(Color::Indexed(22)));
+        assert_eq!(indexed.del_bg, Some(Color::Indexed(52)));
+        assert_eq!(indexed.add_fg, Color::Indexed(120));
+        assert_eq!(indexed.del_fg, Color::Indexed(217));
+        assert_eq!(indexed.code_bg, None, "code blocks follow the terminal canvas");
+        assert!(!indexed.mono);
         let mono = palette(Depth::Mono);
         assert!(mono.mono);
         assert_eq!(mono.add_bg, None);
