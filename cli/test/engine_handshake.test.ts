@@ -55,7 +55,7 @@ const rl = readline.createInterface({ input: process.stdin });
 rl.on('line', (line) => {
   const req = JSON.parse(line);
   if (req.method === 'hello') {
-    process.stdout.write(JSON.stringify({ id: req.id, result: { version: '${getBuildIdentity().version}', protocol: ${CORE_PROTOCOL_VERSION} } }) + '\n');
+    process.stdout.write(JSON.stringify({ id: req.id, result: { version: '${getBuildIdentity().version}', protocol: ${CORE_PROTOCOL_VERSION} } }) + '\\n');
   } else if (req.method === 'write_file') {
     // The executor may have performed a side effect before its response was lost.
     process.exit(0);
