@@ -616,12 +616,25 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
 }
 
 fn one_line(value: &str, max: usize) -> String {
-    let clean = value.split_whitespace().collect::<Vec<_>>().join(" ");
-    let max = max.max(4);
-    if clean.chars().count() <= max {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let clean = diff_view::safe_text(&normalized);
+    if max == 0 {
+        return String::new();
+    }
+    if unicode_width::UnicodeWidthStr::width(clean.as_str()) <= max {
         clean
     } else {
-        format!("{}…", clean.chars().take(max - 1).collect::<String>())
+        let mut clipped = String::new();
+        let mut width: usize = 0;
+        for grapheme in unicode_segmentation::UnicodeSegmentation::graphemes(clean.as_str(), true) {
+            let grapheme_width = unicode_width::UnicodeWidthStr::width(grapheme);
+            if width.saturating_add(grapheme_width) > max - 1 {
+                break;
+            }
+            clipped.push_str(grapheme);
+            width += grapheme_width;
+        }
+        format!("{clipped}…")
     }
 }
 
@@ -702,5 +715,23 @@ mod tests {
         assert_eq!(theme_accent("nord"), Color::Cyan);
         assert_eq!(theme_accent("dracula"), Color::Magenta);
         assert_eq!(theme_accent("monochrome"), Color::Reset);
+    }
+
+    #[test]
+    fn compact_labels_fit_terminal_cells_and_show_control_characters_safely() {
+        let cjk = one_line("界界界", 4);
+        assert!(unicode_width::UnicodeWidthStr::width(cjk.as_str()) <= 4, "{cjk:?}");
+        assert!(cjk.ends_with('…'), "{cjk:?}");
+
+        let emoji = one_line("👩‍👩‍👧‍👦abcd", 5);
+        assert!(unicode_width::UnicodeWidthStr::width(emoji.as_str()) <= 5, "{emoji:?}");
+        assert!(emoji.ends_with('…'), "{emoji:?}");
+
+        let control = one_line("safe\u{1b}[31m", 20);
+        assert!(!control.contains('\u{1b}'), "{control:?}");
+        assert!(control.contains('␛'), "{control:?}");
+
+        assert_eq!(one_line("long", 0), "");
+        assert_eq!(one_line("long", 1), "…");
     }
 }
