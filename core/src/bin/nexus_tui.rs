@@ -242,7 +242,9 @@ fn render(frame: &mut ratatui::Frame, data: &Snapshot, state: &mut AppState) {
         .split(area);
     render_header(frame, root[0], data);
 
-    let columns = if area.width >= 96 {
+    // A wide but short terminal still needs the compact, stacked context layout: beside activity it would clip the
+    // validation summary and active milestone below the fold. Side-by-side earns its space once both dimensions fit.
+    let columns = if area.width >= 96 && area.height >= 24 {
         Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
@@ -671,6 +673,35 @@ mod tests {
         assert!(rendered.contains("PASSED"));
         assert!(rendered.contains("Verify behavior"));
         assert!(rendered.contains("q return"));
+    }
+
+    #[test]
+    fn short_wide_terminal_stacks_context_below_activity() {
+        let mut terminal = Terminal::new(TestBackend::new(160, 14)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &fixture(), &mut AppState::default()))
+            .unwrap();
+        let rows = terminal.backend().to_string();
+        let validation_row = rows
+            .lines()
+            .position(|row| row.contains("VALIDATION"))
+            .expect("validation summary remains visible");
+        assert!(validation_row >= 9, "short terminals should stack the context below activity: {rows}");
+        assert!(rows.contains("Verify behavior"), "active milestone stays visible: {rows}");
+    }
+
+    #[test]
+    fn wide_tall_terminal_keeps_context_beside_activity() {
+        let mut terminal = Terminal::new(TestBackend::new(160, 30)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &fixture(), &mut AppState::default()))
+            .unwrap();
+        let rendered = terminal.backend().to_string();
+        let validation_row = rendered
+            .lines()
+            .find(|row| row.contains("VALIDATION"))
+            .expect("validation summary remains visible");
+        assert!(validation_row.find("VALIDATION").unwrap() >= 96);
     }
 
     #[test]
