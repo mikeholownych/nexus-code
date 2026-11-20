@@ -494,7 +494,7 @@ export class McpConnection {
       }, timeoutMs);
 
       if (!res) {
-        return { success: false, output: "", error: "MCP call outcome unknown: the server returned no result; the tool may have run, so check its effect before retrying." };
+        return { success: false, output: "", outcomeUnknown: true, error: "MCP call outcome unknown: the server returned no result; the tool may have run, so check its effect before retrying." };
       }
 
       let textOutput = "";
@@ -523,6 +523,7 @@ export class McpConnection {
         return {
           success: false,
           output: "",
+          outcomeUnknown: true,
           error: `MCP call outcome unknown: ${err.message}. The tool may have run; check its effect before retrying, do not assume it failed.`,
         };
       }

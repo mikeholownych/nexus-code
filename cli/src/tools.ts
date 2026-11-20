@@ -831,6 +831,7 @@ export class RustCoreBridge {
       pending.resolve({
         success: false,
         output: "",
+        outcomeUnknown: true,
         error: "Rust core RPC daemon disconnected",
       });
     }
@@ -1069,6 +1070,7 @@ export class RustCoreBridge {
             output: "",
             error: `RPC request for '${toolName}' timed out after ${timeoutMs / 1000}s without an answer from the command runner (result unknown); the command was told to stop`,
             timedOut: true,
+            outcomeUnknown: true,
           });
         }
       }, timeoutMs);

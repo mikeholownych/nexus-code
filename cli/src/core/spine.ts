@@ -116,12 +116,14 @@ export interface ExecutionReceipt {
   output: string;
   /** Error message if failed or denied */
   error?: string;
+  /** The call may have taken effect, but its executor outcome could not be established. */
+  outcomeUnknown?: boolean;
   /** Execution duration in milliseconds */
   durationMs: number;
   /** Whether candidate state was mutated by operation (CAND-001) */
   candidateMutated: boolean;
   /** High-level execution status */
-  status: "COMPLETED" | "DENIED" | "FAILED" | "BLOCKED";
+  status: "COMPLETED" | "DENIED" | "FAILED" | "UNKNOWN" | "BLOCKED";
   /** Typed denial reason if status is DENIED */
   denialReason?: string;
   /** ISO 8601 timestamp (EVID-003) */
@@ -588,10 +590,16 @@ export class ExecutionSpine {
         };
       }
     } catch (err: any) {
+      const mayHaveTakenEffect = Boolean(capability.mutating && !context.dryRun);
       result = {
         success: false,
         output: "",
-        error: `FAIL-001: Invocation exception in '${toolName}': ${err?.message || String(err)}`,
+        error: mayHaveTakenEffect
+          ? `OUTCOME UNKNOWN: Invocation exception in '${toolName}': ${err?.message || String(err)}`
+          : `FAIL-001: Invocation exception in '${toolName}': ${err?.message || String(err)}`,
+        // The handler was admitted and invoked. If a mutating capability throws, it may have failed after
+        // performing its effect; do not present that as a confirmed no-effect failure.
+        outcomeUnknown: mayHaveTakenEffect,
       };
     }
     const durationMs = Date.now() - t0;
@@ -612,9 +620,14 @@ export class ExecutionSpine {
     }
 
     // Stage 6: Post-Execution Evidence & Receipt Generation
+    const outcomeUnknown = !result.success && !result.denialReason
+      && Boolean(result.outcomeUnknown || result.timedOut || result.cancelled);
     const candidateMutated = Boolean(
-      result.success && changesWorkspace(capability) && !context.dryRun
+      (result.success || outcomeUnknown) && changesWorkspace(capability) && !context.dryRun
     );
+    const reportedError = outcomeUnknown && !/outcome unknown/i.test(result.error ?? "")
+      ? `OUTCOME UNKNOWN: ${result.error ?? "no answer from the executor"}. The effect may have happened; check it before retrying, do not assume it failed.`
+      : result.error;
 
     if (candidateMutated) {
       try {
@@ -642,10 +655,11 @@ export class ExecutionSpine {
       targetResources,
       success: result.success,
       output: result.output || "",
-      error: result.error,
+      error: reportedError,
+      ...(outcomeUnknown ? { outcomeUnknown: true } : {}),
       durationMs,
       candidateMutated,
-      status: result.success ? "COMPLETED" : result.denialReason ? "DENIED" : "FAILED",
+      status: result.success ? "COMPLETED" : outcomeUnknown ? "UNKNOWN" : result.denialReason ? "DENIED" : "FAILED",
       ...(result.denialReason ? { denialReason: result.denialReason } : {}),
       timestamp: new Date().toISOString(),
       simulated: Boolean(context.dryRun),

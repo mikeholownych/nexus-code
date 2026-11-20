@@ -51,6 +51,7 @@ export type OperationLifecycleStatus =
   | "in_flight"
   | "completed"
   | "failed"
+  | "outcome_unknown"
   | "interrupted";
 
 export interface DurablePlanPhase {
@@ -78,6 +79,8 @@ export interface InFlightOperationRecord {
   startedAt: string;
   completedAt?: string;
   status: OperationLifecycleStatus;
+  /** The operation may have taken effect, but the executor did not provide a trustworthy result. */
+  outcomeUnknown?: boolean;
   error?: string;
 }
 
@@ -760,15 +763,16 @@ export class DurableStateManager {
   public recordOperationEnd(
     taskId: string,
     invocationId: string,
-    result: { success: boolean; error?: string },
+    result: { success: boolean; error?: string; outcomeUnknown?: boolean },
     seq?: number
   ): DurableTaskState {
     return withStateStoreGuard(this.baseDir, () => {
       const state = this.loadTaskStateLocked(taskId, undefined, this.workspacePaths, false);
       const op = state.currentOperation;
       if (op && (seq !== undefined && op.seq !== undefined ? op.seq === seq : op.invocationId === invocationId)) {
-        op.status = result.success ? "completed" : "failed";
+        op.status = result.outcomeUnknown ? "outcome_unknown" : result.success ? "completed" : "failed";
         op.completedAt = new Date().toISOString();
+        if (result.outcomeUnknown) op.outcomeUnknown = true;
         op.error = result.error;
       }
       return this.saveTaskStateLocked(state, this.workspacePaths);
@@ -932,11 +936,15 @@ export class DurableStateManager {
     // 1. In-flight operation detection (PERS-002, F-07). A finished operation whose record was never cleared did not
     //    get its result into the durable conversation either: the history is partial, so it is treated the same way.
     const op = state.currentOperation;
-    if (op && (op.status === "in_flight" || op.status === "completed" || op.status === "failed")) {
+    if (op && (op.status === "in_flight" || op.status === "completed" || op.status === "failed" || op.status === "outcome_unknown")) {
       interrupted = true;
-      op.error = op.status === "in_flight"
-        ? "Operation was interrupted by process termination or crash."
-        : `Operation ${op.status === "failed" ? "failed" : "finished"}, but its result was not recorded before the process stopped.`;
+      const priorStatus = op.status;
+      op.outcomeUnknown ||= priorStatus === "outcome_unknown";
+      op.error = priorStatus === "in_flight"
+        ? "Operation was interrupted by process termination or crash; its outcome is unknown."
+        : priorStatus === "outcome_unknown"
+          ? "Operation outcome was unknown and its result was not recorded before the process stopped."
+          : `Operation ${priorStatus === "failed" ? "failed" : "finished"}, but its result was not recorded before the process stopped.`;
       op.status = "interrupted";
       interruptedOp = { ...op };
       state.status = "interrupted";
