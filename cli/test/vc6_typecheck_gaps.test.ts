@@ -143,6 +143,21 @@ describe("VC-6: a change that breaks an untouched caller", () => {
     assert.equal(turn.verification?.status, "PASSED");
   });
 
+  test("a resumed task marks unattributed type errors unavailable and blocks enforced verification", { timeout: 120_000 }, async () => {
+    await withAgent(
+      { ...files, "legacy.ts": 'export const n: number = "one";\n' },
+      { tools: { tsc: "real-tsc" }, steps: [done], config: { typecheck: "enforce" } },
+      async (agent) => {
+        agent.restoreSession(agent.getMessages(), true);
+        const result = await (agent as any).runTypecheckOracle({ budgetSecs: 30, configured: false });
+
+        assert.equal(result.evidence.status, "UNAVAILABLE");
+        assert.match(result.evidence.scope, /baseline is unavailable after resume/);
+        assert.match(result.block ?? "", /pre-change baseline was not retained across resume/);
+      },
+    );
+  });
+
   test("NEXUS_TYPECHECK=off keeps the opt-out: no check, no block", { timeout: 120_000 }, async () => {
     const turn = await turnOf(files, { tools: { tsc: "real-tsc" }, steps: [fix, breakLib, done], env: { NEXUS_TYPECHECK: "off" } });
     assert.equal(turn.verification?.typecheck?.status, "NOT_APPLICABLE");

@@ -165,6 +165,8 @@ export class AutonomousAgent {
   /** VC-9: the operator's answers (`--answer id=approve|decline`), consumed when the run reaches the same decision. */
   private operatorAnswers = new Map<string, NeedsInputOption>();
   private typecheckBaseline = new Map<string, Set<string>>();
+  /** A resumed local session cannot authenticate a saved pre-change typecheck baseline. */
+  private typecheckBaselineUnavailableAfterResume = false;
   /** VC-6: paths already changed in the workspace when the task began, so only later shell changes count as the candidate's. */
   private preTaskChanged?: Set<string>;
   /** Optional tool groups offered in this conversation (see core/tool_groups). */
@@ -955,6 +957,7 @@ export class AutonomousAgent {
     // and make candidate-edited tests look pristine.
     this.changeBaseline = undefined;
     this.typecheckBaseline.clear();
+    this.typecheckBaselineUnavailableAfterResume = true;
     this.preTaskChanged = undefined;
     this.untrustedRecoveredBaseline = state.changeBaseline ?? undefined;
     this.recheckOnResume();
@@ -1321,6 +1324,8 @@ export class AutonomousAgent {
     this.messages = withHarnessProvenance(msgs);
     this.restoreFindings(findings);
     this.objective = objective ?? undefined;
+    this.typecheckBaseline.clear();
+    this.typecheckBaselineUnavailableAfterResume = true;
     if (this.objective) {
       // Steering that was queued but never applied when the session was saved is not silently dropped: it is shown
       // to the model as still pending and applied at the first step of the next turn.

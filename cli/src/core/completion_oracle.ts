@@ -139,31 +139,42 @@ export async function runTypecheckOracleImpl(this: any, opts: {
       continue;
     }
     const run = await runTypecheck(check, (command, timeout_secs) => this.bridge.executeTool("run_command", { command, timeout_secs }), this.config.workspace, modified, remainingSecs, baseline);
+    // Without the pre-change signatures, PREEXISTING means only that the current compiler failed. On resume that
+    // output cannot show whether the errors predate the task or were introduced by its edits, so never accept it as
+    // an attributed baseline result.
+    const resumedWithoutBaseline = this.typecheckBaselineUnavailableAfterResume && !baseline && run.status === "PREEXISTING";
+    const resultStatus = resumedWithoutBaseline ? "UNAVAILABLE" : run.status;
+    const resultScope = resumedWithoutBaseline
+      ? "pre-change type-check baseline is unavailable after resume; current diagnostics cannot be attributed"
+      : `under ${check.configPath}`;
     const excerpt = `(untrusted compiler output)\n${safeTerminal(foldVoluminousOutput(run.output || "", 30, 2000))}`;
     const evidence: TypecheckEvidence = {
-      status: run.status, enforced, ...named,
+      status: resultStatus, enforced, ...named,
       ...(run.version ? { toolVersion: run.version } : {}),
       exitCode: run.exitCode,
       ...(run.errorCount !== undefined ? { errorCount: run.errorCount, firstDiagnostics: (run.firstDiagnostics ?? []).map((d) => safeTerminal(d)) } : {}),
       ...(baseline ? { baselineErrorCount: baseline.size } : {}),
       ...(run.introducedCount !== undefined ? { introducedCount: run.introducedCount } : {}),
       ...(shellChanged.length ? { shellChangedFiles: shellChanged.slice(0, 20) } : {}),
-      scope: `under ${check.configPath}`,
+      scope: resultScope,
       ...(run.status === "PASSED" ? {} : { excerpt }), candidateId: opts.candidateId, at: at(),
     };
     results.push(evidence);
-    const blocking = run.status === "FAILED" || run.status === "TIMED_OUT";
-    if (ledger && current && (blocking || run.status === "PASSED")) recordAttempt(ledger, {
+    const failedOrTimedOut = run.status === "FAILED" || run.status === "TIMED_OUT";
+    const blocking = failedOrTimedOut || resumedWithoutBaseline;
+    if (ledger && current && (failedOrTimedOut || run.status === "PASSED")) recordAttempt(ledger, {
       command: check.command, ...current, mutationSeq: this.mutationSeq,
       status: run.status === "PASSED" ? "PASSED" : run.status === "TIMED_OUT" ? "TIMED_OUT" : "FAILED",
-      ...(blocking ? {
+      ...(failedOrTimedOut ? {
         failedCheck: safeTerminal(run.firstDiagnostics?.[0] ?? run.status).slice(0, 240),
         ...attemptEvidence(run.output, run.exitCode, { timedOut: run.status === "TIMED_OUT" }),
         ...(run.status === "FAILED" ? { classification: "CANDIDATE_FAILED" as const, failingTests: (run.firstDiagnostics ?? []).map((d) => safeTerminal(d).slice(0, 240)) } : {}),
       } : {}),
     });
     if (enforced && blocking) {
-      const what = run.status === "FAILED" ? "failed" : `timed out after ${opts.budgetSecs}s`;
+      const what = resumedWithoutBaseline
+        ? "could not be attributed because its pre-change baseline was not retained across resume"
+        : run.status === "FAILED" ? "failed" : `timed out after ${opts.budgetSecs}s`;
       blockingMessages.push(`${check.tool} type-check ${what} under ${check.configPath} (sha256 ${check.configSha256.slice(0, 12)}). Command: ${check.command}\n${excerpt}`);
     }
   }
