@@ -1,8 +1,8 @@
 //! Shared diff rendering for the live TUI: one parser and one row layout used by the transcript's edit cards, the
 //! workspace `/diff` output and the full review panel. Rows are laid out to the exact width they are drawn at — an
 //! aligned old/new line-number gutter, an explicit `+`/`−` marker, the content with tabs expanded to stops and
-//! control characters made visible, and a tinted background spanning the row — so alignment never depends on the
-//! terminal's own wrapping. Colour is never the only signal: markers, numbers and labels carry the meaning.
+//! control characters made visible — so alignment never depends on the terminal's own wrapping. Color is never the
+//! only signal: markers, numbers and labels carry the meaning.
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -301,34 +301,11 @@ impl Syntax {
     }
 }
 
-/// The diff palette for a colour depth. 24-bit and 256-colour terminals get muted tinted rows with syntax colours
-/// chosen for at least 4.5:1 contrast on every row background; 16-colour and monochrome terminals get coloured (or
-/// plain) text without backgrounds, where the `+`/`−` markers carry the meaning.
+/// The diff palette follows the terminal's configured foreground at truecolor and 16-colour depths. 256-colour
+/// terminals have enough palette range for restrained row tints, while `+` and `−` markers keep meaning explicit.
 pub fn palette(depth: Depth) -> Palette {
     match depth {
-        Depth::TrueColor => Palette {
-            add_bg: Some(Color::Rgb(22, 56, 36)),
-            del_bg: Some(Color::Rgb(70, 27, 33)),
-            add_fg: Color::Rgb(126, 231, 135),
-            del_fg: Color::Rgb(255, 138, 138),
-            number: Color::Rgb(108, 124, 136),
-            add_number: Color::Rgb(128, 190, 142),
-            del_number: Color::Rgb(218, 146, 150),
-            bar: Color::Rgb(62, 76, 88),
-            text: Color::Rgb(222, 228, 233),
-            meta: Color::Rgb(125, 145, 158),
-            code_bg: Some(Color::Rgb(22, 29, 38)),
-            mono: false,
-            syntax: Some(Syntax {
-                keyword: Color::Rgb(212, 172, 255),
-                string: Color::Rgb(240, 202, 142),
-                comment: Color::Rgb(152, 168, 180),
-                number: Color::Rgb(255, 176, 128),
-                type_name: Color::Rgb(124, 208, 255),
-            }),
-        },
         Depth::Ansi256 => Palette {
-            mono: false,
             add_bg: Some(Color::Indexed(22)),
             del_bg: Some(Color::Indexed(52)),
             add_fg: Color::Indexed(120),
@@ -339,29 +316,52 @@ pub fn palette(depth: Depth) -> Palette {
             bar: Color::Indexed(239),
             text: Color::Indexed(254),
             meta: Color::Indexed(247),
-            code_bg: Some(Color::Indexed(234)),
+            // Code and command surfaces remain the terminal's own background.
+            code_bg: None,
+            mono: false,
             syntax: Some(Syntax {
-                keyword: Color::Indexed(189),
-                string: Color::Indexed(223),
-                comment: Color::Indexed(251),
-                number: Color::Indexed(224),
-                type_name: Color::Indexed(159),
+                keyword: Color::Magenta,
+                string: Color::Yellow,
+                comment: Color::Reset,
+                number: Color::LightYellow,
+                type_name: Color::Cyan,
             }),
         },
-        Depth::Ansi16 | Depth::Mono => Palette {
+        Depth::TrueColor | Depth::Ansi16 => Palette {
             add_bg: None,
             del_bg: None,
             add_fg: Color::Green,
             del_fg: Color::Red,
-            number: Color::DarkGray,
+            number: Color::Reset,
             add_number: Color::Green,
             del_number: Color::Red,
-            bar: Color::DarkGray,
+            bar: Color::Reset,
             text: Color::Reset,
-            meta: Color::DarkGray,
+            meta: Color::Reset,
             code_bg: None,
+            mono: false,
+            syntax: Some(Syntax {
+                keyword: Color::Magenta,
+                string: Color::Yellow,
+                comment: Color::Reset,
+                number: Color::LightYellow,
+                type_name: Color::Cyan,
+            }),
+        },
+        Depth::Mono => Palette {
+            add_bg: None,
+            del_bg: None,
+            add_fg: Color::Reset,
+            del_fg: Color::Reset,
+            number: Color::Reset,
+            add_number: Color::Reset,
+            del_number: Color::Reset,
+            bar: Color::Reset,
+            text: Color::Reset,
+            meta: Color::Reset,
+            code_bg: None,
+            mono: true,
             syntax: None,
-            mono: depth == Depth::Mono,
         },
     }
 }
@@ -1146,31 +1146,8 @@ fn wrap_spans(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::contrast;
-
     fn text_of(line: &Line<'_>) -> String {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
-    }
-
-    fn rgb(color: Color) -> (u8, u8, u8) {
-        match color {
-            Color::Rgb(r, g, b) => (r, g, b),
-            Color::Indexed(i) => {
-                const CUBE: [u8; 6] = [0, 95, 135, 175, 215, 255];
-                match i {
-                    16..=231 => {
-                        let i = i - 16;
-                        (CUBE[(i / 36) as usize], CUBE[((i / 6) % 6) as usize], CUBE[(i % 6) as usize])
-                    }
-                    232..=255 => {
-                        let v = 8 + 10 * (i - 232);
-                        (v, v, v)
-                    }
-                    _ => panic!("not a 256-colour entry"),
-                }
-            }
-            other => panic!("no RGB for {other:?}"),
-        }
     }
 
     const SAMPLE: &str = "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,4 +1,5 @@\n fn a() {}\n-let x = 1;\n+let x = 2;\n+let y = 3;\n \n \tindented\n@@ -40,3 +41,3 @@ fn tail()\n keep\n--- old dashes\n+++ new pluses\n";
@@ -1367,20 +1344,34 @@ diff --git a/new.rs b/new.rs\nnew file mode 100644\n--- /dev/null\n+++ b/new.rs\
     }
 
     #[test]
-    fn syntax_colours_keep_at_least_4_5_to_1_contrast_on_every_row_background() {
-        // The terminal's own background is assumed dark (the TUI's theme is dark); checked against black and the
-        // TUI surface colour.
-        for depth in [Depth::TrueColor, Depth::Ansi256] {
+    fn terminal_palette_uses_the_users_default_surfaces_and_semantic_ansi_colors() {
+        for depth in [Depth::TrueColor, Depth::Ansi16] {
             let pal = palette(depth);
-            let syntax = pal.syntax.unwrap();
-            let backgrounds = [rgb(pal.add_bg.unwrap()), rgb(pal.del_bg.unwrap()), rgb(pal.code_bg.unwrap()), (0, 0, 0), (18, 27, 37)];
-            for fg in [pal.text, pal.add_fg, pal.del_fg, syntax.keyword, syntax.string, syntax.comment, syntax.number, syntax.type_name] {
-                for bg in backgrounds {
-                    let ratio = contrast(rgb(fg), bg);
-                    assert!(ratio >= 4.5, "{depth:?}: {fg:?} on {bg:?} is {ratio:.2}:1");
-                }
-            }
+            assert_eq!(pal.add_bg, None, "{depth:?}: diff meaning must not assume a dark canvas");
+            assert_eq!(pal.del_bg, None, "{depth:?}: diff meaning must not assume a dark canvas");
+            assert_eq!(pal.code_bg, None, "{depth:?}: code blocks must follow the terminal canvas");
+            assert_eq!(pal.text, Color::Reset, "{depth:?}: body text follows terminal foreground");
+            assert_eq!(pal.number, Color::Reset);
+            assert_eq!(pal.meta, Color::Reset);
+            assert_eq!(pal.add_fg, Color::Green);
+            assert_eq!(pal.del_fg, Color::Red);
+            assert!(!pal.mono, "{depth:?}: color-capable terminals keep semantic color");
         }
+        let indexed = palette(Depth::Ansi256);
+        assert_eq!(indexed.add_bg, Some(Color::Indexed(22)));
+        assert_eq!(indexed.del_bg, Some(Color::Indexed(52)));
+        assert_eq!(indexed.add_fg, Color::Indexed(120));
+        assert_eq!(indexed.del_fg, Color::Indexed(217));
+        assert_eq!(indexed.code_bg, None, "code blocks follow the terminal canvas");
+        assert!(!indexed.mono);
+        let mono = palette(Depth::Mono);
+        assert!(mono.mono);
+        assert_eq!(mono.add_bg, None);
+        assert_eq!(mono.del_bg, None);
+        assert_eq!(mono.code_bg, None);
+        assert_eq!(mono.syntax, None);
+        assert_eq!(mono.add_fg, Color::Reset);
+        assert_eq!(mono.del_fg, Color::Reset);
     }
 
     #[test]

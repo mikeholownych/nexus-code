@@ -45,16 +45,15 @@ mod live_view;
 #[path = "nexus_tui/live.rs"]
 mod live;
 
-const ACCENT: Color = Color::Rgb(103, 232, 249);
-const MUTED: Color = Color::Rgb(125, 145, 158);
-const SURFACE: Color = Color::Rgb(18, 27, 37);
+const ACCENT: Color = Color::Cyan;
+const MUTED: Color = Color::Reset;
+const SURFACE: Color = Color::Reset;
 
 fn theme_accent(theme: &str) -> Color {
     match theme {
-        "catppuccin" => Color::Rgb(137, 220, 235),
-        "nord" => Color::Rgb(136, 192, 208),
-        "dracula" => Color::Rgb(189, 147, 249),
-        "monochrome" => Color::White,
+        "catppuccin" | "nord" => Color::Cyan,
+        "dracula" => Color::Magenta,
+        "monochrome" => Color::Reset,
         _ => ACCENT,
     }
 }
@@ -148,8 +147,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("interactive Nexus TUI requires a terminal".into());
     }
 
-    let mut terminal = ratatui::init();
-    let result = run(&mut terminal, &snapshot);
+    let depth = theme::Depth::from_env();
+    theme::apply_backend_policy(depth);
+    drop(ratatui::try_init()?);
+    let backend = ratatui::backend::CrosstermBackend::new(theme::SgrWriter::new(
+        io::stdout(),
+        depth == theme::Depth::Ansi16,
+    ));
+    let mut terminal = Terminal::new(backend)?;
+    let result = run(&mut terminal, &snapshot, depth);
     ratatui::restore();
     result?;
     Ok(())
@@ -158,17 +164,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn run<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     snapshot: &Snapshot,
+    depth: theme::Depth,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     B::Error: 'static,
 {
     let mut state = AppState::default();
-    terminal.draw(|frame| render(frame, snapshot, &mut state))?;
+    draw_snapshot(terminal, snapshot, &mut state, depth)?;
     while !state.done {
         if event::poll(Duration::from_secs(1))? {
             match event::read()? {
                 Event::Resize(_, _) => {
-                    terminal.draw(|frame| render(frame, snapshot, &mut state))?;
+                    draw_snapshot(terminal, snapshot, &mut state, depth)?;
                 }
                 Event::Key(key) => {
                     if key.kind != KeyEventKind::Press {
@@ -213,13 +220,51 @@ where
                             _ => {}
                         },
                     }
-                    terminal.draw(|frame| render(frame, snapshot, &mut state))?;
+                    draw_snapshot(terminal, snapshot, &mut state, depth)?;
                 }
                 _ => {}
             }
         }
     }
     Ok(())
+}
+
+fn draw_snapshot<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+    snapshot: &Snapshot,
+    state: &mut AppState,
+    depth: theme::Depth,
+) -> Result<(), B::Error> {
+    terminal.draw(|frame| {
+        render(frame, snapshot, state);
+        theme::downsample(frame.buffer_mut(), depth);
+    })?;
+    Ok(())
+}
+
+fn badge_style(theme: &str) -> Style {
+    if theme == "monochrome" {
+        Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED)
+    } else {
+        Style::default()
+            .fg(Color::Black)
+            .bg(theme_accent(theme))
+            .add_modifier(Modifier::BOLD)
+    }
+}
+
+fn semantic_style(theme: &str, color: Color) -> Style {
+    if theme == "monochrome" {
+        let modifier = match color {
+            Color::Green => Modifier::BOLD,
+            Color::Yellow => Modifier::UNDERLINED,
+            Color::Red => Modifier::REVERSED,
+            _ => Modifier::empty(),
+        };
+        Style::default().fg(Color::Reset).add_modifier(modifier)
+    } else {
+        Style::default().fg(color)
+    }
 }
 
 fn render(frame: &mut ratatui::Frame, data: &Snapshot, state: &mut AppState) {
@@ -243,7 +288,9 @@ fn render(frame: &mut ratatui::Frame, data: &Snapshot, state: &mut AppState) {
         .split(area);
     render_header(frame, root[0], data);
 
-    let columns = if area.width >= 96 {
+    // A wide but short terminal still needs the compact, stacked context layout: beside activity it would clip the
+    // validation summary and active milestone below the fold. Side-by-side earns its space once both dimensions fit.
+    let columns = if area.width >= 96 && area.height >= 24 {
         Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
@@ -280,10 +327,7 @@ fn render_header(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot) {
     let mut top_spans = vec![
         Span::styled(
             " NEXUS ",
-            Style::default()
-                .fg(Color::Black)
-                .bg(theme_accent(&data.theme))
-                .add_modifier(Modifier::BOLD),
+            badge_style(&data.theme),
         ),
         Span::styled(
             "  WORKSPACE  ",
@@ -291,7 +335,7 @@ fn render_header(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot) {
         ),
         Span::styled(
             short_path(&data.workspace, if area.width < 82 { 16 } else { 28 }),
-            Style::default().fg(Color::White),
+            Style::default().fg(Color::Reset),
         ),
     ];
     if area.width >= 82 {
@@ -304,9 +348,7 @@ fn render_header(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot) {
         Span::raw("   "),
         Span::styled(
             one_line(&data.status, (area.width / 3) as usize),
-            Style::default()
-                .fg(status_color)
-                .add_modifier(Modifier::BOLD),
+            semantic_style(&data.theme, status_color).add_modifier(Modifier::BOLD),
         ),
     ]);
     let top = Line::from(top_spans);
@@ -324,7 +366,7 @@ fn render_header(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot) {
             ),
             Span::styled(
                 one_line(&data.objective, area.width.saturating_sub(14) as usize),
-                Style::default().fg(Color::White),
+                Style::default().fg(Color::Reset),
             ),
         ])),
         rows[1],
@@ -348,19 +390,19 @@ fn render_activity(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot, stat
                     "warning" => ("!", Color::Yellow),
                     "change" => ("▸", theme_accent(&data.theme)),
                     "tool" => ("·", MUTED),
-                    _ => ("◦", Color::White),
+                    _ => ("◦", Color::Reset),
                 };
                 let marker = if index == state.selected { "›" } else { " " };
                 ListItem::new(vec![
                     Line::from(vec![
                         Span::styled(
                             format!("{marker} {glyph} "),
-                            Style::default().fg(color).add_modifier(Modifier::BOLD),
+                            semantic_style(&data.theme, color).add_modifier(Modifier::BOLD),
                         ),
                         Span::styled(
-                            &event.title,
+                            diff_view::safe_text(&event.title),
                             Style::default()
-                                .fg(Color::White)
+                                .fg(Color::Reset)
                                 .add_modifier(Modifier::BOLD),
                         ),
                     ]),
@@ -379,7 +421,7 @@ fn render_activity(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot, stat
         .block(
             Block::default()
                 .borders(Borders::LEFT)
-                .border_style(Style::default().fg(Color::DarkGray))
+                .border_style(Style::default().fg(MUTED))
                 .title(Span::styled(
                     "  RECENT SIGNAL  ",
                     Style::default()
@@ -387,7 +429,7 @@ fn render_activity(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot, stat
                         .add_modifier(Modifier::BOLD),
                 )),
         )
-        .highlight_style(Style::default().bg(SURFACE));
+        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
     let mut list_state =
         ListState::default().with_selected((!data.activity.is_empty()).then_some(state.selected));
     frame.render_stateful_widget(list, area, &mut list_state);
@@ -415,8 +457,8 @@ fn render_context(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot) {
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    validation,
-                    Style::default().fg(if validation == "PASSED" {
+                    diff_view::safe_text(validation),
+                    semantic_style(&data.theme, if validation == "PASSED" {
                         Color::Green
                     } else {
                         Color::Yellow
@@ -430,7 +472,7 @@ fn render_context(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot) {
                 ),
                 Span::styled(
                     one_line(active, area.width.saturating_sub(8) as usize),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(Color::Reset),
                 ),
             ]),
         ]);
@@ -450,8 +492,8 @@ fn render_context(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot) {
             Color::Red
         };
         lines.push(Line::from(Span::styled(
-            format!("  {}", validation.status),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
+            format!("  {}", diff_view::safe_text(&validation.status)),
+            semantic_style(&data.theme, color).add_modifier(Modifier::BOLD),
         )));
         if let Some(id) = &validation.candidate_id {
             lines.push(Line::from(Span::styled(
@@ -493,10 +535,10 @@ fn render_context(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot) {
                 _ => ("○", MUTED),
             };
             lines.push(Line::from(vec![
-                Span::styled(format!("  {glyph} "), Style::default().fg(color)),
+                Span::styled(format!("  {glyph} "), semantic_style(&data.theme, color)),
                 Span::styled(
                     one_line(&item.name, area.width.saturating_sub(8) as usize),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(Color::Reset),
                 ),
             ]));
         }
@@ -509,7 +551,7 @@ fn render_context(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot) {
             .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(Span::styled(
-        format!("  {}", data.context),
+        format!("  {}", diff_view::safe_text(&data.context)),
         Style::default().fg(MUTED),
     )));
     lines.push(Line::from(Span::styled(
@@ -546,23 +588,36 @@ fn render_detail(frame: &mut ratatui::Frame, data: &Snapshot, state: &AppState) 
         return;
     };
     let detail_width = 84usize.saturating_sub(4).max(1);
-    let detail_rows = item
+    let detail = item
         .detail
-        .lines()
-        .map(|line| line.chars().count().div_ceil(detail_width))
+        .split('\n')
+        .map(diff_view::safe_text)
+        .collect::<Vec<_>>();
+    let detail_rows = detail
+        .iter()
+        .map(|line| {
+            unicode_width::UnicodeWidthStr::width(line.as_str())
+                .max(1)
+                .div_ceil(detail_width)
+        })
         .sum::<usize>();
     let detail_height = detail_rows.saturating_add(4).clamp(7, 18) as u16;
     let area = centered(frame.area(), 84, detail_height);
     frame.render_widget(Clear, area);
     frame.render_widget(
-        Paragraph::new(item.detail.as_str())
+        Paragraph::new(Text::from(
+            detail
+                .iter()
+                .map(|line| Line::from(line.as_str()))
+                .collect::<Vec<_>>(),
+        ))
             .scroll((state.scroll, 0))
             .wrap(Wrap { trim: false })
             .block(
                 Block::default()
                     .title(format!(
                         "  {} · evidence · Esc close · ↑↓ scroll  ",
-                        item.title
+                        diff_view::safe_text(&item.title)
                     ))
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(theme_accent(&data.theme)))
@@ -578,9 +633,9 @@ fn render_validation(frame: &mut ratatui::Frame, data: &Snapshot, state: &AppSta
     };
     let content = format!(
         "Status: {}\nCandidate: {}\nVerifier: {}\n\nA validation receipt describes a check bound to a candidate. A passed receipt does not claim that unrun checks passed.",
-        receipt.status,
-        receipt.candidate_id.as_deref().unwrap_or("unavailable"),
-        receipt.verifier.as_deref().unwrap_or("unavailable")
+        diff_view::safe_text(&receipt.status),
+        diff_view::safe_text(receipt.candidate_id.as_deref().unwrap_or("unavailable")),
+        diff_view::safe_text(receipt.verifier.as_deref().unwrap_or("unavailable"))
     );
     let area = centered(frame.area(), 72, 14);
     frame.render_widget(Clear, area);
@@ -617,12 +672,25 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
 }
 
 fn one_line(value: &str, max: usize) -> String {
-    let clean = value.split_whitespace().collect::<Vec<_>>().join(" ");
-    let max = max.max(4);
-    if clean.chars().count() <= max {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let clean = diff_view::safe_text(&normalized);
+    if max == 0 {
+        return String::new();
+    }
+    if unicode_width::UnicodeWidthStr::width(clean.as_str()) <= max {
         clean
     } else {
-        format!("{}…", clean.chars().take(max - 1).collect::<String>())
+        let mut clipped = String::new();
+        let mut width: usize = 0;
+        for grapheme in unicode_segmentation::UnicodeSegmentation::graphemes(clean.as_str(), true) {
+            let grapheme_width = unicode_width::UnicodeWidthStr::width(grapheme);
+            if width.saturating_add(grapheme_width) > max - 1 {
+                break;
+            }
+            clipped.push_str(grapheme);
+            width += grapheme_width;
+        }
+        format!("{clipped}…")
     }
 }
 
@@ -662,6 +730,66 @@ mod tests {
     }
 
     #[test]
+    fn short_wide_terminal_stacks_context_below_activity() {
+        let mut terminal = Terminal::new(TestBackend::new(160, 14)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &fixture(), &mut AppState::default()))
+            .unwrap();
+        let rows = terminal.backend().to_string();
+        let validation_row = rows
+            .lines()
+            .position(|row| row.contains("VALIDATION"))
+            .expect("validation summary remains visible");
+        assert!(validation_row >= 9, "short terminals should stack the context below activity: {rows}");
+        assert!(rows.contains("Verify behavior"), "active milestone stays visible: {rows}");
+    }
+
+    #[test]
+    fn wide_tall_terminal_keeps_context_beside_activity() {
+        let mut terminal = Terminal::new(TestBackend::new(160, 30)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &fixture(), &mut AppState::default()))
+            .unwrap();
+        let rendered = terminal.backend().to_string();
+        let validation_row = rendered
+            .lines()
+            .find(|row| row.contains("VALIDATION"))
+            .expect("validation summary remains visible");
+        assert!(validation_row.find("VALIDATION").unwrap() >= 96);
+    }
+
+    #[test]
+    fn snapshot_titles_and_evidence_show_terminal_controls_visibly() {
+        let mut data = fixture();
+        data.activity[0].title = "Review\u{1b}[31m \u{202e}result".into();
+        data.activity[0].detail = "Evidence\u{1b}[31m\nSecond line \u{202e}tail".into();
+        let mut state = AppState {
+            overlay: Overlay::Detail,
+            ..AppState::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &data, &mut state))
+            .unwrap();
+        let rendered = terminal.backend().to_string();
+        assert!(rendered.contains("␛[31m"), "{rendered}");
+        assert!(rendered.contains("<U+202E>"), "{rendered}");
+        assert!(!rendered.contains('\u{1b}') && !rendered.contains('\u{202e}'));
+
+        let receipt = data.validation.as_mut().unwrap();
+        receipt.status = "PASSED\u{1b}[31m".into();
+        receipt.verifier = Some("cargo test \u{202e}ignored".into());
+        state.overlay = Overlay::Validation;
+        terminal
+            .draw(|frame| render(frame, &data, &mut state))
+            .unwrap();
+        let rendered = terminal.backend().to_string();
+        assert!(rendered.contains("␛[31m"), "{rendered}");
+        assert!(rendered.contains("<U+202E>"), "{rendered}");
+        assert!(!rendered.contains('\u{1b}') && !rendered.contains('\u{202e}'));
+    }
+
+    #[test]
     fn narrow_terminal_shows_recovery_instruction() {
         let backend = TestBackend::new(44, 12);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -692,5 +820,60 @@ mod tests {
     fn selected_theme_changes_the_primary_accent() {
         assert_ne!(theme_accent("default"), theme_accent("dracula"));
         assert_eq!(theme_accent("unknown"), ACCENT);
+    }
+
+    #[test]
+    fn terminal_themes_use_configured_surfaces_and_ansi_accents() {
+        assert_eq!(ACCENT, Color::Cyan);
+        assert_eq!(MUTED, Color::Reset);
+        assert_eq!(SURFACE, Color::Reset);
+        assert_eq!(theme_accent("catppuccin"), Color::Cyan);
+        assert_eq!(theme_accent("nord"), Color::Cyan);
+        assert_eq!(theme_accent("dracula"), Color::Magenta);
+        assert_eq!(theme_accent("monochrome"), Color::Reset);
+    }
+
+    #[test]
+    fn monochrome_theme_uses_text_semantics_and_a_readable_brand_badge() {
+        for (color, modifier) in [
+            (Color::Green, Modifier::BOLD),
+            (Color::Yellow, Modifier::UNDERLINED),
+            (Color::Red, Modifier::REVERSED),
+        ] {
+            let style = semantic_style("monochrome", color);
+            assert_eq!(style.fg, Some(Color::Reset));
+            assert!(style.add_modifier.contains(modifier), "{color:?}: {style:?}");
+        }
+        let badge = badge_style("monochrome");
+        assert!(badge.fg.is_none() || badge.fg == Some(Color::Reset));
+        assert!(badge.add_modifier.contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn snapshot_terminal_depth_policy_clears_colors_but_preserves_selection() {
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        let mut state = AppState::default();
+        draw_snapshot(&mut terminal, &fixture(), &mut state, theme::Depth::Mono).unwrap();
+        let cells = &terminal.backend().buffer().content;
+        assert!(cells.iter().all(|cell| cell.fg == Color::Reset && cell.bg == Color::Reset));
+        assert!(cells.iter().any(|cell| cell.symbol() == "N" && cell.modifier.contains(Modifier::REVERSED)));
+    }
+
+    #[test]
+    fn compact_labels_fit_terminal_cells_and_show_control_characters_safely() {
+        let cjk = one_line("界界界", 4);
+        assert!(unicode_width::UnicodeWidthStr::width(cjk.as_str()) <= 4, "{cjk:?}");
+        assert!(cjk.ends_with('…'), "{cjk:?}");
+
+        let emoji = one_line("👩‍👩‍👧‍👦abcd", 5);
+        assert!(unicode_width::UnicodeWidthStr::width(emoji.as_str()) <= 5, "{emoji:?}");
+        assert!(emoji.ends_with('…'), "{emoji:?}");
+
+        let control = one_line("safe\u{1b}[31m", 20);
+        assert!(!control.contains('\u{1b}'), "{control:?}");
+        assert!(control.contains('␛'), "{control:?}");
+
+        assert_eq!(one_line("long", 0), "");
+        assert_eq!(one_line("long", 1), "…");
     }
 }
