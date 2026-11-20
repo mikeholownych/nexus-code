@@ -77,3 +77,50 @@ test("extension capabilities default to conservative effect classes", () => {
     assert.equal(needsOperatorDecision(c.effect), true, "review mode asks before running them");
   }
 });
+
+test("an MCP server added after extensibility initialization is synced before the next turn", async (t) => {
+  const prevTrust = process.env.NEXUS_TRUST_WORKSPACE;
+  process.env.NEXUS_TRUST_WORKSPACE = "1";
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-mcp-spine-late-add-"));
+  const repo = path.join(root, "repo");
+  fs.mkdirSync(repo);
+  execSync("git init -q", { cwd: repo, stdio: "ignore" });
+  const calls: string[] = [];
+  const mcp = http.createServer((req, res) => {
+    let raw = "";
+    req.on("data", (c) => (raw += c));
+    req.on("end", () => {
+      const body = JSON.parse(raw || "{}");
+      calls.push(body.method);
+      const result =
+        body.method === "tools/list" ? { tools: [{ name: "echo", description: "echo", inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } }] }
+        : body.method === "tools/call" ? { content: [{ type: "text", text: `echo:${body.params?.arguments?.text}` }] }
+        : {};
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ jsonrpc: "2.0", id: body.id, result }));
+    });
+  });
+  await new Promise<void>((r) => mcp.listen(0, "127.0.0.1", r));
+  const gw = await startGateway((n) =>
+    n === 1 ? { kind: "tools", calls: [{ name: "mcp__demo__echo", args: { text: "hi" } }] } : { kind: "text", content: "done" },
+  );
+  const agent = new AutonomousAgent({ endpoint: gw.url, model: "m", maxSteps: 4, temperature: 0, workspace: repo, shell: "bash", approvalMode: "auto", fullAccess: true });
+  (agent as any).ui = new Proxy({}, { get: () => () => {} });
+  t.after(async () => {
+    agent.shutdown();
+    await gw.close();
+    mcp.closeAllConnections?.();
+    await new Promise<void>((r) => mcp.close(() => r()));
+    fs.rmSync(root, { recursive: true, force: true });
+    if (prevTrust === undefined) delete process.env.NEXUS_TRUST_WORKSPACE;
+    else process.env.NEXUS_TRUST_WORKSPACE = prevTrust;
+  });
+  await agent.initExtensibility();
+  const added = await agent.getMcpManager().addServer("demo", { url: `http://127.0.0.1:${(mcp.address() as AddressInfo).port}`, transport: "http" }, true);
+  assert.equal(added.success, true, added.error);
+  await agent.run("call the echo tool");
+  assert.ok(calls.includes("tools/call"), `the MCP server never received tools/call (saw ${JSON.stringify(calls)})`);
+  const transcript = JSON.stringify(gw.requests);
+  assert.doesNotMatch(transcript, /FAIL-001/);
+  assert.match(transcript, /echo:hi/);
+});

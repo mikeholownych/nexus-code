@@ -1053,7 +1053,13 @@ export class AutonomousAgent {
   }
 
   public async initExtensibility(): Promise<void> {
-    if (this.extensibilityInitialized) return;
+    if (this.extensibilityInitialized) {
+      // MCP servers and plugins can be added while the REPL is running. Refresh
+      // the execution registry before each turn so newly advertised tools are
+      // also registered with the execution spine.
+      this.syncExtensionCapabilities();
+      return;
+    }
     try {
       await this.pluginManager.loadPlugins();
       await this.mcpManager.loadAndConnect();
