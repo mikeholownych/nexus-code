@@ -664,14 +664,14 @@ export class DurableStateManager {
     // Schema version check (fails closed on unsupported future versions) is performed before reading any messages.
     // Migrate legacy session file if necessary with pre-migration backup; publication below creates the backup first.
     const state: DurableTaskState = this.migrateIfLegacy(record.parsed, taskId);
-    const lifecycleProblem = taskLifecycleProblem(state);
-    if (lifecycleProblem) throw new CorruptStateError(taskId, lifecycleProblem, this.quarantineFile(record.filePath));
     this.normalizeWorktreeBinding(state, taskId, record);
 
     // Verify task identity binding
     if (state.taskId && taskId && state.taskId !== taskId && state.sessionId !== taskId) {
       throw new TaskIdentityMismatchError(taskId, state.taskId);
     }
+    const lifecycleProblem = taskLifecycleProblem(state);
+    if (lifecycleProblem) throw new CorruptStateError(taskId, lifecycleProblem, this.quarantineFile(record.filePath));
 
     // Verify workspace binding if expectedWorkspace provided
     let selectedPaths = workspacePaths;
@@ -1235,7 +1235,8 @@ export class DurableStateManager {
 }
 
 function taskLifecycleProblem(state: DurableTaskState): string | undefined {
-  if (!TASK_LIFECYCLE_STATUSES.has(state.status)) {
+  // OperationStore keeps its separate operation lifecycle in the same durable envelope.
+  if (state.operation === undefined && !TASK_LIFECYCLE_STATUSES.has(state.status)) {
     return `Task has an invalid lifecycle status (${String(state.status)})`;
   }
   if (state.activePlan !== undefined) {
