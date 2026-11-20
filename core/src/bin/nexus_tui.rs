@@ -147,8 +147,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("interactive Nexus TUI requires a terminal".into());
     }
 
-    let mut terminal = ratatui::init();
-    let result = run(&mut terminal, &snapshot);
+    let depth = theme::Depth::from_env();
+    theme::apply_backend_policy(depth);
+    drop(ratatui::try_init()?);
+    let backend = ratatui::backend::CrosstermBackend::new(theme::SgrWriter::new(
+        io::stdout(),
+        depth == theme::Depth::Ansi16,
+    ));
+    let mut terminal = Terminal::new(backend)?;
+    let result = run(&mut terminal, &snapshot, depth);
     ratatui::restore();
     result?;
     Ok(())
@@ -157,17 +164,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn run<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     snapshot: &Snapshot,
+    depth: theme::Depth,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     B::Error: 'static,
 {
     let mut state = AppState::default();
-    terminal.draw(|frame| render(frame, snapshot, &mut state))?;
+    draw_snapshot(terminal, snapshot, &mut state, depth)?;
     while !state.done {
         if event::poll(Duration::from_secs(1))? {
             match event::read()? {
                 Event::Resize(_, _) => {
-                    terminal.draw(|frame| render(frame, snapshot, &mut state))?;
+                    draw_snapshot(terminal, snapshot, &mut state, depth)?;
                 }
                 Event::Key(key) => {
                     if key.kind != KeyEventKind::Press {
@@ -212,13 +220,51 @@ where
                             _ => {}
                         },
                     }
-                    terminal.draw(|frame| render(frame, snapshot, &mut state))?;
+                    draw_snapshot(terminal, snapshot, &mut state, depth)?;
                 }
                 _ => {}
             }
         }
     }
     Ok(())
+}
+
+fn draw_snapshot<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+    snapshot: &Snapshot,
+    state: &mut AppState,
+    depth: theme::Depth,
+) -> Result<(), B::Error> {
+    terminal.draw(|frame| {
+        render(frame, snapshot, state);
+        theme::downsample(frame.buffer_mut(), depth);
+    })?;
+    Ok(())
+}
+
+fn badge_style(theme: &str) -> Style {
+    if theme == "monochrome" {
+        Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED)
+    } else {
+        Style::default()
+            .fg(Color::Black)
+            .bg(theme_accent(theme))
+            .add_modifier(Modifier::BOLD)
+    }
+}
+
+fn semantic_style(theme: &str, color: Color) -> Style {
+    if theme == "monochrome" {
+        let modifier = match color {
+            Color::Green => Modifier::BOLD,
+            Color::Yellow => Modifier::UNDERLINED,
+            Color::Red => Modifier::REVERSED,
+            _ => Modifier::empty(),
+        };
+        Style::default().fg(Color::Reset).add_modifier(modifier)
+    } else {
+        Style::default().fg(color)
+    }
 }
 
 fn render(frame: &mut ratatui::Frame, data: &Snapshot, state: &mut AppState) {
@@ -281,10 +327,7 @@ fn render_header(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot) {
     let mut top_spans = vec![
         Span::styled(
             " NEXUS ",
-            Style::default()
-                .fg(Color::Black)
-                .bg(theme_accent(&data.theme))
-                .add_modifier(Modifier::BOLD),
+            badge_style(&data.theme),
         ),
         Span::styled(
             "  WORKSPACE  ",
@@ -305,9 +348,7 @@ fn render_header(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot) {
         Span::raw("   "),
         Span::styled(
             one_line(&data.status, (area.width / 3) as usize),
-            Style::default()
-                .fg(status_color)
-                .add_modifier(Modifier::BOLD),
+            semantic_style(&data.theme, status_color).add_modifier(Modifier::BOLD),
         ),
     ]);
     let top = Line::from(top_spans);
@@ -356,7 +397,7 @@ fn render_activity(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot, stat
                     Line::from(vec![
                         Span::styled(
                             format!("{marker} {glyph} "),
-                            Style::default().fg(color).add_modifier(Modifier::BOLD),
+                            semantic_style(&data.theme, color).add_modifier(Modifier::BOLD),
                         ),
                         Span::styled(
                             diff_view::safe_text(&event.title),
@@ -417,7 +458,7 @@ fn render_context(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot) {
                 ),
                 Span::styled(
                     diff_view::safe_text(validation),
-                    Style::default().fg(if validation == "PASSED" {
+                    semantic_style(&data.theme, if validation == "PASSED" {
                         Color::Green
                     } else {
                         Color::Yellow
@@ -452,7 +493,7 @@ fn render_context(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot) {
         };
         lines.push(Line::from(Span::styled(
             format!("  {}", diff_view::safe_text(&validation.status)),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
+            semantic_style(&data.theme, color).add_modifier(Modifier::BOLD),
         )));
         if let Some(id) = &validation.candidate_id {
             lines.push(Line::from(Span::styled(
@@ -494,7 +535,7 @@ fn render_context(frame: &mut ratatui::Frame, area: Rect, data: &Snapshot) {
                 _ => ("○", MUTED),
             };
             lines.push(Line::from(vec![
-                Span::styled(format!("  {glyph} "), Style::default().fg(color)),
+                Span::styled(format!("  {glyph} "), semantic_style(&data.theme, color)),
                 Span::styled(
                     one_line(&item.name, area.width.saturating_sub(8) as usize),
                     Style::default().fg(Color::Reset),
@@ -790,6 +831,32 @@ mod tests {
         assert_eq!(theme_accent("nord"), Color::Cyan);
         assert_eq!(theme_accent("dracula"), Color::Magenta);
         assert_eq!(theme_accent("monochrome"), Color::Reset);
+    }
+
+    #[test]
+    fn monochrome_theme_uses_text_semantics_and_a_readable_brand_badge() {
+        for (color, modifier) in [
+            (Color::Green, Modifier::BOLD),
+            (Color::Yellow, Modifier::UNDERLINED),
+            (Color::Red, Modifier::REVERSED),
+        ] {
+            let style = semantic_style("monochrome", color);
+            assert_eq!(style.fg, Some(Color::Reset));
+            assert!(style.add_modifier.contains(modifier), "{color:?}: {style:?}");
+        }
+        let badge = badge_style("monochrome");
+        assert!(badge.fg.is_none() || badge.fg == Some(Color::Reset));
+        assert!(badge.add_modifier.contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn snapshot_terminal_depth_policy_clears_colors_but_preserves_selection() {
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        let mut state = AppState::default();
+        draw_snapshot(&mut terminal, &fixture(), &mut state, theme::Depth::Mono).unwrap();
+        let cells = &terminal.backend().buffer().content;
+        assert!(cells.iter().all(|cell| cell.fg == Color::Reset && cell.bg == Color::Reset));
+        assert!(cells.iter().any(|cell| cell.symbol() == "N" && cell.modifier.contains(Modifier::REVERSED)));
     }
 
     #[test]
