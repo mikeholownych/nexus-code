@@ -811,7 +811,7 @@ error[E0308]: mismatched types
           streamRequests++;
           const calls = streamRequests === 1 ? [
             { index: 0, id: "write", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "parent-worktree.txt", content: "parent\n" }) } },
-            { index: 1, id: "spawn", type: "function", function: { name: "spawn_subagent", arguments: JSON.stringify({ prompt: "write to the original checkout", max_steps: 3 }) } },
+            { index: 1, id: "spawn", type: "function", function: { name: "spawn_subagent", arguments: JSON.stringify({ prompt: "write to the original checkout", profile: "implementer", max_steps: 3 }) } },
             { index: 2, id: "complete", type: "function", function: { name: "task_completed", arguments: JSON.stringify({ summary: "Parent task finished." }) } },
           ] : [];
           res.writeHead(200, { "Content-Type": "text/event-stream" });
@@ -899,7 +899,7 @@ error[E0308]: mismatched types
         childRequests++;
         if (childRequests > 1) {
           const toolMessage = (request.messages || []).find((message: any) => message.role === "tool");
-          childDeniedWrite = String(toolMessage?.content || "").includes("Read-only mode violation");
+          childDeniedWrite = String(toolMessage?.content || "").includes("Delegation authority denied");
         }
         const call = childRequests === 1
           ? { name: "write_file", args: { path: "read-only-child.txt", content: "must not write" } }
@@ -1308,7 +1308,7 @@ error[E0308]: mismatched types
         if (request.stream) {
           parentRequests++;
           const calls = parentRequests === 1 ? [
-            { index: 0, id: "spawn", type: "function", function: { name: "spawn_subagent", arguments: JSON.stringify({ prompt: "run the repository tests", max_steps: 2 }) } },
+            { index: 0, id: "spawn", type: "function", function: { name: "spawn_subagent", arguments: JSON.stringify({ prompt: "run the repository tests", profile: "tester", max_steps: 2 }) } },
             { index: 1, id: "complete", type: "function", function: { name: "task_completed", arguments: JSON.stringify({ summary: "Parent finished." }) } },
           ] : [];
           res.writeHead(200, { "Content-Type": "text/event-stream" });

@@ -903,11 +903,11 @@ describe("V2: unverified changes survive retries, step limits, restarts and resu
             : { text: "Subagent report: created sub_file.txt" };
         }
         return toolResults(b) === 0
-          ? { tools: [{ name: "spawn_subagent", args: { prompt: "create sub_file.txt" } }] }
+          ? { tools: [{ name: "spawn_subagent", args: { prompt: "create sub_file.txt", profile: "implementer" } }] }
           : { text: "Parent finished without verification." };
       });
       const repo = makeRepo();
-      const config = cfg(gw, repo);
+      const config = cfg(gw, repo, { worktree: true });
       try {
         const agent = quiet(new AutonomousAgent(config));
         const r = await muted(() => agent.runTurn("Spawn subagent to create sub_file.txt"));
@@ -924,6 +924,7 @@ describe("V2: unverified changes survive retries, step limits, restarts and resu
         const saved = manager.loadTaskState(agent.getTaskId());
         assert.equal(saved.unverifiedChangesPending, true);
 
+        if (agent.getActiveWorktree()) agent.discardActiveWorktree();
         agent.shutdown();
       } finally {
         await gw.close();
@@ -1649,7 +1650,7 @@ describe("V2: process death while a subagent ran", () => {
       if (isChild(b)) return toolResults(b) === 0 ? write("child.txt") : { hold: true };
       if (!allText(b).includes("OBJ-DELEGATE")) return done("nothing to do");
       if (lastUser(b).includes("Nexus stopped while")) return done("checked; nothing else to do");
-      return toolResults(b) === 0 ? { tools: [{ name: "spawn_subagent", args: { prompt: "Write child.txt.", max_steps: 4 } }] } : done("delegated");
+      return toolResults(b) === 0 ? { tools: [{ name: "spawn_subagent", args: { prompt: "Write child.txt.", profile: "implementer", max_steps: 4 } }] } : done("delegated");
     });
     const ws = path.join(home, "ws");
     fs.mkdirSync(ws);
