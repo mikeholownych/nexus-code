@@ -49,7 +49,7 @@ What the v1.2.1 plan ([`docs/v1.2.1/PLAN.md`](../v1.2.1/PLAN.md)) did not finish
 
 - **VC-8** (per-role tool deny-lists: implementer loses browser and knowledge-writing tools; tester also loses web fetch, web search and delegation) merged as #660 (`c8e986f4`), tests in `cli/test/role_deny_lists.test.ts`.
 - **CS-9** (operator command rules, allow < prompt < forbidden, `~/.config/nexus/command_rules.json`, decisions saved in the session) merged as #662 (`45b44c5b`), documented in `docs/COMMAND_RULES.md`.
-- **CS-10** phase 1 (the native worker runs inside the Bubblewrap sandbox with `--sandbox bwrap`; opt-in, fails closed when the box cannot be built; Docker and `none` still confine commands only) merged as #664 (`00efdde3`); design in `docs/v1.2.2/CS10_WORKER_ISOLATION.md`. Not done: sandboxing the worker under Docker, and the phase-2 items in that note.
+- **CS-10** (the native worker runs inside the sandbox): phase 1, Bubblewrap, merged as #664 (`00efdde3`). Docker and phase 2 followed at the owner's direction (gate decision 2026-11-21): on Linux the worker runs inside the Docker container too, and with a sandboxed worker file tools use a separate `--files-only` worker with no network. Opt-in, fails closed. Design, what was built and the stated limits: `docs/v1.2.2/CS10_WORKER_ISOLATION.md` section 10. Not built: option C (Landlock/seccomp in the worker); a worker container on a non-Linux host.
 
 ## Not started / deferred in their rows
 
