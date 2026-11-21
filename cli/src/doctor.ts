@@ -595,15 +595,19 @@ const sandboxCheck: Check = async (ctx) => {
       "skip",
       "Effective containment: none. No --sandbox is configured; run_command runs on the host with the scrubbed environment only.",
       [`bubblewrap (bwrap): ${available ? "available" : "not available"}`, `workspace: ${ctx.config?.workspace ?? "(none)"}`],
-      available ? "Run with --sandbox bwrap to confine commands (HOME masked, no network unless --sandbox-network)." : "Install bubblewrap and run with --sandbox bwrap to confine commands.",
+      available ? "Run with --sandbox bwrap to confine commands and the native worker (HOME masked, no network unless --sandbox-network)." : "Install bubblewrap and run with --sandbox bwrap to confine commands and the native worker.",
     );
   }
   if (sandbox !== "docker" && !isBwrapAvailable()) {
     return f("sandbox.confinement", "runtime", "warn", "--sandbox is configured but bubblewrap (bwrap) is not available.", [], "Install bubblewrap, or run without --sandbox.");
   }
   const m = sandboxHomeMounts();
+  const workerInBox = sandbox !== "docker";
   const evidence = [
-    `network: ${sandboxNetworkEnabled() ? "ON (--sandbox-network / NEXUS_SANDBOX_NETWORK)" : "off (default)"}`,
+    workerInBox
+      ? "native worker (harness-core): runs inside this sandbox, so a compromised worker has the same limits as a command (CS-10)"
+      : "native worker (harness-core): runs outside Docker (Docker confines commands only); use --sandbox bwrap to confine the worker too",
+    `network: ${sandboxNetworkEnabled() ? "ON (--sandbox-network / NEXUS_SANDBOX_NETWORK; covers the worker and its commands)" : "off (default)"}`,
     `HOME ${m.home} is masked with an empty tmpfs; read-only mounts back under it:`,
     ...(m.mounts.length ? m.mounts.map((x) => `  ${x.path}  (${x.source})`) : ["  (none)"]),
     ...m.masked.map((x) => `  hidden file: ${x}`),
