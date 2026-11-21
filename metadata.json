@@ -1,0 +1,53 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M7Y1QFNT27ZH2TEG618FN72V",
+  "strategy": "manual-commit",
+  "branch": "v1/invariants-audit",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "docs/evidence/change-cost-live-2026-11-18/README.md",
+    "docs/evidence/change-cost-live-2026-11-18/deep-smoke-b8e218f3.results.jsonl",
+    "docs/evidence/change-cost-live-2026-11-18/run3-deep-base.manifest.json",
+    "docs/evidence/change-cost-live-2026-11-18/run3-deep-base.results.jsonl",
+    "docs/evidence/change-cost-live-2026-11-18/run3-deep-branch.manifest.json",
+    "docs/evidence/change-cost-live-2026-11-18/run3-deep-branch.results.jsonl",
+    "docs/v1.2.1/PLAN.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 40,
+    "cache_creation_tokens": 1318533,
+    "cache_read_tokens": 10542871,
+    "output_tokens": 9869,
+    "api_call_count": 18,
+    "subagent_tokens": {
+      "input_tokens": 0,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 0,
+      "output_tokens": 0,
+      "api_call_count": 0
+    }
+  },
+  "redaction": {
+    "replacements": 19,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 8,
+      "credentialed_uri": 3,
+      "entropy": 8,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
