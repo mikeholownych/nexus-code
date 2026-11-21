@@ -12,10 +12,18 @@ import net from "node:net";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { RustCoreBridge, resolveCoreBinary } from "../src/tools.js";
-import { isBwrapAvailable, setSandboxNetworkFlag } from "../src/sandbox.js";
+import { isBwrapAvailable, isDockerAvailable, setSandboxNetworkFlag, wrapSandboxedWorker, workerRuntimeFiles, DOCKER_WORKER_LABEL } from "../src/sandbox.js";
+import { getBuildIdentity } from "../src/build_identity.js";
 
 const core = resolveCoreBinary();
 const SKIP = !isBwrapAvailable() ? "bwrap is not installed on this host" : !core ? "the Rust core is not built" : false;
+const DOCKER_SKIP = process.platform !== "linux"
+  ? "a containerised worker needs a Linux host"
+  : !core
+    ? "the Rust core is not built"
+    : !(isDockerAvailable() && spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0)
+      ? "the docker daemon is not available"
+      : false;
 
 let root = "";
 let home = "";
@@ -185,10 +193,164 @@ describe("the native worker inside the sandbox", { skip: SKIP }, () => {
     }
   });
 
-  test("a docker-confined host keeps wrapping commands itself (the worker is outside Docker)", async () => {
+});
+
+/** Containers started for this test process's workers (the label carries the owning pid). */
+const workerContainers = (): string[] =>
+  spawnSync("docker", ["ps", "-q", "--filter", `label=${DOCKER_WORKER_LABEL}=${process.pid}`], { encoding: "utf8" }).stdout.split("\n").filter(Boolean);
+
+describe("CS-10 phase 2: file tools go to a separate files-only worker that never has a network", { skip: SKIP }, () => {
+  const spawnargs = (b: RustCoreBridge, which: "files" | "primary"): string[] => (b as any).channels[which].process?.spawnargs ?? [];
+
+  test("a sandboxed bridge starts the files worker for file tools and the command worker only when a command runs", async () => {
+    const b = bridge("bwrap");
+    assert.equal((await b.executeTool("read_file", { path: "a.txt" })).success, true);
+    assert.ok(spawnargs(b, "files").length > 0, "the files worker is running");
+    assert.equal((b as any).channels.primary.process, null, "no command worker until a command is run");
+    assert.ok(spawnargs(b, "files").some((arg) => arg.includes("--files-only")), "it was started with --files-only");
+    assert.equal((await b.executeTool("run_command", { command: "echo from-command-worker" })).success, true);
+    assert.ok(spawnargs(b, "primary").length > 0, "the command worker started for the command");
+    assert.equal(spawnargs(b, "primary").some((arg) => arg.includes("--files-only")), false);
+    assert.notEqual((b as any).channels.primary.process.pid, (b as any).channels.files.process.pid, "two processes");
+  });
+
+  test("the files worker refuses to run a command even when asked directly, and the refused command does not run", async () => {
+    const b = bridge("bwrap");
+    await b.executeTool("read_file", { path: "a.txt" });
+    const files = (b as any).channels.files;
+    for (const method of ["run_command", "cancel", "end_background", "list_services"]) {
+      const params = method === "run_command" ? { command: "echo x > refused.txt", shell: "bash" } : {};
+      const res = await (b as any).executeViaRpc(method, params, { channel: files, ignoreTurnSignal: true });
+      assert.equal(res.success, false, method);
+      assert.match(String(res.error), /file tools only/, method);
+    }
+    assert.equal(fs.existsSync(path.join(workspace, "refused.txt")), false);
+    // Baseline: the same request to the command worker runs.
+    const ran = await (b as any).executeViaRpc("run_command", { command: "echo x > ran.txt", shell: "bash" });
+    assert.equal(ran.success, true, JSON.stringify(ran).slice(0, 200));
+    assert.equal(fs.existsSync(path.join(workspace, "ran.txt")), true);
+  });
+
+  test("with the network allowed for commands, the files worker's box still has none", async () => {
+    const server = net.createServer((s) => s.end());
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as net.AddressInfo).port;
+    const probe = `(exec 3<>/dev/tcp/127.0.0.1/${port}) 2>/dev/null && echo CONNECTED || echo REFUSED`;
+    setSandboxNetworkFlag(true);
+    try {
+      const b = bridge("bwrap");
+      const filesLaunch = (b as any).workerLaunch(["rpc"], "files");
+      const commandLaunch = (b as any).workerLaunch(["rpc"], "commands");
+      assert.ok(filesLaunch.args.includes("--unshare-net"), "the files worker's box unshares the network");
+      assert.equal(commandLaunch.args.includes("--unshare-net"), false, "the command worker's box has the network the operator allowed");
+      // The files worker cannot run a probe (it refuses commands), so the probe runs as the process in each box.
+      // A stand-in "worker" in its own directory (the profile binds the worker's directory read-only).
+      const probeDir = fs.mkdtempSync(path.join(root, "probe-"));
+      const probeScript = path.join(probeDir, "probe.sh");
+      fs.writeFileSync(probeScript, `#!/bin/bash\n${probe}\n`, { mode: 0o755 });
+      const inBox = (network: false | undefined) => {
+        const launch = wrapSandboxedWorker(probeScript, [], workspace, { engines: ["bwrap"], network });
+        assert.equal(launch.sandboxed, true, launch.warning);
+        const run = spawnSync(launch.command!, launch.args!, { encoding: "utf8" });
+        return `${run.stdout}${run.stderr}`;
+      };
+      assert.match(inBox(false), /REFUSED/, "the box a files worker gets");
+      assert.match(inBox(undefined), /CONNECTED/, "baseline: the box a command worker gets reaches the listener");
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
+  test("an unsandboxed bridge keeps one worker for everything (no files worker)", async () => {
+    const b = bridge(false);
+    assert.equal((await b.executeTool("read_file", { path: "a.txt" })).success, true);
+    assert.equal((await b.executeTool("run_command", { command: "echo one-worker" })).success, true);
+    assert.equal((b as any).channels.files.process, null);
+    assert.equal(spawnargs(b, "primary").some((arg) => arg.includes("--files-only")), false);
+  });
+
+  test("a core that ignores --files-only is not trusted with the files role (handshake fails closed)", async () => {
+    // A stand-in core that answers hello like a core built before the flag existed: no files_only field.
+    const dir = fs.mkdtempSync(path.join(root, "old-core-"));
+    const fake = path.join(dir, "harness-core");
+    const version = getBuildIdentity().version === "unknown" ? "0.0.0" : getBuildIdentity().version;
+    fs.writeFileSync(fake, `#!/bin/bash\nwhile IFS= read -r line; do id=$(printf '%s' "$line" | sed -n 's/.*"id":\\([0-9]*\\).*/\\1/p'); printf '{"id":%s,"result":{"protocol":1,"version":"${version}"}}\\n' "$id"; done\n`, { mode: 0o755 });
+    const b = new RustCoreBridge(workspace, "bash", fake, false, false, "bwrap");
+    bridges.push(b);
+    const res = await (b as any).executeViaRpc("read_file", { path: "a.txt" });
+    assert.equal(res.success, false);
+    assert.match(String(res.error), /did not report files-only mode/);
+    assert.equal((b as any).channels.files.process, null, "the untrusted worker was stopped");
+  });
+});
+
+describe("CS-10: the worker inside a Docker container", { skip: DOCKER_SKIP }, () => {
+  test("the worker's runtime files are resolved from the binary, or it is a static binary", () => {
+    const runtime = workerRuntimeFiles(core!);
+    assert.equal("error" in runtime, false, JSON.stringify(runtime));
+  });
+
+  test("secrets under $HOME: readable unsandboxed, absent from the worker's container", async () => {
+    assert.match((await sh(bridge(false), `cat ${home}/.ssh/id_canary`)).stdout, /PRIVATE-KEY-CANARY/, "baseline");
     const b = bridge("docker");
-    assert.equal((b as any).workerSandboxMode(), "off");
-    assert.equal((b as any).workerIsSandboxed(), false);
+    const boxed = await sh(b, `cat ${home}/.ssh/id_canary 2>&1; cat ${home}/.config/nexus/config.env 2>&1`, { shell: "sh" });
+    assert.notEqual(boxed.exit, undefined, JSON.stringify(boxed).slice(0, 300));
+    assert.doesNotMatch(boxed.stdout + boxed.stderr, /PRIVATE-KEY-CANARY|canary-secret/, "their contents are not readable");
+    assert.equal((await sh(b, `ls -A ${home}`, { shell: "sh" })).stdout.trim(), "ws", "of the home directory only the workspace exists in the container");
+  });
+
+  test("writes outside the workspace fail; a write inside reaches the host", async () => {
+    const b = bridge("docker");
+    await sh(b, `echo x > ${outside}/docker.txt; echo y > /usr/docker.txt; echo z > ${home}/docker.txt`, { shell: "sh" });
+    for (const target of [path.join(outside, "docker.txt"), "/usr/docker.txt", path.join(home, "docker.txt")]) assert.equal(fs.existsSync(target), false, target);
+    const inside = await sh(b, "echo inside > docker-in.txt; cat docker-in.txt", { shell: "sh" });
+    assert.equal(inside.exit, 0, JSON.stringify(inside).slice(0, 300));
+    assert.equal(fs.readFileSync(path.join(workspace, "docker-in.txt"), "utf8"), "inside\n");
+  });
+
+  test("file tools work through the containerised files worker, and commands use the image's sh", async () => {
+    const b = bridge("docker");
+    assert.equal((await b.executeTool("write_file", { path: "dw.txt", content: "hello\n" })).success, true);
+    assert.match((await b.executeTool("read_file", { path: "dw.txt" })).output, /hello/);
+    assert.equal(fs.readFileSync(path.join(workspace, "dw.txt"), "utf8"), "hello\n");
+    assert.match((await b.executeTool("search_code", { query: "alpha" })).output, /a\.txt/);
+    const sent: Record<string, any>[] = [];
+    const original = (b as any).executeViaRpc.bind(b);
+    (b as any).executeViaRpc = async (tool: string, args: Record<string, any>, options?: unknown) => {
+      if (tool === "run_command") sent.push({ ...args });
+      return original(tool, args, options);
+    };
+    const res = await b.executeTool("run_command", { command: "echo from-container; cat /proc/1/comm" });
+    assert.equal(res.success, true, JSON.stringify(res).slice(0, 300));
+    assert.match(res.output, /from-container/);
+    assert.match(res.output, /docker-init/, "the command ran inside the worker's container");
+    assert.deepEqual(sent.map((a) => [a.command, a.shell, a.argv]), [["echo from-container; cat /proc/1/comm", "sh", undefined]], "sent as is, not wrapped in a second docker run");
+  });
+
+  test("network: none in the container by default, present when the operator opts in, never for the files worker", async () => {
+    const interfaces = "ls /sys/class/net | tr '\\n' ' '";
+    assert.equal((await sh(bridge("docker"), interfaces, { shell: "sh" })).stdout.trim(), "lo", "only loopback by default");
+    setSandboxNetworkFlag(true);
+    const b = bridge("docker");
+    assert.match((await sh(b, interfaces, { shell: "sh" })).stdout, /eth0/, "the one network switch covers the worker's container");
+    assert.ok((b as any).workerLaunch(["rpc"], "files").args.join(" ").includes("--network none"), "the files worker's container has no network even then");
+    assert.equal((b as any).workerLaunch(["rpc"], "commands").args.join(" ").includes("--network none"), false);
+  });
+
+  test("no worker container survives shutdown, including one with a background command", async () => {
+    const b = bridge("docker");
+    await b.executeTool("read_file", { path: "a.txt" });
+    await sh(b, "sleep 31338 &", { shell: "sh" });
+    assert.equal(workerContainers().length, 2, "a files container and a command container are running");
+    b.shutdown();
+    let left: string[] = [];
+    for (let i = 0; i < 150; i++) {
+      left = workerContainers();
+      if (!left.length) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    if (left.length) spawnSync("docker", ["kill", ...left], { stdio: "ignore" });
+    assert.deepEqual(left, [], "the containers ended with their client");
   });
 });
 
@@ -202,6 +364,7 @@ describe("what happens when the box cannot be built", () => {
     assert.equal(res.success, false);
     assert.match(String(res.error), /Worker isolation violation/);
     assert.equal((b as any).rpcProcess ?? null, null, "no worker process exists");
+    assert.equal((b as any).channels.files.process, null, "nor a files worker");
     fs.rmSync(empty, { recursive: true, force: true });
   });
 
@@ -215,8 +378,45 @@ describe("what happens when the box cannot be built", () => {
     fs.rmSync(empty, { recursive: true, force: true });
   });
 
-  test("Docker and none never contain the worker (they confine commands only, as before)", () => {
-    for (const mode of ["docker", "none", false] as const) assert.equal((bridge(mode) as any).workerSandboxMode(), "off", String(mode));
+  test("`--sandbox docker` with no Docker fails closed: no worker is started outside a container", { skip: process.platform !== "linux" ? "Linux only" : !core ? "the Rust core is not built" : false }, async () => {
+    const empty = fs.mkdtempSync(path.join(root || "/var/tmp", "empty-path-"));
+    process.env.PATH = empty;
+    const b = new RustCoreBridge(workspace, "bash", core, false, false, "docker");
+    bridges.push(b);
+    for (const [tool, args] of [["read_file", { path: "a.txt" }], ["list_dir", { path: "." }]] as const) {
+      const res = await b.executeTool(tool, args);
+      assert.equal(res.success, false, tool);
+      assert.match(String(res.error), /Worker isolation violation/, tool);
+    }
+    assert.equal((b as any).channels.primary.process, null);
+    assert.equal((b as any).channels.files.process, null);
+    fs.rmSync(empty, { recursive: true, force: true });
+  });
+
+  test("Docker installed but its daemon down: `--sandbox` (auto) falls back to the worker as before; `--sandbox docker` refuses and says why", { skip: process.platform !== "linux" ? "Linux only" : !core ? "the Rust core is not built" : false }, async () => {
+    // A stand-in docker CLI that exists (`--version`) but cannot reach a daemon; no bwrap on this PATH.
+    const fakeBin = fs.mkdtempSync(path.join(root || "/var/tmp", "docker-down-"));
+    fs.writeFileSync(path.join(fakeBin, "docker"), `#!/bin/sh\n[ "$1" = "--version" ] && { echo "Docker version 0 (stand-in)"; exit 0; }\necho "Cannot connect to the Docker daemon" >&2\nexit 1\n`, { mode: 0o755 });
+    process.env.PATH = fakeBin;
+    const auto = new RustCoreBridge(workspace, "bash", core, false, false, true);
+    bridges.push(auto);
+    const read = await auto.executeTool("read_file", { path: "a.txt" });
+    assert.equal(read.success, true, JSON.stringify(read).slice(0, 200));
+    assert.equal((auto as any).workerEngine(), "none");
+    const required = new RustCoreBridge(workspace, "bash", core, false, false, "docker");
+    bridges.push(required);
+    const refused = await required.executeTool("read_file", { path: "a.txt" });
+    assert.equal(refused.success, false);
+    assert.match(String(refused.error), /Worker isolation violation: .*Docker daemon is not reachable/);
+    fs.rmSync(fakeBin, { recursive: true, force: true });
+  });
+
+  test("which sandbox settings contain the worker", () => {
+    for (const mode of ["none", false] as const) assert.equal((bridge(mode) as any).workerSandboxMode(), "off", String(mode));
+    assert.equal((bridge("docker") as any).workerSandboxMode(), process.platform === "linux" ? "required" : "off");
+    assert.deepEqual((bridge("docker") as any).workerEngines(), ["docker"]);
+    assert.deepEqual((bridge("bwrap") as any).workerEngines(), ["bwrap"]);
+    assert.deepEqual((bridge(true) as any).workerEngines(), ["bwrap", "docker"], "auto prefers Bubblewrap, then Docker");
     assert.equal((bridge("bwrap") as any).workerSandboxMode(), "required");
     assert.equal((bridge(true) as any).workerSandboxMode(), "preferred");
     assert.equal((bridge("auto") as any).workerSandboxMode(), "preferred");

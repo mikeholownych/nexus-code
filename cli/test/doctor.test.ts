@@ -131,6 +131,17 @@ describe("doctor findings name the actual failure", () => {
     assert.match(finding.action ?? "", /--sandbox bwrap/);
   });
 
+  test("sandbox.confinement says where the worker runs under Docker and names the files-only worker (CS-10)", async () => {
+    const evidence = find(await doctor({ config: cfg({ sandbox: "docker" }) }), "sandbox.confinement")!.evidence.join("\n");
+    if (process.platform === "linux") {
+      assert.match(evidence, /native worker \(harness-core\): runs inside this sandbox/);
+      assert.match(evidence, /files-only worker: it refuses to run commands and has no network even with --sandbox-network/);
+    } else {
+      assert.match(evidence, /runs outside Docker on this host/);
+      assert.doesNotMatch(evidence, /files-only worker/);
+    }
+  });
+
   test("config.project_env_ignored reports operator-only settings a workspace .env tries to set (REQ-SEC-110)", async () => {
     const ws = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-doctor-projenv-"));
     try {

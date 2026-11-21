@@ -397,7 +397,7 @@ function probeDockerSandbox(): boolean {
  * Restricts mutating filesystem access to the target workspace directory.
  */
 export interface SandboxedWorkerLaunch {
-  /** The program and arguments to spawn: `bwrap ...` ending in the worker command. */
+  /** The program and arguments to spawn: `bwrap ...` or `docker run ...` ending in the worker command. */
   command?: string;
   args?: string[];
   sandboxed: boolean;
@@ -405,21 +405,39 @@ export interface SandboxedWorkerLaunch {
   warning?: string;
 }
 
+export interface SandboxedWorkerOptions extends Pick<SandboxOptions, "network"> {
+  /** Engines to try, in order. Default: Bubblewrap only. */
+  engines?: readonly ("bwrap" | "docker")[];
+}
+
 /**
- * CS-10: launches a long-lived worker (the native core) inside the same Bubblewrap profile a sandboxed command gets: a
- * read-only root, the workspace the only writable path, $HOME masked, a scrubbed environment, no network unless the
- * operator allowed it, and the worker dies with its parent. The worker's own directory is bound read-only because it may
- * live under the masked $HOME (a development checkout or a per-user install).
+ * CS-10: launches a long-lived worker (the native core) inside the sandbox a command would get: a read-only root, the
+ * workspace the only writable path, $HOME masked, a scrubbed environment, no network unless the operator allowed it, and
+ * the worker ends with its parent. The worker's commands then run in the same box, so the per-command wrap is not
+ * applied a second time.
  *
- * The worker's commands then run in the same box, so the per-command wrap is not applied a second time. Only Bubblewrap
- * is supported for the worker; the caller decides what a Docker request means.
+ * The first engine in `options.engines` that can build the box is used; with none, the result is unsandboxed with the
+ * reasons, and the caller decides whether that is a refusal.
  */
 export function wrapSandboxedWorker(
   workerPath: string,
   workerArgs: readonly string[],
   workspace: string,
-  options: Pick<SandboxOptions, "network"> = {},
+  options: SandboxedWorkerOptions = {},
 ): SandboxedWorkerLaunch {
+  const warnings: string[] = [];
+  for (const engine of options.engines ?? ["bwrap"]) {
+    const launch = engine === "bwrap"
+      ? wrapBwrapWorker(workerPath, workerArgs, workspace, options)
+      : wrapDockerWorker(workerPath, workerArgs, workspace, options);
+    if (launch.sandboxed) return launch;
+    if (launch.warning) warnings.push(launch.warning);
+  }
+  return { sandboxed: false, engine: "none", warning: warnings.join(" ") || "No sandbox engine was requested for the worker." };
+}
+
+/** The worker's own directory is bound read-only because it may live under the masked $HOME (a checkout or a per-user install). */
+function wrapBwrapWorker(workerPath: string, workerArgs: readonly string[], workspace: string, options: SandboxedWorkerOptions): SandboxedWorkerLaunch {
   if (!isBwrapAvailable()) {
     return { sandboxed: false, engine: "none", warning: "Bubblewrap (bwrap) is not available, so the worker cannot be isolated." };
   }
@@ -434,6 +452,103 @@ export function wrapSandboxedWorker(
     return { sandboxed: false, engine: wrapped.engine, warning: wrapped.warning ?? "The Bubblewrap profile could not be built for the worker." };
   }
   return { command: wrapped.argv[0], args: wrapped.argv.slice(1), sandboxed: true, engine: "bwrap" };
+}
+
+/** Where the worker and the libraries it was linked against are mounted in the container; nothing in the image is replaced. */
+const DOCKER_WORKER_RUNTIME = "/nexus-worker";
+export const DOCKER_WORKER_LABEL = "io.nexus-code.worker-of";
+
+/**
+ * The host files a dynamically linked worker needs to start: its ELF interpreter and shared libraries, from `ldd`. The
+ * container image is usually built on another C library (the default image is Alpine/musl), so the worker runs through
+ * its own loader with its own libraries from a private directory instead of the image's. A static worker needs none.
+ */
+export function workerRuntimeFiles(workerPath: string): { loader?: string; libraries: string[] } | { error: string } {
+  let output: string;
+  try {
+    output = execFileSync("ldd", [workerPath], { encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "pipe"] });
+  } catch (err: any) {
+    const text = `${err?.stdout ?? ""}${err?.stderr ?? ""}`;
+    if (/not a dynamic executable|statically linked/i.test(text)) return { libraries: [] };
+    return { error: `the worker's runtime libraries could not be resolved (ldd failed: ${String(err?.message ?? err).split("\n")[0]})` };
+  }
+  if (/statically linked/i.test(output)) return { libraries: [] };
+  let loader: string | undefined;
+  const libraries: string[] = [];
+  for (const line of output.split("\n")) {
+    const resolved = line.match(/=>\s*(\/\S+)\s+\(/)?.[1];
+    if (resolved) libraries.push(resolved);
+    else if (/=>\s*not found/.test(line)) return { error: `the worker needs a library that is not installed: ${line.trim()}` };
+    else {
+      const direct = line.match(/^\s*(\/\S+)\s+\(/)?.[1];
+      if (direct) loader = direct;
+    }
+  }
+  if (!loader) return { error: "the worker's ELF interpreter could not be determined from ldd" };
+  try {
+    return { loader: fs.realpathSync(loader), libraries: libraries.map((file) => fs.realpathSync(file)) };
+  } catch (err: any) {
+    return { error: `a worker runtime file is missing: ${err?.message ?? err}` };
+  }
+}
+
+/**
+ * CS-10 (Docker): the worker as the long-lived process of one hardened container, built from the same `docker run`
+ * arguments a sandboxed command gets (unprivileged uid, no capabilities, read-only root, no network unless allowed, the
+ * workspace the only host directory). `--interactive` carries the JSON-RPC stream; `--init` reaps the commands the
+ * worker starts and forwards signals; the container ends when the worker does (its client closing stdin ends the worker).
+ */
+function wrapDockerWorker(workerPath: string, workerArgs: readonly string[], workspace: string, options: SandboxedWorkerOptions): SandboxedWorkerLaunch {
+  const refuse = (warning: string): SandboxedWorkerLaunch => ({ sandboxed: false, engine: "none", warning });
+  if (process.platform !== "linux") return refuse("The worker can only run in a Docker container on a Linux host.");
+  // The CLI being installed is not enough for a long-lived worker: with the daemon down the container would never start
+  // and every tool would fail. Ask the daemon, so `auto` can fall back and an explicit `docker` refuses with the reason.
+  try {
+    execFileSync("docker", ["version", "--format", "{{.Server.Version}}"], { stdio: ["ignore", "ignore", "ignore"], timeout: 5000 });
+  } catch {
+    return refuse("The Docker daemon is not reachable, so the worker cannot run in a container.");
+  }
+  const placeholder = "true";
+  const wrapped = wrapSandboxedCommand(placeholder, workspace, { mode: "docker", network: options.network });
+  if (!wrapped.sandboxed || wrapped.engine !== "docker" || !wrapped.argv?.length) {
+    return refuse(wrapped.warning ?? "The Docker sandbox could not be built for the worker.");
+  }
+  // The command form ends `-w <workspace> <image> sh -c <cmd>`; everything before the image is the hardened profile.
+  const tail = wrapped.argv.slice(-6);
+  const absWorkspace = path.resolve(workspace);
+  if (tail[0] !== "-w" || tail[1] !== absWorkspace || tail[3] !== "sh" || tail[4] !== "-c" || tail[5] !== placeholder || wrapped.argv[1] !== "run") {
+    return refuse("The Docker sandbox arguments have an unexpected shape; refusing to start the worker in a container built from them.");
+  }
+  const image = tail[2];
+  const runtime = workerRuntimeFiles(workerPath);
+  if ("error" in runtime) return refuse(`The worker cannot run in a Docker container: ${runtime.error}.`);
+  const mounts: string[] = [];
+  const names = new Set<string>();
+  const mount = (host: string, name: string) => {
+    if (names.has(name)) return;
+    names.add(name);
+    mounts.push("-v", `${host}:${DOCKER_WORKER_RUNTIME}/${name}:ro`);
+  };
+  let resolvedWorker: string;
+  try {
+    resolvedWorker = fs.realpathSync(workerPath);
+  } catch (err: any) {
+    return refuse(`The worker binary is missing: ${err?.message ?? err}.`);
+  }
+  mount(resolvedWorker, "harness-core");
+  for (const library of runtime.libraries) mount(library, path.basename(library));
+  const inContainer = `${DOCKER_WORKER_RUNTIME}/harness-core`;
+  const start = runtime.loader
+    ? (mount(runtime.loader, "ld.so"), [`${DOCKER_WORKER_RUNTIME}/ld.so`, "--library-path", DOCKER_WORKER_RUNTIME, inContainer])
+    : [inContainer];
+  const profile = wrapped.argv.slice(2, -6);
+  return {
+    command: "docker",
+    // The label names the CLI process that owns the container, so a leftover can be found (`docker ps --filter label=...`).
+    args: ["run", "--interactive", "--init", "--label", `${DOCKER_WORKER_LABEL}=${process.pid}`, ...profile, ...mounts, "-w", absWorkspace, image, ...start, ...workerArgs],
+    sandboxed: true,
+    engine: "docker",
+  };
 }
 
 export function wrapSandboxedCommand(
