@@ -253,6 +253,9 @@ export class LspClient {
               ...(d.code !== undefined && d.code !== null ? { code: d.code } : {}),
             }));
             const current = this.opened.get(params.uri);
+            if (process.env.NEXUS_LSP_TRACE_DIAGNOSTICS === "1") {
+              console.error("LSP_DIAGNOSTICS", JSON.stringify({ server: this.serverCmd, uri: params.uri, version: params.version ?? null, currentVersion: current?.version ?? null, count: diags.length, first: diags[0]?.message ?? null }));
+            }
             if (typeof params.version === "number" && current && params.version !== current.version) {
               continue; // published for an older version of the file than the server was last told about
             }

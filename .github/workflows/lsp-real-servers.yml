@@ -60,4 +60,6 @@ jobs:
           gopls version || true
       - name: Run the real-server tests
         working-directory: cli
+        env:
+          NEXUS_LSP_TRACE_DIAGNOSTICS: "1"
         run: node scripts/run_tests.mjs test/lsp_real_servers.test.ts
