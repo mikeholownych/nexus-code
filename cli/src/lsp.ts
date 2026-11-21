@@ -253,9 +253,6 @@ export class LspClient {
               ...(d.code !== undefined && d.code !== null ? { code: d.code } : {}),
             }));
             const current = this.opened.get(params.uri);
-            if (process.env.NEXUS_LSP_TRACE_DIAGNOSTICS === "1") {
-              console.error("LSP_DIAGNOSTICS", JSON.stringify({ server: this.serverCmd, uri: params.uri, version: params.version ?? null, currentVersion: current?.version ?? null, count: diags.length, first: diags[0]?.message ?? null }));
-            }
             if (typeof params.version === "number" && current && params.version !== current.version) {
               continue; // published for an older version of the file than the server was last told about
             }
@@ -368,6 +365,11 @@ export class LspClient {
       const version = prev.version + 1;
       this.opened.set(uri, { version, text });
       this.diagnosticsMap.delete(uri);
+        // Startup progress does not mean work for this newer document version has settled. A server may first
+        // publish diagnostics for the updated version before its analysis has caught up; make the bounded grace
+        // path apply again unless this edit produces fresh progress notifications.
+        this.progressSeen = false;
+        this.lastProgressAt = 0;
       this.sendNotification("textDocument/didChange", {
         textDocument: { uri, version },
         contentChanges: [{ text }],
