@@ -20,6 +20,7 @@ const LIFECYCLE: Record<DurableOperationState["status"], DurableTaskState["statu
   RUNNING: "in_progress",
   WAITING: "in_progress",
   BLOCKED: "in_progress",
+  PAUSED: "in_progress",
   COMPLETE: "completed",
   CANCELLED: "interrupted",
 };
@@ -259,9 +260,9 @@ export class OperationStore {
     return { stale, holder, ...identity };
   }
 
-  /** Most recently updated operation in this workspace that is waiting or running (to resume after restart). */
+  /** Most recently updated operation in this workspace that can resume after restart. */
   latestResumable(): DurableOperationState | undefined {
-    return this.list().find((op) => op.status === "WAITING" || op.status === "RUNNING");
+    return this.list().find((op) => op.status === "WAITING" || op.status === "RUNNING" || op.status === "PAUSED");
   }
 
   /**

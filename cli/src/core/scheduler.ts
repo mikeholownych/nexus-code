@@ -381,7 +381,7 @@ export class ConvergenceScheduler {
    * on the unit, and makes the unit schedulable again. The next decide() re-evaluates; nothing runs here.
    */
   resolve(decisionId: string, optionId: string, note?: string): AppliedDecision {
-    if (this.state.status === "COMPLETE" || this.state.status === "CANCELLED") {
+    if (this.state.status === "COMPLETE" || this.state.status === "CANCELLED" || this.state.status === "PAUSED") {
       throw new DecisionRejected(`Operation ${this.state.id} is ${this.state.status}; it has no pending decisions.`);
     }
     const u = this.state.units.find((x) => x.status === "BLOCKED" && x.blocked?.decision.id === decisionId);
@@ -673,5 +673,11 @@ export class ConvergenceScheduler {
     for (const u of this.state.units) if (u.status === "RUNNING") u.status = "RUNNABLE";
     this.state.status = "CANCELLED";
     this.emit("OPERATION_CANCELLED", "Operation cancelled; work units and their history are preserved.");
+  }
+
+  pause(): void {
+    if (this.state.status === "COMPLETE" || this.state.status === "CANCELLED" || this.state.status === "PAUSED") return;
+    this.state.status = "PAUSED";
+    this.emit("OPERATION_PAUSED", "Operation paused at a safe boundary; completed work and outstanding obligations are preserved.");
   }
 }

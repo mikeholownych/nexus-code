@@ -65,7 +65,7 @@ export {
 } from "./operation_schema.js";
 
 export type WorkUnitStatus = "RUNNABLE" | "RUNNING" | "PARKED" | "WAITING_ON_DEPENDENCY" | "COMPLETE" | "BLOCKED";
-export type OperationStatus = "RUNNING" | "WAITING" | "BLOCKED" | "COMPLETE" | "CANCELLED";
+export type OperationStatus = "RUNNING" | "WAITING" | "BLOCKED" | "PAUSED" | "COMPLETE" | "CANCELLED";
 
 /** The task a unit was given before any operator revision (its conversation began with this). */
 export function unitBaseTask(prompt: string): string {
@@ -219,6 +219,7 @@ export type OperationEventType =
   | "OPERATION_RESUMED"
   | "OPERATION_BLOCKED"
   | "OPERATION_COMPLETED"
+  | "OPERATION_PAUSED"
   | "OPERATION_CANCELLED"
   | "DECISION_APPLIED"
   | "CONCURRENCY_LIMIT"

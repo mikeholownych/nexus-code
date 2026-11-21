@@ -38,6 +38,7 @@ import { TurnResult, lifecycleStatusForTurn } from "./core/turn.js";
 import { buildSessionExport } from "./session_export.js";
 import { SensitivePersistenceError } from "./core/persistence_protection.js";
 import { persistableEndpoint } from "./core/endpoint_identity.js";
+import { executeBatchCommand } from "./batch_command.js";
 
 interface PatchHunk {
   header: string;
@@ -103,6 +104,7 @@ export function replReadOnlyAllowed(command: string, args: string): boolean {
   }
   if (name === "skill") return !value || !/^init(?:\s|$)/.test(value);
   if (name === "theme") return !value;
+  if (name === "batch") return /^(?:status|list|validate|results)(?:\s|$)/.test(value);
   if (name === "doctor") return !/(^|\s)--fix(?:=|\s|$)/.test(value);
   return false;
 }
@@ -120,8 +122,8 @@ export class InteractiveRepl {
   private currentSessionId: string;
   private themeManager: ThemeManager = new ThemeManager();
   private exitResolve?: () => void;
-  /** Cancels a running /team operation (Ctrl-C). */
-  private teamAbort?: AbortController;
+  /** Cancels a running durable /team or /batch operation (Ctrl-C). */
+  private operationAbort?: AbortController;
   /** Set while `/worktree merge --ai-message` awaits the model: Ctrl-C cancels it instead of ending the session. */
   private worktreeAbort?: AbortController;
 
@@ -407,6 +409,7 @@ export class InteractiveRepl {
     console.log(`  ${pc.bold(pc.yellow("/mcp [add|resources|prompts]"))} Manage MCP servers, tools, resources, and prompts`);
     console.log(`  ${pc.bold(pc.yellow("/plugins"))}            List loaded custom plugins and lifecycle hooks`);
     console.log(`  ${pc.bold(pc.yellow("/team <role|full> <task>"))} Multi-agent collaborative team orchestration`);
+    console.log(`  ${pc.bold(pc.yellow("/batch <spec-file> | run|validate|status|list|pause|resume|cancel|results"))} Bounded durable work batches`);
     console.log(`  ${pc.bold(pc.yellow("/image <path> [prompt]"))} Ingest multi-modal image into vision model`);
     console.log(`  ${pc.bold(pc.yellow("/theme [name]"))}       View or switch terminal color theme`);
     console.log(`  ${pc.bold(pc.yellow("/tui"))}                Launch full-screen interactive TUI dashboard`);
@@ -673,7 +676,7 @@ export class InteractiveRepl {
           "/checkpoints", "/undo", "/audit", "/export", "/tokens", "/init",
           "/onboard", "/test",
           "/model", "/shell", "/cd", "/history", "/copy", "/paste",
-          "/image", "/theme", "/team", "/upgrade",
+          "/image", "/theme", "/team", "/batch", "/upgrade",
           "/exit", "/quit"
         ];
         const trimmed = line.trim();
@@ -742,9 +745,9 @@ export class InteractiveRepl {
         console.log(pc.yellow("\n⏹  Cancel requested: the merge stops before it changes anything."));
         return;
       }
-      if (this.teamAbort && !this.teamAbort.signal.aborted) {
-        this.teamAbort.abort();
-        console.log(pc.yellow("\n⏹  Stop requested: the team operation is cancelled after its current step; its state is preserved."));
+      if (this.operationAbort && !this.operationAbort.signal.aborted) {
+        this.operationAbort.abort();
+        console.log(pc.yellow("\n⏹  Stop requested: the durable operation is cancelled after its current step; its state is preserved."));
         return;
       }
       if (this.agent.getTurnLifecycle()) {
@@ -1707,10 +1710,10 @@ export class InteractiveRepl {
               continue;
             }
 
-            this.teamAbort = new AbortController();
+            this.operationAbort = new AbortController();
             try {
               const orchestrator = new TeamOrchestrator(this.config, {
-                signal: this.teamAbort.signal,
+                signal: this.operationAbort.signal,
                 independentReview,
                 maxInProcessWaitMs: 60_000,
                 onEvent: (e) => {
@@ -1721,7 +1724,25 @@ export class InteractiveRepl {
               const result = await orchestrator.run(subCmd === "full" ? "full" : (subCmd as AgentRole), objective);
               console.log((result.success ? pc.green : pc.yellow)(`\n${result.report}\n`));
             } finally {
-              this.teamAbort = undefined;
+              this.operationAbort = undefined;
+            }
+            continue;
+          } else if (cmd === "batch") {
+            this.operationAbort = new AbortController();
+            try {
+              const events: Array<{ type: string; message: string }> = [];
+              const result = await executeBatchCommand(arg, this.config, this.operationAbort.signal, (event) => {
+                if (events.length < 200) events.push(event);
+              });
+              for (const event of events) {
+                const color = event.type.startsWith("RESOURCE_") ? pc.dim : pc.cyan;
+                console.log(color(`◆ ${formatDiagnosticForOutput(event.message)}`));
+              }
+              console.log((result.success ? pc.green : pc.yellow)(`\n${formatDiagnosticForOutput(result.output)}\n`));
+            } catch (error) {
+              console.log(pc.red(`\n${formatDiagnosticForOutput(error)}\n`));
+            } finally {
+              this.operationAbort = undefined;
             }
             continue;
           } else if (cmd === "shell") {

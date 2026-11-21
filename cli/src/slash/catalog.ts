@@ -136,6 +136,7 @@ export const SLASH_COMMANDS: SlashSpec[] = [
   { name: "image", usage: "/image <path> [prompt]", summary: "Send an image to the vision model", cancellable: true },
   { name: "tdd", usage: "/tdd <issue>", summary: "[experimental] Run a RED → GREEN → REFACTOR cycle", cancellable: true },
   { name: "team", usage: "/team <role|full> [--independent-review] <objective>", summary: "[experimental] Run a role or the full team as a durable operation (researcher, architect, implementer, tester, reviewer)" },
+  { name: "batch", usage: "/batch <spec-file> | run|validate <spec-file> | status|list|pause|resume|cancel|results [id]", summary: "Validate and run bounded durable work batches through the operation scheduler", cancellable: true },
   { name: "theme", usage: "/theme [name]", summary: "Show or save the colour theme" },
   { name: "recover", usage: "/recover [task-id]", summary: "Recover durable task state" },
   { name: "step", usage: "/step", summary: "Advance the active task by one single model/tool cycle and pause", cancellable: true },

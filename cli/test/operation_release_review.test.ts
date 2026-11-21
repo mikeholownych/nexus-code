@@ -10,7 +10,7 @@ import { driveOperation, OperationRunner, OperationStore, type WorkUnitExecutor 
 import { newOperation, type DurableOperationState, type UnitRunResult, type WorkUnit } from "../src/core/operation.js";
 import { messagesBlock, publishMessage } from "../src/core/operation_messages.js";
 import { ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "../src/core/operation_git.js";
-import { UnsupportedOperationSchemaError } from "../src/core/operation_schema.js";
+import { CURRENT_OPERATION_SCHEMA_VERSION, UnsupportedOperationSchemaError } from "../src/core/operation_schema.js";
 import { STATE_RESTORE_PENDING_FILE } from "../src/core/state_store_guard.js";
 import type { ResourceDescriptor } from "../src/core/resources.js";
 import type { UnitRunContext } from "../src/core/operation_runner.js";
@@ -148,7 +148,7 @@ test("a future nested operation version is refused before load or save can rewri
   store.save(op);
   const file = store.manager.getStateFilePath(op.id);
   const raw = JSON.parse(fs.readFileSync(file, "utf8"));
-  raw.operation.schemaVersion = 3;
+  raw.operation.schemaVersion = CURRENT_OPERATION_SCHEMA_VERSION + 1;
   raw.operation.objective = "aZ7mK2pQ9x-V4nR8cT1yB6hW3";
   fs.writeFileSync(file, JSON.stringify(raw), { mode: 0o600 });
   const before = fs.readFileSync(file);
@@ -260,7 +260,7 @@ test("operation version preflight honors a pending restore barrier for load and 
   store.save(op);
   const file = store.manager.getStateFilePath(op.id);
   const raw = JSON.parse(fs.readFileSync(file, "utf8"));
-  raw.operation.schemaVersion = 3;
+  raw.operation.schemaVersion = CURRENT_OPERATION_SCHEMA_VERSION + 1;
   fs.writeFileSync(file, JSON.stringify(raw), { mode: 0o600 });
   const before = fs.readFileSync(file);
   fs.writeFileSync(path.join(store.manager.getBaseDir(), STATE_RESTORE_PENDING_FILE), "pending\n", { mode: 0o600 });
@@ -559,7 +559,7 @@ test("CLI resume returns exit 2 for an unsupported operation schema", (t) => {
   store.save(op);
   const file = store.manager.getStateFilePath(op.id);
   const raw = JSON.parse(fs.readFileSync(file, "utf8"));
-  raw.operation.schemaVersion = 3;
+  raw.operation.schemaVersion = CURRENT_OPERATION_SCHEMA_VERSION + 1;
   fs.writeFileSync(file, JSON.stringify(raw), { mode: 0o600 });
 
   const result = runOperationCli(["operation", "resume", op.id], env, root);
@@ -591,7 +591,7 @@ test("replay leaves a legacy redaction-changing record byte-identical and still 
   assert.equal(fs.statSync(file).mtimeMs, mtime);
   assert.equal(fs.existsSync(`${file}.pre-migration-v1`), false);
 
-  raw.operation.schemaVersion = 3;
+  raw.operation.schemaVersion = CURRENT_OPERATION_SCHEMA_VERSION + 1;
   fs.writeFileSync(file, JSON.stringify(raw), { mode: 0o600 });
   const futureBytes = fs.readFileSync(file);
   const futureMtime = fs.statSync(file).mtimeMs;
