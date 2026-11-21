@@ -1,0 +1,354 @@
+{
+ "measuredAt": "2026-11-21",
+ "model": "engineering/lead (served by engineering/b0)",
+ "agentExecutableSha256": "89e41a010299feac2aabea65f7ea3f932eb76fea7ab37ff15226316e88095573",
+ "runsPerArmPerTask": 5,
+ "arms": {
+  "unmasked": {
+   "cx4-log-triage": [
+    {
+     "run": 1,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 144013,
+     "completionTokens": 1329,
+     "wallSeconds": 99,
+     "steps": 6,
+     "outcome": "UNVERIFIED",
+     "timedOut": false
+    },
+    {
+     "run": 2,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 275328,
+     "completionTokens": 2130,
+     "wallSeconds": 147,
+     "steps": 6,
+     "outcome": "UNVERIFIED",
+     "timedOut": false
+    },
+    {
+     "run": 3,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 289251,
+     "completionTokens": 2855,
+     "wallSeconds": 152,
+     "steps": 20,
+     "outcome": "NOT_ESTABLISHED",
+     "timedOut": false
+    },
+    {
+     "run": 4,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 197428,
+     "completionTokens": 2104,
+     "wallSeconds": 124,
+     "steps": 11,
+     "outcome": "NOT_ESTABLISHED",
+     "timedOut": false
+    },
+    {
+     "run": 5,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 229883,
+     "completionTokens": 2232,
+     "wallSeconds": 94,
+     "steps": 14,
+     "outcome": "UNVERIFIED",
+     "timedOut": false
+    }
+   ],
+   "cx4-verbose-fix": [
+    {
+     "run": 1,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 179987,
+     "completionTokens": 1178,
+     "wallSeconds": 53,
+     "steps": 7,
+     "outcome": "UNVERIFIED",
+     "timedOut": false
+    },
+    {
+     "run": 2,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 279477,
+     "completionTokens": 7010,
+     "wallSeconds": 204,
+     "steps": 12,
+     "outcome": "UNVERIFIED",
+     "timedOut": false
+    },
+    {
+     "run": 3,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 181956,
+     "completionTokens": 1529,
+     "wallSeconds": 63,
+     "steps": 7,
+     "outcome": "UNVERIFIED",
+     "timedOut": false
+    },
+    {
+     "run": 4,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 183937,
+     "completionTokens": 1786,
+     "wallSeconds": 65,
+     "steps": 7,
+     "outcome": "UNVERIFIED",
+     "timedOut": false
+    },
+    {
+     "run": 5,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 215164,
+     "completionTokens": 1491,
+     "wallSeconds": 58,
+     "steps": 8,
+     "outcome": "UNVERIFIED",
+     "timedOut": false
+    }
+   ],
+   "cx4-wide-rename": [
+    {
+     "run": 1,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 282308,
+     "completionTokens": 2282,
+     "wallSeconds": 61,
+     "steps": 12,
+     "outcome": "UNVERIFIED",
+     "timedOut": false
+    },
+    {
+     "run": 2,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 230357,
+     "completionTokens": 30683,
+     "wallSeconds": 563,
+     "steps": 9,
+     "outcome": "UNVERIFIED",
+     "timedOut": false
+    },
+    {
+     "run": 3,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 251755,
+     "completionTokens": 11995,
+     "wallSeconds": 414,
+     "steps": 10,
+     "outcome": "UNVERIFIED",
+     "timedOut": false
+    },
+    {
+     "run": 4,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 152529,
+     "completionTokens": 1633,
+     "wallSeconds": 43,
+     "steps": 8,
+     "outcome": "UNVERIFIED",
+     "timedOut": false
+    },
+    {
+     "run": 5,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 111197,
+     "completionTokens": 1333,
+     "wallSeconds": 34,
+     "steps": 7,
+     "outcome": "UNVERIFIED",
+     "timedOut": false
+    }
+   ]
+  },
+  "masked (2000 tokens)": {
+   "cx4-log-triage": [
+    {
+     "run": 1,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 133690,
+     "completionTokens": 1385,
+     "wallSeconds": 77,
+     "steps": 11,
+     "outcome": "NOT_ESTABLISHED",
+     "timedOut": false
+    },
+    {
+     "run": 2,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 122348,
+     "completionTokens": 1555,
+     "wallSeconds": 76,
+     "steps": 11,
+     "outcome": "NOT_ESTABLISHED",
+     "timedOut": false
+    },
+    {
+     "run": 3,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 174506,
+     "completionTokens": 1840,
+     "wallSeconds": 91,
+     "steps": 15,
+     "outcome": "NOT_ESTABLISHED",
+     "timedOut": false
+    },
+    {
+     "run": 4,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 107778,
+     "completionTokens": 1188,
+     "wallSeconds": 62,
+     "steps": 9,
+     "outcome": "NOT_ESTABLISHED",
+     "timedOut": false
+    },
+    {
+     "run": 5,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 133214,
+     "completionTokens": 1626,
+     "wallSeconds": 85,
+     "steps": 12,
+     "outcome": "UNVERIFIED",
+     "timedOut": false
+    }
+   ],
+   "cx4-verbose-fix": [
+    {
+     "run": 1,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 84294,
+     "completionTokens": 1607,
+     "wallSeconds": 58,
+     "steps": 8,
+     "outcome": "UNVERIFIED",
+     "timedOut": false
+    },
+    {
+     "run": 2,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 76549,
+     "completionTokens": 1522,
+     "wallSeconds": 58,
+     "steps": 7,
+     "outcome": "UNVERIFIED",
+     "timedOut": false
+    },
+    {
+     "run": 3,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 94488,
+     "completionTokens": 1558,
+     "wallSeconds": 62,
+     "steps": 9,
+     "outcome": "UNVERIFIED",
+     "timedOut": false
+    },
+    {
+     "run": 4,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 76800,
+     "completionTokens": 1641,
+     "wallSeconds": 58,
+     "steps": 7,
+     "outcome": "UNVERIFIED",
+     "timedOut": false
+    },
+    {
+     "run": 5,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 85172,
+     "completionTokens": 1625,
+     "wallSeconds": 59,
+     "steps": 8,
+     "outcome": "UNVERIFIED",
+     "timedOut": false
+    }
+   ],
+   "cx4-wide-rename": [
+    {
+     "run": 1,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 100379,
+     "completionTokens": 1400,
+     "wallSeconds": 48,
+     "steps": 9,
+     "outcome": "UNVERIFIED",
+     "timedOut": false
+    },
+    {
+     "run": 2,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 234708,
+     "completionTokens": 4063,
+     "wallSeconds": 107,
+     "steps": 9,
+     "outcome": "UNVERIFIED",
+     "timedOut": false
+    },
+    {
+     "run": 3,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 90866,
+     "completionTokens": 1607,
+     "wallSeconds": 72,
+     "steps": 8,
+     "outcome": "UNVERIFIED",
+     "timedOut": false
+    },
+    {
+     "run": 4,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 74298,
+     "completionTokens": 1732,
+     "wallSeconds": 39,
+     "steps": 7,
+     "outcome": "UNVERIFIED",
+     "timedOut": false
+    },
+    {
+     "run": 5,
+     "hiddenPass": true,
+     "regressionPass": true,
+     "promptTokens": 85956,
+     "completionTokens": 1326,
+     "wallSeconds": 51,
+     "steps": 8,
+     "outcome": "UNVERIFIED",
+     "timedOut": false
+    }
+   ]
+  }
+ }
+}
