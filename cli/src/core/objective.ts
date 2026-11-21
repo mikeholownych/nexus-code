@@ -129,6 +129,8 @@ export interface SteeringConflict {
   /** `unresolved`: no operator was available, so the ledger is unchanged and the negation was not applied. */
   status: "pending" | "approved" | "declined" | "unresolved";
   decidedAt?: string;
+  /** Set when a later turn starts with the conflict still unresolved: the turn that left it unresolved has reported it (VC-9), so it is not raised as a question again. */
+  carried?: boolean;
 }
 
 /** Requirements of an earlier objective still unmet when a new request replaced it; the operator decides what happens to them. */
@@ -661,11 +663,13 @@ export function recordSteeringConflict(ledger: ObjectiveLedger, id: string, text
 }
 
 /**
- * The operator's decision, recorded only while the conflict is still pending: approval descopes the negated
- * requirements (accepted) and queues the steering; a refusal changes nothing. `note` is the sanitised steering text.
+ * The operator's decision, recorded while the conflict is pending, or after the turn left it unresolved (VC-9: the
+ * decision is still owed, and nothing was applied in the meantime). Approval descopes the negated requirements
+ * (accepted) and queues the steering; a refusal changes nothing. A conflict already approved or declined is not
+ * decided twice. `note` is the sanitised steering text.
  */
 export function resolveSteeringConflict(ledger: ObjectiveLedger, conflict: SteeringConflict, approved: boolean, note: string, at = now()): boolean {
-  if (conflict.status !== "pending") return false;
+  if (conflict.status !== "pending" && conflict.status !== "unresolved") return false;
   conflict.status = approved ? "approved" : "declined";
   conflict.decidedAt = at;
   if (!approved) return true;
@@ -680,6 +684,22 @@ export function resolveSteeringConflict(ledger: ObjectiveLedger, conflict: Steer
   }
   queueSteering(ledger, conflict.id, conflict.text, at);
   return true;
+}
+
+/**
+ * A turn is starting. Conflicts an earlier turn left unresolved are decided now if the operator answered their question
+ * (`answer(conflict)` returns the decision), and the rest are marked carried so this turn does not ask about them again.
+ * Returns the conflicts decided here.
+ */
+export function carryUnresolvedConflicts(ledger: ObjectiveLedger, answer: (conflict: SteeringConflict) => boolean | undefined, note: (text: string) => string, at = now()): SteeringConflict[] {
+  const decided: SteeringConflict[] = [];
+  for (const c of ledger.steeringConflicts ?? []) {
+    if (c.status !== "unresolved") continue;
+    const approved = answer(c);
+    if (approved === undefined) c.carried = true;
+    else if (resolveSteeringConflict(ledger, c, approved, note(c.text), at)) decided.push(c);
+  }
+  return decided;
 }
 
 /** Conflicts still waiting when the turn closes can no longer be applied coherently: they stay unresolved, nothing changes. */

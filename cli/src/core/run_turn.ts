@@ -15,8 +15,10 @@ import { InferenceError } from "../client.js";
 import { TurnResult, InterruptionRecord, InferenceFailure, CapacityRecord, ModelStop, ProviderRecoveryRecord, assertTurnResultInvariants, deepFreezeTurn, summarizeTurn } from "./turn.js";
 import { withDurableSync } from "./durable_file.js";
 import { ProviderRecoveryController, RecoveryCancelled, recoveryPolicyFromEnv } from "./provider_recovery.js";
-import { amendObjective, blockedRequirements, createLedger, gatingRequirements, isNewObjective, openRequirements, supersededBy, trackingOf } from "./objective.js";
+import { amendObjective, blockedRequirements, carryUnresolvedConflicts, createLedger, gatingRequirements, isNewObjective, openRequirements, supersededBy, trackingOf } from "./objective.js";
 import { snapshot } from "../file_diff.js";
+import { buildBlockedRequirementQuestion, buildSteeringConflictQuestion } from "./needs_input.js";
+import { safeOperatorText } from "../protocol.js";
 import { TurnEvidence, TurnReason } from "./turn.js";
 import { DEFAULT_REPEATED_CALL_HARD, DEFAULT_REPEATED_CALL_SOFT, judgeRepeatedCalls, makeCallRecord, pushCall, repeatedCallHistory, type CallClass, type CallRecord } from "./repeated_calls.js";
 import pc from "picocolors";
@@ -133,6 +135,16 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
     ledger.outcome = undefined;
     ledger.continuation = { ...ledger.continuation, segments: 1, lastProgressStep: 0, stopReason: undefined };
     this.objective = ledger;
+    // VC-9 row 7: a steering conflict an earlier turn left unresolved is decided here if the operator answered its
+    // question; the others are carried, so only the turn that left a conflict unresolved reports it.
+    carryUnresolvedConflicts(
+      ledger,
+      (conflict) => {
+        const answer = this.operatorAnswers.get(buildSteeringConflictQuestion(conflict, safeOperatorText).id);
+        return answer === undefined ? undefined : answer === "approve";
+      },
+      (text) => safeOperatorText(text),
+    );
   }
 
   let currentStep = 1;
@@ -1301,6 +1313,33 @@ export function buildTurnResultImpl(this: any, input: {
   // A finished turn with operator requirements still open or blocked established nothing about the objective, whatever
   // the verifier said about the code (a failing verifier is the more specific reason and is reported below).
   const requirementsIncomplete = open.length > 0 || blocked.length > 0;
+  // VC-9 row 8: in a headless run (`nexus run`) nobody is there to read "R3 is blocked" and reply, so a requirement the
+  // model marked blocked ends the turn BLOCKED / NEEDS_INPUT with the blocker as a question. Other surfaces have an
+  // operator or a client and keep REQUIREMENTS_INCOMPLETE; so does a requirement that is only still open.
+  const blockedByModel = this.config.surface === "headless" && this.depth === 0 ? blocked.filter((r) => r.status === "blocked") : [];
+  const blockedRequirementTurn = (): TurnResult | undefined => {
+    if (!blockedByModel.length) return undefined;
+    const [first, ...rest] = blockedByModel.map((r) => buildBlockedRequirementQuestion(r));
+    const further = rest.filter((q, i) => q.id !== first.id && rest.findIndex((x) => x.id === q.id) === i);
+    return deepFreezeTurn(assertTurnResultInvariants({
+      ...base, execution: "BLOCKED", outcome: "NOT_ESTABLISHED", reason: "NEEDS_INPUT",
+      detail: first.prompt.slice(0, 300), needsInput: first,
+      ...(further.length ? { furtherNeedsInput: further } : {}),
+    }));
+  };
+  // VC-9 row 7: steering that would drop a requirement went undecided in this turn (nobody could be asked, or the turn
+  // closed first). It was not applied, so what the turn did is not what the operator last asked for: a turn that would
+  // otherwise report completion ends BLOCKED / NEEDS_INPUT with the decision as the question.
+  const steeringConflictTurn = (): TurnResult | undefined => {
+    const undecided = (ledger?.steeringConflicts ?? []).filter((c: any) => c.status === "unresolved" && !c.carried);
+    if (!undecided.length) return undefined;
+    const [first, ...rest] = undecided.map((c: any) => buildSteeringConflictQuestion(c, safeOperatorText));
+    return deepFreezeTurn(assertTurnResultInvariants({
+      ...base, execution: "BLOCKED", outcome: "NOT_ESTABLISHED", reason: "NEEDS_INPUT",
+      detail: first.prompt.slice(0, 300), needsInput: first,
+      ...(rest.length ? { furtherNeedsInput: rest } : {}),
+    }));
+  };
   const incompleteDetail = () =>
     [open.length ? `open: ${open.map((r) => r.id).join(", ")}` : "", blocked.length ? `blocked: ${blocked.map((r) => `${r.id} (${r.note ?? "no reason"})`).join(", ")}` : ""]
       .filter(Boolean)
@@ -1318,6 +1357,8 @@ export function buildTurnResultImpl(this: any, input: {
   // A diagnostic run works on a snapshot of a failing candidate and is never integrated: its report is the result, and
   // no verifier can establish it (the candidate fails by definition), so what it wrote (reproduction scratch files in
   // a worktree that is never integrated) is not pending verification.
+  const undecidedSteering = steeringConflictTurn();
+  if (undecidedSteering) return undecidedSteering;
   if (this.config.diagnosticRun && !requirementsIncomplete) {
     if (this.turnRemovedObservations.size > 0) return contextEvidenceLost();
     return deepFreezeTurn(assertTurnResultInvariants({ ...base, unverifiedChangesPending: false, execution: "COMPLETED", outcome: "NOT_REQUIRED" }));
@@ -1340,7 +1381,7 @@ export function buildTurnResultImpl(this: any, input: {
       return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "NOT_ESTABLISHED", reason: "VERIFIER_TIMED_OUT", detail: `${evidence.command} (deadline ${evidence.deadlineSecs}s)` }));
     }
     if (requirementsIncomplete) {
-      return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "NOT_ESTABLISHED", reason: "REQUIREMENTS_INCOMPLETE", detail: incompleteDetail() }));
+      return blockedRequirementTurn() ?? deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "NOT_ESTABLISHED", reason: "REQUIREMENTS_INCOMPLETE", detail: incompleteDetail() }));
     }
     // A current task may have a trustworthy pre-change verifier snapshot but no operator-declared
     // deliverable scope. Its passing tests are regression evidence only; keep the obligation pending.
@@ -1381,7 +1422,7 @@ export function buildTurnResultImpl(this: any, input: {
     }));
   }
   if (requirementsIncomplete) {
-    return deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "NOT_ESTABLISHED", reason: "REQUIREMENTS_INCOMPLETE", detail: incompleteDetail() }));
+    return blockedRequirementTurn() ?? deepFreezeTurn(assertTurnResultInvariants({ ...base, execution: "COMPLETED", outcome: "NOT_ESTABLISHED", reason: "REQUIREMENTS_INCOMPLETE", detail: incompleteDetail() }));
   }
   if ((this.turnMutations > 0 && !latchCaughtNothing) || this.turnCarriedChanges) {
     if (evidence?.status === "PASSED") {
