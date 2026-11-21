@@ -2,9 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildReviewEvidencePackage,
+  CHANGE_ASSESSMENT_FIELDS,
   detectScopeViolations,
   extractModifiedFilesFromDiff,
   formatIndependentReviewPrompt,
+  isSignificantChange,
   parseIndependentReviewVerdict,
   type ReviewEvidencePackage,
 } from "../src/core/independent_review.js";
@@ -379,4 +381,63 @@ test("a model ACCEPT with no deterministic verifier evidence is REJECT (missing 
   assert.match(res.unprovenCriteria.join("\n"), /No deterministic verifier evidence/);
   // Same package with a passing run is still accepted: the gate keys on evidence, not on the reviewer.
   assert.equal(parseIndependentReviewVerdict(accept, { ...untested, verifierExitCode: 0 }).verdict, "ACCEPT");
+});
+
+const ASSESSMENT_DIFF = `diff --git a/cli/src/feature.ts b/cli/src/feature.ts
+--- a/cli/src/feature.ts
++++ b/cli/src/feature.ts
+@@ -1 +1 @@
+-old
++new
+`;
+const FULL_ASSESSMENT = Object.fromEntries(CHANGE_ASSESSMENT_FIELDS.map((field) => [field, `${field} stated`]));
+const assessmentReview = (extra: object = {}) => JSON.stringify({
+  verdict: "ACCEPT", verifiedObservations: ["ok"], suspectedDefects: [], unprovenCriteria: [], scopeViolations: [],
+  reviewerConfidenceNote: "n", ...extra,
+});
+const assessmentPackage = (diff: string, extra: object = {}) => buildReviewEvidencePackage({
+  unitId: "review", objective: "Review the change", baselineCommit: "base", unifiedDiff: diff,
+  verifierCommand: "make test", verifierOutput: "passed", verifierExitCode: 0, ...extra,
+});
+
+test("isSignificantChange: core paths, five files and 300 changed lines are significant", () => {
+  assert.equal(isSignificantChange(ASSESSMENT_DIFF), false);
+  assert.equal(isSignificantChange(ASSESSMENT_DIFF.replaceAll("cli/src/feature.ts", "cli/src/core/feature.ts")), true);
+  const fiveFiles = Array.from({ length: 5 }, (_, i) => ASSESSMENT_DIFF.replaceAll("feature.ts", `feature-${i}.ts`)).join("");
+  assert.equal(isSignificantChange(fiveFiles), true);
+  assert.equal(isSignificantChange(ASSESSMENT_DIFF + Array.from({ length: 300 }, () => "+line\n").join("")), true);
+});
+
+test("a significant change requires a complete engineering assessment, but the assessment cannot rescue failure", () => {
+  const small = assessmentPackage(ASSESSMENT_DIFF);
+  assert.equal(parseIndependentReviewVerdict(assessmentReview(), small).verdict, "ACCEPT");
+
+  const coreDiff = ASSESSMENT_DIFF.replaceAll("cli/src/feature.ts", "cli/src/core/feature.ts");
+  const significant = assessmentPackage(coreDiff);
+  const missing = parseIndependentReviewVerdict(assessmentReview(), significant);
+  assert.equal(missing.verdict, "REJECT");
+  assert.match(missing.unprovenCriteria.join("\n"), /engineering assessment is missing/);
+
+  const incomplete = parseIndependentReviewVerdict(
+    assessmentReview({ changeAssessment: { ...FULL_ASSESSMENT, residualRisk: "  " } }), significant,
+  );
+  assert.equal(incomplete.verdict, "REJECT");
+  assert.match(incomplete.unprovenCriteria.join("\n"), /incomplete \(residualRisk\)/);
+
+  const complete = parseIndependentReviewVerdict(assessmentReview({ changeAssessment: FULL_ASSESSMENT }), significant);
+  assert.equal(complete.verdict, "ACCEPT");
+  assert.deepEqual(complete.changeAssessment, FULL_ASSESSMENT);
+
+  const failedVerifier = assessmentPackage(coreDiff, { verifierExitCode: 1 });
+  assert.equal(parseIndependentReviewVerdict(assessmentReview({ changeAssessment: FULL_ASSESSMENT }), failedVerifier).verdict, "REJECT");
+});
+
+test("malformed assessments fail closed and the prompt explains the significant-change contract", () => {
+  assert.equal(parseIndependentReviewVerdict(assessmentReview({ changeAssessment: "fine" }), assessmentPackage(ASSESSMENT_DIFF)).verdict, "REJECT");
+  const coreDiff = ASSESSMENT_DIFF.replaceAll("cli/src/feature.ts", "cli/src/core/feature.ts");
+  const prompt = formatIndependentReviewPrompt(assessmentPackage(coreDiff, { unresolvedAssumptions: ["the cache is single-writer"] }));
+  assert.match(prompt, /change-risk:/);
+  assert.match(prompt, /SIGNIFICANT change: "changeAssessment" is required/);
+  assert.match(prompt, /Unresolved Assumptions[\s\S]*the cache is single-writer/);
+  assert.match(formatIndependentReviewPrompt(assessmentPackage(ASSESSMENT_DIFF)), /"changeAssessment" is optional for a small change/);
 });
