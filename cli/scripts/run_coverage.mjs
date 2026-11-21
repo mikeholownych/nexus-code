@@ -33,7 +33,9 @@ const args = [
   "--import", "tsx",
   "--test",
   "--experimental-test-coverage",
-  "--test-reporter=spec", "--test-reporter-destination=/dev/stdout",
+  // Node's special "stdout" destination writes through process.stdout. A literal /dev/stdout opens a
+  // WriteStream whose fsync returns EINVAL when stdout is a pipe (CI), crashing after the suite passes.
+  "--test-reporter=spec", "--test-reporter-destination=stdout",
   "--test-reporter=lcov", `--test-reporter-destination=${out}`,
   ...(process.argv.includes("--tier=unit") ? UNIT_FILES : listCliTestFiles()),
 ];

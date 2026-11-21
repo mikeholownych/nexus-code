@@ -60,6 +60,16 @@ identity), so the API path returned `HTTP 200` and `stored: true` on 2026-11-21.
 - `.github/workflows/ci.yml`: `make lint` in the two required test jobs; a new **advisory** `diff-coverage`
   job that uploads lcov and a JSON report. Required check names and the 45-minute CLI timeout are unchanged.
 
+## CI findings
+
+First PR run (`44958425598`, job `137011607758`): the advisory `diff coverage (advisory)` job exited 1
+after the test suite had already passed 94/94. The spec reporter used `--test-reporter-destination=/dev/stdout`;
+on a piped stdout (GitHub runner) that WriteStream's `fsync` returns `EINVAL`, raising an unhandled
+`error` event after the suite finished. Reproduced locally by piping the runner's stdout, and fixed by
+using Node's special `stdout` destination (writes through `process.stdout`) in `cli/scripts/run_coverage.mjs`.
+The bundled core build and the diff-coverage step were not at fault; the latter passes locally against
+the generated lcov. The `Entire Gates` failure on the same run is not a merge requirement.
+
 ## Metrics ledger
 
 | ID | Metric | Baseline | Current (this slice) | Status |
@@ -73,7 +83,7 @@ identity), so the API path returned `HTTP 200` and `stored: true` on 2026-11-21.
 | T0-3 | Rust suite | not recorded before this slice | `cargo test --locked`: 458 tests across six binaries, 0 failures (396 in `nexus-tui`, including the new golden corpus test); `tsc` build = 0 | measured locally |
 | T1-1 | duration-based sharding | file size only | measured duration preferred; 2 new sharder tests pass | measured locally |
 | T1-2 | protocol golden corpus | mirrored types, no shared bytes | 8 records; TS 3/3 and Rust 1/1 tests pass | measured locally |
-| T2-1 | diff coverage | none | advisory CI job added; threshold held at 0 until measured | wired, not calibrated |
+| T2-1 | diff coverage | none | advisory CI job added; threshold held at 0 until measured. First CI run failed on the reporter destination, not on coverage; fixed, rerun pending | wired, not calibrated |
 | T3-1 | real-capability release evidence | absent | unchanged; no stable-tag claim made | open |
 
 Scale reference (unchanged): nexus ~264k source LOC / 435 test files; opencode ~1.47M / 1,927;
