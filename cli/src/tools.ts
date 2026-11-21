@@ -817,10 +817,16 @@ export class RustCoreBridge {
       if (launch.sandboxed && launch.command && launch.args && launch.engine !== "none") {
         return { command: launch.command, args: launch.args, sandboxed: true, engine: launch.engine };
       }
+      // A files-only worker is a capability boundary, not a best-effort optimization. If its
+      // sandbox disappears after the command worker was selected, never fall back to a worker
+      // that can run commands or reach the network.
+      if (role === "files") return { refused: launch.warning ?? "the files-only worker requires a sandbox and was not started outside it." };
       if (mode === "required") return { refused: launch.warning ?? "no supported sandbox engine is available." };
       // "auto": no engine here can hold the worker, so it is launched as before; commands report their own containment.
     } else if (mode === "required") {
       return { refused: "the worker can only be isolated from an installed core binary, not from `cargo run`. Build or install the core, or run without --sandbox." };
+    } else if (role === "files") {
+      return { refused: "the files-only worker requires an installed core binary that can run inside a sandbox." };
     }
     if (useBinary) return { command: this.coreBinaryPath!, args: coreArgs, sandboxed: false, engine: "none" };
     return {

@@ -458,38 +458,151 @@ function wrapBwrapWorker(workerPath: string, workerArgs: readonly string[], work
 const DOCKER_WORKER_RUNTIME = "/nexus-worker";
 export const DOCKER_WORKER_LABEL = "io.nexus-code.worker-of";
 
-/**
- * The host files a dynamically linked worker needs to start: its ELF interpreter and shared libraries, from `ldd`. The
- * container image is usually built on another C library (the default image is Alpine/musl), so the worker runs through
- * its own loader with its own libraries from a private directory instead of the image's. A static worker needs none.
- */
-export function workerRuntimeFiles(workerPath: string): { loader?: string; libraries: string[] } | { error: string } {
-  let output: string;
-  try {
-    output = execFileSync("ldd", [workerPath], { encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "pipe"] });
-  } catch (err: any) {
-    const text = `${err?.stdout ?? ""}${err?.stderr ?? ""}`;
-    if (/not a dynamic executable|statically linked/i.test(text)) return { libraries: [] };
-    return { error: `the worker's runtime libraries could not be resolved (ldd failed: ${String(err?.message ?? err).split("\n")[0]})` };
-  }
-  if (/statically linked/i.test(output)) return { libraries: [] };
-  let loader: string | undefined;
-  const libraries: string[] = [];
-  for (const line of output.split("\n")) {
-    const resolved = line.match(/=>\s*(\/\S+)\s+\(/)?.[1];
-    if (resolved) libraries.push(resolved);
-    else if (/=>\s*not found/.test(line)) return { error: `the worker needs a library that is not installed: ${line.trim()}` };
-    else {
-      const direct = line.match(/^\s*(\/\S+)\s+\(/)?.[1];
-      if (direct) loader = direct;
+type ElfRuntimeInfo = { interpreter?: string; machine: string; needed: string[]; searchPaths: string[] };
+
+/** Resolve only root-owned system inspection tools; PATH may contain workspace-controlled entries. */
+function trustedSystemTool(name: string): string | undefined {
+  for (const directory of ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]) {
+    const candidate = path.join(directory, name);
+    try {
+      const stat = fs.statSync(candidate);
+      if (!stat.isFile() || stat.uid !== 0 || (stat.mode & 0o022) !== 0) continue;
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return fs.realpathSync(candidate);
+    } catch {
+      // Try the next standard system directory.
     }
   }
-  if (!loader) return { error: "the worker's ELF interpreter could not be determined from ldd" };
+  return undefined;
+}
+
+function readElfRuntimeInfo(readelf: string, file: string): ElfRuntimeInfo | { error: string } {
+  let output: string;
   try {
-    return { loader: fs.realpathSync(loader), libraries: libraries.map((file) => fs.realpathSync(file)) };
+    output = execFileSync(readelf, ["-hW", "-lW", "-dW", file], {
+      encoding: "utf8",
+      timeout: 5_000,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { LC_ALL: "C", PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },
+    });
   } catch (err: any) {
-    return { error: `a worker runtime file is missing: ${err?.message ?? err}` };
+    const detail = String(err?.stderr ?? err?.message ?? err).split("\n")[0];
+    return { error: `ELF metadata could not be read for ${file}: ${detail}` };
   }
+  if (/Not an ELF file|Failed to read file header/i.test(output)) return { error: `${file} is not a readable ELF file.` };
+  const machine = output.match(/^\s*Machine:\s*(.+)$/m)?.[1].trim();
+  if (!machine) return { error: `the ELF machine type could not be read for ${file}.` };
+  const interpreter = output.match(/\[Requesting program interpreter:\s*([^\]]+)\]/)?.[1];
+  const needed = [...output.matchAll(/\(NEEDED\).*?Shared library:\s*\[([^\]]+)\]/g)].map((match) => match[1]);
+  const rawSearchPaths = [...output.matchAll(/\((?:RPATH|RUNPATH)\).*?\[([^\]]*)\]/g)].flatMap((match) => match[1].split(":"));
+  const origin = path.dirname(file);
+  const searchPaths = rawSearchPaths.flatMap((entry) => {
+    const expanded = entry.replace(/\$\{ORIGIN\}|\$ORIGIN/g, origin);
+    if (!expanded || expanded.includes("$") || !path.isAbsolute(expanded)) return [];
+    return [expanded];
+  });
+  return { interpreter, machine, needed, searchPaths };
+}
+
+/**
+ * Resolve the worker's ELF interpreter and shared libraries without executing the worker. `ldd` can run the target's
+ * interpreter on some systems, so it is unsafe for a binary that an agent may have replaced inside its workspace.
+ * `readelf` only parses metadata; `ldconfig -p` supplies the host's cached library paths. Unknown dependencies fail
+ * closed. Static workers need no host runtime files.
+ */
+export function workerRuntimeFiles(workerPath: string): { loader?: string; libraries: string[] } | { error: string } {
+  if (process.platform !== "linux") return { error: "worker runtime discovery is supported only on Linux." };
+  const readelf = trustedSystemTool("readelf");
+  if (!readelf) return { error: "a trusted system readelf executable is unavailable." };
+
+  let resolvedWorker: string;
+  try {
+    resolvedWorker = fs.realpathSync(workerPath);
+    if (!fs.statSync(resolvedWorker).isFile()) return { error: "the worker path is not a regular file." };
+  } catch (err: any) {
+    return { error: `the worker binary is missing: ${err?.message ?? err}` };
+  }
+
+  const initial = readElfRuntimeInfo(readelf, resolvedWorker);
+  if ("error" in initial) return initial;
+  const machineTags = ({ x64: ["x86-64"], arm64: ["aarch64"], arm: ["arm"], ia32: ["80386"] } as Record<string, string[]>)[process.arch] ?? [];
+  if (!machineTags.some((tag) => initial.machine.toLowerCase().includes(tag))) {
+    return { error: `the worker architecture (${initial.machine}) does not match the host architecture (${process.arch}).` };
+  }
+  if (!initial.interpreter && initial.needed.length === 0) return { libraries: [] };
+  if (!initial.interpreter) return { error: "the dynamically linked worker has no ELF interpreter." };
+
+  const ldconfig = trustedSystemTool("ldconfig");
+  if (!ldconfig) return { error: "a trusted system ldconfig executable is unavailable for shared-library resolution." };
+  let cacheOutput: string;
+  try {
+    cacheOutput = execFileSync(ldconfig, ["-p"], {
+      encoding: "utf8",
+      timeout: 5_000,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { LC_ALL: "C", PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },
+    });
+  } catch (err: any) {
+    return { error: `system shared-library paths could not be read (ldconfig failed: ${String(err?.message ?? err).split("\n")[0]}).` };
+  }
+
+  const architecture = ({ x64: ["x86-64", "x86_64"], arm64: ["aarch64"], arm: ["arm"], ia32: ["80386"] } as Record<string, string[]>)[process.arch] ?? [];
+  const cache = new Map<string, string[]>();
+  for (const line of cacheOutput.split("\n")) {
+    const match = line.match(/^\s*(\S+)\s+\(([^)]+)\)\s+=>\s+(\S+)\s*$/);
+    if (!match || !architecture.some((tag) => match[2].toLowerCase().includes(tag))) continue;
+    const paths = cache.get(match[1]) ?? [];
+    paths.push(match[3]);
+    cache.set(match[1], paths);
+  }
+
+  const loaderPath = initial.interpreter;
+  let loader: string | undefined;
+  if (loaderPath) {
+    try {
+      loader = fs.realpathSync(loaderPath);
+      if (!fs.statSync(loader).isFile()) return { error: "the worker's ELF interpreter is not a regular file." };
+    } catch (err: any) {
+      return { error: `the worker's ELF interpreter is missing: ${err?.message ?? err}` };
+    }
+  }
+
+  const libraries = new Set<string>();
+  const scanned = new Set<string>([resolvedWorker]);
+  const queue: Array<{ file: string; info: ElfRuntimeInfo }> = [{ file: resolvedWorker, info: initial }];
+  const resolveNeeded = (name: string, searchPaths: string[]): string | undefined => {
+    const candidates = name.includes("/")
+      ? (path.isAbsolute(name) ? [name] : [])
+      : [...searchPaths.map((directory) => path.join(directory, name)), ...(cache.get(name) ?? [])];
+    for (const candidate of candidates) {
+      try {
+        const resolved = fs.realpathSync(candidate);
+        if (fs.statSync(resolved).isFile()) return resolved;
+      } catch {
+        // Try the next candidate; never guess when a needed library is absent.
+      }
+    }
+    return undefined;
+  };
+
+  while (queue.length) {
+    const current = queue.shift()!;
+    for (const name of current.info.needed) {
+      const resolved = resolveNeeded(name, current.info.searchPaths);
+      if (!resolved) return { error: `the worker needs a shared library that could not be resolved: ${name}` };
+      libraries.add(resolved);
+      if (libraries.size > 256) return { error: "the worker has more than 256 shared runtime files; refusing an unbounded mount set." };
+      if (scanned.has(resolved)) continue;
+      scanned.add(resolved);
+      const info = readElfRuntimeInfo(readelf, resolved);
+      if ("error" in info) return info;
+      if (!machineTags.some((tag) => info.machine.toLowerCase().includes(tag))) {
+        return { error: `shared library ${name} has an incompatible architecture (${info.machine}).` };
+      }
+      queue.push({ file: resolved, info });
+    }
+  }
+  return { ...(loader ? { loader } : {}), libraries: [...libraries] };
 }
 
 /**

@@ -55,6 +55,23 @@ const sh = async (b: RustCoreBridge, command: string, extra: Record<string, unkn
   return { ...res, stdout: String(parsed.stdout ?? ""), stderr: String(parsed.stderr ?? ""), exit: parsed.exit_code as number | undefined };
 };
 
+/** Check and clean up only the process group returned by this test's run_command call. */
+function processGroupExists(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (err: any) {
+    return err?.code === "EPERM";
+  }
+}
+
+function captureWorkerStderr(b: RustCoreBridge, channel: unknown): () => string {
+  let stderr = "";
+  const worker = (b as any).ensureRpcDaemon(channel) as { stderr?: NodeJS.ReadableStream } | null;
+  worker?.stderr?.on("data", (chunk: Buffer | string) => { stderr = (stderr + chunk.toString()).slice(-4_000); });
+  return () => stderr;
+}
+
 before(() => {
   root = fs.mkdtempSync(path.join("/var/tmp", "nexus-cs10-"));
   home = path.join(root, "home");
@@ -148,26 +165,33 @@ describe("the native worker inside the sandbox", { skip: SKIP }, () => {
   });
 
   test("the worker and its children end with the CLI: no sandbox process survives shutdown", async () => {
-    const pids = (): Set<number> => new Set(spawnSync("pgrep", ["-x", "bwrap"], { encoding: "utf8" }).stdout.split("\n").filter(Boolean).map(Number));
-    const existing = pids();
     const b = bridge("bwrap");
-    await sh(b, "sleep 31337", { background: true });
-    assert.ok([...pids()].some((p) => !existing.has(p)), "a sandbox process is running");
+    const command = await sh(b, "sleep 31337", { background: true });
+    const pgid = `${command.stdout}\n${command.stderr}`.match(/\bpgid\s+(\d+)\b/)?.[1];
+    assert.ok(pgid, `the runner returned the background process-group id: ${JSON.stringify(command)}`);
+    const worker = (b as any).channels.primary.process as { pid?: number; once: (event: string, callback: () => void) => void; kill: (signal: NodeJS.Signals) => void } | null;
+    assert.ok(worker?.pid, "the sandboxed worker is running");
+    let workerExited = false;
+    worker.once("exit", () => { workerExited = true; });
     b.shutdown();
-    let left: number[] = [];
+    let groupExists = true;
     for (let i = 0; i < 50; i++) {
-      left = [...pids()].filter((p) => !existing.has(p));
-      if (!left.length) break;
+      groupExists = processGroupExists(Number(pgid));
+      if (!groupExists && workerExited) break;
       await new Promise((r) => setTimeout(r, 100));
     }
-    for (const p of left) {
+    // If shutdown regresses, clean up only this test's process group and worker. Never signal
+    // every bwrap process on the host: another test or user's session may own those.
+    if (groupExists) {
       try {
-        process.kill(p, "SIGKILL");
+        process.kill(-Number(pgid), "SIGKILL");
       } catch {
         /* gone */
       }
     }
-    assert.deepEqual(left, [], "the die-with-parent box ended everything inside it");
+    if (!workerExited) worker.kill("SIGKILL");
+    assert.equal(groupExists, false, "the die-with-parent box ended the command process group owned by its worker");
+    assert.equal(workerExited, true, "the worker ended with its client");
   });
 
   test("changing the sandbox setting restarts the worker under the new one", async () => {
@@ -290,11 +314,31 @@ describe("CS-10: the worker inside a Docker container", { skip: DOCKER_SKIP }, (
     assert.equal("error" in runtime, false, JSON.stringify(runtime));
   });
 
+  test("runtime discovery parses an untrusted worker and ignores PATH-controlled ELF tools", () => {
+    const fakeBin = fs.mkdtempSync(path.join(root, "fake-elf-tools-"));
+    const marker = path.join(fakeBin, "executed");
+    for (const name of ["ldd", "readelf", "ldconfig"]) {
+      fs.writeFileSync(path.join(fakeBin, name), `#!/bin/sh\nprintf '%s' ran > '${marker}'\nexit 0\n`, { mode: 0o755 });
+    }
+    process.env.PATH = `${fakeBin}:${previousPath ?? "/usr/bin:/bin"}`;
+    const runtime = workerRuntimeFiles(core!);
+    assert.equal("error" in runtime, false, JSON.stringify(runtime));
+    assert.equal(fs.existsSync(marker), false, "runtime discovery uses trusted absolute system tools");
+
+    const untrusted = path.join(fakeBin, "workspace-worker");
+    const sideEffect = path.join(fakeBin, "worker-executed");
+    fs.writeFileSync(untrusted, `#!/bin/sh\nprintf '%s' ran > '${sideEffect}'\n`, { mode: 0o755 });
+    const result = workerRuntimeFiles(untrusted);
+    assert.equal("error" in result, true, "a script is rejected as a non-ELF worker");
+    assert.equal(fs.existsSync(sideEffect), false, "the candidate worker is never executed on the host");
+  });
+
   test("secrets under $HOME: readable unsandboxed, absent from the worker's container", async () => {
     assert.match((await sh(bridge(false), `cat ${home}/.ssh/id_canary`)).stdout, /PRIVATE-KEY-CANARY/, "baseline");
     const b = bridge("docker");
+    const workerStderr = captureWorkerStderr(b, (b as any).channels.files);
     const boxed = await sh(b, `cat ${home}/.ssh/id_canary 2>&1; cat ${home}/.config/nexus/config.env 2>&1`, { shell: "sh" });
-    assert.notEqual(boxed.exit, undefined, JSON.stringify(boxed).slice(0, 300));
+    assert.notEqual(boxed.exit, undefined, JSON.stringify({ boxed, workerStderr: workerStderr() }).slice(0, 1_000));
     assert.doesNotMatch(boxed.stdout + boxed.stderr, /PRIVATE-KEY-CANARY|canary-secret/, "their contents are not readable");
     assert.equal((await sh(b, `ls -A ${home}`, { shell: "sh" })).stdout.trim(), "ws", "of the home directory only the workspace exists in the container");
   });
@@ -409,6 +453,26 @@ describe("what happens when the box cannot be built", () => {
     assert.equal(refused.success, false);
     assert.match(String(refused.error), /Worker isolation violation: .*Docker daemon is not reachable/);
     fs.rmSync(fakeBin, { recursive: true, force: true });
+  });
+
+  test("auto mode refuses a files-only worker if its cached sandbox becomes unavailable", { skip: DOCKER_SKIP }, async () => {
+    const available = fs.mkdtempSync(path.join(root, "docker-available-"));
+    const unavailable = fs.mkdtempSync(path.join(root, "docker-unavailable-"));
+    for (const bin of [available, unavailable]) {
+      // Keep Bubblewrap out of the engine preference while leaving host tools and the real Docker CLI available.
+      fs.writeFileSync(path.join(bin, "bwrap"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    }
+    fs.writeFileSync(path.join(unavailable, "docker"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    process.env.PATH = `${available}:/usr/bin:/bin:/usr/sbin:/sbin`;
+    const b = new RustCoreBridge(workspace, "bash", core, false, false, true);
+    bridges.push(b);
+    assert.equal((b as any).workerEngine(), "docker", "the command worker initially has a container");
+
+    process.env.PATH = `${unavailable}:/usr/bin:/bin:/usr/sbin:/sbin`;
+    const result = await b.executeTool("read_file", { path: "a.txt" });
+    assert.equal(result.success, false);
+    assert.match(String(result.error), /Worker isolation violation/);
+    assert.equal((b as any).channels.files.process, null, "the files worker did not start outside a sandbox");
   });
 
   test("which sandbox settings contain the worker", () => {
