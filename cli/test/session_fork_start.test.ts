@@ -14,6 +14,8 @@ import { runWorktreeCommand } from "../src/worktrunk/command.js";
 import { fileURLToPath } from "node:url";
 import { SessionManager } from "../src/session.js";
 import { WorktreeManager } from "../src/worktree.js";
+import { AutonomousAgent } from "../src/agent.js";
+import type { HarnessConfig } from "../src/types.js";
 import type { ChatMessage } from "../src/types.js";
 import { WorkspacePath } from "../src/core/workspace_path.js";
 import { routeSlash } from "../src/slash/router.js";
@@ -125,6 +127,50 @@ describe("startFork", () => {
     execFileSync("git", ["reset", "--hard", "-q"], { cwd: sourceWorktree, stdio: "ignore" });
     fs.rmSync(path.join(sourceWorktree, "untracked.txt"), { force: true });
     fs.rmSync(path.join(sourceWorktree, "ignored.txt"), { force: true });
+  });
+
+  test("a forked worktree binding is restored by the normal task resume path", async () => {
+    const homePath = fs.mkdtempSync(path.join(dir, "resume-home-"));
+    const previous = {
+      HOME: process.env.HOME,
+      NEXUS_STATE_DIR: process.env.NEXUS_STATE_DIR,
+      XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+    };
+    process.env.HOME = homePath;
+    process.env.NEXUS_STATE_DIR = path.join(homePath, "state");
+    process.env.XDG_CONFIG_HOME = path.join(homePath, ".config");
+    const config = (): HarnessConfig => ({
+      endpoint: "http://127.0.0.1:9/v1", model: "test-model", workspace: ws,
+      maxSteps: 3, temperature: 0.1, shell: "bash",
+    });
+    let owner: AutonomousAgent | undefined;
+    let resumed: AutonomousAgent | undefined;
+    try {
+      owner = new AutonomousAgent(config());
+      const stored = new SessionManager(owner.getStateManager().getBaseDir(), () => WorkspacePath.fromSelectedWorkspace(ws));
+      seed(stored, "resume-source", { worktreeBinding: { ...binding, taskId: "resume-source" } });
+      const sessions = new SessionManager(stored.getSessionsDir(), () => WorkspacePath.fromSelectedWorkspace(sourceWorktree));
+      const fork = startFork(sessions, { forkSession: "resume-source" });
+      const saved = sessions.loadSession(fork.id)!;
+      assert.ok(saved.worktreeBinding, "the session record must bind its isolated checkout");
+
+      resumed = new AutonomousAgent(config());
+      const recovery = await resumed.recoverFromTaskState(fork.id);
+      assert.equal(recovery.worktreeStatus, "consistent");
+      assert.equal(resumed.getConfig().workspace, saved.worktreeBinding.worktreePath);
+      assert.equal(resumed.getActiveWorktree()?.taskId, saved.worktreeBinding.taskId);
+      assert.equal(resumed.getActiveWorktree()?.branch, saved.worktreeBinding.branch);
+      assert.equal(resumed.getMessages().length, saved.messages.length);
+    } finally {
+      resumed?.shutdown();
+      owner?.shutdown();
+      for (const key of ["HOME", "NEXUS_STATE_DIR", "XDG_CONFIG_HOME"] as const) {
+        const value = previous[key];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      fs.rmSync(homePath, { recursive: true, force: true });
+    }
   });
 
   test("a snapshot over the untracked-file bound fails closed without creating a checkout", () => {
