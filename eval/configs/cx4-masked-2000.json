@@ -1,5 +1,5 @@
 {
-  "name": "nexus@gateway/engineering/lead",
+  "name": "nexus@gateway/engineering/lead (CX-4 masked 2000)",
   "agent": "nexus",
   "endpoint": "https://10.0.8.5:8443/v1",
   "model": "engineering/lead",
