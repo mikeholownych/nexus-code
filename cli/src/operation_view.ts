@@ -213,7 +213,7 @@ export async function watchOperation(options: WatchOptions): Promise<WatchResult
     if (options.clear) write("\x1b[2J\x1b[H");
     write(`${render(state)}\n`);
     renders += 1;
-    if (state.status === "COMPLETE" || state.status === "CANCELLED") return { renders, stopped: "terminal" };
+    if (state.status === "COMPLETE" || state.status === "CANCELLED" || state.status === "PAUSED") return { renders, stopped: "terminal" };
     if (options.maxRenders && renders >= options.maxRenders) return { renders, stopped: "limit" };
     await sleep(intervalMs, options.signal);
   }
@@ -432,7 +432,7 @@ export function buildOperationView(
     status: state.status,
     createdAt: state.createdAt,
     updatedAt: state.updatedAt,
-    terminal: state.status === "COMPLETE" || state.status === "CANCELLED",
+    terminal: state.status === "COMPLETE" || state.status === "CANCELLED" || state.status === "PAUSED",
     counts: {
       total: state.units.length,
       complete: count("COMPLETE"),

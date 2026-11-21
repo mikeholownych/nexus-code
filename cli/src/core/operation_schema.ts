@@ -8,27 +8,25 @@
  * Rules, in the order they are applied on load:
  *
  *   1. A record this build understands (current version) is validated and used as-is.
- *   2. A v1 record (or one that predates the field, which reads as v1) is migrated in memory by adding the schema
- *      version and nothing else. Every v1.1 field is read through a defensive default, so a migrated record keeps
- *      scheduling exactly as it did.
+ *   2. A v1 or v2 record (or one that predates the field, which reads as v1) is upgraded in memory by changing only
+ *      the schema version. The v3 addition is a lifecycle status; existing records keep their prior scheduling.
  *   3. A record from a newer build is refused. It is not corrupt: a build that wrote it can still read it, and
  *      quarantining it would destroy evidence. It is also never interpreted as if it were current.
  *
- * Migration is deliberately additive and lossless: the persisted record is re-serialised from the same object, so a
- * reviewer can diff a migrated record against a v1.0.0 one and see only `schemaVersion`. The store writes a
- * `.pre-migration-v1` copy of the whole record before the first v2 write (see `OperationStore.save`).
+ * Migration is deliberately additive and lossless: the store writes a byte-identical `.pre-migration-vN` copy of the
+ * whole record before the first write at a newer schema version (see `OperationStore.save`).
  */
 import { unresolvedAssumptionsProblem, type DurableOperationState, type OperationPolicy, type WorkUnit } from "./operation.js";
 import { specialistInputsProblem } from "./specialist_profiles.js";
 import { parseBoundaryRules } from "./boundary_rules.js";
 
 /** The operation document version this build writes. Independent of the task-store envelope version. */
-export const CURRENT_OPERATION_SCHEMA_VERSION = 2;
+export const CURRENT_OPERATION_SCHEMA_VERSION = 3;
 
 /** The operation document version every released 1.0.0 build wrote. */
 export const LEGACY_OPERATION_SCHEMA_VERSION = 1;
 
-const OPERATION_STATUSES = new Set(["RUNNING", "WAITING", "BLOCKED", "COMPLETE", "CANCELLED"]);
+const OPERATION_STATUSES = new Set(["RUNNING", "WAITING", "BLOCKED", "PAUSED", "COMPLETE", "CANCELLED"]);
 const WORK_UNIT_STATUSES = new Set(["RUNNABLE", "RUNNING", "PARKED", "WAITING_ON_DEPENDENCY", "COMPLETE", "BLOCKED"]);
 const DECISION_ACTION_KINDS = new Set([
   "retry",

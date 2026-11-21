@@ -139,6 +139,7 @@ export class OperationRunner {
   }
 
   private async runOperation(signal?: AbortSignal): Promise<DurableOperationState> {
+    if (this.state.status === "PAUSED") return this.state;
     if (this.state.status === "COMPLETE" || this.state.status === "CANCELLED") {
       this.git?.disposeAllUnits();
       return this.state;

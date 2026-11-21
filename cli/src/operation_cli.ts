@@ -50,7 +50,7 @@ export function recordCheckpointRestored(
   state.updatedAt = new Date(at).toISOString();
 }
 
-interface OperationSpec {
+export interface OperationSpec {
   id?: string;
   objective: string;
   units: WorkUnitSpec[];
@@ -186,7 +186,7 @@ export function validateOperationSpec(spec: unknown): asserts spec is OperationS
   }
 }
 
-function normalizeResources(spec: OperationSpec, config: HarnessConfig, identity: ReturnType<typeof createOperationAccountIdentity>): ResourceDescriptor[] {
+export function normalizeResources(spec: OperationSpec, config: HarnessConfig, identity: ReturnType<typeof createOperationAccountIdentity>): ResourceDescriptor[] {
   if (!spec.resources?.length) return resourcesFromConfig(config, identity);
   const configOrigin = new URL(config.endpoint.replace(/\/+$/, "")).origin;
   return spec.resources.map((r) => {
@@ -334,17 +334,17 @@ export function registerOperationCommands(program: Command): void {
       await drive(state, config, store, Boolean(options.discover || spec.discoverCatalog), Boolean(options.json), { entry: "new" });
     }));
 
-  common(op.command("resume").argument("[id]", "Operation id (default: latest waiting/running operation in this workspace)"))
+  common(op.command("resume").argument("[id]", "Operation id (default: latest resumable operation in this workspace)"))
     .description("Resume an operation from durable state (after a restart, the wait continues or re-evaluates if overdue)")
     .action(operationAction(async (id: string | undefined, options: any) => {
       const config = buildConfig(options);
       const store = new OperationStore(config.workspace);
       const state = id ? store.load(id) : store.latestResumable();
-      if (!state) throw new Error("No waiting or running operation in this workspace.");
+      if (!state) throw new Error("No resumable operation in this workspace.");
       // Re-read and adjust under the driver lock: this snapshot may already be stale.
       await drive(state, config, store, Boolean(options.discover), Boolean(options.json), {
         entry: "existing",
-        prepare: (fresh) => { if (fresh.status === "CANCELLED") fresh.status = "RUNNING"; },
+        prepare: (fresh) => { if (fresh.status === "CANCELLED" || fresh.status === "PAUSED") fresh.status = "RUNNING"; },
       });
     }));
 
