@@ -157,8 +157,8 @@ function writeLargeFixture(c: Case): string {
     else if (c.id === "python") files[`extra-${n}.py`] = `extra${n}: int = ${i}\n`;
     else if (c.id === "go") files[`extra-${n}.go`] = `package main\n\nfunc extra${n}() int { return ${i} }\n`;
     else {
-      files[`src/extra-${n}.rs`] = `pub fn extra${n}() -> i32 { ${i} }\n`;
-      files["src/main.rs"] = `mod extra-${n};\n` + files["src/main.rs"];
+      files[`src/extra_${n}.rs`] = `pub fn extra${n}() -> i32 { ${i} }\n`;
+      files["src/main.rs"] = `mod extra_${n};\n` + files["src/main.rs"];
     }
   }
   return writeFixture(files);
@@ -232,7 +232,7 @@ for (const c of CASES) {
     try {
       const initial = await mgr.diagnostics(c.bad, c.timeoutMs);
       assert.equal(initial.status, "ok", `large workspace error: ${JSON.stringify(initial)}`);
-      if (initial.status === "ok") assert.ok(initial.diagnostics.some((d) => d.severity === "error" && c.message.test(d.message)));
+      if (initial.status === "ok") assert.ok(initial.diagnostics.some((d) => d.severity === "error" && c.message.test(d.message)), `large workspace error: ${JSON.stringify(initial.diagnostics)}`);
 
       fs.writeFileSync(path.join(dir, c.bad), c.fixed);
       const updated = await mgr.diagnostics(c.bad, c.timeoutMs);
