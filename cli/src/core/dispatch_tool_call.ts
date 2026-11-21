@@ -19,6 +19,8 @@ import { failedCheckFrom, attemptEvidence, recordAttempt, convergenceSignal, con
 import { recordTestEdit, recordUnverifiableTestEdit } from "./regression_obligations.js";
 import { FILE_EDIT_TOOLS, describeChange, editTarget, snapshot } from "../file_diff.js";
 import { roleToolAllowList, roleToolDenyList } from "./roles.js";
+import { decideCommand, describePrefix, type CommandVerdict, type CommandRuleDecision } from "./command_rules.js";
+import { redactSecrets } from "../ui.js";
 import { MAY_OUTLIVE_COMMAND, ConfirmHandler, observationKey, egressOriginOf, READ_ONLY_TOOLS, logAudit } from "./agent_support.js";
 import { buildNeedsInput, type NeedsInputQuestion } from "./needs_input.js";
 import {
@@ -357,11 +359,70 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
       shouldExit: false,
     };
   }
+  // CS-9: the operator's command rules. `forbidden` refuses in every mode; `prompt` asks unless --yes; `allow` removes the
+  // normal prompt only (every other control below still applies). The deciding rule is recorded for the session export.
+  if (this.commandRulesNotice) {
+    const notice = `[nexus] command_rules: ${this.commandRulesNotice}`;
+    this.commandRulesNotice = undefined;
+    if (this.depth === 0) {
+      if (this.observer?.onNotice) this.observer.onNotice(notice);
+      else console.warn(notice);
+    }
+  }
+  const ruleVerdict: CommandVerdict | null = toolName === "run_command" && typeof args.command === "string" ? decideCommand(this.commandRules, args.command) : null;
+  const recordRule = (verdict: CommandVerdict, effectText: CommandRuleDecision["effect"]): void => {
+    this.commandRuleDecisions.push({
+      timestamp: new Date().toISOString(),
+      tool: toolName,
+      command: redactSecrets(String(args.command)).replace(/\s+/g, " ").slice(0, 200),
+      decision: verdict.decision,
+      effect: effectText,
+      rule: verdict.rule.index,
+      rules: verdict.rules.map((r) => r.index),
+      prefix: describePrefix(verdict.rule),
+      ...(verdict.rule.justification ? { justification: verdict.rule.justification } : {}),
+    });
+    if (this.commandRuleDecisions.length > 500) this.commandRuleDecisions.splice(0, this.commandRuleDecisions.length - 500);
+    this.syncVerificationAttempts();
+  };
+  if (ruleVerdict?.decision === "forbidden") {
+    recordRule(ruleVerdict, "refused");
+    const cancelMsg = `Error: this command is refused by the operator's command rule ${ruleVerdict.rule.index} (forbidden: ${describePrefix(ruleVerdict.rule)})${ruleVerdict.rule.justification ? `: ${ruleVerdict.rule.justification}` : ""}. It is not run in any mode. Do the work another way, or report what you could not do.`;
+    if (this.flightRecorder) this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, cancelMsg, 0, "COMMAND_RULE_FORBIDDEN");
+    this.observer?.onToolEnd?.({ dispatch, callId: call.id, tool: toolName, success: false, output: "", error: cancelMsg, denied: true });
+    return {
+      receipt: {
+        invocationId: call.id,
+        taskId: this.activeWorktree?.taskId || this.currentTaskId,
+        actor,
+        executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+        capabilityId: this.capabilityRegistry.getByToolName(toolName)?.id || "unknown",
+        toolName,
+        targetResources: extractTargetResources(toolName, args),
+        success: false,
+        output: "",
+        error: cancelMsg,
+        durationMs: 0,
+        candidateMutated: false,
+        status: "DENIED",
+        denialReason: "COMMAND_RULE_FORBIDDEN",
+        timestamp: new Date().toISOString(),
+        simulated: Boolean(this.config.dryRun),
+      },
+      shouldExit: false,
+    };
+  }
   const injectionAsk = Boolean(onConfirm) && this.injectionApprovalNeeded(effect, currentStep);
   const reissuesInterrupted = this.interruptedCall !== undefined
     && (this.interruptedCall.toolName === "*" || this.interruptedCall.toolName === toolName)
     && (this.interruptedCall.argsHash === undefined || this.interruptedCall.argsHash === argsFingerprint(toolName, args));
-  const askOperator = this.approvalPolicy.requiresDecision(effect, policyContext)
+  const policyAsk = this.approvalPolicy.requiresDecision(effect, policyContext);
+  const ruleSkipsPrompt = ruleVerdict?.decision === "allow";
+  const ruleAsks = ruleVerdict?.decision === "prompt" && !policyContext.fullAccess;
+  if (ruleVerdict && ruleSkipsPrompt && policyAsk) recordRule(ruleVerdict, "allowed without prompt");
+  else if (ruleVerdict && ruleAsks && !policyAsk) recordRule(ruleVerdict, "prompted");
+  const askOperator = (policyAsk && !ruleSkipsPrompt)
+    || ruleAsks
     || verificationEdit?.action === "ask"
     || injectionAsk
     || reissuesInterrupted;
