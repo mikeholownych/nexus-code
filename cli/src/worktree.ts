@@ -199,7 +199,10 @@ export class WorktreeManager {
     const untracked = pinnedGit(source.worktreePath, ["ls-files", "--others", "--exclude-standard", "-z"], { maxBuffer: maxPatchBytes }).stdout;
     const created = this.createWorktree(forkTaskId, actualBranch);
     try {
-      if (staged) pinnedGit(created.worktreePath, ["apply", "--cached", "--binary", "-"], { input: staged, maxBuffer: maxPatchBytes });
+      // Applying only to the index leaves the checkout at HEAD. The unstaged diff is based on the staged tree,
+      // so overlapping staged and unstaged edits would then fail to apply to the stale worktree. Keep index and
+      // worktree aligned before applying the unstaged patch.
+      if (staged) pinnedGit(created.worktreePath, ["apply", "--index", "--binary", "-"], { input: staged, maxBuffer: maxPatchBytes });
       if (unstaged) pinnedGit(created.worktreePath, ["apply", "--binary", "-"], { input: unstaged, maxBuffer: maxPatchBytes });
       copyForkUntrackedFiles(source.worktreePath, created.worktreePath, untracked, trackedBytes);
       return created;
