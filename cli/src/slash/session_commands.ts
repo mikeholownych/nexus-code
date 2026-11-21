@@ -294,7 +294,6 @@ function fork({ host, args }: SlashContext): SlashOutcome {
   if (host.app.getAgent().getMessages().length <= 1) return reply("fork", "Nothing to fork yet: the conversation is empty.", false);
   const wanted = args.trim();
   if (wanted && !/^\d+$/.test(wanted)) return reply("fork", "Usage: /fork [message-count]", false);
-  if (host.app.getAgent().getActiveWorktree()) return reply("fork", "Not forked: this session is working in a git worktree, and a fork would share it with the original. Merge or discard the worktree first (/worktree), or continue here.", false);
   const source = host.sessionId();
   // Saved first, so the fork is of the conversation as it is now.
   host.saveSession();
@@ -306,7 +305,7 @@ function fork({ host, args }: SlashContext): SlashOutcome {
   }
   const result = host.resumeSession(forked.id);
   if (!result.ok) return reply("fork", `Forked ${source} into ${forked.id}, but it could not be opened: ${result.message}`, false);
-  return reply("fork", `Forked ${source} at message ${forked.atMessage} into ${forked.id}; you are now in the fork. /resume ${source} returns to the original.`);
+  return reply("fork", `Forked ${source} at message ${forked.atMessage} into ${forked.id}; you are now in the fork${forked.worktreePath ? " with a separate working checkout" : ""}. /resume ${source} returns to the original.`);
 }
 
 function comparableDir(dir: string | undefined): string {

@@ -1258,8 +1258,6 @@ export class InteractiveRepl {
                 console.log(pc.yellow("Nothing to fork yet: the conversation is empty.\n"));
               } else if (arg && !/^\d+$/.test(arg)) {
                 console.log(pc.yellow("Usage: /fork [message-count]\n"));
-              } else if (this.agent.getActiveWorktree()) {
-                console.log(pc.yellow("Not forked: this session is working in a git worktree, and a fork would share it with the original. Merge or discard the worktree first (/worktree), or continue here.\n"));
               } else {
                 const source = this.currentSessionId;
                 this.saveCurrentSession("Snapshot");
@@ -1268,7 +1266,7 @@ export class InteractiveRepl {
                 this.currentSessionId = sess.id;
                 const archiveNotice = this.agent.restoreConversation(sess, (committed) => this.sessionManager.readArchivedHistory(sess.id, committed));
                 if (archiveNotice) console.log(pc.yellow(archiveNotice));
-                console.log(pc.green(`✔ Forked ${source} at message ${forked.atMessage} into ${pc.bold(forked.id)}; you are now in the fork. /resume ${source} returns to the original.\n`));
+                console.log(pc.green(`✔ Forked ${source} at message ${forked.atMessage} into ${pc.bold(forked.id)}; you are now in the fork${forked.worktreePath ? " with a separate working checkout" : ""}. /resume ${source} returns to the original.\n`));
               }
             } catch (err: any) {
               console.log(pc.red(`Failed to fork session: ${formatDiagnosticForOutput(err)}\n`));

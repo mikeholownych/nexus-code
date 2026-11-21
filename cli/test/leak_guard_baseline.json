@@ -61,6 +61,7 @@
   "review_unit_boundary.test.ts",
   "sandbox_quoting.test.ts",
   "security.test.ts",
+  "session_fork_start.test.ts",
   "si3_steering_conflict.test.ts",
   "si4_invariants.test.ts",
   "sidecar.test.ts",

@@ -21,16 +21,20 @@ export function forkStartError(options: ForkStartOptions): string | undefined {
   return undefined;
 }
 
-/** Forks the named session; throws with a clear message for an unknown source, a bad fork point or a worktree-bound source. */
-export function startFork(sessions: SessionManager, options: ForkStartOptions): { id: string; sourceId: string; atMessage: number } {
+/** Forks the named session; bound sessions receive a separate worktree checkout. */
+export function startFork(sessions: SessionManager, options: ForkStartOptions): { id: string; sourceId: string; atMessage: number; worktreePath?: string; branch?: string } {
   const bad = forkStartError(options);
   if (bad) throw new Error(bad);
   if (options.forkSession === undefined) throw new Error("--fork-session needs a session id");
   const forked = sessions.forkSession(options.forkSession, options.forkAt === undefined ? {} : { atMessage: Number(options.forkAt) });
-  return { id: forked.id, sourceId: forked.sourceId, atMessage: forked.atMessage };
+  return {
+    id: forked.id, sourceId: forked.sourceId, atMessage: forked.atMessage,
+    ...(forked.worktreePath ? { worktreePath: forked.worktreePath } : {}),
+    ...(forked.branch ? { branch: forked.branch } : {}),
+  };
 }
 
 /** The line that tells the operator which session they are now in. */
-export function forkStartNotice(f: { id: string; sourceId: string; atMessage: number }): string {
-  return `Forked ${f.sourceId} at message ${f.atMessage} into ${f.id}; continuing in the fork (the original is unchanged).`;
+export function forkStartNotice(f: { id: string; sourceId: string; atMessage: number; worktreePath?: string }): string {
+  return `Forked ${f.sourceId} at message ${f.atMessage} into ${f.id}; continuing in the fork (the original is unchanged${f.worktreePath ? "; the fork has a separate working checkout" : ""}).`;
 }
