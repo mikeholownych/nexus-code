@@ -913,6 +913,13 @@ export class RustCoreBridge {
         if (channel.process === child) this.cleanupChannel(channel);
       });
 
+      // A worker that exits right after launch (a container that fails to start) closes its stdin: a request written
+      // after that raises EPIPE on the stream, asynchronously. Without a listener that is an uncaught exception that
+      // ends the CLI; with one, the request waiting on this worker is answered as a disconnect.
+      child.stdin?.on("error", () => {
+        if (channel.process === child) this.cleanupChannel(channel);
+      });
+
       child.on("exit", () => {
         if (channel.process === child) this.cleanupChannel(channel);
       });
