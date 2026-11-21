@@ -187,6 +187,22 @@ describe("startFork", () => {
       for (const file of files) fs.rmSync(path.join(sourceWorktree, file), { force: true });
     }
   });
+
+  test("a snapshot over the byte bound rolls back the checkout created for copying", () => {
+    const s = mk("oversized-bytes");
+    seed(s, "src", { worktreeBinding: binding });
+    const tooLarge = path.join(sourceWorktree, "fork-over-limit.bin");
+    fs.writeFileSync(tooLarge, "");
+    fs.truncateSync(tooLarge, 64 * 1024 * 1024 + 1);
+    try {
+      assert.throws(() => s.forkSession("src", { newId: "oversized-bytes-fork" }), /snapshot exceeds the 67108864 byte fork limit/);
+      assert.equal(fs.existsSync(path.join(ws, ".nexus", "worktrees", "oversized-bytes-fork")), false);
+      assert.equal(execFileSync("git", ["branch", "--list", "nexus/oversized-bytes-fork"], { cwd: ws, encoding: "utf8" }).trim(), "");
+      assert.equal(s.loadSession("oversized-bytes-fork"), null);
+    } finally {
+      fs.rmSync(tooLarge, { force: true });
+    }
+  });
 });
 
 describe("nexus run --fork-session (through dist)", () => {
