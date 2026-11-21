@@ -4286,6 +4286,10 @@ ${NEXUS_RUNTIME_IDENTITY}`;
   async runTurn(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean; tddRed?: boolean; step?: boolean }): Promise<TurnResult> {
     const ownsWorktreeDelegation = this.config.worktree && !this.worktreeRunTurnAuthorized;
     const delegatedWorktreeCall = this.worktreeRunTurnAuthorized && this.worktreeDelegatedTurnInProgress;
+    if (!delegatedWorktreeCall) {
+      this.delegatedChildrenStarted = 0;
+      this.delegatedBudget = undefined;
+    }
     const span = delegatedWorktreeCall ? undefined : this.safeStartTraceSpan("nexus.agent.turn", { "nexus.task.id": this.currentTaskId });
     const previousParent = this.activeTraceSpanId;
     if (span) {
