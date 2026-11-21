@@ -23,8 +23,8 @@ let previousHome: string | undefined;
 const agents: AutonomousAgent[] = [];
 const bridges: RustCoreBridge[] = [];
 
-function makeAgent(endpoint = "http://127.0.0.1:9/v1", depth = 0): AutonomousAgent {
-  const config = { endpoint, model: "m", maxSteps: 8, temperature: 0, workspace: repo, shell: "bash" } as any;
+function makeAgent(endpoint = "http://127.0.0.1:9/v1", depth = 0, worktree = false): AutonomousAgent {
+  const config = { endpoint, model: "m", maxSteps: 8, temperature: 0, workspace: repo, shell: "bash", worktree } as any;
   const agent = depth === 0 ? new AutonomousAgent(config) : new AutonomousAgent(config, depth, { durable: false });
   (agent as any).ui = new Proxy({}, { get: () => () => {} });
   if (depth === 0) {
@@ -48,7 +48,10 @@ beforeEach(() => {
   execSync("git init -q && git config user.name t && git config user.email t@t.invalid && git add . && git commit -qm base", { cwd: repo, stdio: "ignore" });
 });
 afterEach(() => {
-  for (const a of agents.splice(0)) a.shutdown();
+  for (const a of agents.splice(0)) {
+    if (a.getActiveWorktree()) a.discardActiveWorktree();
+    a.shutdown();
+  }
   for (const b of bridges.splice(0)) b.shutdown();
   for (const d of [repo, stateDir, home]) fs.rmSync(d, { recursive: true, force: true });
   if (previousHome === undefined) delete process.env.HOME;
@@ -67,15 +70,14 @@ async function scripted(s: Script) {
   });
   return { gw, seen };
 }
-const spawn = (prompt: string): Reply => ({ kind: "tools", calls: [{ name: "spawn_subagent", args: { prompt } }] });
+const spawn = (prompt: string): Reply => ({ kind: "tools", calls: [{ name: "spawn_subagent", args: { prompt, profile: "implementer" } }] });
 const write: Reply = { kind: "tools", calls: [{ name: "write_file", args: WRITE }] };
-const toolMessages = (agent: AutonomousAgent) => (agent as any).messages.filter((m: any) => m.role === "tool").map((m: any) => String(m.content));
 
 describe("VC-9: a subagent's question reaches the parent's result", () => {
   test("headless: the parent ends BLOCKED / NEEDS_INPUT with the subagent's question; the subagent neither waits nor approves", { timeout: 60_000 }, async () => {
     const { gw, seen } = await scripted({ parent: [spawn("write a.txt"), { kind: "text", content: "never reached" }], child: [write, { kind: "text", content: "routed around" }] });
     try {
-      const parent = makeAgent(gw.url);
+      const parent = makeAgent(gw.url, 0, true);
       const turn = await parent.runTurn("delegate the write");
       assert.equal(turn.execution, "BLOCKED");
       assert.equal(turn.reason, "NEEDS_INPUT");
@@ -91,7 +93,7 @@ describe("VC-9: a subagent's question reaches the parent's result", () => {
       assert.equal(fs.existsSync(path.join(repo, "a.txt")), false);
       assert.equal(seen.child, 1, "the subagent stopped at the question instead of routing around it");
       assert.equal(seen.parent, 1, "the parent stopped with the question instead of asking the model again");
-      assert.match(toolMessages(parent).join("\n"), /Subagent did not complete: needs an operator decision/);
+      assert.equal(turn.needsInput?.subject.tool, "write_file", "the child approval decision is surfaced on the parent turn");
     } finally {
       await gw.close();
     }
@@ -102,7 +104,7 @@ describe("VC-9: a subagent's question reaches the parent's result", () => {
     const direct = makeAgent();
     await (direct as any).dispatchToolCall({ id: "d1", type: "function", function: { name: "write_file", arguments: JSON.stringify(WRITE) } }, 1, "agent");
     try {
-      const turn = await makeAgent(gw.url).runTurn("delegate the write");
+      const turn = await makeAgent(gw.url, 0, true).runTurn("delegate the write");
       assert.equal(turn.needsInput?.id, pending(direct).id);
     } finally {
       await gw.close();
@@ -114,14 +116,15 @@ describe("VC-9: a subagent's question reaches the parent's result", () => {
       fs.rmSync(path.join(repo, "a.txt"), { force: true });
       const { gw } = await scripted({ parent: [spawn("write a.txt"), spawn("write a.txt"), { kind: "text", content: "all done" }], child: [write, write, { kind: "text", content: "child report" }] });
       try {
-        const parent = makeAgent(gw.url);
+        const parent = makeAgent(gw.url, 0, true);
         const blocked = await parent.runTurn("delegate the write");
         assert.equal(blocked.reason, "NEEDS_INPUT");
         parent.setOperatorAnswers(parseAnswers([`${blocked.needsInput!.id}=${answer}`]));
         const resumed = await parent.runTurn("continue");
         assert.notEqual(resumed.reason, "NEEDS_INPUT", `${answer}: the answered question is not asked again`);
         assert.equal(resumed.needsInput, undefined);
-        assert.equal(fs.existsSync(path.join(repo, "a.txt")), answer === "approve", `${answer}: the subagent's write happened only on approve`);
+        const workspace = parent.getActiveWorktree()?.worktreePath ?? repo;
+        assert.equal(fs.existsSync(path.join(workspace, "a.txt")), answer === "approve", `${answer}: the subagent's write happened only on approve`);
       } finally {
         await gw.close();
       }
@@ -131,7 +134,7 @@ describe("VC-9: a subagent's question reaches the parent's result", () => {
   test("an answer for another decision does not approve the subagent's", { timeout: 60_000 }, async () => {
     const { gw } = await scripted({ parent: [spawn("write a.txt"), { kind: "text", content: "x" }], child: [write] });
     try {
-      const parent = makeAgent(gw.url);
+      const parent = makeAgent(gw.url, 0, true);
       parent.setOperatorAnswers(parseAnswers([`${buildNeedsInput("tool_approval", "p", {}, "write_file", '{"other":1}').id}=approve`]));
       const turn = await parent.runTurn("delegate the write");
       assert.equal(turn.reason, "NEEDS_INPUT");
@@ -197,12 +200,13 @@ describe("VC-9: unchanged paths", () => {
       const { gw } = await scripted({ parent: [spawn("write a.txt"), { kind: "text", content: "done" }], child: [write, { kind: "text", content: "child report" }] });
       try {
         const asked: string[] = [];
-        const parent = makeAgent(gw.url);
+        const parent = makeAgent(gw.url, 0, true);
         const turn = await parent.runTurn("delegate the write", async (tool) => { asked.push(tool); return approve; });
         assert.notEqual(turn.reason, "NEEDS_INPUT");
         assert.equal(turn.needsInput, undefined);
         assert.ok(asked.includes("write_file"), "the operator was asked");
-        assert.equal(fs.existsSync(path.join(repo, "a.txt")), approve);
+        const workspace = parent.getActiveWorktree()?.worktreePath ?? repo;
+        assert.equal(fs.existsSync(path.join(workspace, "a.txt")), approve);
         assert.equal(pending(parent), undefined);
       } finally {
         await gw.close();

@@ -52,6 +52,15 @@ export const spawnSubagentCapability: CanonicalCapability = {
           "prompt": {
             "type": "string",
             "description": "The specific objective or question for the subagent to solve."
+          },
+          "profile": {
+            "type": "string",
+            "enum": ["researcher", "architect", "implementer", "tester", "reviewer", "semantic_explorer", "call_site_analyzer", "failure_debugger", "security_reviewer", "acceptance_reviewer"],
+            "description": "Optional pre-defined specialist profile. Omitted requests use the read-only semantic_explorer profile."
+          },
+          "inputs": {
+            "type": "object",
+            "description": "Optional bounded task inputs. These do not grant additional permissions."
           }
         },
         "required": [

@@ -34,6 +34,49 @@ export interface DelegationContract {
   requiresIndependentReview: boolean;
 }
 
+export interface DelegationRuntimeLimits {
+  maxDepth: number;
+  maxChildrenPerParent: number;
+  maxActiveChildren: number;
+  maxInferenceSteps: number;
+  maxDurationMs: number;
+}
+
+function boundedLimit(name: string, fallback: number, minimum: number, maximum: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  if (!/^\d+$/.test(raw)) throw new Error(`${name} must be an integer from ${minimum} to ${maximum}`);
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new Error(`${name} must be an integer from ${minimum} to ${maximum}`);
+  }
+  return value;
+}
+
+/** Optional operator tuning is strictly bounded; absent settings use conservative client-side limits. */
+export function delegationRuntimeLimits(): DelegationRuntimeLimits {
+  return {
+    maxDepth: boundedLimit("NEXUS_DELEGATION_MAX_DEPTH", 1, 1, 1),
+    maxChildrenPerParent: boundedLimit("NEXUS_DELEGATION_MAX_CHILDREN", 4, 1, 16),
+    maxActiveChildren: boundedLimit("NEXUS_DELEGATION_MAX_ACTIVE", 4, 1, 16),
+    maxInferenceSteps: boundedLimit("NEXUS_DELEGATION_MAX_STEPS", 64, 1, 256),
+    maxDurationMs: boundedLimit("NEXUS_DELEGATION_MAX_DURATION_MS", 120_000, 1_000, 600_000),
+  };
+}
+
+let activeTransientChildren = 0;
+export function acquireTransientDelegationSlot(maxActive: number): (() => void) | undefined {
+  if (!Number.isSafeInteger(maxActive) || maxActive < 1 || activeTransientChildren >= maxActive) return undefined;
+  activeTransientChildren++;
+  let released = false;
+  return () => {
+    if (!released) {
+      released = true;
+      activeTransientChildren = Math.max(0, activeTransientChildren - 1);
+    }
+  };
+}
+
 export interface DelegationEvidence {
   kind: string;
   reference: string;
