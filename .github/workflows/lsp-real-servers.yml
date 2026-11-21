@@ -1,7 +1,7 @@
 name: LSP real servers
 
-# Weekly run of the product's language-server client (cli/src/lsp.ts) against REAL servers on a tiny fixture project
-# (CS-6): a deliberate error must be reported, and a clean file must be a published empty report, not "unavailable".
+# Weekly run of the product's language-server client (cli/src/lsp.ts) against REAL servers (CS-6): deliberate errors,
+# trust refusal, diagnostics in a 64-source-file workspace, incremental edits, and recovery after server termination.
 # The ordinary suite exercises the client only against a fake server. Not a required check. See docs/LSP_REAL_SERVERS.md
 # for what it covers and what it does not.
 #
