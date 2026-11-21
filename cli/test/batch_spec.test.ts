@@ -6,11 +6,11 @@ test("batch validation accepts the existing operation specification and preserve
   const spec = {
     id: "batch-build",
     objective: "Build and verify the package",
-    policy: { maxConcurrentUnits: 2 },
+    policy: { maxConcurrentUnits: 2, executionBudget: { cpuMilli: 2000, memoryBytes: 2048 } },
     git: { isolate: true },
     units: [
-      { id: "implement", role: "implementer", prompt: "Implement the change", authorizedScope: ["src"] },
-      { id: "verify", role: "tester", prompt: "Run the checks", dependsOn: ["implement"] },
+      { id: "implement", role: "implementer", prompt: "Implement the change", authorizedScope: ["src"], executionResources: { cpuMilli: 1000, memoryBytes: 1024 } },
+      { id: "verify", role: "tester", prompt: "Run the checks", dependsOn: ["implement"], executionResources: { cpuMilli: 1000, memoryBytes: 1024 } },
     ],
   };
 

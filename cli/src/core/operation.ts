@@ -145,6 +145,8 @@ export interface WorkUnit {
   required?: boolean;
   /** X-Task-Class routing hint for this unit (used when the resource has none of its own). */
   taskClass?: string;
+  /** Operator-declared execution reservation for safe parallel admission. */
+  executionResources?: ExecutionResourceRequest;
   status: WorkUnitStatus;
   /** Resource the unit last ran on (its conversation continues from there). */
   assignment?: { resourceId: string; model: string; since: string };
@@ -255,6 +257,16 @@ export interface OperationPolicy {
    * Bounded by `MAX_CONCURRENT_UNITS` and by the number of eligible resource slots (see `operation_schema`).
    */
   maxConcurrentUnits?: number;
+  /** Operator-declared aggregate reservations for parallel work; these are admission weights, not OS-enforced quotas. */
+  executionBudget?: ExecutionResourceRequest;
+}
+
+/** Explicit execution reservation. Missing values are unknown, never inferred from provider or model identity. */
+export interface ExecutionResourceRequest {
+  /** Requested CPU reservation in millicores (1000 = one core). */
+  cpuMilli: number;
+  /** Requested memory reservation in bytes. */
+  memoryBytes: number;
 }
 
 export const DEFAULT_OPERATION_POLICY: OperationPolicy = {
@@ -463,6 +475,8 @@ export interface WorkUnitSpec {
   requires?: WorkRequirements;
   required?: boolean;
   taskClass?: string;
+  /** Required for every unit when maxConcurrentUnits > 1; not observed runtime usage. */
+  executionResources?: ExecutionResourceRequest;
   /** Operator cap on this unit's prompt context, in tokens. */
   contextBudget?: number;
   /** Paths (files or directories) a reviewed change may touch; absent declares no scope. */
@@ -556,6 +570,7 @@ export function newOperation(
       requires: u.requires ?? {},
       ...(u.required === false ? { required: false } : {}),
       ...(u.taskClass ? { taskClass: u.taskClass } : {}),
+      ...(u.executionResources ? { executionResources: { ...u.executionResources } } : {}),
       ...(u.contextBudget !== undefined ? { contextBudget: u.contextBudget } : {}),
       ...(u.authorizedScope ? { authorizedScope: normalizeScope(u.id, u.authorizedScope) } : {}),
       ...(u.unresolvedAssumptions ? { unresolvedAssumptions: redactForPersistence([...u.unresolvedAssumptions]) } : {}),

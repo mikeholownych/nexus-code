@@ -270,8 +270,13 @@ export class ConvergenceScheduler {
   ): Assignment[] {
     const limit = Math.max(1, effectiveConcurrency(this.state));
     const used = new Map<string, number>();
+    const budget = this.state.policy.executionBudget;
+    let cpuMilliReserved = 0;
+    let memoryBytesReserved = 0;
     for (const running of this.state.units) {
       if (running.status !== "RUNNING") continue;
+      cpuMilliReserved += running.executionResources?.cpuMilli ?? 0;
+      memoryBytesReserved += running.executionResources?.memoryBytes ?? 0;
       const id = running.assignment?.resourceId;
       if (id) used.set(id, (used.get(id) ?? 0) + 1);
     }
@@ -287,12 +292,20 @@ export class ConvergenceScheduler {
       if (inFlight + out.length >= limit) break;
       const sel = choices.get(unit.id);
       if (!sel) continue;
+      const request = unit.executionResources;
+      if (limit > 1 && (!budget || !request || cpuMilliReserved + request.cpuMilli > budget.cpuMilli || memoryBytesReserved + request.memoryBytes > budget.memoryBytes)) {
+        continue; // resource demand is explicit and operation-local; a budget miss waits for an active unit to settle
+      }
       // Preference order: the registry's chosen resource first, then the rest of its qualified list in registry order.
       const preferred = sel.chosen ? [sel.chosen, ...sel.qualified.map((c) => c.resource).filter((r) => r.id !== sel.chosen!.id)] : sel.qualified.map((c) => c.resource);
       const eligible = new Set(sel.qualified.filter((c) => c.eligibility.eligible).map((c) => c.resource.id));
       const resource = preferred.find((candidate) => (eligible.has(candidate.id) || candidate.id === sel.chosen?.id) && free(candidate.id));
       if (!resource) continue; // eligible but every qualified slot is busy: stay RUNNABLE, do not park or block
       used.set(resource.id, (used.get(resource.id) ?? 0) + 1);
+      if (request) {
+        cpuMilliReserved += request.cpuMilli;
+        memoryBytesReserved += request.memoryBytes;
+      }
       // A reroute is a condition story about the preferred resource; being displaced by a busy slot is not one.
       const reroutedFrom = sel.chosen?.id === resource.id ? reroutes.get(unit.id) : undefined;
       out.push({ unit, resource, ...(reroutedFrom ? { reroutedFrom } : {}) });
