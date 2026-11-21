@@ -67,9 +67,12 @@ describe("REQ-AGT-111 v1 subset: subagent measureAdmission and matched tool sets
   test("subagent chat uses live getEffectiveTools() and calls measureAdmission", { timeout: 60_000 }, async () => {
     const repo = makeRepo({ "notes.txt": "hello from notes\n" });
     const snapshots: string[][] = [];
+    const subagentLimits: Array<number | undefined> = [];
     let subagentMeasureCalls = 0;
     const original = AutonomousAgent.prototype.getEffectiveTools;
     const originalMeasure = (AutonomousAgent.prototype as any).measureAdmission;
+    const originalAdmission = (AutonomousAgent.prototype as any).admitWithFindings;
+    const originalSubagent = AutonomousAgent.prototype.runSubagent;
     AutonomousAgent.prototype.getEffectiveTools = function (this: AutonomousAgent) {
       const tools = original.apply(this);
       if ((this as any).runningAsSubagent) snapshots.push(namesOf(tools));
@@ -78,6 +81,17 @@ describe("REQ-AGT-111 v1 subset: subagent measureAdmission and matched tool sets
     (AutonomousAgent.prototype as any).measureAdmission = async function (this: AutonomousAgent, ...args: unknown[]) {
       if ((this as any).runningAsSubagent) subagentMeasureCalls++;
       return originalMeasure.apply(this, args);
+    };
+    (AutonomousAgent.prototype as any).admitWithFindings = async function (this: AutonomousAgent, ...args: unknown[]) {
+      if ((this as any).runningAsSubagent) subagentLimits.push((this as any).capabilities?.contextLimit ?? this.contextLimit());
+      return originalAdmission.apply(this, args);
+    };
+    (AutonomousAgent.prototype as any).runSubagent = async function (this: AutonomousAgent, ...args: unknown[]) {
+      // Force the helper to rediscover limits; otherwise the parent's earlier discovery could mask a missing subagent call.
+      (this as any).capabilities = undefined;
+      (this as any).capabilitiesKey = undefined;
+      (this as any).capabilitiesCheckedAt = 0;
+      return originalSubagent.apply(this, args as [string, any, AbortSignal | undefined]);
     };
 
     const gw = await startGateway((_n, body) => {
@@ -105,6 +119,8 @@ describe("REQ-AGT-111 v1 subset: subagent measureAdmission and matched tool sets
       const turn = await agent.runTurn("Use a subagent to read notes.txt.");
       assert.equal(turn.execution, "COMPLETED", JSON.stringify({ reason: turn.reason, detail: turn.detail }));
       assert.ok(snapshots.length >= 1, "getEffectiveTools must run while runningAsSubagent");
+      assert.ok(subagentLimits.length >= 1, "subagent must reach admission after clearing the parent's capability cache");
+      assert.ok(subagentLimits.every((limit) => limit === 40_000), `subagent admission used limits ${JSON.stringify(subagentLimits)}, expected the advertised 40000`);
 
       const subChats = (gw.requests as any[]).filter((b) => b.tools && isSubagentBody(b));
       assert.ok(subChats.length >= 1, "expected at least one subagent chat request with tools");
@@ -123,6 +139,8 @@ describe("REQ-AGT-111 v1 subset: subagent measureAdmission and matched tool sets
       console.log = log;
       AutonomousAgent.prototype.getEffectiveTools = original;
       (AutonomousAgent.prototype as any).measureAdmission = originalMeasure;
+      (AutonomousAgent.prototype as any).admitWithFindings = originalAdmission;
+      (AutonomousAgent.prototype as any).runSubagent = originalSubagent;
       agent.shutdown();
       await gw.close();
       fs.rmSync(repo, { recursive: true, force: true });
