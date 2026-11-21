@@ -258,6 +258,22 @@ describe("the ledger carries tracking", () => {
     const legacy: any = { cumulativeSteps: 4 };
     assert.equal(normalizeTracking(legacy), legacy, "filled in place");
     assert.deepEqual(legacy.repetitions, []);
+    assert.equal(legacy.toolInvocations, 0);
+    assert.equal(legacy.toolInvocationHistoryComplete, false, "legacy records must not present a missing counter as an observed zero");
+  });
+
+  test("tool invocation admissions are bounded and legacy counts remain explicitly incomplete", () => {
+    const tracker = ExecutionTracker.fresh();
+    assert.equal(tracker.admitToolInvocations(5, 2), 2);
+    assert.equal(tracker.admitToolInvocations(1, 2), 0);
+    assert.equal(tracker.data.toolInvocations, 2);
+    assert.equal(tracker.data.toolInvocationHistoryComplete, true);
+
+    const restored = normalizeTracking({ version: 1, cumulativeSteps: 4 });
+    assert.equal(restored.toolInvocations, 0);
+    assert.equal(restored.toolInvocationHistoryComplete, false);
+    assert.equal(new ExecutionTracker(restored).admitToolInvocations(1, 1), 1);
+    assert.equal(restored.toolInvocationHistoryComplete, false, "new counts remain a lower bound after a legacy upgrade");
   });
 
   test("an unfinished single-request objective continued with 'continue' keeps its ledger; new work starts a new one", () => {
