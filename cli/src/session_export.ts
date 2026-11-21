@@ -91,6 +91,7 @@ export function buildSessionExport(manager: SessionManager, session: SessionData
         verificationAttempts: objective?.verification ?? [],
         verificationEvidence: lastTurn?.verification ?? null,
         verificationConfigAttempts: session.verificationConfigAttempts ?? [],
+        commandRuleDecisions: session.commandRuleDecisions ?? [],
         unverifiedChangesPending: session.unverifiedChangesPending ?? null,
       },
       tokenAccounting:
@@ -165,6 +166,11 @@ function markdownExport(session: SessionData, history: HistoryCompleteness, arch
   if (session.verificationConfigAttempts?.length) {
     out.push("**Verification configuration edits (tests, CI, build):**", "");
     for (const a of session.verificationConfigAttempts) out.push(`- ${a.timestamp} ${a.decision} \`${a.tool}\` ${a.path} (${a.class}${a.role ? `, ${a.role}` : ""})`);
+    out.push("");
+  }
+  if (session.commandRuleDecisions?.length) {
+    out.push("**Operator command rules (which rule decided a shell command):**", "");
+    for (const d of session.commandRuleDecisions) out.push(`- ${d.timestamp} ${d.effect}: \`${d.command}\` by rule ${d.rule} (${d.decision} \`${d.prefix}\`${d.justification ? `: ${d.justification}` : ""})`);
     out.push("");
   }
   if (session.activePlan?.length) {

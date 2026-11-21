@@ -28,6 +28,7 @@ import { protectArchivedMessages } from "./persistence_protection.js";
 import { updateTaskMessages, readTaskMessages, TaskMessageLogError, type TaskMessageCursor } from "./task_message_log.js";
 import { withStateStoreGuard } from "./state_store_guard.js";
 import type { VerificationConfigAttempt } from "../security.js";
+import type { CommandRuleDecision } from "./command_rules.js";
 
 import { CURRENT_STATE_SCHEMA_VERSION, WORKTREE_BINDING_VERSION, normalizeWorktreeBinding } from "./state_schema.js";
 export { CURRENT_STATE_SCHEMA_VERSION, WORKTREE_BINDING_VERSION } from "./state_schema.js";
@@ -200,6 +201,9 @@ export interface DurableTaskState {
 
   // Agent edits (and shell commands that appear to write) to tests, CI and build configuration, with how each was decided
   verificationConfigAttempts?: VerificationConfigAttempt[];
+
+  // Shell commands an operator command rule (CS-9) allowed without a prompt, prompted for, or refused, with the deciding rule
+  commandRuleDecisions?: CommandRuleDecision[];
 
   // How complete `messages` is as a history: context compaction replaces earlier messages with summaries, and the
   // replaced originals are archived beside the task state (see SessionManager.appendArchivedHistory).
@@ -814,6 +818,7 @@ export class DurableStateManager {
       objective?: ObjectiveLedger | null;
       unverifiedChangesPending?: boolean;
       verificationConfigAttempts?: VerificationConfigAttempt[];
+      commandRuleDecisions?: CommandRuleDecision[];
       changeBaseline?: { command: string; failed: boolean; tests: Record<string, string> | null; verifier?: Record<string, string> | null; verifierUnbindableReason?: string; trustedDeliverables?: string[]; tddRedVerifier?: Record<string, string>; tddRedTests?: Record<string, string>; at: string } | null;
     }
   ): DurableTaskState {
@@ -827,6 +832,7 @@ export class DurableStateManager {
       if (progress.objective !== undefined) state.objective = progress.objective;
       if (progress.unverifiedChangesPending !== undefined) state.unverifiedChangesPending = progress.unverifiedChangesPending;
       if (progress.verificationConfigAttempts) state.verificationConfigAttempts = progress.verificationConfigAttempts;
+      if (progress.commandRuleDecisions) state.commandRuleDecisions = progress.commandRuleDecisions;
       if (progress.changeBaseline !== undefined) state.changeBaseline = progress.changeBaseline;
       return this.saveTaskStateLocked(state, this.workspacePaths);
     });
