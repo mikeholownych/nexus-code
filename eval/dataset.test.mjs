@@ -314,3 +314,19 @@ test("scorer aggregates deterministic code evaluators in report", () => {
     fs.rmSync(temp, { recursive: true, force: true });
   }
 });
+
+test("toolOutputMaskTokens (CX-4 measurement) reaches the Nexus agent as the mask variable, only when set and valid", async () => {
+  const runnerApi = await import("./runner_api.mjs");
+  const launch = (config) => runnerApi.createAgentLaunchPayload({
+    task: { id: "t", objective: "o", tier: "T2" },
+    config: { agent: "nexus", model: "m", sampling: { temperature: 0 }, limits: { context: 4096, output: 512 }, ...config },
+    agentIdentity: { command: process.execPath, argsPrefix: ["/candidate/nexus.js"] },
+    budget: { steps: 4, minutes: 1 },
+    home: os.tmpdir(),
+    localToken: "LOCAL_PROXY_TOKEN_FOR_TEST",
+  });
+  assert.equal(launch({}).env.NEXUS_TOOL_OUTPUT_MASK_TOKENS, undefined, "off unless configured");
+  assert.equal(launch({ toolOutputMaskTokens: 2000 }).env.NEXUS_TOOL_OUTPUT_MASK_TOKENS, "2000");
+  for (const bad of [0, -5, 1.5, "2000", null]) assert.throws(() => launch({ toolOutputMaskTokens: bad }), /positive integer/, String(bad));
+  assert.throws(() => launch({ env: { NEXUS_TOOL_OUTPUT_MASK_TOKENS: "2000" } }), /credential-like environment key/, "the env filter still applies to config.env");
+});

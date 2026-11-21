@@ -1,0 +1,16 @@
+{
+  "id": "cx4-log-triage",
+  "tier": "T2",
+  "fixture": "repo",
+  "steps": 40,
+  "minutes": 15,
+  "description": "Tool-output masking (CX-4): the cause sits in two lines of a 6000-line log; reading it is expensive and the evidence must not be lost.",
+  "objective": "npm test fails: the service config is wrong. The reasons are in logs/server.log (about 6000 lines). Fix config.json so npm test passes, changing only what the log says is wrong. Do not edit the log.",
+  "hidden": {
+    "dir": "hidden",
+    "command": "node hidden/check.js"
+  },
+  "regression": {
+    "command": "npm test --silent"
+  }
+}

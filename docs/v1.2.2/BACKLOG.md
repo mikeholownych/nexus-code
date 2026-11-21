@@ -15,7 +15,7 @@ What the v1.2.1 plan ([`docs/v1.2.1/PLAN.md`](../v1.2.1/PLAN.md)) did not finish
 | Unit | Not done | First step |
 |---|---|---|
 | MQ-1, MQ-2 mock adapter | **Done for synthetic coverage**: mock gateway adapters and scorer cover correct and wrong deliverables, false `VERIFIED`, and Wilson intervals (`cli/test/eval_harness.test.ts`, `eval/score.mjs`). No live benchmark result exists; do not publish empirical claims without a live run. | CI ran the synthetic harness on Node 22, Node 24, and Linux for PR #644. Live results remain contingent on donated capacity or an existing local endpoint with no paid usage. |
-| MQ-4 | Scheduled gateway conformance: the job script, claim protocol and alert path are built and tested (`scripts/gateway_conformance.mjs`, `docs/GATEWAY_CONFORMANCE.md`); this host has no `gateway_conformance` user timer and no first live run is evidenced. | Install a timer and record a run only if a no-cost gateway configuration is available and the owner chooses to enable it. Do not make paid infrastructure a prerequisite. |
+| MQ-4 | Scheduled gateway conformance: the job script, claim protocol and alert path are built and tested (`scripts/gateway_conformance.mjs`, `docs/GATEWAY_CONFORMANCE.md`); a host user timer (`nexus-gateway-conformance.timer`, Sundays 03:00) was installed on 2026-11-21 at the owner's direction; the gateway is on-premises, so no paid infrastructure is involved. The first scheduled run started 2026-11-21 04:49 UTC and its result is not yet recorded. | Record the first run's result unaltered (alerts go to a local log only; no mail or chat target is configured). |
 | PC-1 | Median PR CI under 40 minutes. The pre-optimization baseline across the latest 20 completed, non-cancelled PR workflow executions has a 42m19s median (33m41s–47m11s); see [`docs/evidence/v1.2.2/PC-1_BASELINE_2026-11-20.md`](../evidence/v1.2.2/PC-1_BASELINE_2026-11-20.md). | A removal experiment was rejected by CI: `release_workflow_parity.test.ts` requires the Linux package job to run the CLI suite, and `security_gates.test.ts` requires the SBOM tools during that suite. Both controls are restored. Next, profile for an optimization that preserves these checks and their existing job names; then collect a new 20-run sample after optimization for the v1.2.1 acceptance criterion. No paid infrastructure or extra runner jobs are planned. |
 
 ## Partly done: what is left
@@ -33,7 +33,7 @@ What the v1.2.1 plan ([`docs/v1.2.1/PLAN.md`](../v1.2.1/PLAN.md)) did not finish
 | MT-3 | One `redactPlain` and one `safeTerminal` use in place of 7 and 3 inline copies (part 1); part 2: a characterization test pins 23 variants over a shared corpus, `formatSafeSidecarText` now calls `safeTerminal`, and every remaining variant has a row with the reason it differs in `docs/v1.2.1/REDACTION_VARIANTS.md` | Nothing planned. The audit found only one more behaviour-preserving collapse; the rest differ in bytes (escape stripping, classifier or no classifier, control handling order, credential-key replacement). Module-private variants (`ceri` `redactedJson`, `safeTerminalText`, `flat`, `redactDeep`) are not in the characterization test |
 | MQ-7 | **Done**: slices B–G are implemented and merged in PR #627. Slices D (installed-evaluator binding), E (request-context manifests), F (recovery-reference integrity), and G (bounded campaigns) have focused coverage in `cli/test/ceri_mq7dg.test.ts`; B/C coverage is in `cli/test/ceri_mq7bc.test.ts`. | No remaining v1.2.2 implementation item identified in this unit. |
 | CS-11 | Deterministic loop-pattern transcripts against the real agent turn and the measured table in `docs/LOOP_PATTERNS.md`; the pattern 2b gap (a command failing with only volatile text changing) closed by context-anchored volatile-text patterns, measured on an 86-pair labelled corpus (same-failure merged 6 of 38 to 34 of 38, different-failure merged 0 of 48 before and after) | Four same-failure pairs with no context word to anchor on (digit-less random suffix, unanchored counter, queue depth, short sha), left unmerged on purpose |
-| WM-3 | All five gateway aliases measured (single runs) | A reasoning-aware pass rule for aliases with reasoning off (the runner marks them `passed: false` for the hybrid-reasoning check); repeats, to see run-to-run variation |
+| WM-3 | All five gateway aliases measured (single runs) | Repeats, to see run-to-run variation. Owner decision 2026-11-21: keep the strict pass rule (a reasoning-off alias is `passed: false` for the hybrid-reasoning check alone). Finding: `lead`, `lead-reasoning` and `interactive` are served by `engineering/b0`, so the five aliases are two models (`docs/evidence/v1.2.2/WM-3-gateway-aliases.md`) |
 
 ## Landed after this list was first written (2026-11-18)
 
@@ -47,9 +47,13 @@ What the v1.2.1 plan ([`docs/v1.2.1/PLAN.md`](../v1.2.1/PLAN.md)) did not finish
 
 - **RD-7** (done): `nexus uninstall` for managed installations verifies installed packages against their SHA-256 manifests, serializes against upgrades, and preserves sessions/configuration by default. PR #629 merged at `e9761040e1c22e2f8299bc4d3ca87b3d18cf3819`; focused uninstall tests passed (6/6). The full suite timed out on five files, so it was not reported as passing.
 
+- **VC-8** (per-role tool deny-lists: implementer loses browser and knowledge-writing tools; tester also loses web fetch, web search and delegation) merged as #660 (`c8e986f4`), tests in `cli/test/role_deny_lists.test.ts`.
+- **CS-9** (operator command rules, allow < prompt < forbidden, `~/.config/nexus/command_rules.json`, decisions saved in the session) merged as #662 (`45b44c5b`), documented in `docs/COMMAND_RULES.md`.
+- **CS-10** phase 1 (the native worker runs inside the Bubblewrap sandbox with `--sandbox bwrap`; opt-in, fails closed when the box cannot be built; Docker and `none` still confine commands only) merged as #664 (`00efdde3`); design in `docs/v1.2.2/CS10_WORKER_ISOLATION.md`. Not done: sandboxing the worker under Docker, and the phase-2 items in that note.
+
 ## Not started / deferred in their rows
 
-CS-9 (per-command approval rules), CS-10 (RPC worker isolation), VC-8 (per-role tool allowlists beyond reviewer and researcher), VC-10 (steering semantic judge, gated), RD-5 (superseded by v1.3 AC-1), MT-2 (split the two ~5.4k-line TUI files), PC-5 (settled by v1.3 GV-4).
+VC-10 (steering semantic judge, gated), RD-5 (superseded by v1.3 AC-1), MT-2 (split the two ~5.4k-line TUI files), PC-5 (settled by v1.3 GV-4).
 
 ## Release-note items for the next release
 

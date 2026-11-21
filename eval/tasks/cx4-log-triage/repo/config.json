@@ -1,0 +1,1 @@
+{ "retry_limit": 0, "timeout_ms": 50, "pool_size": 4, "region": "eu-west-1" }

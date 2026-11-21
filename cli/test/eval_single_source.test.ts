@@ -63,14 +63,14 @@ test("a source task.json key that core-v1 would silently drop fails the check", 
 });
 
 test("task ids must agree across eval/tasks, the manifest, examples and oracles", async () => {
-  const { checkCoreV1 } = await load("eval/datasets/sync_core_v1.mjs");
+  const { checkCoreV1, EXCLUDED_FROM_CORE_V1 } = await load("eval/datasets/sync_core_v1.mjs");
   const { root, tasksDir, datasetDir } = copies();
   try {
     fs.cpSync(path.join(tasksDir, "t2-bugfix-csv"), path.join(tasksDir, "t9-new-task"), { recursive: true });
     assert.ok(checkCoreV1({ tasksDir, datasetDir }).some((problem: string) => /t9-new-task.*not in core-v1/.test(problem)));
-    assert.deepEqual(checkCoreV1({ tasksDir, datasetDir, excluded: ["t9-new-task"] }), [], "an explicit exclusion is allowed");
+    assert.deepEqual(checkCoreV1({ tasksDir, datasetDir, excluded: [...EXCLUDED_FROM_CORE_V1, "t9-new-task"] }), [], "an explicit exclusion is allowed");
     fs.appendFileSync(path.join(datasetDir, "examples.jsonl"), JSON.stringify({ id: "t8-ghost", split: "benchmark", domain: "coding-task", objective: "x", taskDir: "tasks/t8-ghost", tier: "T2", steps: 1, minutes: 1 }) + "\n");
-    assert.ok(checkCoreV1({ tasksDir, datasetDir, excluded: ["t9-new-task"] }).some((problem: string) => /t8-ghost.*examples\.jsonl.*not in the manifest/.test(problem)));
+    assert.ok(checkCoreV1({ tasksDir, datasetDir, excluded: [...EXCLUDED_FROM_CORE_V1, "t9-new-task"] }).some((problem: string) => /t8-ghost.*examples\.jsonl.*not in the manifest/.test(problem)));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
