@@ -342,8 +342,21 @@ describe("CS-10: the worker inside a Docker container", { skip: DOCKER_SKIP }, (
     const runtime = workerRuntimeFiles(core!);
     const runtimeSummary = "error" in runtime
       ? runtime
-      : { loader: runtime.loader ? path.basename(runtime.loader) : undefined, libraries: runtime.libraries.map((file) => path.basename(file)) };
+      : {
+        loader: runtime.loader ? path.basename(runtime.loader) : undefined,
+        libraries: runtime.libraries.map((file) => path.basename(file)),
+        libraryNames: runtime.libraryNames.map(({ name, path: file }) => `${name}=>${path.basename(file)}`),
+      };
     assert.equal(launch.engine, "docker", launch.warning);
+    const imageIndex = launch.args!.indexOf("-w") + 2;
+    const loaderProbe = runtime && !("error" in runtime) && runtime.loader
+      ? spawnSync(launch.command!, [
+        ...launch.args!.slice(0, imageIndex + 1),
+        "/nexus-worker/ld.so", "--library-path", "/nexus-worker", "--list", "/nexus-worker/harness-core",
+      ], { encoding: "utf8", timeout: 15_000, maxBuffer: 16_000 })
+      : null;
+    assert.equal(loaderProbe?.status ?? 0, 0, JSON.stringify({ loaderProbe, runtime: runtimeSummary }));
+    assert.doesNotMatch(loaderProbe?.stdout ?? "", /libc\.musl/, "glibc dependencies must resolve to the mounted host runtime, never the image's musl libraries");
     const result = spawnSync(launch.command!, launch.args!, { encoding: "utf8", timeout: 15_000, maxBuffer: 16_000 });
     assert.equal(result.status, 0, JSON.stringify({ status: result.status, signal: result.signal, stdout: result.stdout, stderr: result.stderr, error: result.error?.message, runtime: runtimeSummary }));
     assert.match(result.stdout, /harness-core/);
