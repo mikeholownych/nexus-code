@@ -1,6 +1,5 @@
 [1m[38;5;0m[48;5;6m NEXUS [39m[49m  ws[0m  ⎇ main[38;5;3m ●1 changed[39m  model fake-model[38;5;3m  mode: review[39m · sandbox: off · workspace: trusted  ctx 7%  local
 [1m[38;5;6m› [39mSC:edit[0m
-[1m[38;5;6m  [0m
 [38;5;2m  ✓ approved [39mEdit README.md
 
 [38;5;2m  ✓ [1m[39mEdited README.md[0m  [38;5;2m+2[39m [38;5;1m−1[39m
@@ -15,6 +14,7 @@ Edited.
 
 [1m[38;5;3m! Done · not verified[0m  Files changed. npm test ran before the change; nothing checked the change itself.
   → next: run /test, or ask Nexus to verify the change[2m · v receipt[0m
+
 
 
 
