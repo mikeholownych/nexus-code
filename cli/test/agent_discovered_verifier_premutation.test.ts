@@ -103,7 +103,7 @@ test("captures discovered verifier baseline before a subagent can mutate the wor
         : { kind: "text", content: "Fixed the addition implementation." };
     }
     return toolResults === 0
-      ? { kind: "tools", calls: [{ name: "spawn_subagent", args: { prompt: "Fix the failing addition test." } }] }
+      ? { kind: "tools", calls: [{ name: "spawn_subagent", args: { prompt: "Fix the failing addition test.", profile: "implementer" } }] }
       : toolResults === 1
       ? { kind: "tools", calls: [{ name: "task_completed", args: { summary: "Fixed addition" } }] }
       : { kind: "text", content: "Done." };
@@ -116,6 +116,7 @@ test("captures discovered verifier baseline before a subagent can mutate the wor
     shell: "bash",
     approvalMode: "auto",
     fullAccess: true,
+    worktree: true,
     maxSteps: 5,
     temperature: 0,
     continuation: { ...DEFAULT_CONTINUATION, maxCompletionNudges: 0 },
