@@ -397,7 +397,7 @@ function probeDockerSandbox(): boolean {
  * Restricts mutating filesystem access to the target workspace directory.
  */
 export interface SandboxedWorkerLaunch {
-  /** The program and arguments to spawn: `bwrap ...` ending in the worker command. */
+  /** The program and arguments to spawn: `bwrap ...` or `docker run ...` ending in the worker command. */
   command?: string;
   args?: string[];
   sandboxed: boolean;
@@ -405,21 +405,39 @@ export interface SandboxedWorkerLaunch {
   warning?: string;
 }
 
+export interface SandboxedWorkerOptions extends Pick<SandboxOptions, "network"> {
+  /** Engines to try, in order. Default: Bubblewrap only. */
+  engines?: readonly ("bwrap" | "docker")[];
+}
+
 /**
- * CS-10: launches a long-lived worker (the native core) inside the same Bubblewrap profile a sandboxed command gets: a
- * read-only root, the workspace the only writable path, $HOME masked, a scrubbed environment, no network unless the
- * operator allowed it, and the worker dies with its parent. The worker's own directory is bound read-only because it may
- * live under the masked $HOME (a development checkout or a per-user install).
+ * CS-10: launches a long-lived worker (the native core) inside the sandbox a command would get: a read-only root, the
+ * workspace the only writable path, $HOME masked, a scrubbed environment, no network unless the operator allowed it, and
+ * the worker ends with its parent. The worker's commands then run in the same box, so the per-command wrap is not
+ * applied a second time.
  *
- * The worker's commands then run in the same box, so the per-command wrap is not applied a second time. Only Bubblewrap
- * is supported for the worker; the caller decides what a Docker request means.
+ * The first engine in `options.engines` that can build the box is used; with none, the result is unsandboxed with the
+ * reasons, and the caller decides whether that is a refusal.
  */
 export function wrapSandboxedWorker(
   workerPath: string,
   workerArgs: readonly string[],
   workspace: string,
-  options: Pick<SandboxOptions, "network"> = {},
+  options: SandboxedWorkerOptions = {},
 ): SandboxedWorkerLaunch {
+  const warnings: string[] = [];
+  for (const engine of options.engines ?? ["bwrap"]) {
+    const launch = engine === "bwrap"
+      ? wrapBwrapWorker(workerPath, workerArgs, workspace, options)
+      : wrapDockerWorker(workerPath, workerArgs, workspace, options);
+    if (launch.sandboxed) return launch;
+    if (launch.warning) warnings.push(launch.warning);
+  }
+  return { sandboxed: false, engine: "none", warning: warnings.join(" ") || "No sandbox engine was requested for the worker." };
+}
+
+/** The worker's own directory is bound read-only because it may live under the masked $HOME (a checkout or a per-user install). */
+function wrapBwrapWorker(workerPath: string, workerArgs: readonly string[], workspace: string, options: SandboxedWorkerOptions): SandboxedWorkerLaunch {
   if (!isBwrapAvailable()) {
     return { sandboxed: false, engine: "none", warning: "Bubblewrap (bwrap) is not available, so the worker cannot be isolated." };
   }
@@ -434,6 +452,225 @@ export function wrapSandboxedWorker(
     return { sandboxed: false, engine: wrapped.engine, warning: wrapped.warning ?? "The Bubblewrap profile could not be built for the worker." };
   }
   return { command: wrapped.argv[0], args: wrapped.argv.slice(1), sandboxed: true, engine: "bwrap" };
+}
+
+/** Where the worker and the libraries it was linked against are mounted in the container; nothing in the image is replaced. */
+const DOCKER_WORKER_RUNTIME = "/nexus-worker";
+export const DOCKER_WORKER_LABEL = "io.nexus-code.worker-of";
+
+type ElfRuntimeInfo = { interpreter?: string; machine: string; needed: string[]; soname?: string; searchPaths: string[] };
+
+/** Resolve only root-owned system inspection tools; PATH may contain workspace-controlled entries. */
+function trustedSystemTool(name: string): string | undefined {
+  for (const directory of ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]) {
+    const candidate = path.join(directory, name);
+    try {
+      const stat = fs.statSync(candidate);
+      if (!stat.isFile() || stat.uid !== 0 || (stat.mode & 0o022) !== 0) continue;
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return fs.realpathSync(candidate);
+    } catch {
+      // Try the next standard system directory.
+    }
+  }
+  return undefined;
+}
+
+function readElfRuntimeInfo(readelf: string, file: string): ElfRuntimeInfo | { error: string } {
+  let output: string;
+  try {
+    output = execFileSync(readelf, ["-hW", "-lW", "-dW", file], {
+      encoding: "utf8",
+      timeout: 5_000,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { LC_ALL: "C", PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },
+    });
+  } catch (err: any) {
+    const detail = String(err?.stderr ?? err?.message ?? err).split("\n")[0];
+    return { error: `ELF metadata could not be read for ${file}: ${detail}` };
+  }
+  if (/Not an ELF file|Failed to read file header/i.test(output)) return { error: `${file} is not a readable ELF file.` };
+  const machine = output.match(/^\s*Machine:\s*(.+)$/m)?.[1].trim();
+  if (!machine) return { error: `the ELF machine type could not be read for ${file}.` };
+  const interpreter = output.match(/\[Requesting program interpreter:\s*([^\]]+)\]/)?.[1];
+  const needed = [...output.matchAll(/\(NEEDED\).*?Shared library:\s*\[([^\]]+)\]/g)].map((match) => match[1]);
+  const soname = output.match(/\(SONAME\).*?Library soname:\s*\[([^\]]+)\]/)?.[1];
+  const rawSearchPaths = [...output.matchAll(/\((?:RPATH|RUNPATH)\).*?\[([^\]]*)\]/g)].flatMap((match) => match[1].split(":"));
+  const origin = path.dirname(file);
+  const searchPaths = rawSearchPaths.flatMap((entry) => {
+    const expanded = entry.replace(/\$\{ORIGIN\}|\$ORIGIN/g, origin);
+    if (!expanded || expanded.includes("$") || !path.isAbsolute(expanded)) return [];
+    return [expanded];
+  });
+  return { interpreter, machine, needed, soname, searchPaths };
+}
+
+/**
+ * Resolve the worker's ELF interpreter and shared libraries without executing the worker. `ldd` can run the target's
+ * interpreter on some systems, so it is unsafe for a binary that an agent may have replaced inside its workspace.
+ * `readelf` only parses metadata; `ldconfig -p` supplies the host's cached library paths. Unknown dependencies fail
+ * closed. Static workers need no host runtime files.
+ */
+export function workerRuntimeFiles(workerPath: string): { loader?: string; libraries: string[]; libraryNames: Array<{ name: string; path: string }> } | { error: string } {
+  if (process.platform !== "linux") return { error: "worker runtime discovery is supported only on Linux." };
+  const readelf = trustedSystemTool("readelf");
+  if (!readelf) return { error: "a trusted system readelf executable is unavailable." };
+
+  let resolvedWorker: string;
+  try {
+    resolvedWorker = fs.realpathSync(workerPath);
+    if (!fs.statSync(resolvedWorker).isFile()) return { error: "the worker path is not a regular file." };
+  } catch (err: any) {
+    return { error: `the worker binary is missing: ${err?.message ?? err}` };
+  }
+
+  const initial = readElfRuntimeInfo(readelf, resolvedWorker);
+  if ("error" in initial) return initial;
+  const machineTags = ({ x64: ["x86-64"], arm64: ["aarch64"], arm: ["arm"], ia32: ["80386"] } as Record<string, string[]>)[process.arch] ?? [];
+  if (!machineTags.some((tag) => initial.machine.toLowerCase().includes(tag))) {
+    return { error: `the worker architecture (${initial.machine}) does not match the host architecture (${process.arch}).` };
+  }
+  if (!initial.interpreter && initial.needed.length === 0) return { libraries: [], libraryNames: [] };
+  if (!initial.interpreter) return { error: "the dynamically linked worker has no ELF interpreter." };
+
+  const ldconfig = trustedSystemTool("ldconfig");
+  if (!ldconfig) return { error: "a trusted system ldconfig executable is unavailable for shared-library resolution." };
+  let cacheOutput: string;
+  try {
+    cacheOutput = execFileSync(ldconfig, ["-p"], {
+      encoding: "utf8",
+      timeout: 5_000,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { LC_ALL: "C", PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },
+    });
+  } catch (err: any) {
+    return { error: `system shared-library paths could not be read (ldconfig failed: ${String(err?.message ?? err).split("\n")[0]}).` };
+  }
+
+  const architecture = ({ x64: ["x86-64", "x86_64"], arm64: ["aarch64"], arm: ["arm"], ia32: ["80386"] } as Record<string, string[]>)[process.arch] ?? [];
+  const cache = new Map<string, string[]>();
+  for (const line of cacheOutput.split("\n")) {
+    const match = line.match(/^\s*(\S+)\s+\(([^)]+)\)\s+=>\s+(\S+)\s*$/);
+    if (!match || !architecture.some((tag) => match[2].toLowerCase().includes(tag))) continue;
+    const paths = cache.get(match[1]) ?? [];
+    paths.push(match[3]);
+    cache.set(match[1], paths);
+  }
+
+  const loaderPath = initial.interpreter;
+  let loader: string | undefined;
+  if (loaderPath) {
+    try {
+      loader = fs.realpathSync(loaderPath);
+      if (!fs.statSync(loader).isFile()) return { error: "the worker's ELF interpreter is not a regular file." };
+    } catch (err: any) {
+      return { error: `the worker's ELF interpreter is missing: ${err?.message ?? err}` };
+    }
+  }
+
+  const libraries = new Set<string>();
+  const libraryNames = new Map<string, string>();
+  const scanned = new Set<string>([resolvedWorker]);
+  const queue: Array<{ file: string; info: ElfRuntimeInfo }> = [{ file: resolvedWorker, info: initial }];
+  const resolveNeeded = (name: string, searchPaths: string[]): string | undefined => {
+    const candidates = name.includes("/")
+      ? (path.isAbsolute(name) ? [name] : [])
+      : [...searchPaths.map((directory) => path.join(directory, name)), ...(cache.get(name) ?? [])];
+    for (const candidate of candidates) {
+      try {
+        const resolved = fs.realpathSync(candidate);
+        if (fs.statSync(resolved).isFile()) return resolved;
+      } catch {
+        // Try the next candidate; never guess when a needed library is absent.
+      }
+    }
+    return undefined;
+  };
+
+  while (queue.length) {
+    const current = queue.shift()!;
+    for (const name of current.info.needed) {
+      if (name !== path.basename(name) || !/^[A-Za-z0-9_.+-]+$/.test(name)) {
+        return { error: `the worker has an unsafe shared-library name: ${name}` };
+      }
+      const resolved = resolveNeeded(name, current.info.searchPaths);
+      if (!resolved) return { error: `the worker needs a shared library that could not be resolved: ${name}` };
+      const previous = libraryNames.get(name);
+      if (previous && previous !== resolved) return { error: `the worker's shared-library name is ambiguous: ${name}` };
+      libraryNames.set(name, resolved);
+      libraries.add(resolved);
+      if (libraries.size > 256) return { error: "the worker has more than 256 shared runtime files; refusing an unbounded mount set." };
+      if (scanned.has(resolved)) continue;
+      scanned.add(resolved);
+      const info = readElfRuntimeInfo(readelf, resolved);
+      if ("error" in info) return info;
+      if (!machineTags.some((tag) => info.machine.toLowerCase().includes(tag))) {
+        return { error: `shared library ${name} has an incompatible architecture (${info.machine}).` };
+      }
+      queue.push({ file: resolved, info });
+    }
+  }
+  return { ...(loader ? { loader } : {}), libraries: [...libraries], libraryNames: [...libraryNames].map(([name, file]) => ({ name, path: file })) };
+}
+
+/**
+ * CS-10 (Docker): the worker as the long-lived process of one hardened container, built from the same `docker run`
+ * arguments a sandboxed command gets (unprivileged uid, no capabilities, read-only root, no network unless allowed, the
+ * workspace the only host directory). `--interactive` carries the JSON-RPC stream; `--init` reaps the commands the
+ * worker starts and forwards signals; the container ends when the worker does (its client closing stdin ends the worker).
+ */
+function wrapDockerWorker(workerPath: string, workerArgs: readonly string[], workspace: string, options: SandboxedWorkerOptions): SandboxedWorkerLaunch {
+  const refuse = (warning: string): SandboxedWorkerLaunch => ({ sandboxed: false, engine: "none", warning });
+  if (process.platform !== "linux") return refuse("The worker can only run in a Docker container on a Linux host.");
+  // The CLI being installed is not enough for a long-lived worker: with the daemon down the container would never start
+  // and every tool would fail. Ask the daemon, so `auto` can fall back and an explicit `docker` refuses with the reason.
+  try {
+    execFileSync("docker", ["version", "--format", "{{.Server.Version}}"], { stdio: ["ignore", "ignore", "ignore"], timeout: 5000 });
+  } catch {
+    return refuse("The Docker daemon is not reachable, so the worker cannot run in a container.");
+  }
+  const placeholder = "true";
+  const wrapped = wrapSandboxedCommand(placeholder, workspace, { mode: "docker", network: options.network });
+  if (!wrapped.sandboxed || wrapped.engine !== "docker" || !wrapped.argv?.length) {
+    return refuse(wrapped.warning ?? "The Docker sandbox could not be built for the worker.");
+  }
+  // The command form ends `-w <workspace> <image> sh -c <cmd>`; everything before the image is the hardened profile.
+  const tail = wrapped.argv.slice(-6);
+  const absWorkspace = path.resolve(workspace);
+  if (tail[0] !== "-w" || tail[1] !== absWorkspace || tail[3] !== "sh" || tail[4] !== "-c" || tail[5] !== placeholder || wrapped.argv[1] !== "run") {
+    return refuse("The Docker sandbox arguments have an unexpected shape; refusing to start the worker in a container built from them.");
+  }
+  const image = tail[2];
+  const runtime = workerRuntimeFiles(workerPath);
+  if ("error" in runtime) return refuse(`The worker cannot run in a Docker container: ${runtime.error}.`);
+  const mounts: string[] = [];
+  const names = new Set<string>();
+  const mount = (host: string, name: string) => {
+    if (names.has(name)) return;
+    names.add(name);
+    mounts.push("-v", `${host}:${DOCKER_WORKER_RUNTIME}/${name}:ro`);
+  };
+  let resolvedWorker: string;
+  try {
+    resolvedWorker = fs.realpathSync(workerPath);
+  } catch (err: any) {
+    return refuse(`The worker binary is missing: ${err?.message ?? err}.`);
+  }
+  mount(resolvedWorker, "harness-core");
+  for (const library of runtime.libraries) mount(library, path.basename(library));
+  for (const library of runtime.libraryNames) mount(library.path, library.name);
+  const inContainer = `${DOCKER_WORKER_RUNTIME}/harness-core`;
+  const start = runtime.loader
+    ? (mount(runtime.loader, "ld.so"), [`${DOCKER_WORKER_RUNTIME}/ld.so`, "--library-path", DOCKER_WORKER_RUNTIME, inContainer])
+    : [inContainer];
+  const profile = wrapped.argv.slice(2, -6);
+  return {
+    command: "docker",
+    // The label names the CLI process that owns the container, so a leftover can be found (`docker ps --filter label=...`).
+    args: ["run", "--interactive", "--init", "--label", `${DOCKER_WORKER_LABEL}=${process.pid}`, ...profile, ...mounts, "-w", absWorkspace, image, ...start, ...workerArgs],
+    sandboxed: true,
+    engine: "docker",
+  };
 }
 
 export function wrapSandboxedCommand(

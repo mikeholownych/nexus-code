@@ -84,8 +84,12 @@ describe("ACC-SAFE-05 & REQ-SEC-108: Sandbox execution with complex workspace pa
 
       const bridge = new RustCoreBridge(ws, "bash", undefined, false, false, "docker");
       try {
+        // CS-10: on Linux the worker itself is launched through Docker, and this stand-in `docker` only records its
+        // arguments and exits, so no worker answers. What is under test is the launch: the path reaches Docker as one
+        // literal argument and nothing in it runs as host shell syntax. Elsewhere the command is wrapped as before.
         const res = await bridge.executeTool("run_command", { command: "true" });
-        assert.equal(res.success, true, res.error);
+        if (process.platform === "linux") assert.equal(res.success, false, "a stand-in docker cannot serve the worker protocol");
+        else assert.equal(res.success, true, res.error);
       } finally {
         bridge.shutdown();
       }

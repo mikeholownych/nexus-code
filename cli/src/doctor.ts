@@ -602,11 +602,13 @@ const sandboxCheck: Check = async (ctx) => {
     return f("sandbox.confinement", "runtime", "warn", "--sandbox is configured but bubblewrap (bwrap) is not available.", [], "Install bubblewrap, or run without --sandbox.");
   }
   const m = sandboxHomeMounts();
-  const workerInBox = sandbox !== "docker";
+  // A containerised worker needs a Linux host (the worker is a Linux binary); elsewhere Docker confines commands only.
+  const workerInBox = sandbox !== "docker" || process.platform === "linux";
   const evidence = [
     workerInBox
       ? "native worker (harness-core): runs inside this sandbox, so a compromised worker has the same limits as a command (CS-10)"
-      : "native worker (harness-core): runs outside Docker (Docker confines commands only); use --sandbox bwrap to confine the worker too",
+      : "native worker (harness-core): runs outside Docker on this host (a container can only run it on Linux), so Docker confines commands only here",
+    ...(workerInBox ? ["file tools use a separate files-only worker: it refuses to run commands and has no network even with --sandbox-network (CS-10 phase 2)"] : []),
     `network: ${sandboxNetworkEnabled() ? "ON (--sandbox-network / NEXUS_SANDBOX_NETWORK; covers the worker and its commands)" : "off (default)"}`,
     `HOME ${m.home} is masked with an empty tmpfs; read-only mounts back under it:`,
     ...(m.mounts.length ? m.mounts.map((x) => `  ${x.path}  (${x.source})`) : ["  (none)"]),

@@ -683,6 +683,24 @@ function runReadOnlySandbox(
 /** How long a cancelled RPC waits for the runner to confirm the command ended (its grace period is 2 s). */
 const RPC_CANCEL_CONFIRM_MS = 5_000;
 
+type WorkerRole = "all" | "files" | "commands";
+
+/** One worker process and the requests waiting on it. */
+interface WorkerChannel {
+  process: ChildProcess | null;
+  pending: Map<number, { resolve: (res: ExecutionResult) => void; timeoutTimer: NodeJS.Timeout }>;
+  buffer: string;
+  handshakePromise: Promise<{ version: string; protocol: number }> | null;
+  handshakeError: Error | null;
+  /** Why the worker was not started (containment requested, not available); reported with the tool result. */
+  refusal?: string;
+}
+
+const newWorkerChannel = (): WorkerChannel => ({ process: null, pending: new Map(), buffer: "", handshakePromise: null, handshakeError: null });
+
+/** The methods that start, list or end a command. A files worker refuses them (`core/src/main.rs`, COMMAND_METHODS). */
+const WORKER_COMMAND_METHODS: ReadonlySet<string> = new Set(["run_command", "cancel", "end_background", "list_services"]);
+
 export class RustCoreBridge {
   private static activeBridges: Set<RustCoreBridge> = new Set();
   private workspace: string;
@@ -690,21 +708,24 @@ export class RustCoreBridge {
   private defaultShell: string;
   private coreBinaryPath: string | null = null;
   private cargoManifestPath: string;
-  private rpcProcess: ChildProcess | null = null;
+  /**
+   * The worker processes. `primary` serves everything when the worker is not sandboxed. When it is (CS-10 phase 2), the
+   * work is split: `files` is a worker started with `--files-only` and never given a network, and `primary` runs commands.
+   * Each is started on first use.
+   */
+  private channels: { primary: WorkerChannel; files: WorkerChannel } = { primary: newWorkerChannel(), files: newWorkerChannel() };
   private nextRequestId: number = 1;
-  private pendingRequests: Map<number, {
-    resolve: (res: ExecutionResult) => void;
-    timeoutTimer: NodeJS.Timeout;
-  }> = new Map();
-  private rpcBuffer: string = "";
   private dryRun: boolean = false;
   private readOnly: boolean = false;
   private sandbox: boolean | string = false;
   private requireSandbox: boolean = false;
   private verifierTimeoutSecs?: number;
   private securityManager: SecurityManager;
-  private handshakePromise: Promise<{ version: string; protocol: number }> | null = null;
-  private handshakeError: Error | null = null;
+
+  /** The command (or only) worker's process; the files worker is `channels.files.process`. */
+  private get rpcProcess(): ChildProcess | null {
+    return this.channels.primary.process;
+  }
 
   constructor(
     workspace: string,
@@ -756,59 +777,98 @@ export class RustCoreBridge {
     const changed = this.sandbox !== sandbox;
     this.sandbox = sandbox;
     // A running worker was launched under the previous setting; the next request starts one under the new one.
-    if (changed && this.rpcProcess) this.cleanupRpc();
+    if (changed) this.cleanupRpc();
   }
 
   /**
-   * CS-10: what `--sandbox` asks of the worker. An explicit `bwrap` requires it inside the box (and fails closed when it
-   * cannot be). `auto` (or a bare `--sandbox`) uses the box when Bubblewrap is present and otherwise leaves the worker as
-   * it was, so a host that confines commands with Docker keeps working. `docker` and `none` never contain the worker.
+   * CS-10: what `--sandbox` asks of the worker, and with which engines. An explicit `bwrap` or `docker` requires the
+   * worker inside that sandbox and fails closed when it cannot be. `auto` (or a bare `--sandbox`) uses Bubblewrap, else
+   * Docker, and otherwise leaves the worker as it was. A Docker container can only run the worker on a Linux host, so
+   * elsewhere `docker` keeps confining commands only.
    */
   private workerSandboxMode(): "required" | "preferred" | "off" {
-    if (!this.sandbox || this.sandbox === "none" || this.sandbox === "docker") return "off";
+    if (!this.sandbox || this.sandbox === "none") return "off";
+    if (this.sandbox === "docker") return process.platform === "linux" ? "required" : "off";
     return this.sandbox === "bwrap" ? "required" : "preferred";
   }
 
+  private workerEngines(): ("bwrap" | "docker")[] {
+    if (this.sandbox === "bwrap") return ["bwrap"];
+    if (this.sandbox === "docker") return ["docker"];
+    return ["bwrap", "docker"];
+  }
+
   /**
-   * The one place a worker process is launched from (the persistent daemon and the one-shot fallback both use it), so a
-   * request for containment cannot degrade into an unsandboxed worker through the other path. Returns a refusal when
+   * The one place a worker process is launched from (the persistent daemons and the one-shot fallback all use it), so a
+   * request for containment cannot degrade into an unsandboxed worker through another path. Returns a refusal when
    * containment was requested and cannot be provided, instead of starting the worker outside the box.
+   *
+   * A `files` worker is started with `--files-only` and is never given a network, whatever the operator allowed commands.
    */
-  private workerLaunch(workerArgs: string[]): { command: string; args: string[]; sandboxed: boolean } | { refused: string } {
+  private workerLaunch(workerArgs: string[], role: WorkerRole = "all"): { command: string; args: string[]; sandboxed: boolean; engine: "bwrap" | "docker" | "none" } | { refused: string } {
     const useBinary = Boolean(this.coreBinaryPath && fs.existsSync(this.coreBinaryPath));
     const mode = this.workerSandboxMode();
+    const coreArgs = ["--workspace", this.workspace, ...(role === "files" ? ["--files-only"] : []), ...workerArgs];
     if (mode !== "off" && useBinary) {
-      const launch = wrapSandboxedWorker(this.coreBinaryPath!, ["--workspace", this.workspace, ...workerArgs], this.workspace, {});
-      if (launch.sandboxed && launch.command && launch.args) return { command: launch.command, args: launch.args, sandboxed: true };
+      const launch = wrapSandboxedWorker(this.coreBinaryPath!, coreArgs, this.workspace, {
+        engines: this.workerEngines(),
+        network: role === "files" ? false : undefined,
+      });
+      if (launch.sandboxed && launch.command && launch.args && launch.engine !== "none") {
+        return { command: launch.command, args: launch.args, sandboxed: true, engine: launch.engine };
+      }
+      // A files-only worker is a capability boundary, not a best-effort optimization. If its
+      // sandbox disappears after the command worker was selected, never fall back to a worker
+      // that can run commands or reach the network.
+      if (role === "files") return { refused: launch.warning ?? "the files-only worker requires a sandbox and was not started outside it." };
       if (mode === "required") return { refused: launch.warning ?? "no supported sandbox engine is available." };
-      // "auto": no Bubblewrap here, so the worker is launched as before; commands report their own containment.
+      // "auto": no engine here can hold the worker, so it is launched as before; commands report their own containment.
     } else if (mode === "required") {
-      return { refused: "the worker can only be isolated from an installed core binary, not from `cargo run`. Build or install the core, or run without --sandbox bwrap." };
+      return { refused: "the worker can only be isolated from an installed core binary, not from `cargo run`. Build or install the core, or run without --sandbox." };
+    } else if (role === "files") {
+      return { refused: "the files-only worker requires an installed core binary that can run inside a sandbox." };
     }
-    if (useBinary) return { command: this.coreBinaryPath!, args: ["--workspace", this.workspace, ...workerArgs], sandboxed: false };
+    if (useBinary) return { command: this.coreBinaryPath!, args: coreArgs, sandboxed: false, engine: "none" };
     return {
       command: "cargo",
-      args: ["run", "--manifest-path", this.cargoManifestPath, "--quiet", "--", "--workspace", this.workspace, ...workerArgs],
+      args: ["run", "--manifest-path", this.cargoManifestPath, "--quiet", "--", ...coreArgs],
       sandboxed: false,
+      engine: "none",
     };
   }
 
-  /** Why the worker was not started (containment requested, not available); reported with the tool result. */
-  private workerRefusal?: string;
-  private workerBoxCache?: { key: string; sandboxed: boolean };
+  private workerBoxCache?: { key: string; engine: "bwrap" | "docker" | "none" };
 
   /**
-   * True when this bridge's worker runs inside the sandbox, so its commands are already confined by that box and are not
-   * wrapped a second time. Decided once per sandbox setting and core binary (probing Bubblewrap is not free).
+   * The sandbox engine this bridge's worker runs inside, or "none". Decided once per sandbox setting and core binary
+   * (probing an engine is not free).
    */
-  private workerIsSandboxed(): boolean {
-    if (this.workerSandboxMode() === "off") return false;
+  private workerEngine(): "bwrap" | "docker" | "none" {
+    if (this.workerSandboxMode() === "off") return "none";
     const key = `${String(this.sandbox)}|${this.coreBinaryPath ?? ""}`;
     if (this.workerBoxCache?.key !== key) {
       const launch = this.workerLaunch(["rpc"]);
-      this.workerBoxCache = { key, sandboxed: !("refused" in launch) && launch.sandboxed };
+      this.workerBoxCache = { key, engine: "refused" in launch ? "none" : launch.engine };
     }
-    return this.workerBoxCache.sandboxed;
+    return this.workerBoxCache.engine;
+  }
+
+  /**
+   * True when the worker runs inside the sandbox, so its commands are already confined by that box and are not wrapped
+   * a second time, and file tools go to the separate files worker.
+   */
+  private workerIsSandboxed(): boolean {
+    return this.workerEngine() !== "none";
+  }
+
+  /** The worker a method is sent to: with a sandboxed worker, everything but commands goes to the files worker. */
+  private channelFor(method: string): WorkerChannel {
+    return this.workerIsSandboxed() && !WORKER_COMMAND_METHODS.has(method) ? this.channels.files : this.channels.primary;
+  }
+
+  private roleOf(channel: WorkerChannel): WorkerRole {
+    if (channel === this.channels.files) return "files";
+    return this.workerIsSandboxed() ? "commands" : "all";
   }
 
   public setVerifierTimeoutSecs(secs?: number): void {
@@ -820,59 +880,67 @@ export class RustCoreBridge {
     if (found) this.coreBinaryPath = found;
   }
 
-  private ensureRpcDaemon(): ChildProcess | null {
-    if (this.rpcProcess && !this.rpcProcess.killed && this.rpcProcess.stdin && !this.rpcProcess.stdin.destroyed) {
-      return this.rpcProcess;
+  private ensureRpcDaemon(channel: WorkerChannel = this.channels.primary): ChildProcess | null {
+    if (channel.process && !channel.process.killed && channel.process.stdin && !channel.process.stdin.destroyed) {
+      return channel.process;
     }
 
-    const launch = this.workerLaunch(["rpc"]);
+    const launch = this.workerLaunch(["rpc"], this.roleOf(channel));
     if ("refused" in launch) {
       // Containment was requested and cannot be provided: do not start the worker outside the box. The caller reports it.
-      this.workerRefusal = launch.refused;
+      channel.refusal = launch.refused;
       return null;
     }
-    this.workerRefusal = undefined;
+    channel.refusal = undefined;
     const command = launch.command;
     const spawnArgs = launch.args;
 
     try {
-      this.rpcProcess = spawn(command, spawnArgs, {
+      const child = spawn(command, spawnArgs, {
         cwd: this.workspace,
         // The engine's commands inherit its environment: keep the operator's credentials out of it (command_env.ts).
         env: buildCommandEnvironment(),
         stdio: ["pipe", "pipe", "pipe"],
       });
+      channel.process = child;
 
-      this.rpcProcess.stdout?.on("data", (chunk: Buffer) => {
-        this.handleRpcStdout(chunk.toString("utf-8"));
+      child.stdout?.on("data", (chunk: Buffer) => {
+        this.handleRpcStdout(channel, chunk.toString("utf-8"));
       });
 
-      this.rpcProcess.on("error", () => {
-        this.cleanupRpc();
+      // An exit or error of an earlier process must not tear down the one that replaced it.
+      child.on("error", () => {
+        if (channel.process === child) this.cleanupChannel(channel);
       });
 
-      this.rpcProcess.on("exit", () => {
-        this.cleanupRpc();
+      child.on("exit", () => {
+        if (channel.process === child) this.cleanupChannel(channel);
       });
 
-      return this.rpcProcess;
+      return child;
     } catch {
-      this.cleanupRpc();
+      this.cleanupChannel(channel);
       return null;
     }
   }
 
+  /** Ends every worker of this bridge. */
   private cleanupRpc(): void {
-    if (this.rpcProcess) {
+    this.cleanupChannel(this.channels.primary);
+    this.cleanupChannel(this.channels.files);
+  }
+
+  private cleanupChannel(channel: WorkerChannel): void {
+    if (channel.process) {
       try {
-        this.rpcProcess.stdin?.end();
-        this.rpcProcess.stdout?.destroy();
-        this.rpcProcess.stderr?.destroy();
-        this.rpcProcess.kill("SIGTERM");
+        channel.process.stdin?.end();
+        channel.process.stdout?.destroy();
+        channel.process.stderr?.destroy();
+        channel.process.kill("SIGTERM");
       } catch {}
-      this.rpcProcess = null;
+      channel.process = null;
     }
-    for (const [_, pending] of this.pendingRequests.entries()) {
+    for (const [_, pending] of channel.pending.entries()) {
       clearTimeout(pending.timeoutTimer);
       pending.resolve({
         success: false,
@@ -881,15 +949,15 @@ export class RustCoreBridge {
         error: "Rust core RPC daemon disconnected",
       });
     }
-    this.pendingRequests.clear();
-    this.rpcBuffer = "";
-    this.handshakePromise = null;
+    channel.pending.clear();
+    channel.buffer = "";
+    channel.handshakePromise = null;
   }
 
-  private handleRpcStdout(data: string): void {
-    this.rpcBuffer += data;
-    const lines = this.rpcBuffer.split("\n");
-    this.rpcBuffer = lines.pop() || "";
+  private handleRpcStdout(channel: WorkerChannel, data: string): void {
+    channel.buffer += data;
+    const lines = channel.buffer.split("\n");
+    channel.buffer = lines.pop() || "";
 
     for (const line of lines) {
       const trimmed = line.trim();
@@ -898,10 +966,10 @@ export class RustCoreBridge {
       try {
         const msg = JSON.parse(trimmed);
         const reqId = msg.id;
-        if (reqId !== undefined && this.pendingRequests.has(reqId)) {
-          const { resolve, timeoutTimer } = this.pendingRequests.get(reqId)!;
+        if (reqId !== undefined && channel.pending.has(reqId)) {
+          const { resolve, timeoutTimer } = channel.pending.get(reqId)!;
           clearTimeout(timeoutTimer);
-          this.pendingRequests.delete(reqId);
+          channel.pending.delete(reqId);
 
           if (msg.error) {
             resolve({
@@ -949,8 +1017,7 @@ export class RustCoreBridge {
     this.lsp?.shutdownAll();
     this.lsp = undefined;
     this.cleanupRpc();
-    this.handshakePromise = null;
-    this.handshakeError = null;
+    this.resetHandshake();
     RustCoreBridge.activeBridges.delete(this);
   }
 
@@ -958,25 +1025,27 @@ export class RustCoreBridge {
    * Reset handshake cache (used after restart or in tests).
    */
   public resetHandshake(): void {
-    this.handshakePromise = null;
-    this.handshakeError = null;
+    for (const channel of [this.channels.primary, this.channels.files]) {
+      channel.handshakePromise = null;
+      channel.handshakeError = null;
+    }
   }
 
   /**
    * REQ-REL-103: Verifies that the running harness-core engine matches the CLI's expected protocol
    * version and release version via the `hello` JSON-RPC method.
    */
-  public async ensureHandshake(): Promise<{ version: string; protocol: number }> {
-    if (this.handshakeError) {
-      throw this.handshakeError;
+  public async ensureHandshake(channel: WorkerChannel = this.channelFor("read_file")): Promise<{ version: string; protocol: number }> {
+    if (channel.handshakeError) {
+      throw channel.handshakeError;
     }
-    if (this.handshakePromise) {
-      return this.handshakePromise;
+    if (channel.handshakePromise) {
+      return channel.handshakePromise;
     }
 
-    this.handshakePromise = (async () => {
+    channel.handshakePromise = (async () => {
       try {
-        const result = await this.executeViaRpc("hello", {}, { ignoreTurnSignal: true });
+        const result = await this.executeViaRpc("hello", {}, { ignoreTurnSignal: true, channel });
         if (!result) {
           throw new Error("Failed to communicate with core engine during startup handshake.");
         }
@@ -1003,15 +1072,20 @@ export class RustCoreBridge {
             `Engine version mismatch: core engine reports version ${coreVersion}, but CLI is ${expectedVersion}. Run 'make build' to update.`
           );
         }
+        // CS-10 phase 2: a worker launched as the files worker must say it refuses commands. A core that ignores
+        // `--files-only` would otherwise be trusted with the role.
+        if (this.roleOf(channel) === "files" && data.files_only !== true) {
+          throw new Error("Engine role mismatch: the files worker did not report files-only mode. Run 'make build' to update the core.");
+        }
         return { version: coreVersion, protocol: coreProtocol };
       } catch (err: any) {
-        this.handshakeError = err;
-        this.cleanupRpc();
+        channel.handshakeError = err;
+        this.cleanupChannel(channel);
         throw err;
       }
     })();
 
-    return this.handshakePromise;
+    return channel.handshakePromise;
   }
 
   public static shutdownAllGlobal(): void {
@@ -1032,8 +1106,10 @@ export class RustCoreBridge {
   }
 
   /** Asks the runner to end the request's command; best effort (the daemon may already be gone). */
-  private sendCancel(requestId: number): void {
-    const daemon = this.rpcProcess;
+  private sendCancel(channel: WorkerChannel, requestId: number): void {
+    // Only the command worker has anything to cancel; the files worker refuses the method.
+    if (channel === this.channels.files) return;
+    const daemon = channel.process;
     if (!daemon?.stdin || daemon.stdin.destroyed) return;
     try {
       daemon.stdin.write(JSON.stringify({ id: this.nextRequestId++, method: "cancel", params: { request_id: requestId } }) + "\n");
@@ -1054,19 +1130,20 @@ export class RustCoreBridge {
     }
   }
 
-  private async executeViaRpc(toolName: string, args: Record<string, any>, options: { ignoreTurnSignal?: boolean } = {}): Promise<ExecutionResult | null> {
+  private async executeViaRpc(toolName: string, args: Record<string, any>, options: { ignoreTurnSignal?: boolean; channel?: WorkerChannel } = {}): Promise<ExecutionResult | null> {
+    const channel = options.channel ?? this.channelFor(toolName);
     const signal = options.ignoreTurnSignal ? undefined : this.turnSignal;
     if (signal?.aborted) {
       return { success: false, output: "", error: `'${toolName}' was not started: the turn was cancelled`, cancelled: true };
     }
-    const daemon = this.ensureRpcDaemon();
+    const daemon = this.ensureRpcDaemon(channel);
     if (!daemon || !daemon.stdin || daemon.stdin.destroyed) {
       return null;
     }
 
     if (toolName !== "hello") {
       try {
-        await this.ensureHandshake();
+        await this.ensureHandshake(channel);
       } catch (err: any) {
         return { success: false, output: "", error: err.message };
       }
@@ -1085,15 +1162,15 @@ export class RustCoreBridge {
     return new Promise<ExecutionResult>((outerResolve) => {
       let cancelTimer: NodeJS.Timeout | undefined;
       const onAbort = () => {
-        if (!this.pendingRequests.has(id)) return;
+        if (!channel.pending.has(id)) return;
         // The runner ends the command's process group and answers with cancelled: true within its grace period; if it
         // does not answer, the call is reported cancelled anyway rather than left waiting.
-        this.sendCancel(id);
+        this.sendCancel(channel, id);
         cancelTimer = setTimeout(() => {
-          if (this.pendingRequests.has(id)) {
-            const pending = this.pendingRequests.get(id)!;
+          if (channel.pending.has(id)) {
+            const pending = channel.pending.get(id)!;
             clearTimeout(pending.timeoutTimer);
-            this.pendingRequests.delete(id);
+            channel.pending.delete(id);
             resolve({ success: false, output: "", error: `'${toolName}' was cancelled; the command runner did not confirm within ${RPC_CANCEL_CONFIRM_MS / 1000}s`, cancelled: true });
           }
         }, RPC_CANCEL_CONFIRM_MS);
@@ -1107,10 +1184,10 @@ export class RustCoreBridge {
 
       const timeoutMs = deadlines.bridgeMs;
       const timeoutTimer = setTimeout(() => {
-        if (this.pendingRequests.has(id)) {
-          this.pendingRequests.delete(id);
+        if (channel.pending.has(id)) {
+          channel.pending.delete(id);
           // The bridge stops waiting; the runner is told to end the command too, so nothing keeps running unowned.
-          this.sendCancel(id);
+          this.sendCancel(channel, id);
           resolve({
             success: false,
             output: "",
@@ -1121,13 +1198,13 @@ export class RustCoreBridge {
         }
       }, timeoutMs);
 
-      this.pendingRequests.set(id, { resolve, timeoutTimer });
+      channel.pending.set(id, { resolve, timeoutTimer });
 
       try {
         daemon.stdin!.write(payload + "\n");
       } catch (err: any) {
         clearTimeout(timeoutTimer);
-        this.pendingRequests.delete(id);
+        channel.pending.delete(id);
         resolve({
           success: false,
           output: "",
@@ -1140,7 +1217,7 @@ export class RustCoreBridge {
   private executeViaSpawnSync(toolName: string, args: Record<string, any>): ExecutionResult {
     const argsJson = JSON.stringify(args);
 
-    const launch = this.workerLaunch(["call", "--tool", toolName, "--args", argsJson]);
+    const launch = this.workerLaunch(["call", "--tool", toolName, "--args", argsJson], this.roleOf(this.channelFor(toolName)));
     if ("refused" in launch) {
       return { success: false, output: "", error: `Worker isolation violation: ${launch.refused} The core worker was not started outside the sandbox.` };
     }
@@ -1647,9 +1724,12 @@ export class RustCoreBridge {
 
         // CS-10: with the worker itself inside the sandbox, this command already runs in that box; wrapping it again would
         // nest Bubblewrap (user namespaces inside a user namespace) for no added confinement.
-        const inWorkerBox = !this.readOnly && this.workerIsSandboxed();
+        const workerEngine = this.readOnly ? "none" : this.workerEngine();
+        const inWorkerBox = workerEngine !== "none";
+        // A containerised worker runs the command with the image's `sh`, as the per-command Docker wrap did (`sh -c`).
+        if (workerEngine === "docker") args.shell = "sh";
         const sandboxed = inWorkerBox
-          ? { command: args.command || "", sandboxed: true, engine: "bwrap" as const, argv: undefined as string[] | undefined, warning: undefined as string | undefined }
+          ? { command: args.command || "", sandboxed: true, engine: workerEngine, argv: undefined as string[] | undefined, warning: undefined as string | undefined }
           : wrapSandboxedCommand(args.command || "", this.workspace, {
               mode,
               shell: args.shell,
@@ -1701,6 +1781,8 @@ export class RustCoreBridge {
   }
 
   public async listServices(): Promise<Array<{ name: string; pgid: number; command: string }>> {
+    // With a split worker, services exist only if the command worker has run something: do not start it to ask.
+    if (this.workerIsSandboxed() && !this.rpcProcess) return [];
     try {
       const res = await this.executeViaRpc("list_services", {}, { ignoreTurnSignal: true });
       if (res && res.output) {

@@ -1,6 +1,6 @@
 # CS-10 design note: isolating the RPC worker (`harness-core`)
 
-Status: **design for review. No code in this change.** The backlog row (`docs/v1.2.1/PLAN.md`, CS-10) asks for the design to
+Status: **design, written before the code. What was built since is in section 10.** No code in the change that added this note. The backlog row (`docs/v1.2.1/PLAN.md`, CS-10) asks for the design to
 merge first, then tests that a compromised worker cannot reach anything outside its allowed paths. Decisions the owner must
 make are in section 7; the recommended answers are marked.
 
@@ -112,3 +112,29 @@ do), and a non-required CI job runs them where bubblewrap is installed (the host
 ## 9. Not changed by this note
 
 No code, no default, and no existing control. `--sandbox`, read-only mode and the per-command confinement behave as before.
+
+## 10. What was built after this note (2026-11-21)
+
+The owner chose option A, opt-in, required for v1.2.2 (phase 1, PR #664), and then made Docker and phase 2 part of the
+v1.2.2 gate. State of the code:
+
+| Piece | Behaviour | Tests |
+|---|---|---|
+| Phase 1, Bubblewrap | `--sandbox bwrap` (and `--sandbox` where Bubblewrap exists) runs the worker in the profile; fails closed. | `cli/test/worker_isolation.test.ts` |
+| Docker | On Linux, `--sandbox docker` runs the worker as the long-lived process of one hardened container (`docker run --interactive --init`, same profile as a sandboxed command). The host-built worker is mounted read-only at `/nexus-worker` with its ELF interpreter and recursively resolved shared libraries. Dependency discovery parses ELF metadata with a trusted system `readelf` and resolves library names from the system cache; it never executes the candidate worker on the host. The worker starts through its interpreter (`ld.so --library-path /nexus-worker`), so the image (Alpine/musl by default) is not modified and its own programs are unaffected. Commands run inside the container with the image's `sh`. Fails closed. The container carries the label `io.nexus-code.worker-of=<cli pid>`. | same file, "the worker inside a Docker container" |
+| Phase 2, files worker (option B) | With a sandboxed worker, every method except `run_command`, `cancel`, `end_background` and `list_services` goes to a second worker started with `--files-only`. The core refuses those four methods in that mode (`core/src/main.rs`) and says so in `hello`; the CLI refuses a files worker whose `hello` does not. Its sandbox is built with the network off regardless of `--sandbox-network`. The command worker starts on the first command. | `core/tests/files_only_worker.rs`; same TypeScript file, "CS-10 phase 2" |
+
+Answers to the open questions in section 8: nested user namespaces work with the worker in the Bubblewrap box on the
+owner's host and on the hosted runner (phase 1 CI). The worker needs no runtime directory beyond its own (Bubblewrap) or
+its loader and four libraries (Docker). No test relied on the worker seeing the real home.
+
+Limits, stated plainly:
+
+- The files worker's refusal of commands is a check inside the process (as path confinement is). What holds if that
+  process is compromised is its sandbox: no network, no path outside the workspace. It can still execute programs present
+  in its sandbox; it cannot be made to by a request.
+- The two workers share the workspace. A compromised files worker can write files the command worker later runs. Phase 2
+  narrows the network exposure of the parsing surface; it does not separate the workers' authority over the workspace.
+- Docker on a non-Linux host confines commands only (the worker is not a Linux binary there); `nexus doctor` says so.
+- With a containerised worker, commands in a session share one container (and its `/tmp`), where each used to get a new one.
+- Option C (Landlock and seccomp in the worker) is not built.

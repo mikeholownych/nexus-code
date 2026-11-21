@@ -16,6 +16,11 @@ struct Cli {
     #[arg(short, long, default_value = ".")]
     workspace: PathBuf,
 
+    /// CS-10 phase 2: serve file, search, parse and git tools only. Every method that starts or controls a command is
+    /// refused, so this process never executes one on a request's say-so.
+    #[arg(long, global = true)]
+    files_only: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -50,6 +55,12 @@ struct RpcResponse {
     error: Option<String>,
 }
 
+/// Set once at startup from `--files-only`; read by every request.
+static FILES_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The methods a files-only worker refuses: everything that starts, lists or ends a command.
+const COMMAND_METHODS: [&str; 4] = ["run_command", "cancel", "end_background", "list_services"];
+
 /// How long a cancelled or shut-down command group gets between SIGTERM and SIGKILL.
 const CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
@@ -59,11 +70,16 @@ fn execute_tool(tool_name: &str, params: Value, base_dir: &Path) -> Result<Value
 
 /// `key` identifies the RPC request, so a later `cancel` can end the command it started.
 fn execute_request(tool_name: &str, params: Value, base_dir: &Path, key: Option<String>) -> Result<Value, String> {
+    let files_only = FILES_ONLY.load(std::sync::atomic::Ordering::Relaxed);
+    if files_only && COMMAND_METHODS.contains(&tool_name) {
+        return Err(format!("'{tool_name}' is refused: this worker serves file tools only (--files-only) and runs no commands"));
+    }
     match tool_name {
         "hello" => {
             Ok(serde_json::json!({
                 "version": env!("CARGO_PKG_VERSION"),
                 "protocol": 1,
+                "files_only": files_only,
             }))
         }
         "read_file" => {
@@ -318,6 +334,7 @@ fn parse_flexible_json(input: &str) -> Result<Value, String> {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+    FILES_ONLY.store(cli.files_only, std::sync::atomic::Ordering::Relaxed);
     let workspace = std::fs::canonicalize(&cli.workspace).unwrap_or(cli.workspace);
 
     match cli.command {
