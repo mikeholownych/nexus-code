@@ -17,7 +17,7 @@ import pc from "picocolors";
 import { buildConfig, mergeOperationPolicy } from "./config.js";
 import { ConvergenceScheduler, DecisionRejected, newOperation, unresolvedAssumptionsProblem, type DurableOperationState, type OperationEvent, type OperationPolicy, type WorkUnitSpec } from "./core/operation.js";
 import { BoundaryRules, parseBoundaryRules } from "./core/boundary_rules.js";
-import { UnsupportedOperationSchemaError, clampUnisolatedConcurrency, concurrencyIsolationProblem, validateOperationPolicy, validateResourceSlots } from "./core/operation_schema.js";
+import { UnsupportedOperationSchemaError, clampUnisolatedConcurrency, concurrencyIsolationProblem, parallelResourceBudgetProblem, validateExecutionResources, validateOperationPolicy, validateResourceSlots } from "./core/operation_schema.js";
 import { MessageRejected, publishMessage } from "./core/operation_messages.js";
 import { ROLE_PROFILES, specialistInputsProblem } from "./core/roles.js";
 import { AgentWorkUnitExecutor, applyOperatorDecision, driveOperation, OperationExistsError, type DriveOptions, OperationLockedError, OperationStore, resourcesFromConfig } from "./core/operation_runner.js";
@@ -78,8 +78,9 @@ export class OperationSpecError extends Error {
 // `git.publish` would leave the operator believing a PR will be opened, and a typo such as `depends` would drop a
 // dependency and run work out of order.
 const SPEC_KEYS = ["id", "objective", "units", "resources", "discoverCatalog", "policy", "git", "boundaries"] as const;
-const UNIT_KEYS = ["id", "title", "role", "prompt", "dependsOn", "requires", "required", "taskClass", "contextBudget", "inputs", "authorizedScope", "unresolvedAssumptions"] as const;
-const POLICY_KEYS = ["maxWaitMs", "unknownResumeBudget", "maxRunsPerUnit", "minWaitMs", "maxConcurrentUnits"] as const;
+const UNIT_KEYS = ["id", "title", "role", "prompt", "dependsOn", "requires", "required", "taskClass", "executionResources", "contextBudget", "inputs", "authorizedScope", "unresolvedAssumptions"] as const;
+const POLICY_KEYS = ["maxWaitMs", "unknownResumeBudget", "maxRunsPerUnit", "minWaitMs", "maxConcurrentUnits", "executionBudget"] as const;
+const EXECUTION_RESOURCE_KEYS = ["cpuMilli", "memoryBytes"] as const;
 const GIT_KEYS = ["isolate", "baseRef"] as const;
 const REQUIREMENT_KEYS = ["capabilities", "qualification", "minContext", "independentOf", "minTrust"] as const;
 const RESOURCE_KEYS = [
@@ -131,6 +132,12 @@ export function validateOperationSpec(spec: unknown): asserts spec is OperationS
   if (s.policy !== undefined) {
     if (!s.policy || typeof s.policy !== "object" || Array.isArray(s.policy)) throw new OperationSpecError("operation spec 'policy' must be an object");
     rejectUnknown("policy", s.policy, POLICY_KEYS);
+    if (s.policy.executionBudget !== undefined) {
+      if (!s.policy.executionBudget || typeof s.policy.executionBudget !== "object" || Array.isArray(s.policy.executionBudget)) {
+        throw new OperationSpecError("operation spec 'policy.executionBudget' must be an object");
+      }
+      rejectUnknown("policy.executionBudget", s.policy.executionBudget, EXECUTION_RESOURCE_KEYS);
+    }
     try {
       validateOperationPolicy(s.policy);
     } catch (error: any) {
@@ -169,6 +176,17 @@ export function validateOperationSpec(spec: unknown): asserts spec is OperationS
     if (unit.contextBudget !== undefined && (!Number.isInteger(unit.contextBudget) || unit.contextBudget <= 0)) {
       throw new OperationSpecError(`work unit '${unit.id}' 'contextBudget' must be a positive integer number of tokens`);
     }
+    if (unit.executionResources !== undefined) {
+      if (!unit.executionResources || typeof unit.executionResources !== "object" || Array.isArray(unit.executionResources)) {
+        throw new OperationSpecError(`work unit '${unit.id}' 'executionResources' must be an object`);
+      }
+      rejectUnknown(`work unit '${unit.id}' executionResources`, unit.executionResources, EXECUTION_RESOURCE_KEYS);
+      try {
+        validateExecutionResources("(new)", `work unit '${unit.id}'.executionResources`, unit.executionResources);
+      } catch (error: any) {
+        throw new OperationSpecError(String(error?.message ?? error).replace(/^operation \(new\): /, ""));
+      }
+    }
     if (unit.unresolvedAssumptions !== undefined) {
       const problem = unresolvedAssumptionsProblem(unit.unresolvedAssumptions);
       if (problem) throw new OperationSpecError(`work unit '${unit.id}' ${problem}`);
@@ -184,6 +202,8 @@ export function validateOperationSpec(spec: unknown): asserts spec is OperationS
       rejectUnknown(`unit '${unit.id}' requires`, unit.requires, REQUIREMENT_KEYS);
     }
   }
+  const resourceProblem = parallelResourceBudgetProblem(s.policy, s.units);
+  if (resourceProblem) throw new OperationSpecError(resourceProblem);
 }
 
 export function normalizeResources(spec: OperationSpec, config: HarnessConfig, identity: ReturnType<typeof createOperationAccountIdentity>): ResourceDescriptor[] {

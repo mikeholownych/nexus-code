@@ -15,7 +15,7 @@ const cliDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const base = {
   objective: "Ship it",
-  units: [{ id: "a", prompt: "x" }, { id: "b", prompt: "y" }],
+  units: [{ id: "a", prompt: "x", executionResources: { cpuMilli: 1000, memoryBytes: 1024 } }, { id: "b", prompt: "y", executionResources: { cpuMilli: 1000, memoryBytes: 1024 } }],
   resources: [{ id: "r1", endpoint: "https://api.test", model: "m" }],
 };
 
@@ -33,8 +33,8 @@ test("SI-8: maxConcurrentUnits > 1 without git.isolate is rejected, naming the f
   }
 });
 
-test("SI-8: maxConcurrentUnits > 1 with git.isolate validates", () => {
-  assert.doesNotThrow(() => validateOperationSpec({ ...base, git: { isolate: true }, policy: { maxConcurrentUnits: 2 } }));
+test("SI-8: maxConcurrentUnits > 1 with git.isolate and explicit budgets validates", () => {
+  assert.doesNotThrow(() => validateOperationSpec({ ...base, git: { isolate: true }, policy: { maxConcurrentUnits: 2, executionBudget: { cpuMilli: 2000, memoryBytes: 2048 } } }));
 });
 
 test("SI-8: maxConcurrentUnits 1 or unset is unchanged without isolation", () => {
@@ -47,7 +47,7 @@ test("SI-8: a legacy record with limit 2 and no git is clamped to 1 with a warni
   const state = { policy: { maxConcurrentUnits: 2 } } as Pick<DurableOperationState, "policy" | "git">;
   assert.match(clampUnisolatedConcurrency(state) ?? "", /git\.isolate.*maxConcurrentUnits 1 \(was 2\)/);
   assert.equal(effectiveConcurrency(state), 1);
-  const isolated = { policy: { maxConcurrentUnits: 2 }, git: { isolate: true } } as unknown as Pick<DurableOperationState, "policy" | "git">;
+  const isolated = { policy: { maxConcurrentUnits: 2, executionBudget: { cpuMilli: 2000, memoryBytes: 2048 } }, git: { isolate: true }, units: [{ id: "a", executionResources: { cpuMilli: 1000, memoryBytes: 1024 } }] } as unknown as Pick<DurableOperationState, "policy" | "git">;
   assert.equal(clampUnisolatedConcurrency(isolated), undefined);
   assert.equal(effectiveConcurrency(isolated), 2);
   const single = { policy: {} } as Pick<DurableOperationState, "policy" | "git">;
@@ -57,7 +57,7 @@ test("SI-8: a legacy record with limit 2 and no git is clamped to 1 with a warni
 test("SI-8: a clamped legacy state never has two units in flight", () => {
   const unit = (id: string) => ({ id, prompt: id });
   const resources = ["r1", "r2"].map((id) => ({ id, provider: "https://api.test", endpoint: "https://api.test/v1", model: id, capabilities: ["tools"], rank: 0 }));
-  const state = newOperation("op", "o", [unit("a"), unit("b")], resources as never, 0, { maxConcurrentUnits: 2 });
+  const state = newOperation("op", "o", [unit("a"), unit("b")], resources as never, 0, { maxConcurrentUnits: 2, executionBudget: { cpuMilli: 2000, memoryBytes: 2048 } });
   clampUnisolatedConcurrency(state);
   const decision = new ConvergenceScheduler(state, new ResourceRegistry(state.resources, [], () => 0), () => 0).decide();
   assert.equal(decision.kind, "run");
@@ -97,7 +97,7 @@ test("SI-8: `nexus operation run` refuses concurrency without isolation and crea
 });
 
 test("SI-8: with git.isolate the same spec passes validation", (t) => {
-  const result = runCli({ ...base, git: { isolate: true }, policy: { maxConcurrentUnits: 2 } });
+  const result = runCli({ ...base, git: { isolate: true }, policy: { maxConcurrentUnits: 2, executionBudget: { cpuMilli: 2000, memoryBytes: 2048 } } });
   t.after(() => fs.rmSync(path.dirname(result.stateDir), { recursive: true, force: true }));
   assert.doesNotMatch(result.stderr, /maxConcurrentUnits is/);
 });

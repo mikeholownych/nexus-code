@@ -8,8 +8,8 @@
  * Rules, in the order they are applied on load:
  *
  *   1. A record this build understands (current version) is validated and used as-is.
- *   2. A v1 or v2 record (or one that predates the field, which reads as v1) is upgraded in memory by changing only
- *      the schema version. The v3 addition is a lifecycle status; existing records keep their prior scheduling.
+ *   2. A v1, v2, or v3 record (or one that predates the field, which reads as v1) is upgraded in memory by changing
+ *      only the schema version. v4 adds explicit execution reservations; older parallel records are clamped to serial.
  *   3. A record from a newer build is refused. It is not corrupt: a build that wrote it can still read it, and
  *      quarantining it would destroy evidence. It is also never interpreted as if it were current.
  *
@@ -21,7 +21,7 @@ import { specialistInputsProblem } from "./specialist_profiles.js";
 import { parseBoundaryRules } from "./boundary_rules.js";
 
 /** The operation document version this build writes. Independent of the task-store envelope version. */
-export const CURRENT_OPERATION_SCHEMA_VERSION = 3;
+export const CURRENT_OPERATION_SCHEMA_VERSION = 4;
 
 /** The operation document version every released 1.0.0 build wrote. */
 export const LEGACY_OPERATION_SCHEMA_VERSION = 1;
@@ -98,8 +98,28 @@ export function needsMigrationBackup(operationSchemaVersion: unknown): boolean {
 }
 
 /** The effective concurrency for a state: an unset policy is the v1.0.0 behaviour, one unit at a time. */
-export function effectiveConcurrency(state: Pick<DurableOperationState, "policy">): number {
-  return state.policy?.maxConcurrentUnits ?? 1;
+export function effectiveConcurrency(state: Pick<DurableOperationState, "policy"> & Partial<Pick<DurableOperationState, "units">>): number {
+  const requested = state.policy?.maxConcurrentUnits ?? 1;
+  if (requested <= 1) return 1;
+  return state.units && !parallelResourceBudgetProblem(state.policy, state.units) ? requested : 1;
+}
+
+/** Explain why a parallel operation lacks enough explicit resource information for safe admission. */
+export function parallelResourceBudgetProblem(
+  policy: Partial<OperationPolicy> | undefined,
+  units: ReadonlyArray<Pick<WorkUnit, "id" | "executionResources">>,
+): string | undefined {
+  if ((policy?.maxConcurrentUnits ?? 1) <= 1) return undefined;
+  const budget = policy?.executionBudget;
+  if (!budget) return "parallel execution requires policy.executionBudget with explicit cpuMilli and memoryBytes";
+  for (const unit of units) {
+    const request = unit.executionResources;
+    if (!request) return `parallel execution requires work unit '${unit.id}'.executionResources with explicit cpuMilli and memoryBytes`;
+    if (request.cpuMilli > budget.cpuMilli || request.memoryBytes > budget.memoryBytes) {
+      return `work unit '${unit.id}' executionResources exceed policy.executionBudget`;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -170,6 +190,7 @@ export function validateOperationState(state: DurableOperationState): void {
     }
   }
   for (const unit of state.units) {
+    if (unit.executionResources !== undefined) validateExecutionResources(state.id, `work unit '${unit.id}'.executionResources`, unit.executionResources);
     for (const dependency of unit.dependsOn ?? []) {
       if (!ids.has(dependency)) {
         throw new InvalidOperationStateError(`operation ${state.id}: unit '${unit.id}' depends on unknown unit '${dependency}'`);
@@ -177,6 +198,12 @@ export function validateOperationState(state: DurableOperationState): void {
     }
   }
   validateConcurrency(state.id, "policy.maxConcurrentUnits", state.policy.maxConcurrentUnits);
+  if (state.policy.executionBudget !== undefined) validateExecutionResources(state.id, "policy.executionBudget", state.policy.executionBudget);
+  const hasResourceDeclarations = state.policy.executionBudget !== undefined || state.units.some((unit) => unit.executionResources !== undefined);
+  if (hasResourceDeclarations) {
+    const resourceProblem = parallelResourceBudgetProblem(state.policy, state.units);
+    if (resourceProblem) throw new InvalidOperationStateError(`operation ${state.id}: ${resourceProblem}`);
+  }
   for (const resource of state.resources ?? []) {
     validateConcurrency(state.id, `resource '${resource.id}'.maxConcurrentUnits`, resource.maxConcurrentUnits);
   }
@@ -233,6 +260,24 @@ function validateConcurrency(operationId: string, field: string, value: unknown)
 /** The policy field this build adds; kept here so the scheduler and the loader agree on the default and the bound. */
 export function validateOperationPolicy(policy: Partial<OperationPolicy>): void {
   validateConcurrency("(new)", "policy.maxConcurrentUnits", policy.maxConcurrentUnits);
+  if (policy.executionBudget !== undefined) validateExecutionResources("(new)", "policy.executionBudget", policy.executionBudget);
+}
+
+export function validateExecutionResources(operationId: string, field: string, value: unknown): asserts value is { cpuMilli: number; memoryBytes: number } {
+  const record = value as Record<string, unknown> | null;
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    throw new InvalidOperationStateError(`operation ${operationId}: ${field} must be an object`);
+  }
+  const keys = Object.keys(record);
+  if (keys.length !== 2 || !keys.includes("cpuMilli") || !keys.includes("memoryBytes")) {
+    throw new InvalidOperationStateError(`operation ${operationId}: ${field} must contain only cpuMilli and memoryBytes`);
+  }
+  if (!Number.isSafeInteger(record.cpuMilli) || (record.cpuMilli as number) <= 0) {
+    throw new InvalidOperationStateError(`operation ${operationId}: ${field}.cpuMilli must be a positive safe integer`);
+  }
+  if (!Number.isSafeInteger(record.memoryBytes) || (record.memoryBytes as number) <= 0) {
+    throw new InvalidOperationStateError(`operation ${operationId}: ${field}.memoryBytes must be a positive safe integer`);
+  }
 }
 
 /**
@@ -248,12 +293,16 @@ export function concurrencyIsolationProblem(maxConcurrentUnits: number | undefin
  * A record created before the isolation rule (or hand-edited) may ask for concurrency without isolation. It is not
  * refused, which would strand it: its limit is clamped to 1 and the returned warning names the fix.
  */
-export function clampUnisolatedConcurrency(state: Pick<DurableOperationState, "policy" | "git">): string | undefined {
+export function clampUnisolatedConcurrency(state: Pick<DurableOperationState, "policy" | "git"> & Partial<Pick<DurableOperationState, "units">>): string | undefined {
   const problem = concurrencyIsolationProblem(state.policy?.maxConcurrentUnits, Boolean(state.git?.isolate));
-  if (!problem) return undefined;
+  const resourceProblem = !problem && (state.policy?.maxConcurrentUnits ?? 1) > 1
+    ? parallelResourceBudgetProblem(state.policy, state.units ?? [])
+    : undefined;
+  const reason = problem ?? resourceProblem;
+  if (!reason) return undefined;
   const limit = state.policy.maxConcurrentUnits;
   state.policy.maxConcurrentUnits = 1;
-  return `${problem}; running this operation with maxConcurrentUnits 1 (was ${limit})`;
+  return `${reason}; running this operation with maxConcurrentUnits 1 (was ${limit})`;
 }
 
 /**

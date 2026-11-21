@@ -26,12 +26,16 @@ const res = (id: string, o: Partial<ResourceDescriptor> = {}): ResourceDescripto
   ...o,
 });
 
-const unit = (id: string, o: Partial<WorkUnitSpec> = {}): WorkUnitSpec => ({ id, title: id, prompt: `do ${id}`, ...o });
+const reservation = { cpuMilli: 1000, memoryBytes: 1024 };
+const unit = (id: string, o: Partial<WorkUnitSpec> = {}): WorkUnitSpec => ({ id, title: id, prompt: `do ${id}`, executionResources: reservation, ...o });
 const done = (summary = "ok"): UnitRunResult => ({ kind: "completed", summary, outcome: "NOT_REQUIRED" });
 
 function schedulerFor(units: WorkUnitSpec[], resources: ResourceDescriptor[], policy?: Partial<DurableOperationState["policy"]>): ConvergenceScheduler {
   const clock = fakeClock();
-  const state = newOperation("op-conc", "objective", units, resources, clock.now(), policy);
+  const effectivePolicy = policy?.maxConcurrentUnits && policy.maxConcurrentUnits > 1
+    ? { executionBudget: { cpuMilli: 2000, memoryBytes: 2048 }, ...policy }
+    : policy;
+  const state = newOperation("op-conc", "objective", units, resources, clock.now(), effectivePolicy);
   return new ConvergenceScheduler(state, new ResourceRegistry(state.resources, [], clock), clock.now);
 }
 
@@ -121,7 +125,10 @@ function runnerFor(
   policy?: Partial<DurableOperationState["policy"]>,
 ): Ran {
   const clock = fakeClock();
-  const state = newOperation("op-run", "objective", units, resources, clock.now(), policy);
+  const effectivePolicy = policy?.maxConcurrentUnits && policy.maxConcurrentUnits > 1
+    ? { executionBudget: { cpuMilli: 2000, memoryBytes: 2048 }, ...policy }
+    : policy;
+  const state = newOperation("op-run", "objective", units, resources, clock.now(), effectivePolicy);
   let active = 0;
   let highest = 0;
   const starts: string[] = [];
@@ -236,7 +243,7 @@ test("ACC-V11-MAO-07: a restart reconciles every unit that was in flight, throug
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const store = new OperationStore(dir, path.join(dir, "tasks"), dir);
   const clock = fakeClock();
-  const state = newOperation("op-restart", "objective", [unit("a"), unit("b")], [res("r1"), res("r2")], clock.now(), { maxConcurrentUnits: 2 });
+  const state = newOperation("op-restart", "objective", [unit("a"), unit("b")], [res("r1"), res("r2")], clock.now(), { maxConcurrentUnits: 2, executionBudget: { cpuMilli: 2000, memoryBytes: 2048 } });
   store.save(state);
 
   // Two units were in flight when the previous process died: persisted exactly as the runner leaves them.
@@ -257,6 +264,26 @@ test("ACC-V11-MAO-07: a restart reconciles every unit that was in flight, throug
   assert.deepEqual(final.units.map((u) => u.unknownResumes), [1, 1], "each interrupted unit resumes once");
   assert.deepEqual(final.units.map((u) => u.runs), [1, 1], "no duplicated work");
   assert.deepEqual(ran.sort(), ["a", "b"]);
+});
+
+test("explicit CPU and memory reservations independently bound parallel admission", async () => {
+  const fitsCpu = runnerFor(
+    [unit("a"), unit("b")], [res("r1"), res("r2")],
+    async (u) => done(u.id),
+    { maxConcurrentUnits: 2, executionBudget: { cpuMilli: 1500, memoryBytes: 2048 } },
+  );
+  fitsCpu.state.units[1].executionResources = { cpuMilli: 600, memoryBytes: 512 };
+  await fitsCpu.runner.run();
+  assert.equal(fitsCpu.maxActive(), 1, "CPU reservations above the operation budget serialize work");
+
+  const fitsMemory = runnerFor(
+    [unit("a"), unit("b")], [res("r1"), res("r2")],
+    async (u) => done(u.id),
+    { maxConcurrentUnits: 2, executionBudget: { cpuMilli: 2048, memoryBytes: 1500 } },
+  );
+  fitsMemory.state.units[1].executionResources = { cpuMilli: 512, memoryBytes: 600 };
+  await fitsMemory.runner.run();
+  assert.equal(fitsMemory.maxActive(), 1, "memory reservations above the operation budget serialize work");
 });
 
 test("ACC-V11-MAO-06: a failing review ends the operation BLOCKED, never COMPLETE", async () => {

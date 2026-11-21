@@ -360,9 +360,9 @@ test("a completed batch member is durable before its batch-mate settles and is n
     const store = new OperationStore(process.env.RELEASE_WORKSPACE, process.env.RELEASE_STATE_DIR);
     const resources = ["r1", "r2"].map((id) => ({ id, provider: "http://127.0.0.1:9", endpoint: "http://127.0.0.1:9/v1", model: "m", capabilities: ["tools"], rank: 0 }));
     const state = newOperation("op-batch-durable", "persist each result", [
-      { id: "a", title: "a", prompt: "a" },
-      { id: "b", title: "b", prompt: "b" },
-    ], resources, Date.now(), { maxConcurrentUnits: 2 });
+      { id: "a", title: "a", prompt: "a", executionResources: { cpuMilli: 1000, memoryBytes: 1024 } },
+      { id: "b", title: "b", prompt: "b", executionResources: { cpuMilli: 1000, memoryBytes: 1024 } },
+    ], resources, Date.now(), { maxConcurrentUnits: 2, executionBudget: { cpuMilli: 2000, memoryBytes: 2048 } });
     const executor = { run: async (unit) => unit.id === "a"
       ? { kind: "completed", summary: "a done", outcome: "NOT_REQUIRED" }
       : new Promise(() => {}) };

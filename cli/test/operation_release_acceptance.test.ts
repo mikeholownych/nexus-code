@@ -230,11 +230,11 @@ function git(cwd: string, args: string[]): string {
 }
 
 function unitSpecs(ids: string[]): WorkUnitSpec[] {
-  return ids.map((id) => ({ id, title: id, prompt: `Complete ${id}` }));
+  return ids.map((id) => ({ id, title: id, prompt: `Complete ${id}`, executionResources: { cpuMilli: 1000, memoryBytes: 1024 } }));
 }
 
 function isolatedGitState(workspace: string, id: string, units: WorkUnitSpec[]): DurableOperationState {
-  const state = newOperation(id, "release acceptance", units, [resource("primary", "http://127.0.0.1:9/v1")], Date.now(), { maxConcurrentUnits: 2 });
+  const state = newOperation(id, "release acceptance", units, [resource("primary", "http://127.0.0.1:9/v1")], Date.now(), { maxConcurrentUnits: 2, executionBudget: { cpuMilli: 2000, memoryBytes: 2048 } });
   const plan = planOperationGit(workspace, id);
   state.git = newOperationGitState(plan);
   ensureIntegrationWorktree(plan, state.git);
@@ -297,9 +297,9 @@ test("ACC-V11-MAO-07: killing a real two-unit runner preserves one tool result p
       },
     });
     const state = newOperation("op-mao07", "crash recovery", [
-      { id: "a", title: "a", prompt: "Complete a" },
-      { id: "b", title: "b", prompt: "Complete b" },
-    ], resources, Date.now(), { maxConcurrentUnits: 2 });
+      { id: "a", title: "a", prompt: "Complete a", executionResources: { cpuMilli: 1000, memoryBytes: 1024 } },
+      { id: "b", title: "b", prompt: "Complete b", executionResources: { cpuMilli: 1000, memoryBytes: 1024 } },
+    ], resources, Date.now(), { maxConcurrentUnits: 2, executionBudget: { cpuMilli: 2000, memoryBytes: 2048 } });
     await driveOperation(state, { store, executor });
     process.exit(4);
   `;
@@ -366,9 +366,9 @@ test("ACC-V11-GIT-02: a crash after integration enqueue and before merge resumes
     const workspace = process.env.RELEASE_WORKSPACE;
     const store = new OperationStore(workspace, process.env.RELEASE_STATE_DIR);
     const state = newOperation("op-git02", "queued crash", [
-      { id: "u1", title: "u1", prompt: "u1" },
-      { id: "u2", title: "u2", prompt: "u2" },
-    ], ["r1", "r2"].map((id) => ({ id, provider: "http://127.0.0.1:9", endpoint: "http://127.0.0.1:9/v1", model: "m", capabilities: ["tools"], rank: 0 })), Date.now(), { maxConcurrentUnits: 2 });
+      { id: "u1", title: "u1", prompt: "u1", executionResources: { cpuMilli: 1000, memoryBytes: 1024 } },
+      { id: "u2", title: "u2", prompt: "u2", executionResources: { cpuMilli: 1000, memoryBytes: 1024 } },
+    ], ["r1", "r2"].map((id) => ({ id, provider: "http://127.0.0.1:9", endpoint: "http://127.0.0.1:9/v1", model: "m", capabilities: ["tools"], rank: 0 })), Date.now(), { maxConcurrentUnits: 2, executionBudget: { cpuMilli: 2000, memoryBytes: 2048 } });
     const plan = planOperationGit(workspace, state.id);
     state.git = newOperationGitState(plan);
     ensureIntegrationWorktree(plan, state.git);

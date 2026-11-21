@@ -189,7 +189,19 @@ test("newOperation rejects an out-of-range concurrency and accepts a valid one",
   for (const value of [0, -1, 1.5, 65, 1000]) {
     assert.throws(() => newOperation("op", "o", spec, [resource("r")], NOW, { maxConcurrentUnits: value }), /maxConcurrentUnits/);
   }
-  assert.equal(newOperation("op", "o", spec, [resource("r")], NOW, { maxConcurrentUnits: 2 }).policy.maxConcurrentUnits, 2);
+  assert.equal(newOperation("op", "o", spec, [resource("r")], NOW, { maxConcurrentUnits: 2, executionBudget: { cpuMilli: 2000, memoryBytes: 2048 } }).policy.maxConcurrentUnits, 2);
+});
+
+test("parallel specs require valid aggregate and per-unit reservations", () => {
+  const base = {
+    objective: "parallel work",
+    git: { isolate: true },
+    policy: { maxConcurrentUnits: 2, executionBudget: { cpuMilli: 1000, memoryBytes: 1024 } },
+    units: [{ id: "a", prompt: "a", executionResources: { cpuMilli: 600, memoryBytes: 512 } }, { id: "b", prompt: "b", executionResources: { cpuMilli: 600, memoryBytes: 512 } }],
+  };
+  assert.throws(() => validateOperationSpec({ ...base, units: [{ ...base.units[0] }, { id: "b", prompt: "b" }] }), /requires work unit 'b'.executionResources/);
+  assert.throws(() => validateOperationSpec({ ...base, policy: { ...base.policy, executionBudget: { cpuMilli: 500, memoryBytes: 1024 } } }), /exceed policy.executionBudget/);
+  assert.throws(() => validateOperationSpec({ ...base, policy: { ...base.policy, executionBudget: { cpuMilli: 0, memoryBytes: 1024 } } }), /cpuMilli must be a positive safe integer/);
 });
 
 test("the store keeps a byte-identical pre-migration copy before the first v2 write", (t) => {
@@ -239,8 +251,8 @@ test("the spec validator rejects publish, unknown keys and a bad limit with an a
   const valid = {
     objective: "Ship it",
     git: { isolate: true },
-    policy: { maxConcurrentUnits: 2 },
-    units: [{ id: "u1", prompt: "do it", role: "implementer", requires: { independentOf: [] }, unresolvedAssumptions: ["existing callers depend on this behavior"] }],
+    policy: { maxConcurrentUnits: 2, executionBudget: { cpuMilli: 1000, memoryBytes: 1024 } },
+    units: [{ id: "u1", prompt: "do it", role: "implementer", executionResources: { cpuMilli: 500, memoryBytes: 512 }, requires: { independentOf: [] }, unresolvedAssumptions: ["existing callers depend on this behavior"] }],
     resources: [{ id: "r1", endpoint: "https://api.test", model: "m" }],
   };
   assert.doesNotThrow(() => validateOperationSpec(valid));
