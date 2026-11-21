@@ -42,6 +42,9 @@ test("Nexus host identity remains explicit with a Claude model and activated cli
     assert.match(systemPrompt, /You are Nexus Code, the agent host\./);
     assert.match(systemPrompt, /provider and model are components Nexus connects to; they do not define or replace the host application/);
     assert.match(systemPrompt, /Do not identify this runtime as Claude Code/);
+    assert.match(systemPrompt, /CHANGE SCOPE: Make the smallest change the task needs/);
+    assert.match(systemPrompt, /a refactor keeps behaviour/);
+    assert.match(systemPrompt, /State side effects you add and assumptions you could not check/);
 
     const skillHandler = (agent as unknown as { spine: { getHandler(name: string): (args: { name: string }) => Promise<{ success: boolean; output: string }> } })
       .spine.getHandler("activate_skill");
