@@ -15,7 +15,7 @@ import { randomUUID } from "node:crypto";
 import type { Command } from "commander";
 import pc from "picocolors";
 import { buildConfig, mergeOperationPolicy } from "./config.js";
-import { ConvergenceScheduler, DecisionRejected, newOperation, type DurableOperationState, type OperationEvent, type OperationPolicy, type WorkUnitSpec } from "./core/operation.js";
+import { ConvergenceScheduler, DecisionRejected, newOperation, unresolvedAssumptionsProblem, type DurableOperationState, type OperationEvent, type OperationPolicy, type WorkUnitSpec } from "./core/operation.js";
 import { BoundaryRules, parseBoundaryRules } from "./core/boundary_rules.js";
 import { UnsupportedOperationSchemaError, clampUnisolatedConcurrency, concurrencyIsolationProblem, validateOperationPolicy, validateResourceSlots } from "./core/operation_schema.js";
 import { MessageRejected, publishMessage } from "./core/operation_messages.js";
@@ -78,7 +78,7 @@ export class OperationSpecError extends Error {
 // `git.publish` would leave the operator believing a PR will be opened, and a typo such as `depends` would drop a
 // dependency and run work out of order.
 const SPEC_KEYS = ["id", "objective", "units", "resources", "discoverCatalog", "policy", "git", "boundaries"] as const;
-const UNIT_KEYS = ["id", "title", "role", "prompt", "dependsOn", "requires", "required", "taskClass", "contextBudget", "inputs", "authorizedScope"] as const;
+const UNIT_KEYS = ["id", "title", "role", "prompt", "dependsOn", "requires", "required", "taskClass", "contextBudget", "inputs", "authorizedScope", "unresolvedAssumptions"] as const;
 const POLICY_KEYS = ["maxWaitMs", "unknownResumeBudget", "maxRunsPerUnit", "minWaitMs", "maxConcurrentUnits"] as const;
 const GIT_KEYS = ["isolate", "baseRef"] as const;
 const REQUIREMENT_KEYS = ["capabilities", "qualification", "minContext", "independentOf", "minTrust"] as const;
@@ -168,6 +168,10 @@ export function validateOperationSpec(spec: unknown): asserts spec is OperationS
     }
     if (unit.contextBudget !== undefined && (!Number.isInteger(unit.contextBudget) || unit.contextBudget <= 0)) {
       throw new OperationSpecError(`work unit '${unit.id}' 'contextBudget' must be a positive integer number of tokens`);
+    }
+    if (unit.unresolvedAssumptions !== undefined) {
+      const problem = unresolvedAssumptionsProblem(unit.unresolvedAssumptions);
+      if (problem) throw new OperationSpecError(`work unit '${unit.id}' ${problem}`);
     }
     if (unit.inputs !== undefined) {
       const problem = specialistInputsProblem(unit.inputs);

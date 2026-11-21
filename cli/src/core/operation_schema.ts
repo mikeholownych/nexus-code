@@ -18,7 +18,7 @@
  * reviewer can diff a migrated record against a v1.0.0 one and see only `schemaVersion`. The store writes a
  * `.pre-migration-v1` copy of the whole record before the first v2 write (see `OperationStore.save`).
  */
-import type { DurableOperationState, OperationPolicy, WorkUnit } from "./operation.js";
+import { unresolvedAssumptionsProblem, type DurableOperationState, type OperationPolicy, type WorkUnit } from "./operation.js";
 import { specialistInputsProblem } from "./specialist_profiles.js";
 import { parseBoundaryRules } from "./boundary_rules.js";
 
@@ -144,6 +144,10 @@ export function validateOperationState(state: DurableOperationState): void {
     }
     if (unit.inputs !== undefined) {
       const problem = specialistInputsProblem(unit.inputs);
+      if (problem) throw new InvalidOperationStateError(`operation ${state.id}: unit '${unit.id}': ${problem}`);
+    }
+    if (unit.unresolvedAssumptions !== undefined) {
+      const problem = unresolvedAssumptionsProblem(unit.unresolvedAssumptions);
       if (problem) throw new InvalidOperationStateError(`operation ${state.id}: unit '${unit.id}': ${problem}`);
     }
     validateAppliedDecisions(state.id, `unit '${unit.id}'`, unit.decisions);

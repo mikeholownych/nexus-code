@@ -24,6 +24,15 @@ import type { ResourceDescriptor } from "../src/core/resources.js";
 const NOW = Date.parse("2026-10-31T12:00:00.000Z");
 const cliDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+test("operation declaration bounds unresolved reviewer assumptions and durable validation rejects malformed state", () => {
+  const base = newOperation("assumptions", "review", [{ id: "review", prompt: "review", unresolvedAssumptions: ["legacy behavior is intentional"] }], [resource("primary")], NOW);
+  assert.deepEqual(base.units[0].unresolvedAssumptions, ["legacy behavior is intentional"]);
+  assert.throws(() => newOperation("too-many", "review", [{ id: "review", prompt: "review", unresolvedAssumptions: Array.from({ length: 33 }, () => "assumption") }], [resource("primary")], NOW), /unresolvedAssumptions/);
+  const corrupted = structuredClone(base);
+  corrupted.units[0].unresolvedAssumptions = [1] as unknown as string[];
+  assert.throws(() => validateOperationState(corrupted), /unresolvedAssumptions/);
+});
+
 function resource(id: string, overrides: Partial<ResourceDescriptor> = {}): ResourceDescriptor {
   return { id, provider: "https://api.test", endpoint: "https://api.test/v1", model: `model-${id}`, capabilities: ["tools"], rank: 0, ...overrides };
 }
@@ -231,7 +240,7 @@ test("the spec validator rejects publish, unknown keys and a bad limit with an a
     objective: "Ship it",
     git: { isolate: true },
     policy: { maxConcurrentUnits: 2 },
-    units: [{ id: "u1", prompt: "do it", role: "implementer", requires: { independentOf: [] } }],
+    units: [{ id: "u1", prompt: "do it", role: "implementer", requires: { independentOf: [] }, unresolvedAssumptions: ["existing callers depend on this behavior"] }],
     resources: [{ id: "r1", endpoint: "https://api.test", model: "m" }],
   };
   assert.doesNotThrow(() => validateOperationSpec(valid));
@@ -244,6 +253,7 @@ test("the spec validator rejects publish, unknown keys and a bad limit with an a
     [{ ...valid, policy: { maxConcurrent: 2 } }, /unknown policy key 'maxConcurrent'/],
     [{ ...valid, policy: { maxConcurrentUnits: 0 } }, /must be an integer from 1 to 64/],
     [{ ...valid, units: [{ id: "u1", prompt: "x", role: "wizard" }] }, /unknown role 'wizard'/],
+    [{ ...valid, units: [{ id: "u1", prompt: "x", unresolvedAssumptions: [1] }] }, /unresolvedAssumptions/],
     [{ ...valid, units: [{ id: "u1", prompt: "x", requires: { minContexts: 1 } }] }, /unknown unit 'u1' requires key 'minContexts'/],
     [{ ...valid, units: [] }, /non-empty 'units' array/],
     [{ ...valid, resources: [{ id: "r1", endpoint: "https://api.test", model: "m", maxConcurrentUnits: 99 }] }, /resource 'r1'.maxConcurrentUnits must be an integer from 1 to 64/],

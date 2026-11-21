@@ -186,6 +186,8 @@ export interface WorkUnit {
   contextBudget?: number;
   /** Operator-declared paths a reviewed change may touch; a reviewer's evidence package carries it, and a diff outside it is rejected. */
   authorizedScope?: string[];
+  /** Operator-declared assumptions that remain unverified and must be considered by a review unit. */
+  unresolvedAssumptions?: string[];
   /** Named inputs the unit's role contract requires (specialists); enforced before the unit starts. */
   inputs?: Record<string, string>;
   /** Hash of the effective inputs last submitted in this unit's conversation; a resume repeats them only on change. */
@@ -464,8 +466,18 @@ export interface WorkUnitSpec {
   contextBudget?: number;
   /** Paths (files or directories) a reviewed change may touch; absent declares no scope. */
   authorizedScope?: string[];
+  /** Assumptions the reviewer must treat as unverified when assessing the candidate. */
+  unresolvedAssumptions?: string[];
   /** Named inputs for a specialist role's contract (see SPECIALIST_CONTRACTS[role].inputRequirements). */
   inputs?: Record<string, string>;
+}
+
+/** Validate bounded operator-authored assumptions carried to an independent reviewer. */
+export function unresolvedAssumptionsProblem(value: unknown): string | undefined {
+  if (!Array.isArray(value) || value.length > 32 || value.some((a) => typeof a !== "string" || a.length > 1000)) {
+    return "unresolvedAssumptions must contain at most 32 strings of at most 1000 characters";
+  }
+  return undefined;
 }
 
 /** A unit's declared scope as repository-relative path prefixes ("*" alone matches everything); anything else is refused. */
@@ -506,6 +518,10 @@ export function newOperation(
       throw new Error(`Work unit '${u.id}': contextBudget must be a positive integer number of tokens`);
     }
     if (u.authorizedScope !== undefined) normalizeScope(u.id, u.authorizedScope);
+    if (u.unresolvedAssumptions !== undefined) {
+      const problem = unresolvedAssumptionsProblem(u.unresolvedAssumptions);
+      if (problem) throw new Error(`Work unit '${u.id}': ${problem}`);
+    }
     if (u.inputs !== undefined) {
       const problem = specialistInputsProblem(u.inputs);
       if (problem) throw new Error(`Work unit '${u.id}': ${problem}`);
@@ -541,6 +557,7 @@ export function newOperation(
       ...(u.taskClass ? { taskClass: u.taskClass } : {}),
       ...(u.contextBudget !== undefined ? { contextBudget: u.contextBudget } : {}),
       ...(u.authorizedScope ? { authorizedScope: normalizeScope(u.id, u.authorizedScope) } : {}),
+      ...(u.unresolvedAssumptions ? { unresolvedAssumptions: redactForPersistence([...u.unresolvedAssumptions]) } : {}),
       // A specialist unit always records its inputs (possibly none): a unit with no `inputs` field predates input
       // enforcement and is grandfathered by the executor.
       ...(u.inputs !== undefined || isSpecialistRole(u.role) ? { inputs: redactForPersistence({ ...(u.inputs ?? {}) }) } : {}),
