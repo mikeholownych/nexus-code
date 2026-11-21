@@ -345,7 +345,8 @@ export function registerOperationCommands(program: Command): void {
       await drive(state, config, store, Boolean(options.discover), Boolean(options.json), {
         entry: "existing",
         prepare: (fresh) => {
-          if (fresh.status === "CANCELLED" || fresh.status === "PAUSED") fresh.status = fresh.wait ? "WAITING" : "RUNNING";
+          if (fresh.status === "CANCELLED") fresh.status = "RUNNING";
+          else if (fresh.status === "PAUSED") fresh.status = fresh.wait ? "WAITING" : "RUNNING";
         },
       });
     }));
