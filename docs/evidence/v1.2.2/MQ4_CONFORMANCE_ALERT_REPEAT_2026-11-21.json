@@ -1,0 +1,22 @@
+{
+  "at": "2026-11-21T16:18:15.692Z",
+  "kind": "not-conformant",
+  "problems": [
+    "engineering/deep: 198/200 native valid (99.0%) is below the 99.5% bar",
+    "engineering/lead-reasoning: 155/200 native valid (77.5%) is below the 99.5% bar"
+  ],
+  "endpoints": [
+    {
+      "alias": "engineering/deep",
+      "attempts": 200,
+      "native_valid": 198,
+      "ratio": 0.99
+    },
+    {
+      "alias": "engineering/lead-reasoning",
+      "attempts": 200,
+      "native_valid": 155,
+      "ratio": 0.775
+    }
+  ]
+}
