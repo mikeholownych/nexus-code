@@ -10,7 +10,7 @@
   "scripts": {
     "build": "tsc && node scripts/copy_data.mjs && node scripts/write_build_info.mjs",
     "test": "npm run test:cli && npm run test:scope",
-    "test:cli": "node scripts/run_tests.mjs",
+    "test:cli": "node scripts/test_shards.mjs",
     "test:scope": "bash ../scripts/terminal-acceptance/test-scope-procs.sh",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts"
