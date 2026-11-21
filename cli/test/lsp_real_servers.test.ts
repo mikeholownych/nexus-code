@@ -28,6 +28,8 @@ interface Case {
   files: Record<string, string>;
   bad: string;
   clean: string;
+  /** A valid replacement for the deliberate error, used to exercise real didChange notifications. */
+  fixed: string;
   /** Matches the message of the deliberate error. */
   message: RegExp;
   timeoutMs: number;
@@ -46,6 +48,7 @@ const CASES: Case[] = [
     },
     bad: "bad.ts",
     clean: "clean.ts",
+    fixed: 'export const n: number = 1;\n',
     message: /string.*not assignable.*number|not assignable/i,
     timeoutMs: 60_000,
   },
@@ -61,6 +64,7 @@ const CASES: Case[] = [
     },
     bad: "bad.py",
     clean: "clean.py",
+    fixed: "x: int = 1\n",
     message: /str.*not assignable.*int|not assignable/i,
     timeoutMs: 60_000,
   },
@@ -76,6 +80,7 @@ const CASES: Case[] = [
     },
     bad: "src/main.rs",
     clean: "src/clean.rs",
+    fixed: "fn main() {\n    let x: i32 = 1;\n    let _ = x;\n}\n",
     message: /mismatched types|expected i32/i,
     timeoutMs: 120_000,
   },
@@ -91,6 +96,7 @@ const CASES: Case[] = [
     },
     bad: "bad.go",
     clean: "clean.go",
+    fixed: "package main\n\nfunc main() {\n\tvar x int = 1\n\t_ = x\n}\n",
     message: /cannot use|string.*int/i,
     timeoutMs: 90_000,
   },
@@ -142,6 +148,22 @@ function writeFixture(files: Record<string, string>): string {
   return dir;
 }
 
+/** Larger than the three-file smoke fixture: 64 source files in one project, including the diagnostic target. */
+function writeLargeFixture(c: Case): string {
+  const files = { ...c.files };
+  for (let i = 0; i < 62; i++) {
+    const n = String(i).padStart(2, "0");
+    if (c.id === "typescript") files[`extra-${n}.ts`] = `export const extra${n}: number = ${i};\n`;
+    else if (c.id === "python") files[`extra-${n}.py`] = `extra${n}: int = ${i}\n`;
+    else if (c.id === "go") files[`extra-${n}.go`] = `package main\n\nfunc extra${n}() int { return ${i} }\n`;
+    else {
+      files[`src/extra-${n}.rs`] = `pub fn extra${n}() -> i32 { ${i} }\n`;
+      files["src/main.rs"] = `mod extra-${n};\n` + files["src/main.rs"];
+    }
+  }
+  return writeFixture(files);
+}
+
 for (const c of CASES) {
   // An unvalidated case still runs and reports; it fails the run only when NEXUS_LSP_REQUIRE names it.
   const todo = c.unvalidated && !required(c.id) ? c.unvalidated : false;
@@ -178,6 +200,69 @@ for (const c of CASES) {
       assert.equal(res.status, "unavailable");
     } finally {
       broken.shutdownAll();
+    }
+  });
+}
+
+for (const c of CASES) {
+  test(`real ${c.label}: trust refusal, large workspace updates, and crash recovery`, { timeout: c.timeoutMs * 3 + 30_000 }, async (t) => {
+    const dir = writeLargeFixture(c);
+    const reason = unavailableReason(c, dir);
+    if (reason) {
+      if (required(c.id)) assert.fail(`NEXUS_LSP_REQUIRE names ${c.id} but ${reason}`);
+      t.skip(`${reason}; install it to run this case`);
+      return;
+    }
+
+    // The executable is installed, but trust and read-only gates must refuse before starting it.
+    for (const refusal of [
+      "workspace not trusted; language server not started",
+      "read-only mode; language server not started",
+    ]) {
+      const refusedManager = new LspBridgeManager(dir, { gate: () => refusal });
+      const refused = await refusedManager.diagnostics(c.bad, 1000);
+      assert.equal(refused.status, "unavailable");
+      if (refused.status === "unavailable") assert.match(refused.reason, /workspace not trusted|read-only mode/);
+      assert.deepEqual(refusedManager.serverPids(), [], `refusal must not start the installed real server: ${refusal}`);
+      refusedManager.shutdownAll();
+    }
+
+    const mgr = new LspBridgeManager(dir, { gate: () => null });
+    let pid: number | undefined;
+    try {
+      const initial = await mgr.diagnostics(c.bad, c.timeoutMs);
+      assert.equal(initial.status, "ok", `large workspace error: ${JSON.stringify(initial)}`);
+      if (initial.status === "ok") assert.ok(initial.diagnostics.some((d) => d.severity === "error" && c.message.test(d.message)));
+
+      fs.writeFileSync(path.join(dir, c.bad), c.fixed);
+      const updated = await mgr.diagnostics(c.bad, c.timeoutMs);
+      assert.equal(updated.status, "ok", `incremental update: ${JSON.stringify(updated)}`);
+      if (updated.status === "ok") assert.deepEqual(updated.diagnostics.filter((d) => d.severity === "error"), []);
+
+      pid = mgr.serverPids()[0];
+      assert.ok(pid, "the real server should have a child process to terminate");
+      process.kill(pid!, "SIGKILL");
+      const exitDeadline = Date.now() + 5000;
+      while (Date.now() < exitDeadline) {
+        try { process.kill(pid!, 0); await new Promise((r) => setTimeout(r, 25)); }
+        catch { break; }
+      }
+      fs.writeFileSync(path.join(dir, c.bad), c.files[c.bad] ?? c.files["src/main.rs"]);
+      const afterCrash = await mgr.diagnostics(c.bad, 5000);
+      assert.ok(afterCrash.status === "unavailable" || afterCrash.diagnostics.some((d) => d.severity === "error" && c.message.test(d.message)),
+        `after a server crash, stale clean diagnostics must not be returned: ${JSON.stringify(afterCrash)}`);
+    } finally {
+      mgr.shutdownAll();
+    }
+
+    // A fresh manager can recover the same workspace without inheriting the crashed process or its diagnostics.
+    const recovered = new LspBridgeManager(dir, { gate: () => null });
+    try {
+      const result = await recovered.diagnostics(c.bad, c.timeoutMs);
+      assert.equal(result.status, "ok", `recovery after server crash: ${JSON.stringify(result)}`);
+      if (result.status === "ok") assert.ok(result.diagnostics.some((d) => d.severity === "error" && c.message.test(d.message)));
+    } finally {
+      recovered.shutdownAll();
     }
   });
 }
