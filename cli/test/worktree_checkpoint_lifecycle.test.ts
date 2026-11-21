@@ -32,7 +32,8 @@ test("clean worktree discard clears its durable binding before the path is remov
   } finally {
     agent?.shutdown();
     await gateway.close();
-    process.env.HOME = previousHome;
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
     if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME;
     else process.env.XDG_CONFIG_HOME = previousXdg;
     fs.rmSync(workspace, { recursive: true, force: true });
