@@ -36,7 +36,8 @@ import {
   type VerificationAttempt,
 } from "../src/core/objective.js";
 import { buildReviewEvidencePackage, CHANGE_ASSESSMENT_FIELDS, isSignificantChange, parseIndependentReviewVerdict } from "../src/core/independent_review.js";
-import { illegalOperationTransition } from "../src/core/operation_schema.js";
+import { newOperation } from "../src/core/operation.js";
+import { driveOperation, OperationStore, type WorkUnitExecutor } from "../src/core/operation_runner.js";
 import { ExecutionSpine } from "../src/core/spine.js";
 import { createDefaultRegistry } from "../src/core/capabilities.js";
 import { extensionCapability } from "../src/core/extension_capabilities.js";
@@ -460,13 +461,29 @@ const drivers: Record<string, () => unknown | Promise<unknown>> = {
     }, { workspaceRoot: "/workspace", dryRun: true, readOnly: false });
     return { handlerCalls, simulated: receipt.simulated };
   },
-  "change-cost-d-missing-invariant": () => {
-    const unit = { id: "u1", status: "COMPLETE" } as any;
-    const violation = illegalOperationTransition(
-      { id: "op", status: "COMPLETE", units: [unit] } as any,
-      { id: "op", status: "RUNNING", units: [unit] } as any,
-    );
-    return { refused: violation !== undefined, violation: violation?.replace(/^operation op: /, "") };
+  "change-cost-d-missing-invariant": async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "ceri-change-cost-operation-"));
+    try {
+      const workspace = path.join(root, "workspace");
+      fs.mkdirSync(workspace);
+      const store = new OperationStore(workspace, path.join(root, "state"), root);
+      const resource = { id: "r1", provider: "http://127.0.0.1:9", endpoint: "http://127.0.0.1:9/v1", model: "m", capabilities: ["tools"], rank: 0 };
+      const operation = newOperation("op-stale", "objective", [{ id: "u1", title: "u1", prompt: "u1" }], [resource], Date.now());
+      store.save(operation);
+      const stale = store.load(operation.id);
+      let executions = 0;
+      const executor: WorkUnitExecutor = {
+        async run() {
+          executions++;
+          return { kind: "completed", summary: "done", outcome: "NOT_REQUIRED" };
+        },
+      };
+      const completed = await driveOperation(store.load(operation.id), { store, executor, entry: "existing" });
+      const resumed = await driveOperation(stale, { store, executor, entry: "existing" });
+      return { refused: completed.status === "COMPLETE" && resumed.status === "COMPLETE" && executions === 1, executions, status: resumed.status };
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   },
   "change-cost-e-unnecessary-layer": () => {
     const v = parseIndependentReviewVerdict(

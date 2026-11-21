@@ -40,6 +40,16 @@ const resource = { id: "r1", model: "m" };
 const done = { execution: "COMPLETED", outcome: "NOT_REQUIRED", modelStop: "TOOL_COMPLETION", steps: { used: 1, max: 5 } };
 const verdict = (over: Record<string, unknown> = {}) =>
   JSON.stringify({ verdict: "ACCEPT", verifiedObservations: ["add returns the sum"], suspectedDefects: [], unprovenCriteria: [], scopeViolations: [], reviewerConfidenceNote: "ok", ...over });
+const assessedVerdict = () => verdict({ changeAssessment: {
+  purpose: "Keep the intended change focused",
+  evidence: "The diff and verifier output support the result",
+  boundaryImpact: "No declared boundary changes",
+  invariantImpact: "The existing invariant is preserved",
+  failureBehaviour: "Failures remain visible and reject acceptance",
+  maintainabilityImpact: "The change remains understandable",
+  validation: "The configured verifier passed",
+  residualRisk: "No additional risk identified from the supplied evidence",
+} });
 
 test("review roles are reviewer and acceptance_reviewer only", () => {
   assert.equal(isReviewRole("reviewer"), true);
@@ -229,7 +239,7 @@ test("a dependency that ran no verifier forwards none; a large diff then has no 
   const none = build();
   assert.ok(none.unifiedDiff.length > 20000);
   assert.equal(parseIndependentReviewVerdict(verdict(), none).verdict, "REJECT");
-  assert.equal(parseIndependentReviewVerdict(verdict(), build({ command: "make test", status: "PASSED", hasExecutedTests: true })).verdict, "ACCEPT");
+  assert.equal(parseIndependentReviewVerdict(assessedVerdict(), build({ command: "make test", status: "PASSED", hasExecutedTests: true })).verdict, "ACCEPT");
   assert.equal(parseIndependentReviewVerdict(verdict(), build({ command: "make test", status: "FAILED", hasExecutedTests: true })).verdict, "REJECT");
 });
 

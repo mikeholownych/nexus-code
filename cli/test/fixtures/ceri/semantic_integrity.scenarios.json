@@ -228,13 +228,13 @@
       "id": "change-cost-d-missing-invariant",
       "category": "change_cost",
       "status": "active",
-      "description": "A persisted COMPLETE operation cannot be saved back to RUNNING.",
-      "state": "stored operation COMPLETE; a stale writer holds a RUNNING copy",
-      "trigger": "save of the stale copy",
+      "description": "A stale operation snapshot cannot overwrite a concurrently completed operation.",
+      "state": "a driver loads the operation before another driver completes it",
+      "trigger": "the stale driver resumes after the stored operation is COMPLETE",
       "invariant": "COMPLETE is a terminal operation state",
-      "evidence": "the lifecycle transition guard returns the precise violation",
-      "run": "real: production operation transition rule; no model",
-      "expected": { "refused": true, "violation": "COMPLETE cannot become RUNNING" }
+      "evidence": "the stored status remains COMPLETE and the unit executes only once",
+      "run": "real: operation driver lock and persisted-state reload; no model",
+      "expected": { "refused": true, "executions": 1, "status": "COMPLETE" }
     },
     {
       "id": "change-cost-e-unnecessary-layer",
