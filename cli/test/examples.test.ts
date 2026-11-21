@@ -25,6 +25,8 @@ test("examples/operation/isolate.json is a valid spec, and the isolation it decl
   assert.doesNotThrow(() => validateOperationSpec(spec));
   assert.equal(spec.git.isolate, true);
   assert.ok(spec.policy.maxConcurrentUnits > 1);
+  assert.ok(spec.policy.executionBudget.cpuMilli >= spec.units.reduce((sum: number, unit: any) => sum + unit.executionResources.cpuMilli, 0));
+  assert.ok(spec.policy.executionBudget.memoryBytes >= spec.units.reduce((sum: number, unit: any) => sum + unit.executionResources.memoryBytes, 0));
   const without = { ...spec, git: undefined };
   assert.throws(() => validateOperationSpec(without), (e: Error) => e instanceof OperationSpecError && /git\.isolate/.test(e.message));
 });
