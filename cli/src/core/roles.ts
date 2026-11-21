@@ -131,6 +131,24 @@ export function roleToolAllowList(role: AgentRole | string | undefined): Readonl
   return undefined;
 }
 
+/**
+ * VC-8: tools a working role is refused even though it is not read-only. The implementer and tester do edit files and run
+ * commands, so they are not held to an allow-list; they lose the tools that reach outside the task (a browser, the
+ * persistent knowledge store) and, for the tester, the ones that widen what a verifier run depends on (the network and
+ * delegating to a subagent). Owner decision 2026-11-21 ("network and side-channel tools"); the real controls for what
+ * they may change stay the path guards, the verifier and the review.
+ */
+const BROWSER_TOOLS = ["browser_navigate", "browser_screenshot", "browser_click", "browser_type", "browser_console_logs"];
+const ROLE_DENIED_TOOLS: Readonly<Partial<Record<string, ReadonlySet<string>>>> = {
+  implementer: new Set([...BROWSER_TOOLS, "manage_knowledge"]),
+  tester: new Set([...BROWSER_TOOLS, "manage_knowledge", "fetch_web", "search_web", "spawn_subagent"]),
+};
+
+/** The tools a role is refused, or undefined when it has no deny-list. Applied on top of `roleToolAllowList`. */
+export function roleToolDenyList(role: AgentRole | string | undefined): ReadonlySet<string> | undefined {
+  return role === undefined || !Object.hasOwn(ROLE_DENIED_TOOLS, role) ? undefined : ROLE_DENIED_TOOLS[role];
+}
+
 export interface RoleRequirement {
   /** Qualification a resource must hold (resources without a qualification list hold all). */
   qualification: string;
