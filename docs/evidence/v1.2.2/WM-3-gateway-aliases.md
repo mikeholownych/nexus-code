@@ -31,3 +31,27 @@ inferred from timing. The routing could change; it is a snapshot, not a guarante
   quantity) is reported separately and stays 200/200 native valid on all five. No reasoning-aware rule was added, so the
   qualification pass rule is not weakened.
 - Live eval runs on `lead` and `deep` (`docs/evidence/change-cost-live-2026-11-18/`) are therefore two-model evidence.
+
+## Update, 2026-11-21: seven aliases, three models
+
+The operator added a third model on a separate host. `GET /v1/models` at 20:20Z lists seven aliases, and each entry now names
+the workers that serve it (`serving[].worker_id`, `pool`, `model_id`):
+
+| Alias | Served by (pool: model) | Context | Advertised `max_completion_tokens` | Reasoning |
+|---|---|---|---|---|
+| `engineering/b0` | lead: `Qwen3.6-35B-A3B-UD-Q4_K_M` | 65536 | 8192 | off |
+| `engineering/lead` | lead | 65536 | 8192 | off |
+| `engineering/lead-reasoning` | lead | 65536 | 16384 | on |
+| `engineering/deep` | deep: `Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M` | 65536 | 12288 | on |
+| `engineering/interactive` | lead **and** deep | 65536 | 1024 | off |
+| `engineering/interactive-rocm` | rocm: `qwen3-coder-30b-a3b-instruct-q8_0` (new) | 16384 | 8192 | off |
+| `engineering/auto` | lead, deep **and** rocm | 16384 | 8192 | off |
+
+What follows from it:
+
+- Three distinct models. `auto` and `interactive` can be answered by more than one of them, so a result on either alias is not
+  a result for one model unless the response's `model` field is recorded per request.
+- `deep` and `lead-reasoning`, the two aliases the release measurement uses, are each served by one worker.
+- `auto` advertises a 16384-token context, a quarter of the other routes.
+- This is the catalog's own statement, read once. No completion was sent after the change, so the table at the top (which model
+  *answered* each alias on 2026-11-20) was not re-observed, and nothing recorded before this date covers the third model.
