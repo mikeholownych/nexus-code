@@ -31,3 +31,10 @@ inferred from timing. The routing could change; it is a snapshot, not a guarante
   quantity) is reported separately and stays 200/200 native valid on all five. No reasoning-aware rule was added, so the
   qualification pass rule is not weakened.
 - Live eval runs on `lead` and `deep` (`docs/evidence/change-cost-live-2026-11-18/`) are therefore two-model evidence.
+
+## Update, 2026-11-21
+
+The operator reported that a third model, on a separate host, was added to the gateway behind the `engineering/auto` route, so
+the gateway now serves three distinct models. `GET /v1/models` on 2026-11-21 still lists the same five aliases with the same
+limits; `engineering/auto` is not in the catalog. The table above was not re-observed after the change: which model answers
+each alias now is unmeasured, and nothing recorded before this date covers the third model.
