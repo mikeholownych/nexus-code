@@ -649,8 +649,13 @@ mod tests {
             })
         );
         assert_eq!(
-            parse_event(r#"{"v":1,"type":"checkpoint.choice.request","id":"choice-1","turn_id":"t1","message":"Sensitive content prevents checkpointing."}"#),
-            Ok(Event::CheckpointChoiceRequest { id: "choice-1".into(), message: "Sensitive content prevents checkpointing.".into() })
+            parse_event(
+                r#"{"v":1,"type":"checkpoint.choice.request","id":"choice-1","turn_id":"t1","message":"Sensitive content prevents checkpointing."}"#
+            ),
+            Ok(Event::CheckpointChoiceRequest {
+                id: "choice-1".into(),
+                message: "Sensitive content prevents checkpointing.".into()
+            })
         );
         assert_eq!(
             parse_event(
@@ -760,7 +765,9 @@ mod tests {
     #[test]
     fn activity_diff_and_steering_events_parse() {
         assert_eq!(
-            parse_event(r#"{"v":1,"type":"activity","turn_id":"t1","phase":"tool","step":31,"segment":2,"tool":"run_command","subject":"make test"}"#),
+            parse_event(
+                r#"{"v":1,"type":"activity","turn_id":"t1","phase":"tool","step":31,"segment":2,"tool":"run_command","subject":"make test"}"#
+            ),
             Ok(Event::Activity {
                 phase: "tool".into(),
                 step: 31,
@@ -776,7 +783,9 @@ mod tests {
             Ok(Event::FileDiff { ref path, added: 1, removed: 1, ref kind, .. }) if path == "a.ts" && kind == "modified"
         ));
         assert_eq!(
-            parse_event(r#"{"v":1,"type":"steer.ack","id":"g1","status":"cancelled","message":"Not applied","text":"use tabs"}"#),
+            parse_event(
+                r#"{"v":1,"type":"steer.ack","id":"g1","status":"cancelled","message":"Not applied","text":"use tabs"}"#
+            ),
             Ok(Event::SteerAck {
                 id: "g1".into(),
                 status: "cancelled".into(),
@@ -784,7 +793,10 @@ mod tests {
                 text: Some("use tabs".into()),
             })
         );
-        let line = encode_command(&Command::Steer { id: "g1".into(), text: "use\ntabs".into() });
+        let line = encode_command(&Command::Steer {
+            id: "g1".into(),
+            text: "use\ntabs".into(),
+        });
         assert_eq!(
             serde_json::from_str::<Value>(&line).unwrap(),
             serde_json::json!({"v":1,"type":"steer","id":"g1","text":"use\ntabs"})
@@ -850,7 +862,9 @@ mod tests {
     #[test]
     fn a_notice_carries_an_optional_key_and_raw_cause_and_an_old_one_still_parses() {
         assert_eq!(
-            parse_event(r#"{"v":1,"type":"notice","text":"Retry 2","key":"provider.recovery","detail":"HTTP 429"}"#),
+            parse_event(
+                r#"{"v":1,"type":"notice","text":"Retry 2","key":"provider.recovery","detail":"HTTP 429"}"#
+            ),
             Ok(Event::Notice {
                 text: "Retry 2".into(),
                 key: Some("provider.recovery".into()),
@@ -860,23 +874,49 @@ mod tests {
         // A newer sidecar's unknown fields are ignored, as for every event.
         assert!(matches!(
             parse_event(r#"{"v":1,"type":"notice","text":"x","key":"k","future":1}"#),
-            Ok(Event::Notice { key: Some(_), detail: None, .. })
+            Ok(Event::Notice {
+                key: Some(_),
+                detail: None,
+                ..
+            })
         ));
     }
 
     #[test]
     fn a_stream_stall_parses_with_missing_and_unknown_fields() {
         assert_eq!(
-            parse_event(r#"{"v":1,"type":"stream.stall","turn_id":"t1","stalled":true,"silent_secs":30}"#),
-            Ok(Event::StreamStall { stalled: true, silent_secs: 30 })
+            parse_event(
+                r#"{"v":1,"type":"stream.stall","turn_id":"t1","stalled":true,"silent_secs":30}"#
+            ),
+            Ok(Event::StreamStall {
+                stalled: true,
+                silent_secs: 30
+            })
         );
         // Missing fields default to "spoke again" (not stalled, no silence): the safe reading of a bare event.
-        assert_eq!(parse_event(r#"{"v":1,"type":"stream.stall"}"#), Ok(Event::StreamStall { stalled: false, silent_secs: 0 }));
-        assert_eq!(parse_event(r#"{"v":1,"type":"stream.stall","stalled":true}"#), Ok(Event::StreamStall { stalled: true, silent_secs: 0 }));
+        assert_eq!(
+            parse_event(r#"{"v":1,"type":"stream.stall"}"#),
+            Ok(Event::StreamStall {
+                stalled: false,
+                silent_secs: 0
+            })
+        );
+        assert_eq!(
+            parse_event(r#"{"v":1,"type":"stream.stall","stalled":true}"#),
+            Ok(Event::StreamStall {
+                stalled: true,
+                silent_secs: 0
+            })
+        );
         // A newer sidecar's unknown field is ignored, as for every event.
         assert_eq!(
-            parse_event(r#"{"v":1,"type":"stream.stall","stalled":true,"silent_secs":45,"future":{"a":1}}"#),
-            Ok(Event::StreamStall { stalled: true, silent_secs: 45 })
+            parse_event(
+                r#"{"v":1,"type":"stream.stall","stalled":true,"silent_secs":45,"future":{"a":1}}"#
+            ),
+            Ok(Event::StreamStall {
+                stalled: true,
+                silent_secs: 45
+            })
         );
     }
 
@@ -933,7 +973,10 @@ mod tests {
                 serde_json::json!({"v":1,"type":"deny","id":"approval-1"}),
             ),
             (
-                Command::CheckpointChoice { id: "choice-1".into(), choice: "without_checkpoint".into() },
+                Command::CheckpointChoice {
+                    id: "choice-1".into(),
+                    choice: "without_checkpoint".into(),
+                },
                 serde_json::json!({"v":1,"type":"checkpoint.choice","id":"choice-1","choice":"without_checkpoint"}),
             ),
             (
@@ -1002,7 +1045,9 @@ mod tests {
             })
         );
         assert_eq!(
-            review(r#"{"kind":"verifier","command":"npm test","script":"jest","detail":"package.json:scripts.test"}"#),
+            review(
+                r#"{"kind":"verifier","command":"npm test","script":"jest","detail":"package.json:scripts.test"}"#
+            ),
             Some(Review::Verifier {
                 command: "npm test".into(),
                 script: Some("jest".into()),
@@ -1019,13 +1064,96 @@ mod tests {
         // A delete approval is text rows; fields a later sidecar adds beside them (structured facts) are ignored, and a
         // request without them (an older sidecar) parses the same.
         assert_eq!(
-            review(r#"{"kind":"args","text":"build\ndirectory \u00b7 3 entries","truncated":false,"delete":{"target":"directory","entries":3,"size":6}}"#),
-            Some(Review::Args { text: "build\ndirectory \u{b7} 3 entries".into(), truncated: false })
+            review(
+                r#"{"kind":"args","text":"build\ndirectory \u00b7 3 entries","truncated":false,"delete":{"target":"directory","entries":3,"size":6}}"#
+            ),
+            Some(Review::Args {
+                text: "build\ndirectory \u{b7} 3 entries".into(),
+                truncated: false
+            })
         );
         assert_eq!(
             review(r#"{"kind":"args","text":"{\n  \"path\": \"base.txt\"\n}","truncated":false}"#),
-            Some(Review::Args { text: "{\n  \"path\": \"base.txt\"\n}".into(), truncated: false })
+            Some(Review::Args {
+                text: "{\n  \"path\": \"base.txt\"\n}".into(),
+                truncated: false
+            })
         );
         assert_eq!(review(r#"{"kind":"hologram"}"#), Some(Review::Unknown));
+    }
+
+    /// Wire-level golden corpus shared with cli/test/protocol_golden.test.ts: the TypeScript sidecar owns
+    /// event encoding and the Rust TUI owns command encoding, so each side checks the other's bytes.
+    #[test]
+    fn golden_protocol_v1_corpus() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../cli/test/fixtures/protocol_v1_golden.jsonl"
+        );
+        let corpus =
+            std::fs::read_to_string(path).expect("the shared protocol corpus must be checked in");
+        let mut events = 0;
+        let mut commands = 0;
+        for (index, line) in corpus.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let record: Value =
+                serde_json::from_str(line).unwrap_or_else(|e| panic!("corpus line {index}: {e}"));
+            let name = record["name"]
+                .as_str()
+                .unwrap_or_else(|| panic!("corpus line {index} has no name"));
+            let json = record["json"]
+                .as_str()
+                .unwrap_or_else(|| panic!("corpus line {index} has no json"));
+            let value: Value =
+                serde_json::from_str(json).unwrap_or_else(|e| panic!("corpus record {name}: {e}"));
+            assert_eq!(
+                value["v"],
+                Value::from(PROTOCOL_VERSION),
+                "corpus record {name} is versioned"
+            );
+            assert_eq!(
+                value["type"],
+                Value::from(name),
+                "corpus record {name} type matches its name"
+            );
+            match record["direction"].as_str() {
+                Some("event") => {
+                    assert!(
+                        parse_event(json).is_ok(),
+                        "the Rust client must accept sidecar event {name}"
+                    );
+                    events += 1;
+                }
+                Some("command") => {
+                    let id = value["id"].as_str().unwrap_or_default();
+                    let command = match name {
+                        "prompt.submit" => Command::PromptSubmit {
+                            id: id.into(),
+                            text: value["text"].as_str().unwrap_or_default().into(),
+                        },
+                        "steer" => Command::Steer {
+                            id: id.into(),
+                            text: value["text"].as_str().unwrap_or_default().into(),
+                        },
+                        "receipt" => Command::Receipt { id: id.into() },
+                        "shutdown" => Command::Shutdown,
+                        other => panic!("add a Command constructor for corpus command {other}"),
+                    };
+                    let encoded = serde_json::from_str::<Value>(&encode_command(&command)).unwrap();
+                    assert_eq!(
+                        encoded, value,
+                        "the TUI must emit exactly the recorded bytes for {name}"
+                    );
+                    commands += 1;
+                }
+                other => panic!("corpus line {index} has an unknown direction: {other:?}"),
+            }
+        }
+        assert!(
+            events >= 4 && commands >= 4,
+            "the corpus must cover both wire directions"
+        );
     }
 }

@@ -71,6 +71,8 @@ jobs:
           done
       - run: npm ci --prefix cli
       - run: npm --prefix cli run build
+      - name: Static gates (typecheck, clippy, changed-file rustfmt)
+        run: make lint
       - run: cargo test --locked --manifest-path core/Cargo.toml
       - run: cargo build --locked --release --manifest-path core/Cargo.toml --bin harness-core --bin nexus-tui
       # Keep the cache-key version list in sync with the pinned tool versions below.
@@ -191,6 +193,8 @@ jobs:
       - run: node scripts/sync-version.mjs --check
       - run: npm ci --prefix cli
       - run: npm --prefix cli run build
+      - name: Static gates (typecheck, clippy, changed-file rustfmt)
+        run: make lint
       - run: cargo test --locked --manifest-path core/Cargo.toml
       - run: cargo build --locked --release --manifest-path core/Cargo.toml --bin harness-core --bin nexus-tui
       - name: Run the CLI suite with a hang bound
@@ -216,3 +220,34 @@ jobs:
           name: nexus-linux-x86_64
           path: ${{ runner.temp }}/dist/*
           if-no-files-found: error
+
+  # Advisory: reports coverage of changed cli/src lines from the T0 tier. It is not a required check yet;
+  # the threshold is raised from measured data in docs/evidence/TEST_MATURITY_01.md rather than picked by guesswork.
+  diff-coverage:
+    name: diff coverage (advisory)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - run: npm ci --prefix cli
+      - run: npm --prefix cli run build
+      - run: cargo build --locked --release --manifest-path core/Cargo.toml --bin harness-core
+      - name: T0 coverage (unit tier)
+        timeout-minutes: 15
+        run: node cli/scripts/run_coverage.mjs --tier=unit --out cli/coverage/unit-lcov.info
+      - name: Diff coverage report
+        run: node cli/scripts/diff_coverage.mjs --lcov cli/coverage/unit-lcov.info --base "${{ github.event.pull_request.base.sha || github.event.before }}" --min 0 --json diff-coverage.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: diff-coverage
+          path: |
+            cli/coverage/unit-lcov.info
+            diff-coverage.json
+          if-no-files-found: ignore

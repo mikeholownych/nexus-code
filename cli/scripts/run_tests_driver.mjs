@@ -3,6 +3,7 @@
 // exceeds NEXUS_TEST_FILE_TIMEOUT_SECS (the parent then kills the group and restarts with the remaining files), and
 // {"done":true,"tests":n,"fail":n} when the run ends. Output keeps the spec reporter format, with colour on a TTY.
 import fs from "node:fs";
+import path from "node:path";
 import { run } from "node:test";
 import { spec } from "node:test/reporters";
 
@@ -23,9 +24,17 @@ const watch = (file) => {
 // The watchdog is armed by the first top-level event of each file. Node 24 emits one named after the file itself; Node 22
 // (process isolation) emits only the file's own top-level tests, so keying on a file-named event never armed it there.
 let current;
+let startedAt = 0;
+const secondsSinceStart = () => (Date.now() - startedAt) / 1000;
+const reportDuration = (file) => {
+  if (!file || !startedAt) return;
+  report({ duration: { file: path.relative(cwd, file).split(path.sep).join("/"), secs: Math.round(secondsSinceStart() * 100) / 100 } });
+};
 stream.on("test:dequeue", (e) => {
   if (e.nesting === 0 && e.file && e.file !== current) {
+    reportDuration(current);
     current = e.file;
+    startedAt = Date.now();
     watch(e.file);
   }
 });
@@ -39,6 +48,7 @@ const output = stream.compose(new spec());
 output.pipe(process.stdout, { end: false });
 output.on("end", () => {
   clearTimeout(timer);
+  reportDuration(current);
   report({ done: true, tests: counts.tests, fail: counts.failed });
   process.stdout.write("", () => process.exit(counts.failed ? 1 : 0));
 });
