@@ -364,6 +364,9 @@ export interface TypecheckDiagnostics {
 }
 
 /** tsc `path(line,col): error TSxxxx` and `path:line:col - error TSxxxx`; cargo `error...` followed by `--> path:line:col`. */
+/** Terminal escape sequences (CSI, such as colours, and OSC): presentation only, never part of a diagnostic. */
+const TYPECHECK_ANSI = /\u001b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b\\))/g;
+
 export function parseTypecheckDiagnostics(output: string): TypecheckDiagnostics {
   const files = new Set<string>();
   const unlocatedCodes: string[] = [];
@@ -376,7 +379,10 @@ export function parseTypecheckDiagnostics(output: string): TypecheckDiagnostics 
     if (file !== undefined) located.push({ file, text: (text ?? line).trim().slice(0, 240) });
     if (first.length < 5) first.push(line.trim().slice(0, 240));
   };
-  for (const raw of output.split("\n")) {
+  // A type-checker colours its output when the environment asks for it (FORCE_COLOR, a pretty default): the file, line
+  // and column are then wrapped in escape sequences and no pattern below would match, so a failing check would be read
+  // as "could not run" (ENVIRONMENT) and stop blocking. Colour carries no meaning here; it is removed first.
+  for (const raw of output.replace(TYPECHECK_ANSI, "").split("\n")) {
     const line = raw.replace(/\r$/, "");
     const tsc = line.match(/^(.+?)\((\d+),(\d+)\): error (TS\d+):/) ?? line.match(/^(.+?):(\d+):(\d+) - error (TS\d+):/);
     if (tsc) {
