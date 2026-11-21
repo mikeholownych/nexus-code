@@ -47,9 +47,13 @@ What the v1.2.1 plan ([`docs/v1.2.1/PLAN.md`](../v1.2.1/PLAN.md)) did not finish
 
 - **RD-7** (done): `nexus uninstall` for managed installations verifies installed packages against their SHA-256 manifests, serializes against upgrades, and preserves sessions/configuration by default. PR #629 merged at `e9761040e1c22e2f8299bc4d3ca87b3d18cf3819`; focused uninstall tests passed (6/6). The full suite timed out on five files, so it was not reported as passing.
 
+- **VC-8** (per-role tool deny-lists: implementer loses browser and knowledge-writing tools; tester also loses web fetch, web search and delegation) merged as #660 (`c8e986f4`), tests in `cli/test/role_deny_lists.test.ts`.
+- **CS-9** (operator command rules, allow < prompt < forbidden, `~/.config/nexus/command_rules.json`, decisions saved in the session) merged as #662 (`45b44c5b`), documented in `docs/COMMAND_RULES.md`.
+- **CS-10** phase 1 (the native worker runs inside the Bubblewrap sandbox with `--sandbox bwrap`; opt-in, fails closed when the box cannot be built; Docker and `none` still confine commands only) merged as #664 (`00efdde3`); design in `docs/v1.2.2/CS10_WORKER_ISOLATION.md`. Not done: sandboxing the worker under Docker, and the phase-2 items in that note.
+
 ## Not started / deferred in their rows
 
-CS-9 (per-command approval rules), CS-10 (RPC worker isolation), VC-8 (per-role tool allowlists beyond reviewer and researcher), VC-10 (steering semantic judge, gated), RD-5 (superseded by v1.3 AC-1), MT-2 (split the two ~5.4k-line TUI files), PC-5 (settled by v1.3 GV-4).
+VC-10 (steering semantic judge, gated), RD-5 (superseded by v1.3 AC-1), MT-2 (split the two ~5.4k-line TUI files), PC-5 (settled by v1.3 GV-4).
 
 ## Release-note items for the next release
 
