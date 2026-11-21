@@ -187,6 +187,54 @@
         "repeated": { "execution": "BLOCKED", "outcome": "NOT_ESTABLISHED", "reason": "TOOL_CALL_LOOP", "tool": "read_file", "count": 5, "stepsUsed": 9 },
         "varied": { "reason": "none", "repeatedCall": false }
       }
+    },
+    {
+      "id": "change-cost-a-wrong-abstraction",
+      "category": "change_cost",
+      "status": "active",
+      "description": "A passing change reported by review as an unjustified abstraction is REJECT.",
+      "state": "verifier passes; the diff adds an interface with one implementation and no caller",
+      "trigger": "reviewer reports a change-risk defect with a path and line",
+      "invariant": "reported suspected defects block ACCEPT regardless of verifier success",
+      "evidence": "the final verdict and retained suspected defect",
+      "run": "mechanism: real parser and gate with a scripted reviewer reply; model detection is not measured",
+      "expected": { "verdict": "REJECT", "changeRiskDefects": 1 }
+    },
+    {
+      "id": "change-cost-c-hidden-side-effect",
+      "category": "change_cost",
+      "status": "active",
+      "description": "A mutating remote extension capability in dry-run is simulated and its handler is not invoked.",
+      "state": "dry-run session; a remote MCP tool could push data",
+      "trigger": "the execution spine dispatches the extension capability",
+      "invariant": "dry-run simulates external mutating capabilities",
+      "evidence": "handler invocation count and the simulated receipt field",
+      "run": "real: execution spine, extension capability and local handler counter; no model or network call",
+      "expected": { "handlerCalls": 0, "simulated": true }
+    },
+    {
+      "id": "change-cost-e-unnecessary-layer",
+      "category": "change_cost",
+      "status": "active",
+      "description": "A changed file outside the declared authorized scope is reported and rejects review.",
+      "state": "authorized scope contains src/a.ts; the diff also changes src/wrapper.ts",
+      "trigger": "the review gate parses the candidate diff",
+      "invariant": "deterministic scope violations block ACCEPT",
+      "evidence": "the final verdict and exact violating path",
+      "run": "mechanism: real parser and gate with a scripted reviewer reply; no model",
+      "expected": { "verdict": "REJECT", "scopeViolations": ["src/wrapper.ts"] }
+    },
+    {
+      "id": "change-cost-g-misleading-improvement",
+      "category": "change_cost",
+      "status": "active",
+      "description": "A reviewer ACCEPT cannot override a failed deterministic verifier.",
+      "state": "verifier exits 1 while the reviewer replies ACCEPT",
+      "trigger": "the review gate evaluates the verifier result",
+      "invariant": "deterministic verifier failure blocks ACCEPT",
+      "evidence": "the final verdict and named verifier failure",
+      "run": "mechanism: real parser and gate with a scripted reviewer reply; no model",
+      "expected": { "verdict": "REJECT", "reason": "verifier_failed" }
     }
   ]
 }
