@@ -59,6 +59,13 @@ export interface BackupProgress {
   bytesCopied: number;
 }
 
+/** One snapshotted file, recorded for diagnostics and future reference-based restores. */
+export interface BackupManifestEntry {
+  store: "state" | "config";
+  path: string;
+  bytes: number;
+}
+
 export function getJournalPath(prefix: string): string {
   return path.join(prefix, "lib", "nexus", ".upgrade-journal.json");
 }
@@ -150,6 +157,7 @@ export function createPreMigrationBackup(
 ): BackupResult {
   const result: BackupResult = {};
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const manifestEntries: BackupManifestEntry[] = [];
   let filesCopied = 0;
   let bytesCopied = 0;
   let lastProgressAt = Date.now();
@@ -206,13 +214,25 @@ export function createPreMigrationBackup(
 
     // Snapshot all durable state, not just its index. Backup directories are
     // excluded to avoid recursion; symbolic links are refused rather than read.
-    withDurableStoreGuards(homeDir, () => copyPrivateTree(stateDir, path.join(backupDest, "state"), new Set(["backups", "restore-control", STATE_RESTORE_PENDING_FILE]), observer));
+    const stateExcludes = new Set(["backups", "restore-control", STATE_RESTORE_PENDING_FILE]);
+    withDurableStoreGuards(homeDir, () => copyPrivateTree(stateDir, path.join(backupDest, "state"), stateExcludes, observer, manifestEntries, "state"));
     const configDir = path.join(homeDir, ".config", "nexus");
-    if (fs.existsSync(configDir)) copyPrivateTree(configDir, path.join(backupDest, "config"), new Set(["backups", STATE_RESTORE_PENDING_FILE]), observer);
+    if (fs.existsSync(configDir)) {
+      copyPrivateTree(configDir, path.join(backupDest, "config"), new Set(["backups", STATE_RESTORE_PENDING_FILE]), observer, manifestEntries, "config");
+    }
     const metadataPath = path.join(backupDest, "backup.json");
     const metadataFd = fs.openSync(metadataPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
     try {
-      fs.writeFileSync(metadataFd, JSON.stringify({ formatVersion:1, kind:"nexus-state-config", createdAt:new Date().toISOString() }));
+      const manifest = {
+        formatVersion: 1,
+        kind: "nexus-state-config",
+        createdAt: new Date().toISOString(),
+        files: filesCopied,
+        bytes: bytesCopied,
+        copyMode: "clone-or-durable-copy",
+        entries: manifestEntries,
+      };
+      fs.writeFileSync(metadataFd, JSON.stringify(manifest));
       fs.fchmodSync(metadataFd, 0o600);
       fs.fsyncSync(metadataFd);
     } finally { fs.closeSync(metadataFd); }
@@ -279,6 +299,9 @@ function copyPrivateTree(
   destination: string,
   excluded = new Set<string>(),
   observer?: { bytesCopied: (bytes: number) => void; fileCopied: () => void },
+  entries?: BackupManifestEntry[],
+  store: BackupManifestEntry["store"] = "state",
+  relative = "",
 ): void {
   validatePrivateTreeExcept(source, excluded);
   const existed = fs.existsSync(destination);
@@ -289,10 +312,14 @@ function copyPrivateTree(
   for (const entry of fs.readdirSync(source, { withFileTypes:true })) {
     if (excluded.has(entry.name) || entry.name === STATE_STORE_GUARD_FILE || entry.name === STATE_RESTORE_PENDING_FILE) continue;
     const from = path.join(source, entry.name), to = path.join(destination, entry.name);
-    if (entry.isDirectory()) copyPrivateTree(from, to, new Set(), observer);
+    const itemPath = relative ? `${relative}/${entry.name}` : entry.name;
+    // Carry the exclusions down: a nested backups/ directory must never be
+    // snapshotted into the rollback payload and copied on every upgrade.
+    if (entry.isDirectory()) copyPrivateTree(from, to, excluded, observer, entries, store, itemPath);
     else {
-      copyPrivateFileDurably(from, to, false, observer?.bytesCopied);
+      const bytes = copyPrivateFileDurably(from, to, false, observer?.bytesCopied);
       observer?.fileCopied();
+      entries?.push({ store, path: itemPath, bytes });
     }
   }
   // File contents are fsynced individually. Batch directory-entry durability
@@ -318,27 +345,71 @@ function copyPrivateFileDurably(
     if (!opened.isFile() || current.isSymbolicLink() || opened.dev !== current.dev || opened.ino !== current.ino) {
       throw new Error("Backup source changed while opening");
     }
-    destinationFd = fs.openSync(destination, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
-    destinationCreated = true;
-    const buffer = Buffer.alloc(64 * 1024);
-    let position = 0;
-    while (true) {
-      const count = fs.readSync(sourceFd, buffer, 0, buffer.length, position);
-      if (count === 0) break;
-      let written = 0;
-      while (written < count) {
-        const chunkWritten = fs.writeSync(destinationFd, buffer, written, count - written);
-        written += chunkWritten;
-        onBytesCopied?.(chunkWritten);
+
+    // Prefer a copy-on-write clone: on APFS/btrfs/XFS this is a metadata-only
+    // operation, so a large state tree no longer means gigabytes of writes and
+    // per-chunk JavaScript loops. Node falls back to a real copy when the
+    // filesystem cannot clone, so FICLONE_FORCE is deliberately not used.
+    const cloneFlag = (fs.constants.COPYFILE_FICLONE ?? 0) | (fs.constants.COPYFILE_EXCL ?? 0);
+    let copiedBytes = 0;
+    let cloned = false;
+    if (cloneFlag !== (fs.constants.COPYFILE_EXCL ?? 0)) {
+      try {
+        fs.copyFileSync(sourcePath, destination, cloneFlag);
+        destinationCreated = true;
+        cloned = true;
+        copiedBytes = opened.size;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        // EEXIST and every other failure must fail closed; only an unsupported
+        // clone falls back to the durable chunked copy below.
+        if (!code || !["EINVAL", "ENOSYS", "EOPNOTSUPP", "ENOTSUP", "EXDEV"].includes(code)) throw error;
+        // If the platform created the destination before reporting an
+        // unsupported clone, remove our own partial entry before retrying.
+        // COPYFILE_EXCL means a pre-existing file would have raised EEXIST.
+        try { fs.unlinkSync(destination); syncDirectory(path.dirname(destination)); } catch {}
       }
-      position += count;
     }
+
+    if (!destinationCreated) {
+      destinationFd = fs.openSync(destination, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
+      destinationCreated = true;
+      const buffer = Buffer.alloc(64 * 1024);
+      let position = 0;
+      while (true) {
+        const count = fs.readSync(sourceFd, buffer, 0, buffer.length, position);
+        if (count === 0) break;
+        let written = 0;
+        while (written < count) {
+          const chunkWritten = fs.writeSync(destinationFd, buffer, written, count - written);
+          written += chunkWritten;
+          onBytesCopied?.(chunkWritten);
+        }
+        position += count;
+      }
+      copiedBytes = position;
+    } else {
+      // copyFileSync takes a path, so re-check the source identity after the
+      // clone to close the window between the descriptor check and the copy.
+      const after = fs.lstatSync(sourcePath);
+      if (!after.isFile() || after.isSymbolicLink() || after.dev !== opened.dev || after.ino !== opened.ino || after.size !== opened.size) {
+        throw new Error("Backup source changed while cloning");
+      }
+      destinationFd = fs.openSync(destination, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+      const copied = fs.fstatSync(destinationFd);
+      if (!copied.isFile() || copied.nlink !== 1 || copied.size !== opened.size ||
+          (typeof process.getuid === "function" && copied.uid !== process.getuid())) {
+        throw new Error("Backup clone did not match its source");
+      }
+    }
+
     fs.fchmodSync(destinationFd, 0o600);
     fs.fsyncSync(destinationFd);
     fs.closeSync(destinationFd);
     destinationFd = undefined;
+    if (cloned) onBytesCopied?.(copiedBytes);
     if (syncParentOnSuccess) syncDirectory(path.dirname(destination));
-    return position;
+    return copiedBytes;
   } catch (error) {
     if (destinationFd !== undefined) try { fs.closeSync(destinationFd); } catch {}
     if (destinationCreated) {
