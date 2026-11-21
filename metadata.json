@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M7ZC4FPZS0FN8HCMKA2RSGJH",
+  "strategy": "manual-commit",
+  "branch": "v1/vc9-persistence-identity",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "cli/src/agent.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 602156,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 51635328,
+    "output_tokens": 211982,
+    "api_call_count": 369
+  },
+  "redaction": {
+    "replacements": 1467,
+    "layers": {
+      "betterleaks": 725,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 145,
+      "credentialed_uri": 120,
+      "entropy": 869,
+      "key_context": 0,
+      "provider_token": 6,
+      "shell_stdin": 0
+    }
+  }
+}
