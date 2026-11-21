@@ -98,6 +98,7 @@ describe("A. progressing work has finite, durable budget ceilings", () => {
       assert.equal(turn.continuation!.cumulativeSteps, STEPS + 1);
       assert.ok(tracking.compactions.filter((c) => c.committed).length >= 1, "the long run crossed at least one compaction boundary");
     } finally {
+      if (agent.getActiveWorktree()) agent.discardActiveWorktree();
       agent.shutdown();
       await gw.close();
       fs.rmSync(repo, { recursive: true, force: true });
@@ -107,16 +108,18 @@ describe("A. progressing work has finite, durable budget ceilings", () => {
   test("a delegated helper progresses beyond a short segment while consuming the shared task budget", { timeout: 120_000 }, async () => {
     const gw = await startGateway((n, body) => {
       const sub = allText(body).includes("[Subagent Objective]");
-      if (!sub) return n === 1 ? { kind: "tools", calls: [{ name: "spawn_subagent", args: { prompt: "write s1..s20", max_steps: 2 } }] } : text("parent done");
+      if (!sub) return n === 1 ? { kind: "tools", calls: [{ name: "spawn_subagent", args: { prompt: "write s1..s20", profile: "implementer", max_steps: 2 } }] } : text("parent done");
       const written = (body.messages as any[]).filter((m) => m.role === "tool").length;
       return written < 20 ? write(`s/s${written + 1}.txt`) : { kind: "tools", calls: [{ name: "task_completed", args: { summary: "wrote 20 files" } }] };
     });
     const repo = makeRepo();
-    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo)));
+    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo, { worktree: true })));
     try {
       await agent.runTurn("Delegate writing s1..s20 to a helper.");
-      assert.ok(fs.existsSync(path.join(repo, "s", "s20.txt")), "the helper should finish while the shared 500-step task budget remains");
+      const workspace = agent.getActiveWorktree()?.worktreePath ?? repo;
+      assert.ok(fs.existsSync(path.join(workspace, "s", "s20.txt")), "the helper should finish while the shared 500-step task budget remains");
     } finally {
+      if (agent.getActiveWorktree()) agent.discardActiveWorktree();
       agent.shutdown();
       await gw.close();
       fs.rmSync(repo, { recursive: true, force: true });

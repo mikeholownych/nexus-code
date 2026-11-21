@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { randomUUID } from "node:crypto";
 import { HarnessConfig } from "../types.js";
 import { registerBridgeCapabilities } from "../tools.js";
 import { PolicyContext } from "./approval_policy.js";
@@ -20,6 +21,9 @@ import pc from "picocolors";
 import { collectMaterialDependencies } from "../material_deps.js";
 import { DEFAULT_VERIFIER_TIMEOUT_SECS, foldVoluminousOutput, externalInputsFingerprint, RESUMED_WINDOW_REASON } from "./agent_support.js";
 import type { AutonomousAgent } from "../agent.js";
+import { ROLE_PROFILES, isReadOnlyRole, roleToolAllowList, type AgentRole } from "./roles.js";
+import { acquireTransientDelegationSlot, createDelegationOutcome, delegationRuntimeLimits, resolveDelegationContract } from "./delegation_contract.js";
+import { isSpecialistRole, missingSpecialistInputs, specialistInputsProblem } from "./specialist_profiles.js";
 
 function sha256Digest(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
@@ -445,13 +449,33 @@ export function setupSpineHandlersImpl(this: any): void {
   });
 
   this.spine.registerHandler("spawn_subagent", async (args: any, context: any) => {
-    if (this.depth >= 2 || context.metadata?.actor === "subagent") {
+    let limits;
+    try { limits = delegationRuntimeLimits(); }
+    catch (error: any) { return { success: false, output: "", error: `Delegation configuration is invalid: ${error.message}` }; }
+    if (this.depth >= limits.maxDepth || context.metadata?.actor === "subagent") {
       return {
         success: false,
         output: "",
         error:
           "Error: Subagent depth limit reached. Solve the task directly without spawning additional subagents.",
       };
+    }
+
+    if (++this.delegatedChildrenStarted > limits.maxChildrenPerParent) {
+      return { success: false, output: "", error: `Subagent not started: this parent reached its limit of ${limits.maxChildrenPerParent} delegated children.` };
+    }
+
+    if (!args || typeof args !== "object" || Array.isArray(args) || Object.keys(args).some((key) => !["prompt", "profile", "inputs", "max_steps"].includes(key))) {
+      return { success: false, output: "", error: "Invalid delegation request. Only prompt, profile, inputs, and the ignored legacy max_steps field are accepted." };
+    }
+    const profile = args.profile === undefined ? "semantic_explorer" : args.profile;
+    if (typeof profile !== "string" || !Object.hasOwn(ROLE_PROFILES, profile)) {
+      return { success: false, output: "", error: "Invalid delegation profile." };
+    }
+    let requestedInputs: Record<string, string> = args.inputs === undefined ? {} : args.inputs;
+    const inputsProblem = specialistInputsProblem(requestedInputs);
+    if (inputsProblem) {
+      return { success: false, output: "", error: `Invalid delegation inputs: ${inputsProblem}.` };
     }
 
     // A helper's agent builds its own clients from this config, so its first request would reach the provider a
@@ -464,14 +488,90 @@ export function setupSpineHandlersImpl(this: any): void {
       };
     }
 
-    const subPrompt = args.prompt || "Investigate the task";
+    if (typeof args.prompt !== "string" || args.prompt.length > 8_000 || Object.values(requestedInputs).some((value) => (value as string).length > 2_000)) {
+      return { success: false, output: "", error: "Delegation prompt or inputs exceed the bounded request size." };
+    }
+    const prompt = args.prompt.trim() || "Investigate the task";
+    if (args.inputs === undefined && profile === "semantic_explorer") {
+      requestedInputs = { target_query: prompt, focus_directories: "." };
+    }
+    if (isSpecialistRole(profile)) {
+      const missing = missingSpecialistInputs(profile, requestedInputs);
+      if (missing.length) return { success: false, output: "", error: `Profile '${profile}' requires inputs: ${missing.join(", ")}.` };
+    }
+    const subPrompt = `${prompt}${Object.keys(requestedInputs).length ? `\n\nAuthorized inputs:\n${Object.entries(requestedInputs).map(([key, value]) => `- ${key}: ${value}`).join("\n")}` : ""}`;
     // No step allowance: a helper stops on its report, on demonstrated lack of progress, or with the parent's turn
     // (cancellation). A `max_steps` argument from the model is not an operator limit and is ignored.
     const inheritedWorktreeScope = this.activeWorktree
       ? { workspace: this.activeWorktree.worktreePath, requireSandbox: true as const }
       : undefined;
+    if (!isReadOnlyRole(profile) && !this.activeWorktree) {
+      return { success: false, output: "", error: `Subagent not started: writable profile '${profile}' requires an established isolated worktree.` };
+    }
+    const profileTools = roleToolAllowList(profile) ?? new Set(ROLE_PROFILES[profile as AgentRole].recommendedTools);
+    const parentTools = new Set(this.getEffectiveTools().map((tool: any) => tool.function.name));
+    const parentGrants = this.authorityEngine.getGrants();
+    const hasExplicitParentGrants = parentGrants.length > 0;
+    const parentCapabilityAllowed = (name: string) => {
+      if (!hasExplicitParentGrants) return true;
+      const capabilityId = this.capabilityRegistry.getByToolName(name)?.id;
+      return Boolean(capabilityId && parentGrants.some((grant: any) => {
+        const actors = grant.actor === undefined ? ["*"] : Array.isArray(grant.actor) ? grant.actor : [grant.actor];
+        const domains = grant.executionDomain === undefined ? ["*"] : Array.isArray(grant.executionDomain) ? grant.executionDomain : [grant.executionDomain];
+        return (actors.includes("*") || actors.includes("agent")) &&
+          (domains.includes("*") || domains.includes("agent_orchestration")) &&
+          (grant.capabilities.includes("*") || grant.capabilities.includes(capabilityId) || grant.capabilities.includes(name));
+      }));
+    };
+    const delegatedToolAllowList = [...profileTools].filter((name) => parentTools.has(name) && parentCapabilityAllowed(name));
+    const permittedCapabilities = delegatedToolAllowList.map((name) => this.capabilityRegistry.getByToolName(name)?.id).filter(Boolean);
+    const delegatedCapabilitySet = new Set(permittedCapabilities as string[]);
+    const delegatedAuthorityGrants = hasExplicitParentGrants
+      ? parentGrants.flatMap((grant: any) => {
+          const actors = grant.actor === undefined ? ["*"] : Array.isArray(grant.actor) ? grant.actor : [grant.actor];
+          const domains = grant.executionDomain === undefined ? ["*"] : Array.isArray(grant.executionDomain) ? grant.executionDomain : [grant.executionDomain];
+          const capabilities = [...delegatedCapabilitySet].filter((capability) => grant.capabilities.includes("*") || grant.capabilities.includes(capability) ||
+            delegatedToolAllowList.some((name) => this.capabilityRegistry.getByToolName(name)?.id === capability && grant.capabilities.includes(name)));
+          if (!capabilities.length || !(actors.includes("*") || actors.includes("agent")) || !(domains.includes("*") || domains.includes("agent_orchestration"))) return [];
+          return [{
+            ...grant,
+            actor: ["subagent"],
+            executionDomain: ["subagent"],
+            capabilities,
+            scope: grant.scope === "full_access" ? "workspace" : grant.scope,
+            readOnly: Boolean(grant.readOnly || this.isReadOnly() || isReadOnlyRole(profile)),
+          }];
+        })
+      : undefined;
+    if (hasExplicitParentGrants && delegatedAuthorityGrants!.length === 0) {
+      delegatedAuthorityGrants!.push({ actor: ["subagent"], executionDomain: ["subagent"], capabilities: [], scope: "exact", resources: [] });
+    }
+    try {
+      resolveDelegationContract({
+        id: randomUUID(),
+        parentId: this.currentTaskId || "interactive-turn",
+        objective: prompt,
+        profile,
+        inputs: requestedInputs,
+        authorizedScope: ["*"],
+        permittedCapabilities: permittedCapabilities as string[],
+        executionMode: "transient",
+        requiresVerification: !isReadOnlyRole(profile),
+        requiresIndependentReview: false,
+      }, ["parent", "profile", "task", "session", "workspace"].map((source) => ({
+        source: source as "parent" | "profile" | "task" | "session" | "workspace",
+        authorizedScope: ["*"],
+        permittedCapabilities: permittedCapabilities as string[],
+      })));
+    } catch (error: any) {
+      return { success: false, output: "", error: `Subagent authority could not be resolved: ${error.message}` };
+    }
     const subagentConfig: HarnessConfig = {
       ...this.config,
+      role: undefined,
+      fullAccess: false,
+      readOnly: this.isReadOnly() || isReadOnlyRole(profile),
+      approvalMode: this.isReadOnly() || isReadOnlyRole(profile) ? "read-only" : this.config.approvalMode,
       taskClass: "subagent",
       plannerTaskClass: "subagent",
       ...(inheritedWorktreeScope
@@ -482,28 +582,58 @@ export function setupSpineHandlersImpl(this: any): void {
         : {}),
     };
 
+    const releaseDelegationSlot = acquireTransientDelegationSlot(limits.maxActiveChildren);
+    if (!releaseDelegationSlot) return { success: false, output: "", error: "Subagent not started: the active delegated-child limit is full." };
+    if (!this.delegatedBudget) this.delegatedBudget = { maxInferenceSteps: limits.maxInferenceSteps, steps: 0 };
+    else this.delegatedBudget.maxInferenceSteps = Math.min(this.delegatedBudget.maxInferenceSteps, limits.maxInferenceSteps);
+    const parentSignal: AbortSignal | undefined = this.activeTurn?.controller.signal;
+    const delegatedController = new AbortController();
+    const abortForParent = () => delegatedController.abort(parentSignal?.reason);
+    if (parentSignal?.aborted) abortForParent();
+    else parentSignal?.addEventListener("abort", abortForParent, { once: true });
+    let timedOut = false;
+    const deadlineTimer = setTimeout(() => {
+      timedOut = true;
+      delegatedController.abort(new Error("delegated execution deadline exceeded"));
+    }, limits.maxDurationMs);
+    deadlineTimer.unref?.();
+
     this.ui.startSpinner(`Spawning isolated subagent: "${subPrompt.slice(0, 45)}..."`);
     let subagent: any;
+    const delegatedStartedAt = Date.now();
     try {
       subagent = new (this.constructor as any)(
         subagentConfig,
         this.depth + 1,
         inheritedWorktreeScope,
-        { durable: false }
+        { durable: false, role: profile as AgentRole, delegatedToolAllowList, delegatedAuthorityGrants, delegatedBudget: this.delegatedBudget }
       );
       subagent.inheritObjectiveBudget(this);
       subagent.inheritTraceContext(this);
       subagent.setOperatorAnswers(this.operatorAnswers);
-      const subResult = await subagent.runSubagent(subPrompt, this.activeTurn?.onConfirm, this.activeTurn?.controller.signal);
+      const subResult = await subagent.runSubagent(subPrompt, this.activeTurn?.onConfirm, delegatedController.signal);
       this.ui.stopSpinner(subResult.completed);
       if (subResult.needsInput?.length) this.acceptSubagentQuestions(subResult.needsInput);
-      if (!subResult.completed) {
-        return { success: false, output: subResult.summary, error: `Subagent did not complete: ${subResult.reason}` };
-      }
       console.log(pc.cyan(`\n🤖 [Subagent Report Received]\n`));
+      const stats = subagent.getTokenStats();
+      const outcome = createDelegationOutcome({
+        id: randomUUID(),
+        parentId: this.currentTaskId || "interactive-turn",
+        status: subResult.completed ? "COMPLETED" : timedOut ? "INTERRUPTED" : parentSignal?.aborted ? "CANCELLED" : subagent.turnMutations > 0 ? "UNKNOWN_EFFECT" : "FAILED",
+        summary: (subResult.summary || subResult.reason || "Subagent returned no report.").slice(0, 8_000),
+        evidence: [],
+        uncertainty: subagent.turnMutations > 0 && !subResult.completed ? ["The child made workspace changes but did not complete; effect status requires reconciliation."] : [],
+        resourceUsage: { inferenceRequests: stats.requests, toolCalls: Object.values(subagent.turnToolCallSyntax || {}).reduce((sum: number, value: any) => sum + Number(value || 0), 0), elapsedMs: Date.now() - delegatedStartedAt,
+          inputTokens: { value: stats.prompt, source: stats.reportedRequests === stats.requests ? "reported" : "estimated" },
+          outputTokens: { value: stats.completion, source: stats.reportedRequests === stats.requests ? "reported" : "estimated" } },
+        outstandingObligations: subResult.completed ? [] : [subResult.reason || "Subagent completion was not established."],
+      });
+      if (!subResult.completed) {
+        return { success: false, output: JSON.stringify(outcome), error: `Subagent did not complete: ${subResult.reason}` };
+      }
       return {
         success: true,
-        output: subResult.summary,
+        output: JSON.stringify(outcome),
       };
     } catch (subErr: any) {
       this.ui.stopSpinner(false);
@@ -513,6 +643,9 @@ export function setupSpineHandlersImpl(this: any): void {
         error: `Subagent failed with error: ${subErr.message}`,
       };
     } finally {
+      clearTimeout(deadlineTimer);
+      parentSignal?.removeEventListener("abort", abortForParent);
+      releaseDelegationSlot();
       if (subagent) {
         const subStats = subagent.getTokenStats();
         this.totalTokens.prompt += subStats.prompt;

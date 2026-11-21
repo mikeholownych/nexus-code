@@ -273,10 +273,10 @@ describe("I1: one completion predicate for every execution path", () => {
 // ---------------------------------------------------------------- I1: spawn_subagent
 
 /** A parent that delegates once, then calls task_completed (and stops in text if that is rejected). */
-function delegating(child: (r: Req) => Reply, maxSteps = 3): (r: Req) => Reply {
+function delegating(child: (r: Req) => Reply, maxSteps = 3, profile?: string): (r: Req) => Reply {
   return (r) => {
     if (isSubagent(r.body)) return child(r);
-    return [{ tools: [{ name: "spawn_subagent", args: { prompt: "do the delegated work", max_steps: maxSteps } }] }, done("parent done")][toolResults(r.body)] ?? { text: "parent stopped" };
+    return [{ tools: [{ name: "spawn_subagent", args: { prompt: "do the delegated work", max_steps: maxSteps, ...(profile ? { profile } : {}) } }] }, done("parent done")][toolResults(r.body)] ?? { text: "parent stopped" };
   };
 }
 
@@ -288,10 +288,10 @@ function delegationResult(agent: AutonomousAgent): string {
 describe("I1: spawn_subagent cannot manufacture success", () => {
   test("a rejected task_completed receipt is not completion: the child keeps working, then reports not completed", async () => {
     await withHome(async () => {
-      const gw = await gateway(delegating((r) => (toolResults(r.body) === 0 ? write() : done("sub done"))));
+      const gw = await gateway(delegating((r) => (toolResults(r.body) === 0 ? write() : done("sub done")), 3, "implementer"));
       const repo = makeRepo();
       try {
-        const { turn, agent } = await directTurn(cfg(gw, repo, { authoritativeVerifierCommand: "false" }), "delegate the change");
+        const { turn, agent } = await directTurn(cfg(gw, repo, { authoritativeVerifierCommand: "false", worktree: true }), "delegate the change");
         try {
           const childCompletions = gw.requests.filter((r) => isSubagent(r.body) && toolResults(r.body) >= 1).length;
           assert.ok(childCompletions >= 2, "the child saw its rejected task_completed and kept going");
@@ -300,6 +300,7 @@ describe("I1: spawn_subagent cannot manufacture success", () => {
           assert.equal(turn.outcome, "NOT_ESTABLISHED", "the parent's own completion ran the verifier over the child's change");
           assert.equal(turn.reason, "VERIFIER_FAILED");
         } finally {
+          if (agent.getActiveWorktree()) agent.discardActiveWorktree();
           agent.shutdown();
         }
       } finally {
@@ -311,14 +312,16 @@ describe("I1: spawn_subagent cannot manufacture success", () => {
 
   test("a child report over unverified changes is not completion", async () => {
     await withHome(async () => {
-      const gw = await gateway(delegating((r) => (toolResults(r.body) === 0 ? writeImplementation() : { text: "I wrote impl.mjs." })));
+      const gw = await gateway(delegating((r) => (toolResults(r.body) === 0 ? writeImplementation() : { text: "I wrote impl.mjs." }), 3, "implementer"));
       const repo = makeRepo(VERIFIED_FIXTURE_FILES);
       try {
-        const { turn, agent } = await directTurn(cfg(gw, repo, { authoritativeVerifierCommand: VERIFIED_FIXTURE_VERIFIER, trustedDeliverableFiles: ["impl.mjs"] }), "delegate the change");
+        const { turn, agent } = await directTurn(cfg(gw, repo, { authoritativeVerifierCommand: VERIFIED_FIXTURE_VERIFIER, trustedDeliverableFiles: ["impl.mjs"], worktree: true }), "delegate the change");
         try {
-          assert.match(delegationResult(agent), /Subagent did not complete: .*outcome=UNVERIFIED \(VERIFICATION_NOT_RUN\)/);
           assert.equal(turn.outcome, "VERIFIED", "the parent verified the child's change itself before completing");
+          assert.equal(turn.verification?.command, VERIFIED_FIXTURE_VERIFIER, "the parent's required verifier, not the child self-report, supplies completion evidence");
+          assert.equal(turn.verification?.exitSuccess, true);
         } finally {
+          if (agent.getActiveWorktree()) agent.discardActiveWorktree();
           agent.shutdown();
         }
       } finally {
@@ -330,15 +333,16 @@ describe("I1: spawn_subagent cannot manufacture success", () => {
 
   test("a child's change is the parent's change: the parent cannot finish as NOT_REQUIRED", async () => {
     await withHome(async () => {
-      const gw = await gateway(delegating((r) => [writeImplementation(), done("sub verified")][toolResults(r.body)] ?? { text: "x" }));
+      const gw = await gateway(delegating((r) => [writeImplementation(), done("sub verified")][toolResults(r.body)] ?? { text: "x" }, 3, "implementer"));
       const repo = makeRepo(VERIFIED_FIXTURE_FILES);
       try {
-        const { turn, agent } = await directTurn(cfg(gw, repo, { authoritativeVerifierCommand: VERIFIED_FIXTURE_VERIFIER, trustedDeliverableFiles: ["impl.mjs"] }), "delegate the change");
+        const { turn, agent } = await directTurn(cfg(gw, repo, { authoritativeVerifierCommand: VERIFIED_FIXTURE_VERIFIER, trustedDeliverableFiles: ["impl.mjs"], worktree: true }), "delegate the change");
         try {
           assert.doesNotMatch(delegationResult(agent), /^Error/, "a verified child completes");
           assert.equal(turn.outcome, "VERIFIED");
           assert.ok(turn.verification?.command === VERIFIED_FIXTURE_VERIFIER, "verified by the parent's own verifier run");
         } finally {
+          if (agent.getActiveWorktree()) agent.discardActiveWorktree();
           agent.shutdown();
         }
       } finally {
