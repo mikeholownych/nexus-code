@@ -152,7 +152,8 @@ export class LspClient {
           textDocument: {
             hover: { contentFormat: ["markdown", "plaintext"] },
             definition: { dynamicRegistration: true },
-            publishDiagnostics: { relatedInformation: true },
+          // Ask servers to attach the document version so delayed results for pre-edit content can be rejected.
+          publishDiagnostics: { relatedInformation: true, versionSupport: true },
           },
           // Declared so that servers which report progress (rust-analyzer) send $/progress, which diagnostics wait on.
           window: { workDoneProgress: true },
