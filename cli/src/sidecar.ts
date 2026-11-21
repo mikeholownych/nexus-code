@@ -198,6 +198,12 @@ export class SidecarServer {
       case "deny":
         this.resolveApproval(command.id, false, false);
         return;
+      case "answer":
+        // Bound to the decision by id; consumed when a turn reaches it (an unresolved steering conflict: at the next
+        // turn's start). An id no turn asked about is simply never consumed.
+        this.app.getAgent().setOperatorAnswers(new Map([[command.question, command.option]]));
+        this.emit({ type: "notice", text: `Answer recorded for question ${command.question}: ${command.option}. It applies when the next turn reaches that decision.` });
+        return;
       case "checkpoint.choice":
         this.resolveCheckpointChoice(command.id, command.choice);
         return;

@@ -1174,6 +1174,13 @@ export class AutonomousAgent {
       this.activeWorktree = undefined;
       this.originalWorkspace = undefined;
       this.switchWorktreeWorkspace(originalWorkspace);
+      if (this.durable) {
+        try {
+          this.checkpointDurableState("worktree merged and binding cleared");
+        } catch (error: any) {
+          return { ...res, success: false, error: `Changes were merged, but the cleared worktree binding could not be saved: ${String(error?.message ?? error)}` };
+        }
+      }
     }
     return res;
   }
@@ -1185,12 +1192,39 @@ export class AutonomousAgent {
     if (this.activeWorktree.kind === "named") {
       return { success: false, error: "This is a named worktree: remove it with `nexus worktree remove <branch>`." };
     }
-    const res = this.worktreeManager.discardWorktree(this.activeWorktree.taskId);
-    if (res.success && this.originalWorkspace) {
-      const originalWorkspace = this.originalWorkspace;
-      this.activeWorktree = undefined;
-      this.originalWorkspace = undefined;
-      this.switchWorktreeWorkspace(originalWorkspace);
+    const activeWorktree = this.activeWorktree;
+    const originalWorkspace = this.originalWorkspace;
+    if (!originalWorkspace) return { success: false, error: "Cannot discard the worktree because its original workspace is unavailable." };
+
+    // Publish the cleared binding while the worktree still exists. A failed state write must leave the checkout
+    // attached to the session so resume cannot inherit a durable record pointing at a deleted path.
+    this.activeWorktree = undefined;
+    this.originalWorkspace = undefined;
+    this.switchWorktreeWorkspace(originalWorkspace);
+    if (this.durable) {
+      try {
+        this.checkpointDurableState("worktree binding cleared before discard");
+      } catch (error: any) {
+        this.activeWorktree = activeWorktree;
+        this.originalWorkspace = originalWorkspace;
+        this.switchWorktreeWorkspace(activeWorktree.worktreePath);
+        return { success: false, error: `Cannot discard the worktree because its cleared binding could not be saved: ${String(error?.message ?? error)}` };
+      }
+    }
+
+    const res = this.worktreeManager.discardWorktree(activeWorktree.taskId);
+    if (res.success) return res;
+
+    // The worktree remains live after a refused discard. Restore its binding in memory and on disk.
+    this.activeWorktree = activeWorktree;
+    this.originalWorkspace = originalWorkspace;
+    this.switchWorktreeWorkspace(activeWorktree.worktreePath);
+    if (this.durable) {
+      try {
+        this.checkpointDurableState("worktree binding restored after discard refusal");
+      } catch (error: any) {
+        return { ...res, error: `${res.error || "Worktree discard failed."} Its live binding also could not be restored to durable state: ${String(error?.message ?? error)}` };
+      }
     }
     return res;
   }
@@ -4501,6 +4535,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
     if (!options?.resume && !continuingNamedWorktree) {
       this.resetConversation();
     }
+    // A prior clean run may have discarded its worktree. Replace any old binding before partial progress writes
+    // load and update the durable record; those writes intentionally preserve fields they do not own.
+    if (this.config.worktree && this.durable) this.checkpointDurableState("worktree bound before turn");
     this.worktreeRunTurnAuthorized = true;
     let turnResult: TurnResult | undefined;
     try {
@@ -4528,6 +4565,8 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       this.worktreeRunTurnAuthorized = false;
       if (this.activeWorktree?.kind === "named") {
         console.log(pc.cyan(`🌲 Named worktree ${this.activeWorktree.branch} kept at ${this.activeWorktree.worktreePath}. Merge it with \`nexus worktree merge\` from inside it, or remove it with \`nexus worktree remove\`.`));
+      } else if (!turnResult && this.activeWorktree && this.config.worktree) {
+        console.warn(pc.yellow(`⚠️ Worktree retained because the turn did not reach a durable result: ${this.activeWorktree.worktreePath}`));
       } else if (this.activeWorktree && this.config.worktree) {
         const hasChanges = this.worktreeManager.hasChanges(this.activeWorktree.taskId);
         if (hasChanges) {
@@ -4542,13 +4581,16 @@ ${NEXUS_RUNTIME_IDENTITY}`;
               this.activeValidationReceipt
             );
             if (!result.success) {
-              console.log(pc.yellow(`⚠️ Worktree retained because merge was refused: ${result.error || "unknown error"}`));
+              console.log(pc.yellow(`⚠️ Worktree merge did not complete cleanly: ${result.error || "unknown error"}`));
             }
           } else {
             console.log(pc.yellow(`⚠️ Speculative changes are unverified or the root workspace is dirty; retaining worktree at ${this.activeWorktree.worktreePath}`));
           }
         } else {
-          this.discardActiveWorktree();
+          const discarded = this.discardActiveWorktree();
+          if (!discarded.success) {
+            console.warn(pc.yellow(`⚠️ Clean worktree retained because discard could not be durably recorded: ${discarded.error || "unknown error"}`));
+          }
         }
       }
     }

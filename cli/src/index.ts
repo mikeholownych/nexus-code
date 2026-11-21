@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { parseAnswers } from "./core/needs_input.js";
+import { parseOperatorAnswers } from "./core/needs_input.js";
 import { forkStartError, forkStartNotice, startFork } from "./core/fork_start.js";
 import { Command } from "commander";
 import * as path from "node:path";
@@ -492,18 +492,18 @@ program
   .option("-r, --resume [id]", "Resume previous session or task state")
   .option("--fork-session <id>", "Start in a new copy of the named session (the original is never changed; prints the new id)")
   .option("--fork-at <n>", "With --fork-session: copy only the first n messages (default: all)")
-  .option("--answer <id=approve|decline>", "With --resume: answer a question the blocked run asked (the 12-character needsInput.id in its result); repeatable", collectAnswer, [])
+  .option("--answer <id=approve|decline>", "With --resume: answer a question the blocked run asked (the 12-character needsInput.id in its result); for a question that asks for a reply (a blocked requirement), <id>=reply:<text>; repeatable", collectAnswer, [])
   .option("--step", "Execute one model/tool cycle and pause deterministically")
   .action(async (promptParts: string[], _options: any, cmd: Command) => {
     const options = commandOptions(cmd);
     let prompt = promptParts.join(" ").trim();
     const config = buildConfig(options);
     config.surface = "headless";
-    let answers: ReturnType<typeof parseAnswers> | undefined;
+    let answers: ReturnType<typeof parseOperatorAnswers> | undefined;
     if ((options.answer ?? []).length) {
       try {
         if (options.resume === undefined || options.resume === false) throw new Error("--answer needs --resume (it answers a question a blocked run asked)");
-        answers = parseAnswers(options.answer);
+        answers = parseOperatorAnswers(options.answer);
       } catch (err: any) {
         console.error(`error: ${err.message}`);
         exitAfterFlush(2);
@@ -611,7 +611,8 @@ program
         json: isJson,
         ...(emitEvent ? { observer: streamObserver(emitEvent) } : {}),
         resumeTaskId,
-        ...(answers ? { answers } : {}),
+        ...(answers?.decisions.size ? { answers: answers.decisions } : {}),
+        ...(answers?.replies.size ? { replies: answers.replies } : {}),
         signal: abort.signal,
         step: Boolean(options.step),
       });

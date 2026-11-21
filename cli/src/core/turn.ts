@@ -379,7 +379,7 @@ export interface TurnResult {
     evidence: string;
     attempts: Array<{ n: number; command: string; status: string; classification?: string; failingTests?: string[]; failedCheck?: string; candidate: string }>;
   };
-  /** Present when the turn stopped as NEEDS_INPUT: the decision wanted. Resume with `--answer <id>=approve|decline`. */
+  /** Present when the turn stopped as NEEDS_INPUT: the decision wanted. Resume with `--answer <id>=approve|decline`, or `<id>=reply:<text>` for a question whose only option is `reply`. */
   needsInput?: NeedsInputQuestion;
   /** VC-9: further questions recorded in the same turn (delegated subagents), in the order raised; `needsInput` is the first. */
   furtherNeedsInput?: NeedsInputQuestion[];
@@ -562,7 +562,7 @@ export function summarizeTurn(t: TurnResult): { heading: string; line: string } 
   if (exec === "BLOCKED" && t.reason === "NEEDS_INPUT" && t.needsInput) {
     return {
       heading: "TURN BLOCKED - NEEDS INPUT",
-      line: `execution=BLOCKED outcome=NOT_ESTABLISHED (NEEDS_INPUT ${t.needsInput.id}: ${t.needsInput.prompt}). Resume with --answer ${t.needsInput.id}=approve or ${t.needsInput.id}=decline.${t.furtherNeedsInput?.length ? ` ${t.furtherNeedsInput.length} more question(s) wait behind it: ${t.furtherNeedsInput.map((q) => q.id).join(", ")}.` : ""}`,
+      line: `execution=BLOCKED outcome=NOT_ESTABLISHED (NEEDS_INPUT ${t.needsInput.id}: ${t.needsInput.prompt}). ${t.needsInput.kind === "steering_conflict" ? "Send the steering again to decide it at the prompt, or answer" : "Resume"} with --answer ${t.needsInput.options.some((o) => o.id === "reply") ? `${t.needsInput.id}=reply:<what to do>` : `${t.needsInput.id}=approve or ${t.needsInput.id}=decline`}.${t.furtherNeedsInput?.length ? ` ${t.furtherNeedsInput.length} more question(s) wait behind it: ${t.furtherNeedsInput.map((q) => q.id).join(", ")}.` : ""}`,
     };
   }
   if (exec === "BLOCKED" && t.reason === "TOOL_CALL_LOOP") {
