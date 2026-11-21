@@ -3,6 +3,7 @@ import test from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import "./helpers/leak_guard.js";
 import { BatchOrchestrator } from "../src/batch.js";
 import { OperationStore } from "../src/core/operation_runner.js";
 import type { ResourceDescriptor } from "../src/core/resources.js";
