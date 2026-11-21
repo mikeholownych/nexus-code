@@ -65,11 +65,15 @@ function processGroupExists(pgid: number): boolean {
   }
 }
 
-function captureWorkerStderr(b: RustCoreBridge, channel: unknown): () => string {
+function captureWorkerOutput(b: RustCoreBridge, channel: unknown): () => string {
+  let stdout = "";
   let stderr = "";
-  const worker = (b as any).ensureRpcDaemon(channel) as { stderr?: NodeJS.ReadableStream } | null;
+  let exit = "running";
+  const worker = (b as any).ensureRpcDaemon(channel) as { stdout?: NodeJS.ReadableStream; stderr?: NodeJS.ReadableStream; on?: (event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void) => void } | null;
+  worker?.stdout?.on("data", (chunk: Buffer | string) => { stdout = (stdout + chunk.toString()).slice(-2_000); });
   worker?.stderr?.on("data", (chunk: Buffer | string) => { stderr = (stderr + chunk.toString()).slice(-4_000); });
-  return () => stderr;
+  worker?.on("exit", (code: number | null, signal: NodeJS.Signals | null) => { exit = `${code ?? "null"}/${signal ?? "none"}`; });
+  return () => JSON.stringify({ exit, stdout, stderr });
 }
 
 before(() => {
@@ -336,9 +340,9 @@ describe("CS-10: the worker inside a Docker container", { skip: DOCKER_SKIP }, (
   test("secrets under $HOME: readable unsandboxed, absent from the worker's container", async () => {
     assert.match((await sh(bridge(false), `cat ${home}/.ssh/id_canary`)).stdout, /PRIVATE-KEY-CANARY/, "baseline");
     const b = bridge("docker");
-    const workerStderr = captureWorkerStderr(b, (b as any).channels.files);
+    const workerOutput = captureWorkerOutput(b, (b as any).channels.files);
     const boxed = await sh(b, `cat ${home}/.ssh/id_canary 2>&1; cat ${home}/.config/nexus/config.env 2>&1`, { shell: "sh" });
-    assert.notEqual(boxed.exit, undefined, JSON.stringify({ boxed, workerStderr: workerStderr() }).slice(0, 1_000));
+    assert.notEqual(boxed.exit, undefined, JSON.stringify({ boxed, worker: workerOutput() }).slice(0, 1_600));
     assert.doesNotMatch(boxed.stdout + boxed.stderr, /PRIVATE-KEY-CANARY|canary-secret/, "their contents are not readable");
     assert.equal((await sh(b, `ls -A ${home}`, { shell: "sh" })).stdout.trim(), "ws", "of the home directory only the workspace exists in the container");
   });
