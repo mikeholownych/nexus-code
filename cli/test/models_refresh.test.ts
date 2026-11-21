@@ -71,6 +71,16 @@ test("refresh writes a private cache that overrides the snapshot and keeps bundl
   assert.equal(snapshotProvider("evil"), undefined);
 });
 
+test("a failed atomic cache replacement preserves the existing target and removes its temporary file", async () => {
+  const target = modelsCachePath();
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  // Force the final rename to fail after the helper has written its temporary file.
+  fs.mkdirSync(target);
+  await assert.rejects(refreshModelsCache({ pins, fetchImpl: okFetch(api()) }));
+  assert.equal(fs.statSync(target).isDirectory(), true, "the existing target is left intact when replacement fails");
+  assert.deepEqual(fs.readdirSync(path.dirname(target)), [path.basename(target)], "failed writes do not leave temporary entries");
+});
+
 test("a refreshed model keeps the bundled tool-choice modes that api.json does not carry", async () => {
   const withModes = snapshotProvider("openai")!.models.find((m) => m.toolChoice?.length)!;
   assert.ok(withModes, "the bundled snapshot has an openai model with tool-choice data");
