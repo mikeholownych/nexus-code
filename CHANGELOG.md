@@ -74,6 +74,10 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 
 - One shared helper for escape-stripped redaction (`redactPlain`), one terminal-safe helper (`safeTerminal`) and one sanitisation-failure constant replace identical copies; no output changed (plan unit MT-3, `docs/v1.2.1/REDACTION_VARIANTS.md`)
 
+### Security
+
+- CS-10: with `--sandbox bwrap` (and plain `--sandbox` where Bubblewrap is installed) the native worker `harness-core` runs inside the same Bubblewrap box as sandboxed commands: read-only root, only the workspace writable, `$HOME` masked, scrubbed environment, no network unless `--sandbox-network` (one switch for the worker and its commands), and it ends with the CLI. Before, only commands were confined and the worker ran with the operator's full access (a test acting as a compromised worker read a canary under `$HOME` and wrote outside the workspace; it now cannot). Commands are no longer wrapped a second time inside the worker's box. `--sandbox bwrap` fails closed if the box cannot be built, instead of starting the worker unconfined; plain `--sandbox` without Bubblewrap and `--sandbox docker` behave as before (Docker confines commands only). `nexus doctor` reports where the worker runs. Design: `docs/v1.2.2/CS10_WORKER_ISOLATION.md`.
+
 ## [v1.2.1] - 2026-11-18
 
 ### Security
