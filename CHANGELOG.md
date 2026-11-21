@@ -6,7 +6,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Detailed per-release documentation is maintained in [`docs/releases/`](docs/releases/).
 
-## [Unreleased]
+## [v1.2.2] - Unreleased
 
 ### Changed
 - VC-8: the implementer and tester roles are refused the tools that reach outside the task. Both lose the browser tools and `manage_knowledge`; the tester also loses `fetch_web`, `search_web` and `spawn_subagent`. The agent neither offers a refused tool nor runs it when the model calls it anyway; the denial names the role and says why. Editing, testing, shell, git, LSP and objective tools are unchanged, and the path guards, verifier and review remain the controls for what they may change. Owner choice: network and side-channel tools (2026-11-21).
