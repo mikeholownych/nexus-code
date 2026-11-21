@@ -271,7 +271,7 @@ fn render(frame: &mut ratatui::Frame, data: &Snapshot, state: &mut AppState) {
     let area = frame.area();
     if area.width < 58 || area.height < 14 {
         frame.render_widget(
-            Paragraph::new("Nexus needs a wider terminal (58×14 minimum). Press q to return.")
+            Paragraph::new("Need 58 columns × 14 rows. Press q to return.")
                 .style(Style::default().fg(theme_accent(&data.theme))),
             area,
         );
@@ -796,7 +796,22 @@ mod tests {
         terminal
             .draw(|frame| render(frame, &fixture(), &mut AppState::default()))
             .unwrap();
-        assert!(terminal.backend().to_string().contains("58×14 minimum"));
+        let rendered = terminal.backend().to_string();
+        assert!(rendered.contains("58"));
+        assert!(rendered.contains("14 rows"));
+        assert!(!rendered.contains("wider terminal"));
+    }
+
+    #[test]
+    fn short_wide_terminal_names_its_height_requirement() {
+        let backend = TestBackend::new(160, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render(frame, &fixture(), &mut AppState::default()))
+            .unwrap();
+        let rendered = terminal.backend().to_string();
+        assert!(rendered.contains("14 rows"));
+        assert!(!rendered.contains("wider terminal"));
     }
 
     #[test]

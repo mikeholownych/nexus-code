@@ -296,8 +296,9 @@ export async function runRequirementVerifierImpl(this: any, requirement: { id: s
 
 /**
  * VC-6: the type-check errors that exist before the change, so an error that appears in an untouched file (a caller the
- * change broke) is told apart from one that was already there. Only where cheap: tsc, go vet, pyright and mypy, not
- * cargo, whose first check compiles dependencies. Nothing is recorded when the tool is missing, the run is not approved,
+ * change broke) is told apart from one that was already there. This includes Cargo: its per-workspace target directory
+ * is reused by the completion check, so the baseline's dependency build is reused rather than repeated. Nothing is
+ * recorded when the tool is missing, the run is not approved,
  * times out or cannot be attributed; completion then behaves as before.
  */
 export async function captureTypecheckBaselineImpl(this: any, confirmHandler: ConfirmHandler | undefined, deadlineSecs: number): Promise<void> {

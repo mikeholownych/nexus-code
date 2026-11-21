@@ -301,8 +301,8 @@ impl Syntax {
     }
 }
 
-/// The diff palette follows the terminal's configured foreground at truecolor and 16-colour depths. 256-colour
-/// terminals have enough palette range for restrained row tints, while `+` and `−` markers keep meaning explicit.
+/// Neutral diff text follows the terminal's configured foreground at every colour depth. 256-colour terminals get
+/// restrained add/delete row tints; `+` and `−` markers keep meaning explicit when colour is unavailable.
 pub fn palette(depth: Depth) -> Palette {
     match depth {
         Depth::Ansi256 => Palette {
@@ -310,12 +310,12 @@ pub fn palette(depth: Depth) -> Palette {
             del_bg: Some(Color::Indexed(52)),
             add_fg: Color::Indexed(120),
             del_fg: Color::Indexed(217),
-            number: Color::Indexed(244),
+            number: Color::Reset,
             add_number: Color::Indexed(151),
             del_number: Color::Indexed(181),
-            bar: Color::Indexed(239),
-            text: Color::Indexed(254),
-            meta: Color::Indexed(247),
+            bar: Color::Reset,
+            text: Color::Reset,
+            meta: Color::Reset,
             // Code and command surfaces remain the terminal's own background.
             code_bg: None,
             mono: false,
@@ -1362,6 +1362,10 @@ diff --git a/new.rs b/new.rs\nnew file mode 100644\n--- /dev/null\n+++ b/new.rs\
         assert_eq!(indexed.del_bg, Some(Color::Indexed(52)));
         assert_eq!(indexed.add_fg, Color::Indexed(120));
         assert_eq!(indexed.del_fg, Color::Indexed(217));
+        assert_eq!(indexed.number, Color::Reset, "neutral line numbers follow the terminal foreground");
+        assert_eq!(indexed.bar, Color::Reset, "gutter separators follow the terminal foreground");
+        assert_eq!(indexed.text, Color::Reset, "context and code text follow the terminal foreground");
+        assert_eq!(indexed.meta, Color::Reset, "metadata follows the terminal foreground");
         assert_eq!(indexed.code_bg, None, "code blocks follow the terminal canvas");
         assert!(!indexed.mono);
         let mono = palette(Depth::Mono);
