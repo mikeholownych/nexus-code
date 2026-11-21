@@ -240,7 +240,8 @@ describe("nexus run --fork-session (through dist)", () => {
   });
   test("a worktree-bound source starts its fork in a separate checkout", { skip }, () => {
     const state = home();
-    const s = sessions(state);
+    // Interactive REPLs read the sessions store; `run` forks use the task store above.
+    const s = new SessionManager(path.join(state, "sessions"), () => WorkspacePath.fromSelectedWorkspace(ws));
     seed(s, "src", { worktreeBinding: binding });
     const r = spawnSync(process.execPath, [CLI, "repl", "--fork-session", "src", "-w", ws, "-e", "http://127.0.0.1:9/v1", "-m", "m", "-y"], {
       encoding: "utf8", input: "/exit\n", timeout: 60_000,
