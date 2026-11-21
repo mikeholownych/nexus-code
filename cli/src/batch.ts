@@ -221,7 +221,9 @@ export class BatchOrchestrator {
       ...(this.options.onEvent ? { onEvent: this.options.onEvent } : {}),
       ...(this.options.maxInProcessWaitMs !== undefined ? { maxInProcessWaitMs: this.options.maxInProcessWaitMs } : {}),
       entry: "existing",
-      prepare: (fresh) => { if (fresh.status === "CANCELLED" || fresh.status === "PAUSED") fresh.status = "RUNNING"; },
+      prepare: (fresh) => {
+        if (fresh.status === "CANCELLED" || fresh.status === "PAUSED") fresh.status = fresh.wait ? "WAITING" : "RUNNING";
+      },
     });
     return { id: result.id, status: batchStatus(result), operation: result };
   }

@@ -344,7 +344,9 @@ export function registerOperationCommands(program: Command): void {
       // Re-read and adjust under the driver lock: this snapshot may already be stale.
       await drive(state, config, store, Boolean(options.discover), Boolean(options.json), {
         entry: "existing",
-        prepare: (fresh) => { if (fresh.status === "CANCELLED" || fresh.status === "PAUSED") fresh.status = "RUNNING"; },
+        prepare: (fresh) => {
+          if (fresh.status === "CANCELLED" || fresh.status === "PAUSED") fresh.status = fresh.wait ? "WAITING" : "RUNNING";
+        },
       });
     }));
 
