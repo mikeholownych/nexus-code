@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import { ChatMessage, ToolCall } from "../types.js";
+import { ChatMessage, DEFAULT_MAX_TOOL_INVOCATIONS, MAX_TOOL_INVOCATIONS, ToolCall } from "../types.js";
 import { ExecutionSpine, ExecutionReceipt } from "./spine.js";
 import { ExecutionTracker, REPEAT_THRESHOLD, actionKind, backoffMs, type ObservationVerdict } from "./execution_tracking.js";
 import { fileSignature, readCoverage, readRequests } from "./observation_identity.js";
@@ -155,6 +155,19 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
   const maxTotalSteps = budget ? budget.maxTotalSteps : segmentSteps;
   let segment = 1;
   const tracker = this.objective && this.durable ? trackingOf(this.objective) : ExecutionTracker.fresh();
+  const configuredToolLimit = this.config.maxToolInvocations ?? budget?.maxToolInvocations ?? DEFAULT_MAX_TOOL_INVOCATIONS;
+  if (!Number.isSafeInteger(configuredToolLimit) || configuredToolLimit < 1 || configuredToolLimit > MAX_TOOL_INVOCATIONS) {
+    throw new Error(`Invalid tool invocation budget: expected an integer from 1 to ${MAX_TOOL_INVOCATIONS}.`);
+  }
+  let maxToolInvocations = configuredToolLimit;
+  if (this.objective) {
+    const storedLimit = this.objective.continuation.maxToolInvocations;
+    if (storedLimit !== undefined && (!Number.isSafeInteger(storedLimit) || storedLimit < 1 || storedLimit > MAX_TOOL_INVOCATIONS)) {
+      throw new Error("Persisted objective tool invocation budget is invalid; refusing to dispatch tools.");
+    }
+    maxToolInvocations = storedLimit === undefined ? configuredToolLimit : Math.min(storedLimit, configuredToolLimit);
+    this.objective.continuation.maxToolInvocations = maxToolInvocations;
+  }
 
   try {
     if (this.flightRecorder) {
@@ -214,6 +227,28 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
     let interruption: InterruptionRecord | null = null;
     let undispatched = 0;
     let persistenceFailure: string | undefined;
+
+    const reserveToolInvocations = (requested: number): { admitted: number; exhausted: boolean } => {
+      const admitted = tracker.admitToolInvocations(requested, maxToolInvocations);
+      if (admitted > 0 && !this.persistProgress({ messages: true })) {
+        persistenceFailure = "Tool invocation budget could not be saved before dispatch; no tool was started.";
+        return { admitted: 0, exhausted: false };
+      }
+      return { admitted, exhausted: admitted < requested };
+    };
+    const stopForToolBudget = () => {
+      stopReason = "TOOL_INVOCATION_BUDGET_EXHAUSTED";
+      const count = tracker.data.toolInvocationHistoryComplete
+        ? `${tracker.data.toolInvocations}/${maxToolInvocations}`
+        : `at least ${tracker.data.toolInvocations}/${maxToolInvocations}; tool history before this version is unknown`;
+      stopDetail = `tool invocation budget exhausted (${count} dispatcher admissions)`;
+    };
+    const notDispatchedForBudget = (call: ToolCall) => ({
+      role: "tool" as const,
+      tool_call_id: call.id,
+      name: call.function.name,
+      content: `Not executed: ${stopDetail ?? persistenceFailure ?? "tool invocation budget unavailable"}.`,
+    });
 
     const markInterrupted = (phase: InterruptionRecord["phase"], extra: Partial<InterruptionRecord> = {}) => {
       interruption = {
@@ -872,8 +907,16 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
         }
         // A refusal that stopped the turn stops the whole batch: calls judged before it do not run either.
         if (stopReason) for (const call of parsed.toolCalls) if (!refused.has(call)) refused.set(call, notExecutedMessage(call, stopDetail ?? stopReason).content);
+        const eligible = parsed.toolCalls.filter((call: any) => !refused.has(call));
+        const reservation = eligible.length ? reserveToolInvocations(eligible.length) : { admitted: 0, exhausted: false };
+        const admittedCalls = eligible.slice(0, reservation.admitted);
+        for (const call of eligible.slice(reservation.admitted)) {
+          refused.set(call, persistenceFailure
+            ? `Not executed: ${persistenceFailure}`
+            : `Not executed: tool invocation budget exhausted (${tracker.data.toolInvocations}/${maxToolInvocations} dispatcher admissions).`);
+        }
         const executed = await Promise.all(
-          parsed.toolCalls.filter((call: any) => !refused.has(call)).map(async (call: any) => {
+          admittedCalls.map(async (call: any) => {
             const { receipt } = await this.dispatchToolCall(call, currentStep, "agent");
             return { call, toolName: call.function.name, receipt };
           })
@@ -907,6 +950,7 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
           });
         }
         this.persistProgress({ messages: true });
+        if (reservation.exhausted && !persistenceFailure) stopForToolBudget();
         endStep();
         continue;
       }
@@ -954,6 +998,13 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
         }
         await backoffBefore(call);
         const reacquire = this.turnRemovedObservations.has(observationKey(toolName, call.function.arguments));
+        const reservation = reserveToolInvocations(1);
+        if (reservation.admitted === 0) {
+          if (!persistenceFailure) stopForToolBudget();
+          for (const rest of parsed.toolCalls.slice(ci)) this.messages.push(notDispatchedForBudget(rest));
+          this.persistProgress({ messages: true });
+          break;
+        }
         turn.phase = "tool";
         turn.currentTool = toolName;
         const { receipt, shouldExit } = await this.dispatchToolCall(
@@ -1058,6 +1109,9 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
               ...(stopReason ? { stopReason } : {}),
               stepsWithoutProgress: tracker.data.stepsWithoutProgress,
               cumulativeSteps: tracker.data.cumulativeSteps,
+              toolInvocations: tracker.data.toolInvocations,
+              maxToolInvocations,
+              toolInvocationHistoryComplete: tracker.data.toolInvocationHistoryComplete,
               ...(tracker.loops().length ? { repeated: tracker.loops().slice(0, 5).map((r) => ({ action: r.action, count: r.count, firstStep: r.firstStep, lastStep: r.lastStep })) } : {}),
               ...(this.stateIdentityUncertainty ? { stateUncertainty: this.stateIdentityUncertainty } : {}),
             },
