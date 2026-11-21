@@ -337,6 +337,18 @@ describe("CS-10: the worker inside a Docker container", { skip: DOCKER_SKIP }, (
     assert.equal(fs.existsSync(sideEffect), false, "the candidate worker is never executed on the host");
   });
 
+  test("the host-built core starts in the pinned Docker image before RPC", () => {
+    const launch = wrapSandboxedWorker(core!, ["--version"], workspace, { engines: ["docker"] });
+    const runtime = workerRuntimeFiles(core!);
+    const runtimeSummary = "error" in runtime
+      ? runtime
+      : { loader: runtime.loader ? path.basename(runtime.loader) : undefined, libraries: runtime.libraries.map((file) => path.basename(file)) };
+    assert.equal(launch.engine, "docker", launch.warning);
+    const result = spawnSync(launch.command!, launch.args!, { encoding: "utf8", timeout: 15_000, maxBuffer: 16_000 });
+    assert.equal(result.status, 0, JSON.stringify({ status: result.status, signal: result.signal, stdout: result.stdout, stderr: result.stderr, error: result.error?.message, runtime: runtimeSummary }));
+    assert.match(result.stdout, /harness-core/);
+  });
+
   test("secrets under $HOME: readable unsandboxed, absent from the worker's container", async () => {
     assert.match((await sh(bridge(false), `cat ${home}/.ssh/id_canary`)).stdout, /PRIVATE-KEY-CANARY/, "baseline");
     const b = bridge("docker");
