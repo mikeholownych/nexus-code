@@ -173,6 +173,7 @@ export class SessionManager {
       ...(session.objective !== undefined ? { objective: session.objective } : {}),
       ...(session.findings !== undefined ? { findings: session.findings } : {}),
       ...(session.verificationConfigAttempts !== undefined ? { verificationConfigAttempts: session.verificationConfigAttempts } : {}),
+      ...(session.commandRuleDecisions !== undefined ? { commandRuleDecisions: session.commandRuleDecisions } : {}),
       ...(session.history !== undefined ? { history: session.history } : {}),
       ...(session.forkedFrom !== undefined ? { forkedFrom: session.forkedFrom } : {}),
     };

@@ -66,6 +66,7 @@ import pc from "picocolors";
 import { untrustedWorkspaceExtensions } from "./workspace_trust.js";
 import { ConfirmHandler, SubagentResult, AgentObserver, AgentActivity, CompactionOutcome, CompactionCommitError, CAPABILITY_TTL_MS, TOKEN_COUNT_COOLDOWN_MS, LOW_YIELD_COMPACTIONS_BEFORE_HOLD, NEXUS_RUNTIME_IDENTITY, ContextBudgetError, LedgerNotRetainedError, DurablePlanState, CanonicalDurableProvenance, CanonicalDurableSummary, canonicalDurableProvenance, REMOVED_OBSERVATION, REMOVED_UNSEEN, REMOVED_PARTIAL, REMOVED_CHANGED, REMOVED_RECORDED, REMOVED_UNRECORDED, REMOVED_CONDENSED, REMOVED_DROPPED, REMOVAL_PREFIXES, MEMORY_NOTES_BUDGET_CHARS, ARCHIVE_FOR_READING, boundMemoryNotes, FINDINGS_PREFIX, FINDINGS_NOTE_LIMIT, FINDINGS_BUDGET_CHARS, LEGACY_SHORTENED, FINDINGS_OUTGROWN, FINDINGS_INSTRUCTIONS, unseenTruncationNotice, isTruncatedObservation, observationKey, labelSummaryBlocks, observationPresence, unreacquiredRemovals, LONG_RESPONSE_MS, truncatedReplyNotice, harnessNoteMessage, cutResponseNotice, outputDigest, withoutStepNotices, findingIdentity, shortenedFrom, withoutFindingId, recordedFindings, recordedFindingsState, recordedRetainedObservations, applyDetailBudget, normalizeMessageContent, externalInputsFingerprint, externalInputsContentIdentity, gitIndexIdentity, withPersistableEndpoints, RESUMED_WINDOW_REASON, auditCompactionsOnResume, describeArchiveRead, stepPosition, STATE_IDENTITY_BUDGET_MS, logAudit } from "./core/agent_support.js";
 import { setupSpineHandlersImpl } from "./core/spine_handlers.js";
+import { NO_COMMAND_RULES, readCommandRulesFile, type CommandRuleDecision, type CommandRuleSet } from "./core/command_rules.js";
 import { buildTurnResultImpl, runTurnImpl } from "./core/run_turn.js";
 import { dispatchToolCallImpl } from "./core/dispatch_tool_call.js";
 import type { NeedsInputOption, NeedsInputQuestion } from "./core/needs_input.js";
@@ -561,6 +562,7 @@ export class AutonomousAgent {
     this.capabilityRegistry.register(READ_ARCHIVE_CAPABILITY);
     this.capabilityRegistry.register(ENABLE_TOOLS_CAPABILITY);
     this.setupSpineHandlers();
+    this.loadCommandRules();
     this.stateManager = new DurableStateManager({ workspacePaths: [this.primaryWorkspacePathIdentity] });
     if (typeof (this.client as any)?.setTaskId === "function") this.client.setTaskId(this.currentTaskId);
     if (typeof (this.plannerClient as any)?.setTaskId === "function") this.plannerClient.setTaskId(this.currentTaskId);
@@ -858,6 +860,7 @@ export class AutonomousAgent {
       messages: this.messages,
       unverifiedChangesPending: this.hasPendingModifications,
       verificationConfigAttempts: this.bridge.getSecurityManager().getVerificationAttempts(),
+      commandRuleDecisions: this.commandRuleDecisions,
       durableNotes: notes ? [notes] : undefined,
       ...(this.compactionProvenance ? { compactionProvenance: this.compactionProvenance } : {}),
       ...(this.recoveredOperation !== undefined ? { operation: this.recoveredOperation } : {}),
@@ -1466,6 +1469,24 @@ export class AutonomousAgent {
   }
 
   private persistedVerificationAttempts = 0;
+  private persistedCommandRuleDecisions = 0;
+
+  /** The operator's command rules (CS-9), loaded once from the operator home; empty when absent or invalid. */
+  public commandRules: CommandRuleSet = NO_COMMAND_RULES;
+  /** Which rule decided a command, in order; saved with the session so the export shows it. */
+  public commandRuleDecisions: CommandRuleDecision[] = [];
+  public commandRulesNotice?: string;
+
+  private loadCommandRules(): void {
+    const file = path.join(os.homedir(), ".config", "nexus", "command_rules.json");
+    try {
+      this.commandRules = readCommandRulesFile(file);
+    } catch (error) {
+      // A file that does not load is refused whole: the normal approval policy applies, and the operator is told once.
+      this.commandRules = NO_COMMAND_RULES;
+      this.commandRulesNotice = `${(error as Error).message}. The rules file was ignored; the normal approval policy applies.`;
+    }
+  }
 
   /** A rebuilt bridge brings a fresh security manager; the attempts recorded so far move to it so the saved history is never cut back. */
   private carryVerificationAttempts(next: RustCoreBridge): RustCoreBridge {
@@ -1476,13 +1497,15 @@ export class AutonomousAgent {
   /** Saves the verification-config attempts recorded since the last save, so a resumed session and its export still show them. */
   private syncVerificationAttempts(): void {
     const count = this.bridge.getSecurityManager().getVerificationAttempts().length;
-    if (count === this.persistedVerificationAttempts) return;
+    const rulesCount = this.commandRuleDecisions.length;
+    if (count === this.persistedVerificationAttempts && rulesCount === this.persistedCommandRuleDecisions) return;
     this.persistedVerificationAttempts = count;
-    this.persistProgress({ verificationConfigAttempts: true });
+    this.persistedCommandRuleDecisions = rulesCount;
+    this.persistProgress({ verificationConfigAttempts: true, commandRuleDecisions: true });
   }
 
   /** Save mid-turn progress and report whether every configured persistence sink succeeded. */
-  private persistProgress(progress: { verificationConfigAttempts?: boolean; messages?: boolean; unverifiedChangesPending?: boolean; changeBaseline?: ChangeBaseline | null }): boolean {
+  private persistProgress(progress: { commandRuleDecisions?: boolean; verificationConfigAttempts?: boolean; messages?: boolean; unverifiedChangesPending?: boolean; changeBaseline?: ChangeBaseline | null }): boolean {
     if (!this.durable || this.restoringConversation) return true;
     let saved = true;
     try {
@@ -1512,6 +1535,7 @@ export class AutonomousAgent {
         } : {}),
         ...(progress.unverifiedChangesPending !== undefined ? { unverifiedChangesPending: progress.unverifiedChangesPending } : {}),
         ...(progress.verificationConfigAttempts ? { verificationConfigAttempts: this.bridge.getSecurityManager().getVerificationAttempts() } : {}),
+        ...(progress.commandRuleDecisions ? { commandRuleDecisions: this.commandRuleDecisions } : {}),
         ...(progress.changeBaseline !== undefined ? {
           changeBaseline: progress.changeBaseline
             ? {
@@ -1964,6 +1988,7 @@ export class AutonomousAgent {
       changeBaseline?: DurableTaskState["changeBaseline"];
       lastTurn?: TurnResult | null;
       verificationConfigAttempts?: DurableTaskState["verificationConfigAttempts"];
+      commandRuleDecisions?: DurableTaskState["commandRuleDecisions"];
       model?: string;
       endpoint?: string;
     },
@@ -1985,6 +2010,8 @@ export class AutonomousAgent {
       this.restoreHistory(audit.fullTranscript ? { ...session.history, compactions: 0, archivedMessages: 0, committedCompactions: [] } : session.history);
       this.bridge.getSecurityManager().restoreVerificationAttempts(session.verificationConfigAttempts);
       this.persistedVerificationAttempts = session.verificationConfigAttempts?.length ?? 0;
+      this.commandRuleDecisions = Array.isArray(session.commandRuleDecisions) ? [...session.commandRuleDecisions] : [];
+      this.persistedCommandRuleDecisions = this.commandRuleDecisions.length;
       this.restoreArchive(audit.trustedArchive);
       const described = describeArchiveRead(read);
       return [described, ...audit.notes].filter(Boolean).join(" ") || undefined;
