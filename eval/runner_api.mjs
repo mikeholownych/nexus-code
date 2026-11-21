@@ -30,6 +30,13 @@ export function createAgentLaunchPayload({ task, config, agentIdentity, home, bu
   if (agent === "nexus") {
     if (task.t4Fixture) env.NEXUS_EVAL_TOOL_RECEIPTS = "1";
     env.LOCAL_LLM_ENDPOINT = ep;
+    // CX-4 measurement knob: mask tool outputs above this many tokens (NEXUS_TOOL_OUTPUT_MASK_TOKENS). Only a positive
+    // integer from the config is honoured; the variable name itself is credential-like to the env filter above, so it
+    // cannot be passed through `config.env`.
+    if (config.toolOutputMaskTokens !== undefined) {
+      if (!Number.isInteger(config.toolOutputMaskTokens) || config.toolOutputMaskTokens <= 0) throw new Error("toolOutputMaskTokens must be a positive integer");
+      env.NEXUS_TOOL_OUTPUT_MASK_TOKENS = String(config.toolOutputMaskTokens);
+    }
     const contextArgs = nexusContextLimitArgs(config, limits.context);
     if (task.tier === "T3") {
       // T3 drives the sidecar, the operator channel that carries steering, with the same model, budgets and limits.

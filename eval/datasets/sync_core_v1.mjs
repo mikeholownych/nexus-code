@@ -21,8 +21,9 @@ const DROPPED_KEYS = ["description"]; // prose for readers of eval/tasks; the da
 // The keys a record in the hand-written files may carry; any other key is a field core-v1 would run on that eval/tasks lacks.
 const EXAMPLE_KEYS = ["id", "split", "domain", "objective", "taskDir", "tier", "steps", "minutes"];
 const ORACLE_KEYS = ["id", "hidden", "regression"];
-// Source tasks deliberately not in core-v1 (none today). Listing one here is the only way to leave it out.
-const EXCLUDED_FROM_CORE_V1 = [];
+// Source tasks deliberately not in core-v1. Listing one here is the only way to leave it out.
+// Measurement tasks, not benchmark tasks: CX-4 (tool-output masking) compares masked and unmasked runs on large-output work.
+export const EXCLUDED_FROM_CORE_V1 = ["cx4-verbose-fix", "cx4-log-triage", "cx4-wide-rename"];
 
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const readJsonl = (file) => fs.readFileSync(file, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
