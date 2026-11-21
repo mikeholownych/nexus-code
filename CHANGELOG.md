@@ -9,6 +9,7 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 ## [Unreleased]
 
 ### Changed
+- VC-8: the implementer and tester roles are refused the tools that reach outside the task. Both lose the browser tools and `manage_knowledge`; the tester also loses `fetch_web`, `search_web` and `spawn_subagent`. The agent neither offers a refused tool nor runs it when the model calls it anyway; the denial names the role and says why. Editing, testing, shell, git, LSP and objective tools are unchanged, and the path guards, verifier and review remain the controls for what they may change. Owner choice: network and side-channel tools (2026-11-21).
 - Redaction variants (MT-3, part 2): `formatSafeSidecarText` calls the shared `safeTerminal` instead of restating it, with output byte-identical; the remaining variants are kept and each has a reason in `docs/v1.2.1/REDACTION_VARIANTS.md`. New `cli/test/mt3_redaction_characterization.test.ts` pins the exact output of 23 redaction and terminal-safe variants over a shared corpus.
 
 ### Added
