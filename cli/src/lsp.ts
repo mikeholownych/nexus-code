@@ -6,6 +6,7 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import { buildMcpEnvironment } from "./mcp.js";
 
 const LSP_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+const EDIT_DIAGNOSTICS_GRACE_MS = 8_000;
 const LSP_TOOLCHAIN_VARS = ["RUSTUP_HOME", "CARGO_HOME", "RUSTUP_TOOLCHAIN", "GOPATH", "GOROOT", "GOCACHE", "GOMODCACHE"];
 
 const SYSTEM_BIN_DIRS = ["/usr/bin", "/bin", "/usr/local/bin", "/sbin", "/usr/sbin"];
@@ -104,6 +105,7 @@ export class LspClient {
   private nextId: number = 1;
   private pending: Map<number, { resolve: (val: any) => void; reject: (err: any) => void }> = new Map();
   private diagnosticsMap: Map<string, LspDiagnostic[]> = new Map();
+  private documentChangedAt: Map<string, number> = new Map();
   private buffer: Buffer = Buffer.alloc(0);
   public initialized: boolean = false;
   /** Tokens of the server's work-done progress that has begun and not ended, and when progress last changed. */
@@ -365,11 +367,12 @@ export class LspClient {
       const version = prev.version + 1;
       this.opened.set(uri, { version, text });
       this.diagnosticsMap.delete(uri);
-        // Startup progress does not mean work for this newer document version has settled. A server may first
-        // publish diagnostics for the updated version before its analysis has caught up; make the bounded grace
-        // path apply again unless this edit produces fresh progress notifications.
-        this.progressSeen = false;
-        this.lastProgressAt = 0;
+      this.documentChangedAt.set(uri, Date.now());
+      // Startup progress does not mean work for this newer document version has settled. A server may first
+      // publish diagnostics for the updated version before its analysis has caught up; make the bounded grace
+      // path apply again unless this edit produces fresh progress notifications.
+      this.progressSeen = false;
+      this.lastProgressAt = 0;
       this.sendNotification("textDocument/didChange", {
         textDocument: { uri, version },
         contentChanges: [{ text }],
@@ -382,6 +385,7 @@ export class LspClient {
   public async waitForDiagnostics(filePath: string, timeoutMs: number): Promise<LspDiagnostic[] | null> {
     const uri = pathToFileURL(path.resolve(this.rootPath, filePath)).href;
     const startedAt = Date.now();
+    const changedAt = this.documentChangedAt.get(uri);
     const first = await this.firstDiagnostics(uri, timeoutMs);
     if (!this.awaitProgress || !first) return first;
     // A staged server's first publish may be empty. Wait until its progress has ended and been quiet for a moment (or, if it
@@ -392,9 +396,11 @@ export class LspClient {
       const now = Date.now();
       const idle = this.progressActive.size === 0;
       const settled = this.progressSeen ? now - this.lastProgressAt >= QUIET_MS : now - startedAt >= GRACE_MS;
-      if (idle && settled) break;
+      const editSettled = changedAt === undefined || now - changedAt >= EDIT_DIAGNOSTICS_GRACE_MS;
+      if (idle && settled && editSettled) break;
       await new Promise((r) => setTimeout(r, 100));
     }
+    if (changedAt !== undefined && Date.now() - changedAt >= EDIT_DIAGNOSTICS_GRACE_MS) this.documentChangedAt.delete(uri);
     return this.diagnosticsMap.get(uri) ?? first;
   }
 
