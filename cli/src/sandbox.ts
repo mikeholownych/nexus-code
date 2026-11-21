@@ -458,7 +458,7 @@ function wrapBwrapWorker(workerPath: string, workerArgs: readonly string[], work
 const DOCKER_WORKER_RUNTIME = "/nexus-worker";
 export const DOCKER_WORKER_LABEL = "io.nexus-code.worker-of";
 
-type ElfRuntimeInfo = { interpreter?: string; machine: string; needed: string[]; searchPaths: string[] };
+type ElfRuntimeInfo = { interpreter?: string; machine: string; needed: string[]; soname?: string; searchPaths: string[] };
 
 /** Resolve only root-owned system inspection tools; PATH may contain workspace-controlled entries. */
 function trustedSystemTool(name: string): string | undefined {
@@ -494,6 +494,7 @@ function readElfRuntimeInfo(readelf: string, file: string): ElfRuntimeInfo | { e
   if (!machine) return { error: `the ELF machine type could not be read for ${file}.` };
   const interpreter = output.match(/\[Requesting program interpreter:\s*([^\]]+)\]/)?.[1];
   const needed = [...output.matchAll(/\(NEEDED\).*?Shared library:\s*\[([^\]]+)\]/g)].map((match) => match[1]);
+  const soname = output.match(/\(SONAME\).*?Library soname:\s*\[([^\]]+)\]/)?.[1];
   const rawSearchPaths = [...output.matchAll(/\((?:RPATH|RUNPATH)\).*?\[([^\]]*)\]/g)].flatMap((match) => match[1].split(":"));
   const origin = path.dirname(file);
   const searchPaths = rawSearchPaths.flatMap((entry) => {
@@ -501,7 +502,7 @@ function readElfRuntimeInfo(readelf: string, file: string): ElfRuntimeInfo | { e
     if (!expanded || expanded.includes("$") || !path.isAbsolute(expanded)) return [];
     return [expanded];
   });
-  return { interpreter, machine, needed, searchPaths };
+  return { interpreter, machine, needed, soname, searchPaths };
 }
 
 /**
@@ -510,7 +511,7 @@ function readElfRuntimeInfo(readelf: string, file: string): ElfRuntimeInfo | { e
  * `readelf` only parses metadata; `ldconfig -p` supplies the host's cached library paths. Unknown dependencies fail
  * closed. Static workers need no host runtime files.
  */
-export function workerRuntimeFiles(workerPath: string): { loader?: string; libraries: string[] } | { error: string } {
+export function workerRuntimeFiles(workerPath: string): { loader?: string; libraries: string[]; libraryNames: Array<{ name: string; path: string }> } | { error: string } {
   if (process.platform !== "linux") return { error: "worker runtime discovery is supported only on Linux." };
   const readelf = trustedSystemTool("readelf");
   if (!readelf) return { error: "a trusted system readelf executable is unavailable." };
@@ -529,7 +530,7 @@ export function workerRuntimeFiles(workerPath: string): { loader?: string; libra
   if (!machineTags.some((tag) => initial.machine.toLowerCase().includes(tag))) {
     return { error: `the worker architecture (${initial.machine}) does not match the host architecture (${process.arch}).` };
   }
-  if (!initial.interpreter && initial.needed.length === 0) return { libraries: [] };
+  if (!initial.interpreter && initial.needed.length === 0) return { libraries: [], libraryNames: [] };
   if (!initial.interpreter) return { error: "the dynamically linked worker has no ELF interpreter." };
 
   const ldconfig = trustedSystemTool("ldconfig");
@@ -568,6 +569,7 @@ export function workerRuntimeFiles(workerPath: string): { loader?: string; libra
   }
 
   const libraries = new Set<string>();
+  const libraryNames = new Map<string, string>();
   const scanned = new Set<string>([resolvedWorker]);
   const queue: Array<{ file: string; info: ElfRuntimeInfo }> = [{ file: resolvedWorker, info: initial }];
   const resolveNeeded = (name: string, searchPaths: string[]): string | undefined => {
@@ -588,8 +590,14 @@ export function workerRuntimeFiles(workerPath: string): { loader?: string; libra
   while (queue.length) {
     const current = queue.shift()!;
     for (const name of current.info.needed) {
+      if (name !== path.basename(name) || !/^[A-Za-z0-9_.+-]+$/.test(name)) {
+        return { error: `the worker has an unsafe shared-library name: ${name}` };
+      }
       const resolved = resolveNeeded(name, current.info.searchPaths);
       if (!resolved) return { error: `the worker needs a shared library that could not be resolved: ${name}` };
+      const previous = libraryNames.get(name);
+      if (previous && previous !== resolved) return { error: `the worker's shared-library name is ambiguous: ${name}` };
+      libraryNames.set(name, resolved);
       libraries.add(resolved);
       if (libraries.size > 256) return { error: "the worker has more than 256 shared runtime files; refusing an unbounded mount set." };
       if (scanned.has(resolved)) continue;
@@ -602,7 +610,7 @@ export function workerRuntimeFiles(workerPath: string): { loader?: string; libra
       queue.push({ file: resolved, info });
     }
   }
-  return { ...(loader ? { loader } : {}), libraries: [...libraries] };
+  return { ...(loader ? { loader } : {}), libraries: [...libraries], libraryNames: [...libraryNames].map(([name, file]) => ({ name, path: file })) };
 }
 
 /**
@@ -650,6 +658,7 @@ function wrapDockerWorker(workerPath: string, workerArgs: readonly string[], wor
   }
   mount(resolvedWorker, "harness-core");
   for (const library of runtime.libraries) mount(library, path.basename(library));
+  for (const library of runtime.libraryNames) mount(library.path, library.name);
   const inContainer = `${DOCKER_WORKER_RUNTIME}/harness-core`;
   const start = runtime.loader
     ? (mount(runtime.loader, "ld.so"), [`${DOCKER_WORKER_RUNTIME}/ld.so`, "--library-path", DOCKER_WORKER_RUNTIME, inContainer])
