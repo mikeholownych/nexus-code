@@ -5,9 +5,9 @@
  * This mirrors scripts/gen_models_snapshot.mjs without the tool-choice clone step: `api.json` carries no tool-choice
  * data, so the reader keeps the bundled snapshot's modes for models the cache lists without them.
  */
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { writePrivateFile } from "./durable_file.js";
 import { parseSnapshot, type ModelsSnapshot, type ProviderPin, type SnapshotModel, type SnapshotProvider } from "./models_snapshot.js";
 
 export const MODELS_API_URL = "https://models.dev/api.json";
@@ -117,9 +117,6 @@ export async function refreshModelsCache(opts: { pins: Record<string, ProviderPi
   const { snapshot, rejected } = snapshotFromApi(api, date, opts.pins);
   if (!snapshot.providers.length) throw new Error("models.dev data contained no usable providers; the cache was not changed");
   const file = modelsCachePath(opts.home);
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(snapshot), { mode: 0o600 });
-  fs.renameSync(tmp, file);
+  writePrivateFile(file, JSON.stringify(snapshot), { durable: true, mode: 0o600 });
   return { file, date, providers: snapshot.providers.length, models: snapshot.providers.reduce((n, p) => n + p.models.length, 0), rejected };
 }
