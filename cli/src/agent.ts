@@ -61,7 +61,7 @@ import { maskToolOutputs, maskThresholdFromEnv } from "./core/tool_output_mask.j
 import { ELIDED_FINDINGS_PREFIX, READ_FINDINGS_CAPABILITY, READ_ARCHIVE_CAPABILITY, readArchive, condenseFinding, elidedFindingsNote, findingId, incompleteOutputNotice, indexFinding, isCondensedFinding } from "./core/findings.js";
 import { FILE_EDIT_TOOLS, snapshot } from "./file_diff.js";
 import { TurnEvidence, TurnReason } from "./core/turn.js";
-import { isReadOnlyRole, isSpecialistRole, ROLE_PROFILES, roleToolAllowList, type AgentRole } from "./core/roles.js";
+import { isReadOnlyRole, isSpecialistRole, ROLE_PROFILES, roleToolAllowList, roleToolDenyList, type AgentRole } from "./core/roles.js";
 import pc from "picocolors";
 import { untrustedWorkspaceExtensions } from "./workspace_trust.js";
 import { ConfirmHandler, SubagentResult, AgentObserver, AgentActivity, CompactionOutcome, CompactionCommitError, CAPABILITY_TTL_MS, TOKEN_COUNT_COOLDOWN_MS, LOW_YIELD_COMPACTIONS_BEFORE_HOLD, NEXUS_RUNTIME_IDENTITY, ContextBudgetError, LedgerNotRetainedError, DurablePlanState, CanonicalDurableProvenance, CanonicalDurableSummary, canonicalDurableProvenance, REMOVED_OBSERVATION, REMOVED_UNSEEN, REMOVED_PARTIAL, REMOVED_CHANGED, REMOVED_RECORDED, REMOVED_UNRECORDED, REMOVED_CONDENSED, REMOVED_DROPPED, REMOVAL_PREFIXES, MEMORY_NOTES_BUDGET_CHARS, ARCHIVE_FOR_READING, boundMemoryNotes, FINDINGS_PREFIX, FINDINGS_NOTE_LIMIT, FINDINGS_BUDGET_CHARS, LEGACY_SHORTENED, FINDINGS_OUTGROWN, FINDINGS_INSTRUCTIONS, unseenTruncationNotice, isTruncatedObservation, observationKey, labelSummaryBlocks, observationPresence, unreacquiredRemovals, LONG_RESPONSE_MS, truncatedReplyNotice, harnessNoteMessage, cutResponseNotice, outputDigest, withoutStepNotices, findingIdentity, shortenedFrom, withoutFindingId, recordedFindings, recordedFindingsState, recordedRetainedObservations, applyDetailBudget, normalizeMessageContent, externalInputsFingerprint, externalInputsContentIdentity, gitIndexIdentity, withPersistableEndpoints, RESUMED_WINDOW_REASON, auditCompactionsOnResume, describeArchiveRead, stepPosition, STATE_IDENTITY_BUDGET_MS, logAudit } from "./core/agent_support.js";
@@ -1274,6 +1274,8 @@ export class AutonomousAgent {
     ];
     const allowed = roleToolAllowList(this.role);
     if (allowed) tools = tools.filter((t) => allowed.has(t.function.name));
+    const denied = roleToolDenyList(this.role);
+    if (denied) tools = tools.filter((t) => !denied.has(t.function.name));
     return tools;
   }
 
@@ -2127,9 +2129,10 @@ export class AutonomousAgent {
   /** Whether this agent may call a tool at all: offered to it, allowed for its role, and not refused as read-only. */
   private toolPermitted(): (tool: string) => boolean {
     const allowed = roleToolAllowList(this.role);
+    const denied = roleToolDenyList(this.role);
     const readOnly = this.isReadOnly();
     const requirements = this.offersRequirements();
-    return (tool) => (!allowed || allowed.has(tool)) && !(readOnly && isWriteOrExecTool(tool)) && (tool !== "update_requirements" || requirements);
+    return (tool) => (!allowed || allowed.has(tool)) && !denied?.has(tool) && !(readOnly && isWriteOrExecTool(tool)) && (tool !== "update_requirements" || requirements);
   }
 
   /** update_requirements is offered only with an objective ledger that has requirements, to agents that own it. */

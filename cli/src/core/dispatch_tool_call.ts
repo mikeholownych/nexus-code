@@ -18,7 +18,7 @@ import { createHash } from "node:crypto";
 import { failedCheckFrom, attemptEvidence, recordAttempt, convergenceSignal, convergenceHistory } from "./objective.js";
 import { recordTestEdit, recordUnverifiableTestEdit } from "./regression_obligations.js";
 import { FILE_EDIT_TOOLS, describeChange, editTarget, snapshot } from "../file_diff.js";
-import { roleToolAllowList } from "./roles.js";
+import { roleToolAllowList, roleToolDenyList } from "./roles.js";
 import { MAY_OUTLIVE_COMMAND, ConfirmHandler, observationKey, egressOriginOf, READ_ONLY_TOOLS, logAudit } from "./agent_support.js";
 import { buildNeedsInput, type NeedsInputQuestion } from "./needs_input.js";
 import {
@@ -90,7 +90,9 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
   // A restricted role is refused any tool outside its allow-list, whatever the model was told or claims. A write or
   // exec call in read-only mode is left to the read-only check, which refuses it with its own reason.
   const roleAllowed = roleToolAllowList(this.role);
-  if (roleAllowed && !roleAllowed.has(toolName) && !(this.isReadOnly() && isWriteOrExecTool(toolName))) {
+  const roleDenied = roleToolDenyList(this.role);
+  const denyListed = Boolean(roleDenied?.has(toolName));
+  if (denyListed || (roleAllowed && !roleAllowed.has(toolName) && !(this.isReadOnly() && isWriteOrExecTool(toolName)))) {
     return {
       receipt: recordReceipt({
         invocationId: call.id,
@@ -102,7 +104,9 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
         targetResources: [],
         success: false,
         output: "",
-        error: `Tool "${toolName}" is not permitted for role '${this.role}'. Permitted tools: ${[...roleAllowed].join(", ")}.`,
+        error: denyListed
+          ? `Tool "${toolName}" is not available to role '${this.role}': tools that reach outside the task (${[...roleDenied!].join(", ")}) are not part of that role. Do the work with the tools you have, or report what you could not do.`
+          : `Tool "${toolName}" is not permitted for role '${this.role}'. Permitted tools: ${[...roleAllowed!].join(", ")}.`,
         durationMs: 0,
         candidateMutated: false,
         status: "DENIED",
