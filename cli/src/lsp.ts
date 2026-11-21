@@ -106,6 +106,7 @@ export class LspClient {
   private pending: Map<number, { resolve: (val: any) => void; reject: (err: any) => void }> = new Map();
   private diagnosticsMap: Map<string, LspDiagnostic[]> = new Map();
   private documentChangedAt: Map<string, number> = new Map();
+  private saveOptions?: { includeText?: boolean };
   private buffer: Buffer = Buffer.alloc(0);
   public initialized: boolean = false;
   /** Tokens of the server's work-done progress that has begun and not ended, and when progress last changed. */
@@ -154,8 +155,9 @@ export class LspClient {
           textDocument: {
             hover: { contentFormat: ["markdown", "plaintext"] },
             definition: { dynamicRegistration: true },
-          // Ask servers to attach the document version so delayed results for pre-edit content can be rejected.
-          publishDiagnostics: { relatedInformation: true, versionSupport: true },
+            // Ask servers to attach document versions so delayed results for pre-edit content can be rejected.
+            publishDiagnostics: { relatedInformation: true, versionSupport: true },
+            synchronization: { didSave: true },
           },
           // Declared so that servers which report progress (rust-analyzer) send $/progress, which diagnostics wait on.
           window: { workDoneProgress: true },
@@ -163,6 +165,10 @@ export class LspClient {
       }, 5000);
 
       if (!initRes) return false;
+      const sync = initRes.capabilities?.textDocumentSync;
+      if (typeof sync === "object" && sync?.save) {
+        this.saveOptions = typeof sync.save === "object" ? sync.save : {};
+      }
 
       // 2. Initialized notification
       this.sendNotification("initialized", {});
@@ -377,6 +383,12 @@ export class LspClient {
         textDocument: { uri, version },
         contentChanges: [{ text }],
       });
+      if (this.saveOptions) {
+        this.sendNotification("textDocument/didSave", {
+          textDocument: { uri },
+          ...(this.saveOptions.includeText ? { text } : {}),
+        });
+      }
     }
     return true;
   }
