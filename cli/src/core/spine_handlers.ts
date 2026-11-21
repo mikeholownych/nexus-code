@@ -465,8 +465,8 @@ export function setupSpineHandlersImpl(this: any): void {
       return { success: false, output: "", error: `Subagent not started: this parent reached its limit of ${limits.maxChildrenPerParent} delegated children.` };
     }
 
-    if (!args || typeof args !== "object" || Array.isArray(args) || Object.keys(args).some((key) => !["prompt", "profile", "inputs"].includes(key))) {
-      return { success: false, output: "", error: "Invalid delegation request. Only prompt, profile, and inputs are accepted." };
+    if (!args || typeof args !== "object" || Array.isArray(args) || Object.keys(args).some((key) => !["prompt", "profile", "inputs", "max_steps"].includes(key))) {
+      return { success: false, output: "", error: "Invalid delegation request. Only prompt, profile, inputs, and the ignored legacy max_steps field are accepted." };
     }
     const profile = args.profile === undefined ? "semantic_explorer" : args.profile;
     if (typeof profile !== "string" || !Object.hasOwn(ROLE_PROFILES, profile)) {

@@ -59,7 +59,7 @@ export function delegationRuntimeLimits(): DelegationRuntimeLimits {
     maxDepth: boundedLimit("NEXUS_DELEGATION_MAX_DEPTH", 1, 1, 1),
     maxChildrenPerParent: boundedLimit("NEXUS_DELEGATION_MAX_CHILDREN", 4, 1, 16),
     maxActiveChildren: boundedLimit("NEXUS_DELEGATION_MAX_ACTIVE", 4, 1, 16),
-    maxInferenceSteps: boundedLimit("NEXUS_DELEGATION_MAX_STEPS", 8, 1, 64),
+    maxInferenceSteps: boundedLimit("NEXUS_DELEGATION_MAX_STEPS", 64, 1, 256),
     maxDurationMs: boundedLimit("NEXUS_DELEGATION_MAX_DURATION_MS", 120_000, 1_000, 600_000),
   };
 }
