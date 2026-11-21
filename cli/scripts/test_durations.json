@@ -1,0 +1,13 @@
+{
+  "test/approval_policy.test.ts": 1.11,
+  "test/capabilities.test.ts": 0.2,
+  "test/client_tool_grammar.test.ts": 0.36,
+  "test/diff_coverage.test.ts": 0.19,
+  "test/flight_exclude.test.ts": 0.69,
+  "test/flight_sanitization.test.ts": 0.38,
+  "test/protocol_golden.test.ts": 0.28,
+  "test/protocol.test.ts": 0.02,
+  "test/security.test.ts": 0.29,
+  "test/test_shards.test.ts": 1.25,
+  "test/tool_grammar.test.ts": 0.21
+}

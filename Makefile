@@ -1,7 +1,7 @@
 export PATH := $(HOME)/.cargo/bin:$(PATH)
 APPROVED_RUST_BUILD_IMAGE := rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb
 
-.PHONY: all setup build build-core build-cli check clean test test-ci test-fixture-notice audit security-scan sbom verify-reproducibility
+.PHONY: all setup build build-core build-cli check clean lint typecheck fmt-check test test-ci test-fixture-notice audit security-scan sbom verify-reproducibility
 
 all: build
 
@@ -20,6 +20,17 @@ build-cli:
 
 check:
 	node cli/dist/index.js check
+
+# PR-required static gates. rustfmt is diff-scoped (scripts/check_fmt.sh) because the core has legacy drift.
+lint: typecheck
+	cargo clippy --locked --manifest-path core/Cargo.toml --all-targets -- -D warnings
+	$(MAKE) fmt-check
+
+typecheck:
+	npm --prefix cli run typecheck
+
+fmt-check:
+	bash scripts/check_fmt.sh
 
 clean:
 	cargo clean --manifest-path core/Cargo.toml

@@ -11,7 +11,11 @@
     "build": "tsc && node scripts/copy_data.mjs && node scripts/write_build_info.mjs",
     "test": "npm run test:cli && npm run test:scope",
     "test:cli": "node scripts/test_shards.mjs",
+    "test:unit": "node scripts/test_tiers.mjs --tier=unit",
     "test:scope": "bash ../scripts/terminal-acceptance/test-scope-procs.sh",
+    "test:coverage": "node scripts/run_coverage.mjs",
+    "test:coverage:diff": "node scripts/diff_coverage.mjs --lcov coverage/lcov.info",
+    "typecheck": "tsc --noEmit",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts"
   },

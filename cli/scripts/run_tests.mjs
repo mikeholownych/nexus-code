@@ -71,6 +71,10 @@ function runSegment(segment) {
       for (const line of lines.filter(Boolean)) {
         const message = JSON.parse(line);
         if (message.done) result.done = message;
+        if (message.duration) {
+          const { file, secs } = message.duration;
+          durations.set(file, Math.max(durations.get(file) ?? 0, secs));
+        }
         if (message.timeout && !result.timedOut) {
           result.timedOut = message.timeout;
           console.error(`\nTEST FILE TIMEOUT after ${timeoutSecs}s: ${message.timeout}\nlast output:\n${message.tail.map((l) => `  | ${l}`).join("\n")}`);
@@ -87,6 +91,7 @@ let remaining = files;
 let tests = 0;
 let failures = 0;
 const timedOut = [];
+const durations = new Map();
 let crashed = false;
 while (remaining.length) {
   const result = await runSegment(remaining);
@@ -101,6 +106,13 @@ while (remaining.length) {
   remaining = at < 0 ? [] : remaining.slice(at + 1);
 }
 
+if (process.env.NEXUS_TEST_DURATIONS_OUT) {
+  const out = path.resolve(process.env.NEXUS_TEST_DURATIONS_OUT);
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  const measured = Object.fromEntries([...durations.entries()].sort(([a], [b]) => a.localeCompare(b)));
+  fs.writeFileSync(out, `${JSON.stringify(measured, null, 2)}\n`);
+  console.error(`[test-durations] wrote ${Object.keys(measured).length} measured files to ${out}`);
+}
 cleanupHome();
 const bad = failures > 0 || timedOut.length > 0 || crashed;
 if (timedOut.length || crashed) console.error(`\ntimed out: ${timedOut.join(", ") || "none"}${crashed ? "; the test driver exited without a result" : ""}; tests (completed segments): ${tests}, fail: ${failures}`);
