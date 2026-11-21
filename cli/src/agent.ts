@@ -4595,6 +4595,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
       const requestId = randomUUID();
       const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);
       try {
+        // Subagent inference uses the selected connection's advertised limits too; after the first discovery the depth
+        // guard prevents nested workers from repeatedly reading the same catalog.
+        await this.refreshCapabilities(activeClient, "subagent step", false, signal);
         await this.admitWithFindings(activeClient, currentStep, requestId, signal);
         await this.measureAdmission(activeClient, currentStep, requestId, signal);
         const policy = this.recoveryPolicy ?? recoveryPolicyFromEnv();
