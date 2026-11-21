@@ -59,8 +59,11 @@ exit 0
 `;
 const FAKE_CARGO = `#!/bin/sh
 if [ "$1" = --version ]; then echo "cargo 1.90.0"; exit 0; fi
-if grep -q BADRUST core/src/lib.rs 2>/dev/null; then printf 'error[E0425]: cannot find value BADRUST in this scope\n --> core/src/lib.rs:1:1\n'; exit 1; fi
-exit 0
+if [ "$1" = test ]; then exit 0; fi
+found=0
+if grep -q BADRUST core/src/lib.rs 2>/dev/null; then printf 'error[E0425]: cannot find value BADRUST in this scope\n --> core/src/lib.rs:1:1\n'; found=1; fi
+if grep -q BREAK_API core/src/lib.rs 2>/dev/null; then printf 'error[E0061]: this function takes 1 argument but 2 arguments were supplied\n --> core/src/caller.rs:1:1\n'; found=1; fi
+exit "$found"
 `;
 
 function repo(files: Record<string, string>): string {
@@ -223,6 +226,25 @@ describe("VC-6: every configured project in a workspace is checked", () => {
     assert.equal(checks?.[0]?.status, "PASSED");
     assert.equal(checks?.[1]?.status, "FAILED");
     assert.equal(turn.verification?.typecheck?.status, "FAILED");
+    assert.notEqual(turn.outcome, "VERIFIED");
+  });
+
+  test("Cargo compares current errors with a pre-change baseline and catches a new error in an untouched Rust caller", { timeout: 120_000 }, async () => {
+    const files = {
+      "core/Cargo.toml": "[package]\nname = \"core\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+      "core/src/lib.rs": "pub fn existing() { BADRUST; }\n",
+      "core/src/caller.rs": "pub fn call() {}\n",
+    };
+    const turn = await turnOf(files, {
+      tools: { cargo: FAKE_CARGO },
+      steps: [fix, write("core/src/lib.rs", "pub fn existing() { BADRUST; }\npub fn changed() { BREAK_API; }\n"), done],
+      config: { typecheck: "enforce" },
+    });
+    const rust = turn.verification?.typecheck?.projects?.find((check) => check.configPath === "core/Cargo.toml");
+    assert.equal(rust?.status, "FAILED");
+    assert.equal(rust?.baselineErrorCount, 1);
+    assert.equal(rust?.introducedCount, 1);
+    assert.match(rust?.firstDiagnostics?.[0] ?? "", /BADRUST/);
     assert.notEqual(turn.outcome, "VERIFIED");
   });
 
