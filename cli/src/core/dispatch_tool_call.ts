@@ -89,6 +89,33 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
     return receipt;
   };
 
+  // Delegated authority is checked at the dispatcher as well as when schemas are built. This is the
+  // enforcement point for malformed/native/text tool calls and extension tools alike.
+  if (this.delegatedToolAllowList && !this.delegatedToolAllowList.has(toolName)) {
+    return {
+      receipt: recordReceipt({
+        invocationId: call.id,
+        taskId: this.activeWorktree?.taskId || this.currentTaskId,
+        actor,
+        executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+        capabilityId: this.capabilityRegistry.getByToolName(toolName)?.id || toolName,
+        toolName,
+        targetResources: extractTargetResources(toolName, args),
+        success: false,
+        output: "",
+        error: `Delegation authority denied tool '${toolName}'.`,
+        durationMs: 0,
+        candidateMutated: false,
+        status: "DENIED",
+        denialReason: "DELEGATION_AUTHORITY",
+        timestamp: new Date().toISOString(),
+        simulated: Boolean(this.config.dryRun),
+        ...skillAttr(),
+      }),
+      shouldExit: false,
+    };
+  }
+
   // A restricted role is refused any tool outside its allow-list, whatever the model was told or claims. A write or
   // exec call in read-only mode is left to the read-only check, which refuses it with its own reason.
   const roleAllowed = roleToolAllowList(this.role);

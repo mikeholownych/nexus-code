@@ -209,11 +209,12 @@ describe("continuation beyond the per-segment step limit", () => {
     let writes = 0;
     const gw = await startGateway((_n, body) => {
       const subagent = (body.messages as any[]).some((message) => typeof message.content === "string" && message.content.includes("[Subagent Objective]"));
-      if (!subagent) return { kind: "tools", calls: [{ name: "spawn_subagent", args: { prompt: "write until stopped" } }] };
+      if (!subagent) return { kind: "tools", calls: [{ name: "spawn_subagent", args: { prompt: "write until stopped", profile: "implementer" } }] };
       return write(`shared-${++writes}.txt`);
     });
     const repo = makeRepo();
     const agent = quiet(new AutonomousAgent(cfg(gw.url, repo, {
+      worktree: true,
       continuation: { ...DEFAULT_CONTINUATION, maxTotalSteps: 3 },
     })));
     try {
@@ -224,9 +225,11 @@ describe("continuation beyond the per-segment step limit", () => {
       assert.equal(agent.getObjective()!.execution!.cumulativeSteps, 3);
       assert.equal(gw.requests.length, 3, "one parent request and exactly two delegated requests consumed the budget");
       assert.equal(writes, 2);
-      assert.ok(fs.existsSync(path.join(repo, "shared-1.txt")));
-      assert.ok(fs.existsSync(path.join(repo, "shared-2.txt")));
+      const workspace = agent.getActiveWorktree()?.worktreePath ?? repo;
+      assert.ok(fs.existsSync(path.join(workspace, "shared-1.txt")));
+      assert.ok(fs.existsSync(path.join(workspace, "shared-2.txt")));
     } finally {
+      if (agent.getActiveWorktree()) agent.discardActiveWorktree();
       agent.shutdown();
       await gw.close();
       fs.rmSync(repo, { recursive: true, force: true });

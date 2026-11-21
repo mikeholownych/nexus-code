@@ -13,6 +13,7 @@ import { ExecutionSpine, ExecutionReceipt } from "./core/spine.js";
 import { extensionCapability, isExtensionCapability } from "./core/extension_capabilities.js";
 import { SkillActivationRegistry } from "./core/skill_activation.js";
 import { AuthorityAdmissionEngine } from "./core/authority.js";
+import type { AuthorityGrant } from "./core/authority.js";
 import { CandidateTracker, ValidationReceipt, computeCandidateIdentitySync } from "./core/candidate.js";
 import { ExecutionTracker, actionKind, combineState, ledgerStateIdentity, normalizeTracking, type ObservationVerdict } from "./core/execution_tracking.js";
 import { parseModelResponse, isWriteOrExecTool, type ToolCallSyntaxCounts } from "./parser.js";
@@ -81,6 +82,11 @@ export class AutonomousAgent {
   private ui: TerminalUI;
   private messages: ChatMessage[] = [];
   private depth: number;
+  /** Exact host-authorized tool names for transient delegated agents. */
+  private delegatedToolAllowList?: ReadonlySet<string>;
+  private delegatedAuthorityGrants?: AuthorityGrant[];
+  private delegatedChildrenStarted = 0;
+  private delegatedBudget?: { maxInferenceSteps: number; steps: number };
   private runningAsSubagent = false;
   private skillManager: SkillManager;
   /** Governed skill activations for the current agent (WP-GS-01); public for tests and evidence. */
@@ -348,8 +354,8 @@ export class AutonomousAgent {
   constructor(
     config: HarnessConfig,
     depth: number = 0,
-    inheritedWorktreeScopeOrOptions?: { workspace: string; requireSandbox: true } | { durable?: boolean; role?: AgentRole; unitId?: string },
-    options?: { durable?: boolean; role?: AgentRole; unitId?: string },
+    inheritedWorktreeScopeOrOptions?: { workspace: string; requireSandbox: true } | { durable?: boolean; role?: AgentRole; unitId?: string; delegatedToolAllowList?: readonly string[]; delegatedAuthorityGrants?: AuthorityGrant[]; delegatedBudget?: { maxInferenceSteps: number; steps: number } },
+    options?: { durable?: boolean; role?: AgentRole; unitId?: string; delegatedToolAllowList?: readonly string[]; delegatedAuthorityGrants?: AuthorityGrant[]; delegatedBudget?: { maxInferenceSteps: number; steps: number } },
   ) {
     canonicalDurableProvenance.set(this, new WeakMap());
     assertValidContinuationBudget(config.continuation);
@@ -368,6 +374,9 @@ export class AutonomousAgent {
     let durableOption: boolean | undefined;
     let roleOption: AgentRole | undefined;
     let unitIdOption: string | undefined;
+    let delegatedToolsOption: readonly string[] | undefined;
+    let delegatedGrantsOption: AuthorityGrant[] | undefined;
+    let delegatedBudgetOption: { maxInferenceSteps: number; steps: number } | undefined;
 
     if (inheritedWorktreeScopeOrOptions) {
       if ("workspace" in inheritedWorktreeScopeOrOptions) {
@@ -375,19 +384,31 @@ export class AutonomousAgent {
         durableOption = options?.durable;
         roleOption = options?.role;
         unitIdOption = options?.unitId;
+        delegatedToolsOption = options?.delegatedToolAllowList;
+        delegatedGrantsOption = options?.delegatedAuthorityGrants;
+        delegatedBudgetOption = options?.delegatedBudget;
       } else {
         durableOption = (inheritedWorktreeScopeOrOptions as { durable?: boolean }).durable;
         roleOption = (inheritedWorktreeScopeOrOptions as { role?: AgentRole }).role;
         unitIdOption = (inheritedWorktreeScopeOrOptions as { unitId?: string }).unitId;
+        delegatedToolsOption = (inheritedWorktreeScopeOrOptions as { delegatedToolAllowList?: readonly string[] }).delegatedToolAllowList;
+        delegatedGrantsOption = (inheritedWorktreeScopeOrOptions as { delegatedAuthorityGrants?: AuthorityGrant[] }).delegatedAuthorityGrants;
+        delegatedBudgetOption = (inheritedWorktreeScopeOrOptions as { delegatedBudget?: { maxInferenceSteps: number; steps: number } }).delegatedBudget;
       }
     } else if (options) {
       durableOption = options.durable;
       roleOption = options.role;
       unitIdOption = options.unitId;
+      delegatedToolsOption = options.delegatedToolAllowList;
+      delegatedGrantsOption = options.delegatedAuthorityGrants;
+      delegatedBudgetOption = options.delegatedBudget;
     }
     this.durable = durableOption !== undefined ? durableOption : depth === 0;
     this.role = roleOption ?? config.role;
     this.unitId = unitIdOption;
+    this.delegatedToolAllowList = delegatedToolsOption ? new Set(delegatedToolsOption) : undefined;
+    this.delegatedAuthorityGrants = delegatedGrantsOption ? [...delegatedGrantsOption] : undefined;
+    this.delegatedBudget = delegatedBudgetOption;
 
     if (this.role && isReadOnlyRole(this.role)) {
       this.config.readOnly = true;
@@ -460,6 +481,7 @@ export class AutonomousAgent {
     this.authorityEngine = new AuthorityAdmissionEngine({
       readOnly: initialReadOnly,
       fullAccess: Boolean(config.fullAccess) && !initialReadOnly,
+      grants: this.delegatedAuthorityGrants,
       workspace: ws,
       registry: this.capabilityRegistry,
     });
@@ -1279,6 +1301,7 @@ export class AutonomousAgent {
     if (allowed) tools = tools.filter((t) => allowed.has(t.function.name));
     const denied = roleToolDenyList(this.role);
     if (denied) tools = tools.filter((t) => !denied.has(t.function.name));
+    if (this.delegatedToolAllowList) tools = tools.filter((t) => this.delegatedToolAllowList!.has(t.function.name));
     return tools;
   }
 
@@ -4263,6 +4286,10 @@ ${NEXUS_RUNTIME_IDENTITY}`;
   async runTurn(taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean; tddRed?: boolean; step?: boolean }): Promise<TurnResult> {
     const ownsWorktreeDelegation = this.config.worktree && !this.worktreeRunTurnAuthorized;
     const delegatedWorktreeCall = this.worktreeRunTurnAuthorized && this.worktreeDelegatedTurnInProgress;
+    if (!delegatedWorktreeCall) {
+      this.delegatedChildrenStarted = 0;
+      this.delegatedBudget = undefined;
+    }
     const span = delegatedWorktreeCall ? undefined : this.safeStartTraceSpan("nexus.agent.turn", { "nexus.task.id": this.currentTaskId });
     const previousParent = this.activeTraceSpanId;
     if (span) {
@@ -4572,6 +4599,9 @@ ${NEXUS_RUNTIME_IDENTITY}`;
 
     for (;;) {
       if (signal?.aborted) return { completed: false, summary: finalSummary, reason: "cancelled with the parent turn" };
+      if (this.delegatedBudget && this.delegatedBudget.steps >= this.delegatedBudget.maxInferenceSteps) {
+        return { completed: false, summary: finalSummary, reason: `delegated inference budget exhausted (${this.delegatedBudget.steps}/${this.delegatedBudget.maxInferenceSteps})` };
+      }
       const consumedTaskSteps = objectiveTracker?.data.cumulativeSteps ?? (currentStep - 1);
       if (consumedTaskSteps >= maxTotalSteps) {
         return { completed: false, summary: finalSummary, reason: `objective step budget exhausted (${consumedTaskSteps}/${maxTotalSteps}); no further subagent inference was submitted` };
@@ -4592,6 +4622,7 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         }
       }
       let assistantMessage: ChatMessage;
+      if (this.delegatedBudget) this.delegatedBudget.steps++;
       const requestId = randomUUID();
       const { client: activeClient } = this.selectCognitiveClient(currentStep, this.messages);
       try {

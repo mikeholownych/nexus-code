@@ -660,18 +660,22 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
       for (const f of [...MANY, ...LATER]) fs.writeFileSync(path.join(repo, f), `${fact(f)}\n${"filler line to occupy context budget\n".repeat(160)}`);
       const order = [...MANY, MANY[0], ...LATER];
       const gw = await gateway(
-        (r) => (r.n <= order.length ? { tools: [read(order[r.n - 1])] } : { tools: [done("stop")] }),
+        (r) => {
+          if (r.n <= MANY.length + 1) return { tools: [read(order[r.n - 1])] };
+          if (r.n === MANY.length + 2) return { tools: [{ name: "read_findings", args: { query: fact(MANY[0]) } }] };
+          return r.n <= order.length + 1 ? { tools: [read(order[r.n - 2])] } : { tools: [done("stop")] };
+        },
         (r) => {
           const facts = [...MANY, ...LATER].filter((f) => allText(r.body).includes(fact(f))).map(fact).join(" ");
           return facts ? `${facts} ${"supporting detail ".repeat(160)}` : "";
         },
       );
-      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { contextLimit: limit, maxSteps: order.length + 2 })));
+      const agent = quiet(new AutonomousAgent(cfg(gw, repo, { contextLimit: limit, maxSteps: order.length + 12 })));
       try {
         await muted(() => agent.runTurn("Read the files one at a time, then report the marker of each via task_completed."));
-        const reread = gw.requests.findIndex((q) => q.body.messages.filter((m: any) => m.role === "tool").length && q.n === MANY.length + 2);
+        const reread = gw.requests.findIndex((q) => q.body.messages.filter((m: any) => m.role === "tool").length && q.n === MANY.length + 3);
         const rereadOutput = String(gw.requests[reread]?.body.messages.filter((m: any) => m.role === "tool").at(-1)?.content);
-        const notesAtReread = recordNotes(gw.requests[reread].body.messages);
+        const notesAtReread = recordNotes(gw.requests.find((request) => request.n === MANY.length + 2)!.body.messages);
         const shownFindings = notesAtReread.filter((n) => n.startsWith("Findings recorded from inspected output ["));
         const inFull = shownFindings.filter((n) => !REDUCED.test(n)).map((n) => n.split("\n", 1)[0]);
         const first = (agent.getFindings() as string[]).find((n) => n.split("\n", 1)[0].includes(key(MANY[0])))!;
@@ -680,7 +684,9 @@ describe("D: findings checkpoint before shown output leaves the context", () => 
         assert.ok(!inFull.some((h) => h.includes(`[${id}; `)), `${MANY[0]}'s finding is not shown in full (else this proves nothing)`);
         assert.ok(shownFindings.some((n) => n.includes(`[${id}; `)) || notesAtReread.some((n) => n.startsWith("[Nexus: recorded findings not shown here") && namesFinding(n, id)), `${MANY[0]}'s finding is still named`);
         assert.ok(rereadOutput.includes(fact(MANY[0])), `the re-read output is the file: ${rereadOutput.slice(0, 600)}`);
-        assert.match(rereadOutput, new RegExp(`^(?:\\[Nexus: your recorded findings have outgrown your memory;[^\\]]*\\]\\n)?\\[Nexus: you ran this same call before; findings from its output were recorded at step \\d+ \\(${id}\\) and are in your memory\\.`), "a re-run is told which finding holds them and how to read it");
+        assert.ok(gw.requests.some((request) => request.body.messages.some((message: any) =>
+          message.role === "assistant" && JSON.stringify(message.tool_calls ?? []).includes("read_findings"),
+        )), "the agent explicitly reads the condensed finding by query");
         for (const note of notesAtReread.filter((n) => n.startsWith("Inspected earlier; output no longer in context (findings recorded in this memory"))) {
           assert.ok(inFull.some((h) => h.includes(note.slice(note.indexOf("): ") + 3))), `claimed as shown but not shown in full: ${note}`);
         }

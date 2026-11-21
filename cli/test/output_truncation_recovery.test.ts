@@ -178,7 +178,7 @@ describe("a reply cut off at the output limit", () => {
   test("a delegated helper recovers the same way", { timeout: 60_000 }, async () => {
     const gw = await startGateway((n, body) => {
       const sub = (body.messages as any[]).some((m) => typeof m.content === "string" && m.content.includes("[Subagent Objective]"));
-      if (!sub) return n === 1 ? { kind: "tools", calls: [{ name: "spawn_subagent", args: { prompt: "write notes.md" } }] } : { kind: "text", content: "parent done" };
+      if (!sub) return n === 1 ? { kind: "tools", calls: [{ name: "spawn_subagent", args: { prompt: "write notes.md", profile: "implementer" } }] } : { kind: "text", content: "parent done" };
       const tools = (body.messages as any[]).filter((m) => m.role === "tool").length;
       if (!lastUser(body).includes("cut off") && tools === 0) return bigWrite("notes.md");
       return tools === 0
@@ -186,11 +186,13 @@ describe("a reply cut off at the output limit", () => {
         : { kind: "tools", calls: [{ name: "task_completed", args: { summary: "wrote notes.md" } }] };
     });
     const repo = makeRepo();
-    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo)));
+    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo, { worktree: true })));
     try {
       await agent.runTurn("Delegate writing notes.md to a helper.");
-      assert.equal(fs.readFileSync(path.join(repo, "notes.md"), "utf8"), "short notes\n");
+      const workspace = agent.getActiveWorktree()?.worktreePath ?? repo;
+      assert.equal(fs.readFileSync(path.join(workspace, "notes.md"), "utf8"), "short notes\n");
     } finally {
+      if (agent.getActiveWorktree()) agent.discardActiveWorktree();
       agent.shutdown();
       await gw.close();
       fs.rmSync(repo, { recursive: true, force: true });
