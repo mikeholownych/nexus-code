@@ -317,8 +317,9 @@ describe("I1: spawn_subagent cannot manufacture success", () => {
       try {
         const { turn, agent } = await directTurn(cfg(gw, repo, { authoritativeVerifierCommand: VERIFIED_FIXTURE_VERIFIER, trustedDeliverableFiles: ["impl.mjs"], worktree: true }), "delegate the change");
         try {
-          assert.match(delegationResult(agent), /Subagent did not complete: .*outcome=UNVERIFIED \(VERIFICATION_NOT_RUN\)/);
           assert.equal(turn.outcome, "VERIFIED", "the parent verified the child's change itself before completing");
+          assert.equal(turn.verification?.command, VERIFIED_FIXTURE_VERIFIER, "the parent's required verifier, not the child self-report, supplies completion evidence");
+          assert.equal(turn.verification?.exitSuccess, true);
         } finally {
           if (agent.getActiveWorktree()) agent.discardActiveWorktree();
           agent.shutdown();

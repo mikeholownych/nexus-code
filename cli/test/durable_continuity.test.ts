@@ -1551,11 +1551,12 @@ async function until(cond: () => boolean, ms = 60_000): Promise<void> {
   }
 }
 
-function writeSpec(dir: string, id: string, gw: Gw, prompt: string): string {
+function writeSpec(dir: string, id: string, gw: Gw, prompt: string, isolate = false): string {
   const spec = path.join(dir, `${id}.json`);
   fs.writeFileSync(spec, JSON.stringify({
     id,
     objective: "report the markers",
+    ...(isolate ? { git: { isolate: true } } : {}),
     resources: [{ id: "probe", endpoint: gw.url, model: "m", capabilities: ["tools"], rank: 0 }],
     units: [{ id: "markers", title: "Markers", prompt, requires: { capabilities: ["tools"] } }],
   }));
@@ -1643,32 +1644,32 @@ describe("V1: process death mid-turn, then restart and resume", () => {
 });
 
 describe("V2: process death while a subagent ran", () => {
-  test("a subagent that wrote before the kill leaves the unit unverified after continuing", async () => {
+  test("a durable unit without a transient worktree refuses a writable child before inference", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-cont-kill-"));
     const isChild = (b: any) => allText(b).includes("[Subagent Objective]");
     const gw = await gateway((b) => {
-      if (isChild(b)) return toolResults(b) === 0 ? write("child.txt") : { hold: true };
+      if (isChild(b)) return write("child.txt");
       if (!allText(b).includes("OBJ-DELEGATE")) return done("nothing to do");
-      if (lastUser(b).includes("Nexus stopped while")) return done("checked; nothing else to do");
       return toolResults(b) === 0 ? { tools: [{ name: "spawn_subagent", args: { prompt: "Write child.txt.", profile: "implementer", max_steps: 4 } }] } : done("delegated");
     });
     const ws = path.join(home, "ws");
     fs.mkdirSync(ws);
+    fs.writeFileSync(path.join(ws, "base.txt"), "base\n");
+    execSync("git init -q && git config user.name t && git config user.email t@t.invalid && git add . && git commit -qm base", { cwd: ws, stdio: "ignore" });
+    const worktreesWithChild = () => execSync("git worktree list --porcelain", { cwd: ws, encoding: "utf8" })
+      .split("\n")
+      .filter((line) => line.startsWith("worktree "))
+      .map((line) => line.slice("worktree ".length))
+      .filter((worktree) => fs.existsSync(path.join(worktree, "child.txt")));
     let run: ReturnType<typeof cliProcess> | undefined;
     try {
-      const spec = writeSpec(home, "cont-subagent", gw, "OBJ-DELEGATE: have a subagent write child.txt.");
-      run = cliProcess(["operation", "run", spec, "-w", ws, "-s", "6"], { cwd: ws, home });
-      await until(() => gw.held && fs.existsSync(path.join(ws, "child.txt")));
-      run.kill();
-      await run.done();
-      let op = opState((await cli(["operation", "resume", "cont-subagent", "-w", ws, "-s", "6", "-j"], { cwd: ws, home })).out);
-      assert.equal(op.status, "BLOCKED");
-      assert.match(unitOf(op, "markers").blocked!.reason, /spawn_subagent/);
-      const decision = decisionOf(op, "markers");
-      op = opState((await cli(["operation", "decide", "cont-subagent", decision.id, decision.options[0].id, "-w", ws, "-s", "6", "-j"], { cwd: ws, home })).out);
-      assert.ok(gw.requests.some((b) => lastUser(b).includes("Nexus stopped while spawn_subagent")), "the continuation ran");
-      assert.equal(unitOf(op, "markers").status, "BLOCKED", `after continuing: ${unitOf(op, "markers").status}`);
-      assert.match(unitOf(op, "markers").blocked!.reason, /UNVERIFIED/);
+      const spec = writeSpec(home, "cont-subagent", gw, "OBJ-DELEGATE: have a subagent write child.txt.", true);
+      run = cliProcess(["operation", "run", spec, "-w", ws, "-s", "6", "-j"], { cwd: ws, home });
+      const result = await run.done();
+      assert.equal(result.code, 0, result.err);
+      assert.ok(gw.requests.length >= 1, "the durable parent ran");
+      assert.equal(gw.requests.some((b) => isChild(b)), false, "no child inference starts without an admitted transient worktree");
+      assert.equal(worktreesWithChild().length, 0, "the isolated durable unit has no child side effect");
     } finally {
       run?.kill();
       await gw.close();

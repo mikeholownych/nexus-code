@@ -72,7 +72,6 @@ async function scripted(s: Script) {
 }
 const spawn = (prompt: string): Reply => ({ kind: "tools", calls: [{ name: "spawn_subagent", args: { prompt, profile: "implementer" } }] });
 const write: Reply = { kind: "tools", calls: [{ name: "write_file", args: WRITE }] };
-const toolMessages = (agent: AutonomousAgent) => (agent as any).messages.filter((m: any) => m.role === "tool").map((m: any) => String(m.content));
 
 describe("VC-9: a subagent's question reaches the parent's result", () => {
   test("headless: the parent ends BLOCKED / NEEDS_INPUT with the subagent's question; the subagent neither waits nor approves", { timeout: 60_000 }, async () => {
@@ -94,7 +93,7 @@ describe("VC-9: a subagent's question reaches the parent's result", () => {
       assert.equal(fs.existsSync(path.join(repo, "a.txt")), false);
       assert.equal(seen.child, 1, "the subagent stopped at the question instead of routing around it");
       assert.equal(seen.parent, 1, "the parent stopped with the question instead of asking the model again");
-      assert.match(toolMessages(parent).join("\n"), /Subagent did not complete: needs an operator decision/);
+      assert.equal(turn.needsInput?.subject.tool, "write_file", "the child approval decision is surfaced on the parent turn");
     } finally {
       await gw.close();
     }
@@ -124,7 +123,8 @@ describe("VC-9: a subagent's question reaches the parent's result", () => {
         const resumed = await parent.runTurn("continue");
         assert.notEqual(resumed.reason, "NEEDS_INPUT", `${answer}: the answered question is not asked again`);
         assert.equal(resumed.needsInput, undefined);
-        assert.equal(fs.existsSync(path.join(repo, "a.txt")), answer === "approve", `${answer}: the subagent's write happened only on approve`);
+        const workspace = parent.getActiveWorktree()?.worktreePath ?? repo;
+        assert.equal(fs.existsSync(path.join(workspace, "a.txt")), answer === "approve", `${answer}: the subagent's write happened only on approve`);
       } finally {
         await gw.close();
       }
@@ -205,7 +205,8 @@ describe("VC-9: unchanged paths", () => {
         assert.notEqual(turn.reason, "NEEDS_INPUT");
         assert.equal(turn.needsInput, undefined);
         assert.ok(asked.includes("write_file"), "the operator was asked");
-        assert.equal(fs.existsSync(path.join(repo, "a.txt")), approve);
+        const workspace = parent.getActiveWorktree()?.worktreePath ?? repo;
+        assert.equal(fs.existsSync(path.join(workspace, "a.txt")), approve);
         assert.equal(pending(parent), undefined);
       } finally {
         await gw.close();

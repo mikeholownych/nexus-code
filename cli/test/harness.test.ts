@@ -899,7 +899,7 @@ error[E0308]: mismatched types
         childRequests++;
         if (childRequests > 1) {
           const toolMessage = (request.messages || []).find((message: any) => message.role === "tool");
-          childDeniedWrite = String(toolMessage?.content || "").includes("Delegation authority denied");
+          childDeniedWrite = /Read-only mode violation|Delegation authority denied|not permitted for role/.test(String(toolMessage?.content || ""));
         }
         const call = childRequests === 1
           ? { name: "write_file", args: { path: "read-only-child.txt", content: "must not write" } }

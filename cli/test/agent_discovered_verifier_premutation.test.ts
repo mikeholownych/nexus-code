@@ -68,7 +68,8 @@ test("captures discovered verifier baseline before the first mutating shell comm
   try {
     const turn = await agent.runTurn("Fix the failing addition test using the shell, then complete the task.");
 
-    assert.equal(fs.readFileSync(path.join(workspace, "math.js"), "utf-8"), "exports.add = (a, b) => a + b;\n");
+    const candidateWorkspace = agent.getActiveWorktree()?.worktreePath ?? workspace;
+    assert.equal(fs.readFileSync(path.join(candidateWorkspace, "math.js"), "utf-8"), "exports.add = (a, b) => a + b;\n");
     assert.equal(turn.outcome, "VERIFIED", `${turn.outcome}: ${turn.reason}: ${turn.detail}`);
     assert.equal(turn.verification?.independent, true);
     assert.equal(turn.unverifiedChangesPending, false);
@@ -125,7 +126,8 @@ test("captures discovered verifier baseline before a subagent can mutate the wor
   try {
     const turn = await agent.runTurn("Use a subagent to fix the failing addition test, then complete the task.");
 
-    assert.equal(fs.readFileSync(path.join(workspace, "math.js"), "utf-8"), "exports.add = (a, b) => a + b;\n");
+    const candidateWorkspace = agent.getActiveWorktree()?.worktreePath ?? workspace;
+    assert.equal(fs.readFileSync(path.join(candidateWorkspace, "math.js"), "utf-8"), "exports.add = (a, b) => a + b;\n");
     assert.equal(turn.outcome, "VERIFIED", `${turn.outcome}: ${turn.reason}: ${turn.detail}`);
     assert.equal(turn.verification?.independent, true);
     assert.equal(turn.unverifiedChangesPending, false);
