@@ -35,7 +35,12 @@ import {
   type ObjectiveLedger,
   type VerificationAttempt,
 } from "../src/core/objective.js";
-import { buildReviewEvidencePackage, parseIndependentReviewVerdict } from "../src/core/independent_review.js";
+import { buildReviewEvidencePackage, CHANGE_ASSESSMENT_FIELDS, isSignificantChange, parseIndependentReviewVerdict } from "../src/core/independent_review.js";
+import { newOperation } from "../src/core/operation.js";
+import { driveOperation, OperationStore, type WorkUnitExecutor } from "../src/core/operation_runner.js";
+import { ExecutionSpine } from "../src/core/spine.js";
+import { createDefaultRegistry } from "../src/core/capabilities.js";
+import { extensionCapability } from "../src/core/extension_capabilities.js";
 import { DurableStateManager } from "../src/core/state.js";
 import { SecurityManager } from "../src/security.js";
 import { DEFAULT_CONTINUATION, type HarnessConfig } from "../src/types.js";
@@ -52,6 +57,11 @@ interface Scenario {
   status: "active" | "pending";
   pendingUnit?: string;
   description: string;
+  state?: string;
+  trigger?: string;
+  invariant?: string;
+  evidence?: string;
+  run?: string;
   expected: unknown;
 }
 const raw = fs.readFileSync(SCENARIO_FILE);
@@ -169,6 +179,18 @@ const reviewFacts = (rawReply: string, over: Record<string, unknown> = {}) => {
     : "none";
   return { verdict: v.verdict, reason };
 };
+
+const diffOf = (files: string[]) => files.map((f) =>
+  `diff --git a/${f} b/${f}\n--- a/${f}\n+++ b/${f}\n@@ -1 +1 @@\n-x\n+y\n`,
+).join("");
+const reviewReply = (over: Record<string, unknown> = {}) => JSON.stringify({
+  verdict: "ACCEPT", verifiedObservations: ["ok"], suspectedDefects: [], unprovenCriteria: [],
+  scopeViolations: [], reviewerConfidenceNote: "high", ...over,
+});
+const FULL_ASSESSMENT = Object.fromEntries(CHANGE_ASSESSMENT_FIELDS.map((field) => [field, `${field} stated`]));
+const passingReviewPackage = (over: Record<string, unknown> = {}) => reviewPackage({
+  verifierCommand: "make test", verifierOutput: "ok", verifierExitCode: 0, ...over,
+});
 
 const drivers: Record<string, () => unknown | Promise<unknown>> = {
   "hidden-invariant-01": () => {
@@ -414,6 +436,84 @@ const drivers: Record<string, () => unknown | Promise<unknown>> = {
     const state = { inputs: first.inputs, epoch: "e1", mutationSeq: 2, external: "x1" };
     return { afterFirstChange: afterFirst, afterSecondChange: ledger.requirements[0].status, firstPassReusable: priorAttempt(ledger, "npm test", state) !== undefined };
   },
+  "change-cost-a-wrong-abstraction": () => {
+    const v = parseIndependentReviewVerdict(
+      reviewReply({ suspectedDefects: [{ path: "src/iface.ts", line: 3, description: "change-risk: interface with one implementation and no caller" }] }),
+      passingReviewPackage({ unifiedDiff: diffOf(["src/iface.ts"]) }),
+    );
+    return { verdict: v.verdict, changeRiskDefects: v.suspectedDefects.filter((d) => d.description.startsWith("change-risk:")).length };
+  },
+  "change-cost-b-excessive-extraction": () => {
+    const diff = diffOf(["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts", "src/e.ts", "src/f.ts"]);
+    const v = parseIndependentReviewVerdict(reviewReply(), passingReviewPackage({ unifiedDiff: diff }));
+    return { significant: isSignificantChange(diff), verdict: v.verdict, reason: /assessment is missing/.test(v.unprovenCriteria.join("\n")) ? "assessment_missing" : "none" };
+  },
+  "change-cost-c-hidden-side-effect": async () => {
+    const registry = createDefaultRegistry();
+    registry.register(extensionCapability({
+      type: "function", function: { name: "mcp__s__push", description: "remote mutation", parameters: { type: "object", properties: {}, required: [] } },
+    }, { kind: "mcp", serverName: "s", url: "https://x.example" }));
+    const spine = new ExecutionSpine({ registry });
+    let handlerCalls = 0;
+    spine.registerHandler("mcp__s__push", async () => { handlerCalls++; return { success: true, output: "real" }; });
+    const receipt = await spine.execute({
+      taskId: "t", actor: "agent", executionDomain: "agent_orchestration", toolName: "mcp__s__push", args: {},
+    }, { workspaceRoot: "/workspace", dryRun: true, readOnly: false });
+    return { handlerCalls, simulated: receipt.simulated };
+  },
+  "change-cost-d-missing-invariant": async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "ceri-change-cost-operation-"));
+    try {
+      const workspace = path.join(root, "workspace");
+      fs.mkdirSync(workspace);
+      const store = new OperationStore(workspace, path.join(root, "state"), root);
+      const resource = { id: "r1", provider: "http://127.0.0.1:9", endpoint: "http://127.0.0.1:9/v1", model: "m", capabilities: ["tools"], rank: 0 };
+      const operation = newOperation("op-stale", "objective", [{ id: "u1", title: "u1", prompt: "u1" }], [resource], Date.now());
+      store.save(operation);
+      const stale = store.load(operation.id);
+      let executions = 0;
+      const executor: WorkUnitExecutor = {
+        async run() {
+          executions++;
+          return { kind: "completed", summary: "done", outcome: "NOT_REQUIRED" };
+        },
+      };
+      const completed = await driveOperation(store.load(operation.id), { store, executor, entry: "existing" });
+      const resumed = await driveOperation(stale, { store, executor, entry: "existing" });
+      return { refused: completed.status === "COMPLETE" && resumed.status === "COMPLETE" && executions === 1, executions, status: resumed.status };
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  },
+  "change-cost-e-unnecessary-layer": () => {
+    const v = parseIndependentReviewVerdict(
+      reviewReply(),
+      passingReviewPackage({ unifiedDiff: diffOf(["src/a.ts", "src/wrapper.ts"]), authorizedScope: ["src/a.ts"] }),
+    );
+    return { verdict: v.verdict, scopeViolations: v.scopeViolations };
+  },
+  "change-cost-f-lost-rationale": () => {
+    const v = parseIndependentReviewVerdict(
+      reviewReply({ changeAssessment: { ...FULL_ASSESSMENT, validation: "", residualRisk: "  " } }),
+      passingReviewPackage({ unifiedDiff: diffOf(["cli/src/core/x.ts"]) }),
+    );
+    const empty = /incomplete \(([^)]*)\)/.exec(v.unprovenCriteria.join("\n"))?.[1]?.split(", ") ?? [];
+    return { verdict: v.verdict, reason: /incomplete/.test(v.unprovenCriteria.join("\n")) ? "assessment_incomplete" : "none", empty };
+  },
+  "change-cost-g-misleading-improvement": () => {
+    const v = parseIndependentReviewVerdict(
+      reviewReply(),
+      passingReviewPackage({ unifiedDiff: diffOf(["cli/src/core/x.ts"]), verifierOutput: "failed", verifierExitCode: 1, changeAssessment: FULL_ASSESSMENT }),
+    );
+    return { verdict: v.verdict, reason: /Deterministic verifier failed/.test(v.unprovenCriteria.join("\n")) ? "verifier_failed" : "none" };
+  },
+  "change-cost-h-deliberate-abstraction": () => {
+    const v = parseIndependentReviewVerdict(
+      reviewReply({ changeAssessment: FULL_ASSESSMENT }),
+      passingReviewPackage({ unifiedDiff: diffOf(["cli/src/core/x.ts"]) }),
+    );
+    return { verdict: v.verdict, assessmentFields: v.changeAssessment ? Object.keys(v.changeAssessment).length : 0 };
+  },
 };
 
 test("the frozen scenario file is the one the manifest pins, in a registered CERI domain", () => {
@@ -425,7 +525,27 @@ test("the frozen scenario file is the one the manifest pins, in a registered CER
 });
 
 const PENDING_FROZEN: Record<string, string> = {};
-const ACTIVE_FROZEN = 26;
+const ACTIVE_FROZEN = 34;
+
+test("active change-cost scenarios state their trigger, invariant, evidence and execution boundary", () => {
+  const scenarios = frozen.scenarios.filter((s) => s.category === "change_cost" && s.status === "active");
+  assert.deepEqual(scenarios.map((s) => s.id).sort(), [
+    "change-cost-a-wrong-abstraction",
+    "change-cost-b-excessive-extraction",
+    "change-cost-c-hidden-side-effect",
+    "change-cost-d-missing-invariant",
+    "change-cost-e-unnecessary-layer",
+    "change-cost-f-lost-rationale",
+    "change-cost-g-misleading-improvement",
+    "change-cost-h-deliberate-abstraction",
+  ]);
+  for (const scenario of scenarios) {
+    for (const field of ["state", "trigger", "invariant", "evidence", "run"] as const) {
+      assert.ok(scenario[field]?.trim(), `${scenario.id}: ${field} is required`);
+    }
+    assert.match(scenario.run!, /mechanism:|real:/, `${scenario.id}: execution boundary must be explicit`);
+  }
+});
 
 test("the scenario set cannot shrink or be reclassified without changing this file too", () => {
   const pending = Object.fromEntries(frozen.scenarios.filter((s) => s.status === "pending").map((s) => [s.id, s.pendingUnit]));
