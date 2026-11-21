@@ -201,6 +201,18 @@
       "expected": { "verdict": "REJECT", "changeRiskDefects": 1 }
     },
     {
+      "id": "change-cost-b-excessive-extraction",
+      "category": "change_cost",
+      "status": "active",
+      "description": "A significant multi-file change without the engineering assessment is rejected.",
+      "state": "the diff touches six files for a one-line behaviour change; verifier passes",
+      "trigger": "reviewer answers ACCEPT without changeAssessment",
+      "invariant": "significant changes require the eight-field assessment",
+      "evidence": "the final verdict and unproven criteria naming the missing assessment",
+      "run": "mechanism: real review parser and gate with a scripted reviewer reply; no model",
+      "expected": { "significant": true, "verdict": "REJECT", "reason": "assessment_missing" }
+    },
+    {
       "id": "change-cost-c-hidden-side-effect",
       "category": "change_cost",
       "status": "active",
@@ -211,6 +223,18 @@
       "evidence": "handler invocation count and the simulated receipt field",
       "run": "real: execution spine, extension capability and local handler counter; no model or network call",
       "expected": { "handlerCalls": 0, "simulated": true }
+    },
+    {
+      "id": "change-cost-d-missing-invariant",
+      "category": "change_cost",
+      "status": "active",
+      "description": "A persisted COMPLETE operation cannot be saved back to RUNNING.",
+      "state": "stored operation COMPLETE; a stale writer holds a RUNNING copy",
+      "trigger": "save of the stale copy",
+      "invariant": "COMPLETE is a terminal operation state",
+      "evidence": "the lifecycle transition guard returns the precise violation",
+      "run": "real: production operation transition rule; no model",
+      "expected": { "refused": true, "violation": "COMPLETE cannot become RUNNING" }
     },
     {
       "id": "change-cost-e-unnecessary-layer",
@@ -225,6 +249,18 @@
       "expected": { "verdict": "REJECT", "scopeViolations": ["src/wrapper.ts"] }
     },
     {
+      "id": "change-cost-f-lost-rationale",
+      "category": "change_cost",
+      "status": "active",
+      "description": "A significant change with empty validation and residual risk fields is rejected.",
+      "state": "a core file changed; assessment is present but validation and residualRisk are blank",
+      "trigger": "reviewer answers ACCEPT with the hollow assessment",
+      "invariant": "assessment fields must contain meaningful non-empty values",
+      "evidence": "the final verdict names the empty fields",
+      "run": "mechanism: real review parser and gate with a scripted reviewer reply; no model",
+      "expected": { "verdict": "REJECT", "reason": "assessment_incomplete", "empty": ["validation", "residualRisk"] }
+    },
+    {
       "id": "change-cost-g-misleading-improvement",
       "category": "change_cost",
       "status": "active",
@@ -235,6 +271,18 @@
       "evidence": "the final verdict and named verifier failure",
       "run": "mechanism: real parser and gate with a scripted reviewer reply; no model",
       "expected": { "verdict": "REJECT", "reason": "verifier_failed" }
+    },
+    {
+      "id": "change-cost-h-deliberate-abstraction",
+      "category": "change_cost",
+      "status": "active",
+      "description": "A justified change with complete assessment and passing evidence is accepted.",
+      "state": "a core file changed; verifier passes; assessment is complete; reviewer sees no defects",
+      "trigger": "reviewer answers ACCEPT",
+      "invariant": "the gate rejects unsafe changes without falsely rejecting justified changes",
+      "evidence": "the final verdict preserves all eight assessment fields",
+      "run": "mechanism: real review parser and gate with a scripted reviewer reply; no model",
+      "expected": { "verdict": "ACCEPT", "assessmentFields": 8 }
     }
   ]
 }

@@ -35,7 +35,8 @@ import {
   type ObjectiveLedger,
   type VerificationAttempt,
 } from "../src/core/objective.js";
-import { buildReviewEvidencePackage, parseIndependentReviewVerdict } from "../src/core/independent_review.js";
+import { buildReviewEvidencePackage, CHANGE_ASSESSMENT_FIELDS, isSignificantChange, parseIndependentReviewVerdict } from "../src/core/independent_review.js";
+import { illegalOperationTransition } from "../src/core/operation_schema.js";
 import { ExecutionSpine } from "../src/core/spine.js";
 import { createDefaultRegistry } from "../src/core/capabilities.js";
 import { extensionCapability } from "../src/core/extension_capabilities.js";
@@ -185,6 +186,7 @@ const reviewReply = (over: Record<string, unknown> = {}) => JSON.stringify({
   verdict: "ACCEPT", verifiedObservations: ["ok"], suspectedDefects: [], unprovenCriteria: [],
   scopeViolations: [], reviewerConfidenceNote: "high", ...over,
 });
+const FULL_ASSESSMENT = Object.fromEntries(CHANGE_ASSESSMENT_FIELDS.map((field) => [field, `${field} stated`]));
 const passingReviewPackage = (over: Record<string, unknown> = {}) => reviewPackage({
   verifierCommand: "make test", verifierOutput: "ok", verifierExitCode: 0, ...over,
 });
@@ -440,6 +442,11 @@ const drivers: Record<string, () => unknown | Promise<unknown>> = {
     );
     return { verdict: v.verdict, changeRiskDefects: v.suspectedDefects.filter((d) => d.description.startsWith("change-risk:")).length };
   },
+  "change-cost-b-excessive-extraction": () => {
+    const diff = diffOf(["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts", "src/e.ts", "src/f.ts"]);
+    const v = parseIndependentReviewVerdict(reviewReply(), passingReviewPackage({ unifiedDiff: diff }));
+    return { significant: isSignificantChange(diff), verdict: v.verdict, reason: /assessment is missing/.test(v.unprovenCriteria.join("\n")) ? "assessment_missing" : "none" };
+  },
   "change-cost-c-hidden-side-effect": async () => {
     const registry = createDefaultRegistry();
     registry.register(extensionCapability({
@@ -453,6 +460,14 @@ const drivers: Record<string, () => unknown | Promise<unknown>> = {
     }, { workspaceRoot: "/workspace", dryRun: true, readOnly: false });
     return { handlerCalls, simulated: receipt.simulated };
   },
+  "change-cost-d-missing-invariant": () => {
+    const unit = { id: "u1", status: "COMPLETE" } as any;
+    const violation = illegalOperationTransition(
+      { id: "op", status: "COMPLETE", units: [unit] } as any,
+      { id: "op", status: "RUNNING", units: [unit] } as any,
+    );
+    return { refused: violation !== undefined, violation: violation?.replace(/^operation op: /, "") };
+  },
   "change-cost-e-unnecessary-layer": () => {
     const v = parseIndependentReviewVerdict(
       reviewReply(),
@@ -460,12 +475,27 @@ const drivers: Record<string, () => unknown | Promise<unknown>> = {
     );
     return { verdict: v.verdict, scopeViolations: v.scopeViolations };
   },
+  "change-cost-f-lost-rationale": () => {
+    const v = parseIndependentReviewVerdict(
+      reviewReply({ changeAssessment: { ...FULL_ASSESSMENT, validation: "", residualRisk: "  " } }),
+      passingReviewPackage({ unifiedDiff: diffOf(["cli/src/core/x.ts"]) }),
+    );
+    const empty = /incomplete \(([^)]*)\)/.exec(v.unprovenCriteria.join("\n"))?.[1]?.split(", ") ?? [];
+    return { verdict: v.verdict, reason: /incomplete/.test(v.unprovenCriteria.join("\n")) ? "assessment_incomplete" : "none", empty };
+  },
   "change-cost-g-misleading-improvement": () => {
     const v = parseIndependentReviewVerdict(
       reviewReply(),
-      reviewPackage({ unifiedDiff: diffOf(["cli/src/core/x.ts"]), verifierCommand: "make test", verifierOutput: "failed", verifierExitCode: 1 }),
+      passingReviewPackage({ unifiedDiff: diffOf(["cli/src/core/x.ts"]), verifierOutput: "failed", verifierExitCode: 1, changeAssessment: FULL_ASSESSMENT }),
     );
     return { verdict: v.verdict, reason: /Deterministic verifier failed/.test(v.unprovenCriteria.join("\n")) ? "verifier_failed" : "none" };
+  },
+  "change-cost-h-deliberate-abstraction": () => {
+    const v = parseIndependentReviewVerdict(
+      reviewReply({ changeAssessment: FULL_ASSESSMENT }),
+      passingReviewPackage({ unifiedDiff: diffOf(["cli/src/core/x.ts"]) }),
+    );
+    return { verdict: v.verdict, assessmentFields: v.changeAssessment ? Object.keys(v.changeAssessment).length : 0 };
   },
 };
 
@@ -478,15 +508,19 @@ test("the frozen scenario file is the one the manifest pins, in a registered CER
 });
 
 const PENDING_FROZEN: Record<string, string> = {};
-const ACTIVE_FROZEN = 30;
+const ACTIVE_FROZEN = 34;
 
 test("active change-cost scenarios state their trigger, invariant, evidence and execution boundary", () => {
   const scenarios = frozen.scenarios.filter((s) => s.category === "change_cost" && s.status === "active");
   assert.deepEqual(scenarios.map((s) => s.id).sort(), [
     "change-cost-a-wrong-abstraction",
+    "change-cost-b-excessive-extraction",
     "change-cost-c-hidden-side-effect",
+    "change-cost-d-missing-invariant",
     "change-cost-e-unnecessary-layer",
+    "change-cost-f-lost-rationale",
     "change-cost-g-misleading-improvement",
+    "change-cost-h-deliberate-abstraction",
   ]);
   for (const scenario of scenarios) {
     for (const field of ["state", "trigger", "invariant", "evidence", "run"] as const) {
