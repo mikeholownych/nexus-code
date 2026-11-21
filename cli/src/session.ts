@@ -9,15 +9,17 @@ import {
   TaskRecoveryOptions,
   TaskRecoveryResult,
   CURRENT_STATE_SCHEMA_VERSION,
+  WORKTREE_BINDING_VERSION,
   CorruptStateError,
   UnsupportedSchemaVersionError,
 } from "./core/state.js";
 import { withStateStoreGuard } from "./core/state_store_guard.js";
 import { WorkspacePath } from "./core/workspace_path.js";
-import { protectArchivedMessages } from "./core/persistence_protection.js";
+import { isManagedWorktreePath, isNamedWorktreePath, protectArchivedMessages } from "./core/persistence_protection.js";
 import { insertedBlockPresent, isCompactionRecord } from "./core/compaction_record.js";
 import { appendLinesDurably, readArchiveLines, type ArchiveRead, ensurePrivateDir, writePrivateFile } from "./core/durable_file.js";
 import { persistableEndpoint } from "./core/endpoint_identity.js";
+import { WorktreeManager } from "./worktree.js";
 
 // Re-export core state primitives
 export * from "./core/state.js";
@@ -128,8 +130,12 @@ export class SessionManager {
     return withStateStoreGuard(this.sessionsDir, () => this.saveSessionLocked(session, workspacePath));
   }
 
-  private saveSessionLocked(session: Partial<SessionData> & { id: string }, workspacePath?: WorkspacePath): void {
-    const selectedWorkspace = this.currentSelectedWorkspace();
+  private saveSessionLocked(
+    session: Partial<SessionData> & { id: string },
+    workspacePath?: WorkspacePath,
+    forkWorkspaceIdentity?: WorkspacePath,
+  ): void {
+    const selectedWorkspace = forkWorkspaceIdentity ?? this.currentSelectedWorkspace();
     if (workspacePath && (!selectedWorkspace || !selectedWorkspace.matches(workspacePath.value))) {
       throw new Error("Session workspace identity is not selected by the application");
     }
@@ -334,18 +340,16 @@ export class SessionManager {
    * source is only read. The cut backs up to the last complete tool exchange. Compactions whose summary is still in the
    * kept conversation keep their record and archive lines (copied verbatim, so resume's audit still verifies them);
    * a compaction whose summary the cut removed is left out, rather than letting resume "undo" it into history the
-   * operator did not choose. The objective ledger is carried only by a fork of the whole conversation: it describes
-   * the source's later state, which a truncated fork never reached.
+   * operator did not choose. A bound source gets a new isolated worktree at the same branch and workspace snapshot.
+   * The objective ledger is carried only by a fork of the whole conversation: it describes the source's later state,
+   * which a truncated fork never reached.
    */
-  public forkSession(sourceId: string, options: { atMessage?: number; newId?: string } = {}): { id: string; sourceId: string; atMessage: number; compactions: number } {
+  public forkSession(sourceId: string, options: { atMessage?: number; newId?: string } = {}): {
+    id: string; sourceId: string; atMessage: number; compactions: number; worktreePath?: string; branch?: string;
+  } {
     return withStateStoreGuard(this.sessionsDir, () => {
       const source = this.loadSession(sourceId);
       if (!source) throw new Error(`Session not found: ${sourceId}`);
-      // A worktree binding names one checkout. Copying it would put two sessions in that checkout (and let either's
-      // merge or discard pull it from under the other); creating a second checkout is not a fork's decision.
-      if (source.worktreeBinding) {
-        throw new Error(`Session ${source.id} is bound to the worktree ${source.worktreeBinding.worktreePath} (branch ${source.worktreeBinding.branch}); a fork would share it with the original, so nothing was forked. Continue the original with --resume, or start a new session.`);
-      }
       const total = source.messages.length;
       const asked = options.atMessage ?? total;
       if (!Number.isInteger(asked) || asked < 1 || asked > total) throw new Error(`The fork point must be a whole number between 1 and ${total}.`);
@@ -356,6 +360,7 @@ export class SessionManager {
       if (!/^[A-Za-z0-9._-]{1,160}$/.test(id) || id === "." || id === "..") throw new Error("The new session id is not a safe persistence name.");
       if (this.stateManager.hasTaskState(id) || fs.existsSync(this.archivedHistoryPath(id))) throw new Error(`Session ${id} already exists.`);
 
+      let forkWorktree: { manager: WorktreeManager; taskId: string; worktreePath: string; branch: string; createdAt: string } | undefined;
       const committed: string[] = Array.isArray((source.history as any)?.committedCompactions) ? (source.history as any).committedCompactions.filter((c: unknown): c is string => typeof c === "string") : [];
       const read = this.readArchivedHistory(source.id, new Set(committed));
       const kept = committed.filter((c) => {
@@ -376,24 +381,52 @@ export class SessionManager {
         lines.push(line);
         archivedMessages++;
       }
-      if (lines.length) appendLinesDurably(this.archivedHistoryPath(id), lines);
-
       const at = new Date().toISOString();
-      this.saveSession({
-        id,
-        title: `Fork of ${source.title || "session"}`.slice(0, 120),
-        workspace: source.workspace,
-        model: source.model,
-        ...(source.endpoint ? { endpoint: source.endpoint } : {}),
-        messages,
-        history: { complete: kept.length === 0, compactions: kept.length, archivedMessages, committedCompactions: kept } as any,
-        ...(source.findings !== undefined ? { findings: source.findings } : {}),
-        ...(source.durableNotes !== undefined ? { durableNotes: source.durableNotes } : {}),
-        ...(source.activePlan ? { activePlan: source.activePlan } : {}),
-        ...(whole && source.objective !== undefined ? { objective: source.objective } : {}),
-        forkedFrom: { sessionId: source.id, atMessage, at },
-      });
-      return { id, sourceId: source.id, atMessage, compactions: kept.length };
+      const archivePath = this.archivedHistoryPath(id);
+      try {
+        if (source.worktreeBinding) {
+          const manager = new WorktreeManager(source.worktreeBinding.worktreePath);
+          const created = manager.createSessionForkWorktree(source.worktreeBinding, id);
+          forkWorktree = { manager, taskId: created.taskId, worktreePath: created.worktreePath, branch: created.branch, createdAt: new Date().toISOString() };
+        }
+        if (lines.length) appendLinesDurably(archivePath, lines);
+        this.saveSessionLocked({
+          id,
+          title: `Fork of ${source.title || "session"}`.slice(0, 120),
+          workspace: source.workspace,
+          model: source.model,
+          ...(source.endpoint ? { endpoint: source.endpoint } : {}),
+          messages,
+          ...(forkWorktree ? { worktreeBinding: {
+            taskId: forkWorktree.taskId,
+            worktreePath: forkWorktree.worktreePath,
+            branch: forkWorktree.branch,
+            createdAt: forkWorktree.createdAt,
+            kind: "task" as const,
+            bindingVersion: WORKTREE_BINDING_VERSION,
+          } } : {}),
+          history: { complete: kept.length === 0, compactions: kept.length, archivedMessages, committedCompactions: kept } as any,
+          ...(source.findings !== undefined ? { findings: source.findings } : {}),
+          ...(source.durableNotes !== undefined ? { durableNotes: source.durableNotes } : {}),
+          ...(source.activePlan ? { activePlan: source.activePlan } : {}),
+          ...(whole && source.objective !== undefined ? { objective: source.objective } : {}),
+          forkedFrom: { sessionId: source.id, atMessage, at },
+        }, undefined, forkWorktree ? WorkspacePath.fromSelectedWorkspace(forkWorktree.manager.getGitRoot()) : undefined);
+      } catch (err) {
+        if (this.stateManager.hasTaskState(id)) {
+          throw new Error(`Fork ${id} was durably saved but could not be fully indexed; its workspace is preserved. ${err instanceof Error ? err.message : String(err)}`);
+        }
+        try { fs.rmSync(archivePath, { force: true }); } catch {}
+        if (forkWorktree) {
+          const removed = forkWorktree.manager.discardWorktree(forkWorktree.taskId);
+          if (!removed.success) throw new Error(`Fork could not be saved and its worktree cleanup failed: ${removed.error || "unknown error"}`);
+        }
+        throw err;
+      }
+      return {
+        id, sourceId: source.id, atMessage, compactions: kept.length,
+        ...(forkWorktree ? { worktreePath: forkWorktree.worktreePath, branch: forkWorktree.branch } : {}),
+      };
     });
   }
 
@@ -621,7 +654,6 @@ export class SessionManager {
     const selected = this.currentSelectedWorkspace();
     if (!selected) return undefined;
     selected.assertCurrent();
-    this.stateManager.setWorkspacePaths([selected]);
     const filePath = this.stateManager.getStateFilePath(taskId);
     if (!fs.existsSync(filePath)) return selected;
     let raw: any;
@@ -632,11 +664,27 @@ export class SessionManager {
     }
     const value = raw?.workspacePath || raw?.workspace;
     if (typeof value !== "string") throw new Error("Session record has no workspace identity");
-    if (!selected.matches(value) || (raw?.workspacePath && raw.workspacePath !== selected.value) ||
-        (raw?.workspace && raw.workspace !== selected.value)) {
-      throw new Error("Session workspace does not match the application's selected workspace");
+    if (selected.matches(value) && (!raw?.workspacePath || raw.workspacePath === selected.value) &&
+        (!raw?.workspace || raw.workspace === selected.value)) {
+      this.stateManager.setWorkspacePaths([selected]);
+      return selected;
     }
-    return selected;
+
+    // A session can be opened from another checkout of the same repository. Accept that only when its durable
+    // worktree binding proves a live Nexus-managed checkout owned by this repository's main checkout.
+    const binding = raw?.worktreeBinding;
+    if (binding && typeof binding.worktreePath === "string" && typeof raw?.taskId === "string") {
+      const manager = new WorktreeManager(selected.value);
+      const repository = WorkspacePath.fromSelectedWorkspace(manager.getGitRoot());
+      const validBinding = isManagedWorktreePath(repository, binding.worktreePath, raw.taskId, binding)
+        || isNamedWorktreePath(repository, binding.worktreePath, binding);
+      if (repository.matches(value) && (!raw?.workspacePath || raw.workspacePath === value)
+          && (!raw?.workspace || raw.workspace === value) && validBinding) {
+        this.stateManager.setWorkspacePaths([selected, repository]);
+        return repository;
+      }
+    }
+    throw new Error("Session workspace does not match the application's selected workspace or a valid bound worktree in that repository");
   }
 
   private currentSelectedWorkspace(): WorkspacePath | undefined {

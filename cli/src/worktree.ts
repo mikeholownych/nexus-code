@@ -14,6 +14,7 @@ import { WorkspacePath } from "./core/workspace_path.js";
 import { ensureWorktree } from "./worktrunk/core.js";
 import { openRepo } from "./worktrunk/repo.js";
 import { git as pinnedGit, nestedRepositoryReason, printable } from "./worktrunk/git.js";
+import { validateBranchName } from "./worktrunk/paths.js";
 export { ensureGitExclude };
 
 export interface WorktreeInfo {
@@ -118,6 +119,11 @@ export class WorktreeManager {
     return path.join(this.gitRoot, ".nexus", "worktrees");
   }
 
+  /** The main checkout that owns this repository's worktree registry and `.nexus/worktrees` directory. */
+  public getGitRoot(): string {
+    return this.gitRoot;
+  }
+
   /**
    * Spawns an isolated ephemeral worktree with a dedicated speculative branch.
    */
@@ -158,6 +164,49 @@ export class WorktreeManager {
       };
     } catch (err: any) {
       throw new Error(`Failed to create git worktree: ${err.stderr || err.message}`);
+    }
+  }
+
+  /**
+   * Creates an independent session-fork checkout from the source worktree's branch and working state.
+   * Tracked staged/unstaged edits and non-ignored untracked files are copied; ignored output is left behind.
+   */
+  public createSessionForkWorktree(source: { worktreePath: string; branch: string }, forkId: string): WorktreeCreateResult {
+    const branchProblem = validateBranchName(source.branch);
+    if (branchProblem) throw new Error(`Cannot fork worktree: the saved source branch is invalid (${branchProblem}).`);
+    if (!this.isLinkedWorktree(source.worktreePath)) {
+      throw new Error("Cannot fork worktree: the saved source is not a linked worktree of this repository.");
+    }
+    const planted = nestedRepositoryReason(source.worktreePath);
+    if (planted) throw new Error(`Cannot fork worktree: ${planted}.`);
+    const actualBranch = pinnedGit(source.worktreePath, ["branch", "--show-current"]).stdout.trim();
+    if (actualBranch !== source.branch) {
+      throw new Error(`Cannot fork worktree: it is now on ${actualBranch || "a detached HEAD"}, not the saved branch ${source.branch}.`);
+    }
+    const forkTaskId = forkId;
+    if (!/^[A-Za-z0-9._-]{1,160}$/.test(forkTaskId) || forkTaskId === "." || forkTaskId === "..") {
+      throw new Error("Cannot fork worktree: the new session id is not a safe worktree name.");
+    }
+
+    // Capture the content before creating the sibling checkout. No stash, index update, or source-side write is used.
+    const maxPatchBytes = MAX_FORK_SNAPSHOT_BYTES;
+    const staged = pinnedGit(source.worktreePath, ["diff", "--cached", "--binary", "HEAD"], { maxBuffer: maxPatchBytes }).stdout;
+    const unstaged = pinnedGit(source.worktreePath, ["diff", "--binary"], { maxBuffer: maxPatchBytes }).stdout;
+    const trackedBytes = Buffer.byteLength(staged) + Buffer.byteLength(unstaged);
+    if (trackedBytes > MAX_FORK_SNAPSHOT_BYTES) {
+      throw new Error(`Cannot fork worktree: tracked changes exceed the ${MAX_FORK_SNAPSHOT_BYTES} byte snapshot limit; commit or reduce them before forking.`);
+    }
+    const untracked = pinnedGit(source.worktreePath, ["ls-files", "--others", "--exclude-standard", "-z"], { maxBuffer: maxPatchBytes }).stdout;
+    const created = this.createWorktree(forkTaskId, actualBranch);
+    try {
+      if (staged) pinnedGit(created.worktreePath, ["apply", "--cached", "--binary", "-"], { input: staged, maxBuffer: maxPatchBytes });
+      if (unstaged) pinnedGit(created.worktreePath, ["apply", "--binary", "-"], { input: unstaged, maxBuffer: maxPatchBytes });
+      copyForkUntrackedFiles(source.worktreePath, created.worktreePath, untracked, trackedBytes);
+      return created;
+    } catch (err) {
+      const cleanup = this.discardWorktree(forkTaskId);
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new Error(`Cannot fork worktree: the independent checkout could not be prepared${cleanup.success ? "" : ` and cleanup failed (${cleanup.error || "unknown error"})`}. ${detail}`);
     }
   }
 
@@ -525,5 +574,61 @@ export class WorktreeManager {
     const worktreePath = path.join(this.getWorktreesBaseDir(), taskId);
     const t = tracker || new CandidateTracker();
     return t.computeCandidateIdentitySync(worktreePath);
+  }
+}
+
+const MAX_FORK_UNTRACKED_FILES = 2_000;
+const MAX_FORK_SNAPSHOT_BYTES = 64 * 1024 * 1024;
+
+/** Copy only Git-reported, non-ignored untracked leaf files without following source or destination links. */
+function copyForkUntrackedFiles(sourceRoot: string, targetRoot: string, nulList: string, trackedBytes = 0): void {
+  const files = nulList.split("\0").filter(Boolean);
+  if (files.length > MAX_FORK_UNTRACKED_FILES) {
+    throw new Error(`more than ${MAX_FORK_UNTRACKED_FILES} untracked files would need copying; commit, ignore, or reduce them before forking`);
+  }
+  let bytes = trackedBytes;
+  for (const relative of files) {
+    if (relative.includes("\uFFFD") || path.isAbsolute(relative) || relative.split("/").some((part) => part === ".." || part === "." || part === "")) {
+      throw new Error("an untracked path cannot be copied safely");
+    }
+    const source = path.resolve(sourceRoot, relative);
+    const target = path.resolve(targetRoot, relative);
+    const sourceRelative = path.relative(sourceRoot, source);
+    const targetRelative = path.relative(targetRoot, target);
+    if (sourceRelative.startsWith(`..${path.sep}`) || sourceRelative === ".." || path.isAbsolute(sourceRelative)
+      || targetRelative.startsWith(`..${path.sep}`) || targetRelative === ".." || path.isAbsolute(targetRelative)) {
+      throw new Error("an untracked path resolves outside its worktree");
+    }
+
+    const sourceStat = fs.lstatSync(source);
+    if (!sourceStat.isFile() && !sourceStat.isSymbolicLink()) {
+      throw new Error(`untracked path ${relative} is not a regular file or symlink`);
+    }
+    bytes += sourceStat.isSymbolicLink() ? Buffer.byteLength(fs.readlinkSync(source)) : sourceStat.size;
+    if (bytes > MAX_FORK_SNAPSHOT_BYTES) {
+      throw new Error(`the tracked and untracked workspace snapshot exceeds the ${MAX_FORK_SNAPSHOT_BYTES} byte fork limit; commit, ignore, or reduce files before forking`);
+    }
+
+    const parts = relative.split("/");
+    let parent = targetRoot;
+    for (const part of parts.slice(0, -1)) {
+      parent = path.join(parent, part);
+      try {
+        const st = fs.lstatSync(parent);
+        if (st.isSymbolicLink() || !st.isDirectory()) throw new Error(`destination parent for ${relative} is not a plain directory`);
+      } catch (err: any) {
+        if (err?.code !== "ENOENT") throw err;
+        fs.mkdirSync(parent, { mode: 0o700 });
+      }
+    }
+    if (fs.existsSync(target) || (() => { try { fs.lstatSync(target); return true; } catch { return false; } })()) {
+      throw new Error(`untracked path ${relative} already exists in the fork checkout`);
+    }
+    if (sourceStat.isSymbolicLink()) {
+      fs.symlinkSync(fs.readlinkSync(source), target);
+    } else {
+      fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
+      fs.chmodSync(target, sourceStat.mode & 0o777);
+    }
   }
 }
