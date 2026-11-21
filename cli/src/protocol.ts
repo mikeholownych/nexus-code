@@ -188,6 +188,11 @@ export type SidecarCommand =
   | { type: "cancel" }
   | { type: "approve"; id: string; always: boolean }
   | { type: "deny"; id: string }
+  /**
+   * VC-9: the operator's decision on a question a turn ended BLOCKED / NEEDS_INPUT with (`turn.needsInput.id`), for a
+   * client with no live approval prompt. It is recorded now and applied when the next turn reaches that decision.
+   */
+  | { type: "answer"; id: string; question: string; option: "approve" | "decline" }
   | { type: "checkpoint.choice"; id: string; choice: "read_only" | "without_checkpoint" | "retry" | "allow_sensitive" | "cancel" | "other" }
   | { type: "slash"; id: string; command: string; args: string }
   | { type: "tool.detail"; id: string; evidence: string }
@@ -251,6 +256,12 @@ export function parseCommand(line: string): SidecarCommand {
       return { type: "approve", id: requireId("approve"), always: msg.always === true };
     case "deny":
       return { type: "deny", id: requireId("deny") };
+    case "answer": {
+      const requestId = requireId("answer");
+      if (typeof msg.question !== "string" || !/^[0-9a-f]{12}$/.test(msg.question)) throw new ProtocolError("answer requires question: the 12-character needsInput.id", requestId);
+      if (msg.option !== "approve" && msg.option !== "decline") throw new ProtocolError("answer requires option: approve or decline", requestId);
+      return { type: "answer", id: requestId, question: msg.question, option: msg.option };
+    }
     case "checkpoint.choice": {
       const requestId = requireId("checkpoint.choice");
       const choices = ["read_only", "without_checkpoint", "retry", "allow_sensitive", "cancel", "other"] as const;
