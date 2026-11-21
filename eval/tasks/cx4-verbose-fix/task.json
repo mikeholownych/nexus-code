@@ -1,0 +1,16 @@
+{
+  "id": "cx4-verbose-fix",
+  "tier": "T2",
+  "fixture": "repo",
+  "steps": 60,
+  "minutes": 25,
+  "description": "Tool-output masking (CX-4): a test run prints about 1000 lines per run and the failures come last; the model reruns it while fixing.",
+  "objective": "npm test fails. Fix the bugs in src/calc.js so that all cases pass. Do not change the tests or the runner.",
+  "hidden": {
+    "dir": "hidden",
+    "command": "node hidden/check.js"
+  },
+  "regression": {
+    "command": "npm test --silent"
+  }
+}

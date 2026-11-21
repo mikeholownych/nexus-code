@@ -1,0 +1,16 @@
+{
+  "id": "cx4-wide-rename",
+  "tier": "T2",
+  "fixture": "repo",
+  "steps": 80,
+  "minutes": 30,
+  "description": "Tool-output masking (CX-4): rename a helper used in 18 files; reading them all is expensive and the model must remember what it saw.",
+  "objective": "Rename the helper `fmt` to `formatValue` everywhere: its definition and export in src/util.js and every use in src/m1.js to src/m18.js and src/index.js. Keep behaviour and every comment unchanged, and keep npm test passing. The old name must not remain.",
+  "hidden": {
+    "dir": "hidden",
+    "command": "node hidden/check.js"
+  },
+  "regression": {
+    "command": "npm test --silent"
+  }
+}
