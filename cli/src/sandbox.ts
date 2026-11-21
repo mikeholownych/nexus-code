@@ -396,6 +396,46 @@ function probeDockerSandbox(): boolean {
  * Wrap a shell command in Linux container / namespace sandboxing (Candidate #33)
  * Restricts mutating filesystem access to the target workspace directory.
  */
+export interface SandboxedWorkerLaunch {
+  /** The program and arguments to spawn: `bwrap ...` ending in the worker command. */
+  command?: string;
+  args?: string[];
+  sandboxed: boolean;
+  engine: SandboxedCommandResult["engine"];
+  warning?: string;
+}
+
+/**
+ * CS-10: launches a long-lived worker (the native core) inside the same Bubblewrap profile a sandboxed command gets: a
+ * read-only root, the workspace the only writable path, $HOME masked, a scrubbed environment, no network unless the
+ * operator allowed it, and the worker dies with its parent. The worker's own directory is bound read-only because it may
+ * live under the masked $HOME (a development checkout or a per-user install).
+ *
+ * The worker's commands then run in the same box, so the per-command wrap is not applied a second time. Only Bubblewrap
+ * is supported for the worker; the caller decides what a Docker request means.
+ */
+export function wrapSandboxedWorker(
+  workerPath: string,
+  workerArgs: readonly string[],
+  workspace: string,
+  options: Pick<SandboxOptions, "network"> = {},
+): SandboxedWorkerLaunch {
+  if (!isBwrapAvailable()) {
+    return { sandboxed: false, engine: "none", warning: "Bubblewrap (bwrap) is not available, so the worker cannot be isolated." };
+  }
+  const exec = `exec ${[workerPath, ...workerArgs].map(quoteForShell).join(" ")}`;
+  const wrapped = wrapSandboxedCommand(exec, workspace, {
+    mode: "bwrap",
+    shell: "bash",
+    network: options.network,
+    customBwrapArgs: ["--ro-bind", path.dirname(workerPath), path.dirname(workerPath)],
+  });
+  if (!wrapped.sandboxed || wrapped.engine !== "bwrap" || !wrapped.argv?.length) {
+    return { sandboxed: false, engine: wrapped.engine, warning: wrapped.warning ?? "The Bubblewrap profile could not be built for the worker." };
+  }
+  return { command: wrapped.argv[0], args: wrapped.argv.slice(1), sandboxed: true, engine: "bwrap" };
+}
+
 export function wrapSandboxedCommand(
   cmd: string,
   workspace: string,

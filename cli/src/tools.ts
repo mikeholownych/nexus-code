@@ -1,3 +1,4 @@
+import { wrapSandboxedWorker } from "./sandbox.js";
 import { spawn, spawnSync, ChildProcess } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
@@ -752,7 +753,62 @@ export class RustCoreBridge {
   }
 
   public setSandbox(sandbox: boolean | string): void {
+    const changed = this.sandbox !== sandbox;
     this.sandbox = sandbox;
+    // A running worker was launched under the previous setting; the next request starts one under the new one.
+    if (changed && this.rpcProcess) this.cleanupRpc();
+  }
+
+  /**
+   * CS-10: what `--sandbox` asks of the worker. An explicit `bwrap` requires it inside the box (and fails closed when it
+   * cannot be). `auto` (or a bare `--sandbox`) uses the box when Bubblewrap is present and otherwise leaves the worker as
+   * it was, so a host that confines commands with Docker keeps working. `docker` and `none` never contain the worker.
+   */
+  private workerSandboxMode(): "required" | "preferred" | "off" {
+    if (!this.sandbox || this.sandbox === "none" || this.sandbox === "docker") return "off";
+    return this.sandbox === "bwrap" ? "required" : "preferred";
+  }
+
+  /**
+   * The one place a worker process is launched from (the persistent daemon and the one-shot fallback both use it), so a
+   * request for containment cannot degrade into an unsandboxed worker through the other path. Returns a refusal when
+   * containment was requested and cannot be provided, instead of starting the worker outside the box.
+   */
+  private workerLaunch(workerArgs: string[]): { command: string; args: string[]; sandboxed: boolean } | { refused: string } {
+    const useBinary = Boolean(this.coreBinaryPath && fs.existsSync(this.coreBinaryPath));
+    const mode = this.workerSandboxMode();
+    if (mode !== "off" && useBinary) {
+      const launch = wrapSandboxedWorker(this.coreBinaryPath!, ["--workspace", this.workspace, ...workerArgs], this.workspace, {});
+      if (launch.sandboxed && launch.command && launch.args) return { command: launch.command, args: launch.args, sandboxed: true };
+      if (mode === "required") return { refused: launch.warning ?? "no supported sandbox engine is available." };
+      // "auto": no Bubblewrap here, so the worker is launched as before; commands report their own containment.
+    } else if (mode === "required") {
+      return { refused: "the worker can only be isolated from an installed core binary, not from `cargo run`. Build or install the core, or run without --sandbox bwrap." };
+    }
+    if (useBinary) return { command: this.coreBinaryPath!, args: ["--workspace", this.workspace, ...workerArgs], sandboxed: false };
+    return {
+      command: "cargo",
+      args: ["run", "--manifest-path", this.cargoManifestPath, "--quiet", "--", "--workspace", this.workspace, ...workerArgs],
+      sandboxed: false,
+    };
+  }
+
+  /** Why the worker was not started (containment requested, not available); reported with the tool result. */
+  private workerRefusal?: string;
+  private workerBoxCache?: { key: string; sandboxed: boolean };
+
+  /**
+   * True when this bridge's worker runs inside the sandbox, so its commands are already confined by that box and are not
+   * wrapped a second time. Decided once per sandbox setting and core binary (probing Bubblewrap is not free).
+   */
+  private workerIsSandboxed(): boolean {
+    if (this.workerSandboxMode() === "off") return false;
+    const key = `${String(this.sandbox)}|${this.coreBinaryPath ?? ""}`;
+    if (this.workerBoxCache?.key !== key) {
+      const launch = this.workerLaunch(["rpc"]);
+      this.workerBoxCache = { key, sandboxed: !("refused" in launch) && launch.sandboxed };
+    }
+    return this.workerBoxCache.sandboxed;
   }
 
   public setVerifierTimeoutSecs(secs?: number): void {
@@ -769,25 +825,15 @@ export class RustCoreBridge {
       return this.rpcProcess;
     }
 
-    let command: string;
-    let spawnArgs: string[];
-
-    if (this.coreBinaryPath && fs.existsSync(this.coreBinaryPath)) {
-      command = this.coreBinaryPath;
-      spawnArgs = ["--workspace", this.workspace, "rpc"];
-    } else {
-      command = "cargo";
-      spawnArgs = [
-        "run",
-        "--manifest-path",
-        this.cargoManifestPath,
-        "--quiet",
-        "--",
-        "--workspace",
-        this.workspace,
-        "rpc",
-      ];
+    const launch = this.workerLaunch(["rpc"]);
+    if ("refused" in launch) {
+      // Containment was requested and cannot be provided: do not start the worker outside the box. The caller reports it.
+      this.workerRefusal = launch.refused;
+      return null;
     }
+    this.workerRefusal = undefined;
+    const command = launch.command;
+    const spawnArgs = launch.args;
 
     try {
       this.rpcProcess = spawn(command, spawnArgs, {
@@ -1094,29 +1140,12 @@ export class RustCoreBridge {
   private executeViaSpawnSync(toolName: string, args: Record<string, any>): ExecutionResult {
     const argsJson = JSON.stringify(args);
 
-    let command: string;
-    let spawnArgs: string[];
-
-    if (this.coreBinaryPath && fs.existsSync(this.coreBinaryPath)) {
-      command = this.coreBinaryPath;
-      spawnArgs = ["--workspace", this.workspace, "call", "--tool", toolName, "--args", argsJson];
-    } else {
-      command = "cargo";
-      spawnArgs = [
-        "run",
-        "--manifest-path",
-        this.cargoManifestPath,
-        "--quiet",
-        "--",
-        "--workspace",
-        this.workspace,
-        "call",
-        "--tool",
-        toolName,
-        "--args",
-        argsJson,
-      ];
+    const launch = this.workerLaunch(["call", "--tool", toolName, "--args", argsJson]);
+    if ("refused" in launch) {
+      return { success: false, output: "", error: `Worker isolation violation: ${launch.refused} The core worker was not started outside the sandbox.` };
     }
+    const command = launch.command;
+    const spawnArgs = launch.args;
 
     try {
       const res = spawnSync(command, spawnArgs, {
@@ -1616,12 +1645,17 @@ export class RustCoreBridge {
           }
         }
 
-        const sandboxed = wrapSandboxedCommand(args.command || "", this.workspace, {
-          mode,
-          shell: args.shell,
-          readOnlyHost: this.readOnly,
-          network: this.readOnly ? false : undefined,
-        });
+        // CS-10: with the worker itself inside the sandbox, this command already runs in that box; wrapping it again would
+        // nest Bubblewrap (user namespaces inside a user namespace) for no added confinement.
+        const inWorkerBox = !this.readOnly && this.workerIsSandboxed();
+        const sandboxed = inWorkerBox
+          ? { command: args.command || "", sandboxed: true, engine: "bwrap" as const, argv: undefined as string[] | undefined, warning: undefined as string | undefined }
+          : wrapSandboxedCommand(args.command || "", this.workspace, {
+              mode,
+              shell: args.shell,
+              readOnlyHost: this.readOnly,
+              network: this.readOnly ? false : undefined,
+            });
         const explicitlyRequestedSandbox = Boolean(this.sandbox) && configuredMode !== "none";
         if ((this.readOnly || this.requireSandbox || explicitlyRequestedSandbox) && !sandboxed.sandboxed) {
           const authority = this.readOnly

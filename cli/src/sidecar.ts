@@ -1373,7 +1373,7 @@ async function main(argv: string[]): Promise<void> {
     .option("--dry-run", "Simulate file modifications without writing changes to disk")
     .option("--read-only", "Reject all mutating tool executions and commands")
     .option("--sandbox [mode]", "Isolate command execution using bubblewrap or Docker")
-    .option("--sandbox-network", "With --sandbox: let sandboxed commands use the network (off by default)")
+    .option("--sandbox-network", "With --sandbox: let sandboxed commands and the sandboxed native worker use the network (off by default)")
     .option("--worktree", "Isolate execution inside an ephemeral git worktree")
     .option("--worktree-branch <name>", "Run inside the named git worktree for this branch (created if missing); kept after the run, merge it with `nexus worktree merge`")
     .option("--authoritative-verifier <command>", "Trusted command that must pass before any task completion; its success may authorize automatic worktree merge")

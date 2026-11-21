@@ -17,6 +17,23 @@ function bwrapPids(): Set<number> {
   return new Set(out.split("\n").filter(Boolean).map(Number));
 }
 
+/** `sleep 300` children of the write-mode command: in the worker's box no per-command sandbox process stands for them. */
+function sleepPids(): Set<number> {
+  const out = spawnSync("pgrep", ["-f", "^sleep 300$"], { encoding: "utf8" }).stdout;
+  return new Set(out.split("\n").filter(Boolean).map(Number));
+}
+
+async function sleepSurvivors(before: Set<number>): Promise<number[]> {
+  let extra: number[] = [];
+  for (let i = 0; i < 50; i++) {
+    extra = [...sleepPids()].filter((pid) => !before.has(pid));
+    if (!extra.length) return [];
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  for (const pid of extra) { try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ } }
+  return extra;
+}
+
 async function survivors(before: Set<number>): Promise<number[]> {
   let extra: number[] = [];
   for (let i = 0; i < 50; i++) {
@@ -41,7 +58,11 @@ function scenario(readOnly: boolean): () => Promise<void> {
     const bridge = new RustCoreBridge(workspace, "bash", undefined, false, readOnly, readOnly ? undefined : "bwrap");
     try {
       assert.equal(spawnSync("mkfifo", [path.join(workspace, "pending.fifo")]).status, 0);
+      // The worker itself runs in a sandbox now (CS-10) and starts on its first call: start it before the snapshot, so only
+      // processes created by the cancelled or timed-out command can count as survivors.
+      if (!readOnly) assert.equal((await bridge.executeTool("run_command", { command: "true" })).success, true);
       const before = bwrapPids();
+      const sleepsBefore = sleepPids();
       for (let i = 0; i < 5; i++) {
         // Cancel while the command blocks in a read.
         const controller = new AbortController();
@@ -51,11 +72,13 @@ function scenario(readOnly: boolean): () => Promise<void> {
         const cancelled = await pending;
         assert.ok(cancelled.cancelled === true || /"cancelled": true/.test(cancelled.output ?? ""), `round ${i}: cancelled`);
         assert.deepEqual(await survivors(before), [], `round ${i}: a sandbox process survived cancellation`);
+        assert.deepEqual(await sleepSurvivors(sleepsBefore), [], `round ${i}: the command's background child survived cancellation`);
         // Deadline.
         bridge.setTurnSignal(undefined);
         const timedOut = await bridge.executeTool("run_command", { command: CMD, timeout_secs: 1 });
         assert.ok(timedOut.timedOut === true || /"timed_out": true/.test(timedOut.output ?? ""), `round ${i}: timed out`);
         assert.deepEqual(await survivors(before), [], `round ${i}: a sandbox process survived the deadline`);
+        assert.deepEqual(await sleepSurvivors(sleepsBefore), [], `round ${i}: the command's background child survived the deadline`);
       }
     } finally {
       bridge.setTurnSignal(undefined);
