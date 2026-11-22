@@ -26,7 +26,7 @@ export const lspHoverCapability: CanonicalCapability = {
           },
           "character": {
             "type": "number",
-            "description": "1-based character."
+            "description": "1-based code-point column."
           }
         },
         "required": [
@@ -51,7 +51,7 @@ export const lspDefinitionCapability: CanonicalCapability = {
     "type": "function",
     "function": {
       "name": "lsp_definition",
-      "description": "LSP definition of the symbol at a position: JSON [{file, line, column, endLine, endColumn}], 1-based; file is workspace-relative (external: true outside it).",
+      "description": "LSP definition of the symbol at a position: JSON [{file, line, column, endLine, endColumn}], 1-based, columns in code points; file is workspace-relative (external: true outside it). approximate: true = columns may be off.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -65,7 +65,7 @@ export const lspDefinitionCapability: CanonicalCapability = {
           },
           "character": {
             "type": "number",
-            "description": "1-based character."
+            "description": "1-based code-point column."
           }
         },
         "required": [

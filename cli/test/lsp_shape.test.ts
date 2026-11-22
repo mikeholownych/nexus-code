@@ -112,7 +112,8 @@ test("definition: every form a server answers in becomes the one list; targets o
     "none.ts": [],
     "garbage.ts": [{ nothing: true }, 5],
   };
-  const s = open({ definition: forms }, { "a.ts": "x\n", "sub/b.ts": "x\n", ...Object.fromEntries(Object.keys(forms).map((name) => [name, "helper\n"])) });
+  // sub/b.ts holds the lines the answers point at: the client converts a target's columns with the text of its line.
+  const s = open({ definition: forms }, { "a.ts": "x\n", "sub/b.ts": "\n\n\n\n  helper\n\n\nx\n", ...Object.fromEntries(Object.keys(forms).map((name) => [name, "helper\n"])) });
   const one = [{ file: "sub/b.ts", line: 5, column: 3, endLine: 5, endColumn: 9 }];
   try {
     fs.mkdirSync(path.join(s.root, "dep"));
@@ -123,9 +124,9 @@ test("definition: every form a server answers in becomes the one list; targets o
       return res.output;
     };
     for (const name of ["location.ts", "locations.ts", "link.ts", "links.ts", "barelink.ts"]) assert.equal(await ask(name), JSON.stringify(one, null, 2), name);
-    assert.deepEqual(JSON.parse(await ask("external.ts")), [{ file: path.join(s.root, "dep", "lib.d.ts"), external: true, line: 10, column: 1, endLine: 10, endColumn: 4 }]);
-    assert.deepEqual(JSON.parse(await ask("gone.ts")), [{ file: "/nexus-test-no-such-dir/std/core.ts", external: true, line: 1, column: 1, endLine: 1, endColumn: 2 }], "a target that is not on disk is still placed, by its path");
-    assert.deepEqual(JSON.parse(await ask("virtual.ts")), [{ uri: "jdt://contents/java.base/java.lang/String.class?x=1", line: 121, column: 5, endLine: 121, endColumn: 11 }]);
+    assert.deepEqual(JSON.parse(await ask("external.ts")), [{ file: path.join(s.root, "dep", "lib.d.ts"), external: true, line: 10, column: 1, endLine: 10, endColumn: 4, approximate: true }], "a file outside the workspace is not read, so its columns are the server's (UTF-16 here), marked");
+    assert.deepEqual(JSON.parse(await ask("gone.ts")), [{ file: "/nexus-test-no-such-dir/std/core.ts", external: true, line: 1, column: 1, endLine: 1, endColumn: 2, approximate: true }], "a target that is not on disk is still placed, by its path");
+    assert.deepEqual(JSON.parse(await ask("virtual.ts")), [{ uri: "jdt://contents/java.base/java.lang/String.class?x=1", line: 121, column: 5, endLine: 121, endColumn: 11, approximate: true }]);
     assert.deepEqual(JSON.parse(await ask("mixed.ts")), [...one, { file: "sub/b.ts", line: 8, column: 1, endLine: 8, endColumn: 2 }], "identical targets once; entries that are not locations skipped");
     const nothing = (name: string) => `No definition found for ${name}:1:1: the language server answered and has nothing to go to from this position.`;
     assert.equal(await ask("none.ts"), nothing("none.ts"));
