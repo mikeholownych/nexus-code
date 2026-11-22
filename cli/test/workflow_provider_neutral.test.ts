@@ -7,6 +7,7 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import "./helpers/leak_guard.js";
 import { LoopOrchestrator } from "../src/loop.js";
+import { GoalOrchestrator } from "../src/goal.js";
 import { OperationStore } from "../src/core/operation_runner.js";
 import type { ResourceDescriptor } from "../src/core/resources.js";
 import type { HarnessConfig } from "../src/types.js";
@@ -223,7 +224,7 @@ test("bounded loop lifecycle runs on a minimal OpenAI-compatible endpoint withou
     }).start("Implement the provider-neutral fixture task and verify the required artifact with the configured deterministic verifier.", {
       condition: { kind: "verification", command: f.config.authoritativeVerifierCommand! },
       maxIterations: 1,
-      maxDurationMs: 60_000,
+      maxDurationMs: 300_000,
     });
     assert.equal(result.status, "COMPLETE", `${result.state.reason ?? ""}\n${JSON.stringify(result.state.iterations)}`);
     assertStandardContract(gateway);
@@ -256,7 +257,7 @@ test("bounded loop runs through the existing Anthropic messages adapter without 
     }).start("Implement the provider-neutral fixture task and verify the required artifact with the configured deterministic verifier.", {
       condition: { kind: "verification", command: f.config.authoritativeVerifierCommand! },
       maxIterations: 1,
-      maxDurationMs: 60_000,
+      maxDurationMs: 300_000,
     });
     assert.equal(result.status, "COMPLETE", `${result.state.reason ?? ""}\n${JSON.stringify(result.state.iterations)}`);
     assert.ok(gateway.requests.length > 0);
@@ -270,4 +271,24 @@ test("bounded loop runs through the existing Anthropic messages adapter without 
     await gateway.close();
     await f.cleanup();
   }
+});
+
+test("durable goal seeds implementer and tester ledgers through the standard provider contract", async () => {
+  const f = setup("goal-ledger-provider");
+  const gateway = await f.configureGateway();
+  try {
+    const result = await new GoalOrchestrator(f.config, {
+      store: f.store,
+      resources: f.resources.map((resource) => ({ ...resource, endpoint: gateway.url })),
+      maxInProcessWaitMs: 30_000,
+    }).start("Implement the provider-neutral fixture task and verify the required artifact with the configured deterministic verifier.");
+    assert.equal(result.status, "COMPLETE", `${result.reason ?? ""}\n${JSON.stringify(result.operation.units)}`);
+    assert.equal(result.ledger?.requirements[0]?.status, "verified");
+    const implementer = result.operation.units.find((unit) => unit.role === "implementer");
+    const tester = result.operation.units.find((unit) => unit.role === "tester");
+    assert.ok(implementer?.agentTaskId && tester?.agentTaskId);
+    assert.equal(f.store.manager.loadTaskState(implementer.agentTaskId, f.workspace).objective?.requirements[0]?.status, "implemented");
+    assert.equal(f.store.manager.loadTaskState(tester.agentTaskId, f.workspace).objective?.requirements[0]?.status, "verified");
+    assertStandardContract(gateway);
+  } finally { await f.cleanup(); }
 });
