@@ -387,13 +387,13 @@ export interface AuditCliRun { code: number | null; stdout: string; stderr: stri
  */
 export function runAudit(args: string[], env: Record<string, string> = {}): Promise<AuditCliRun> {
   const base = { ...process.env };
-  for (const key of Object.keys(base)) if (/^(LOCAL_LLM_|LOCAL_HARNESS_|NEXUS_|GIT_)/.test(key) || key === "NODE_TEST_CONTEXT") delete base[key];
+  for (const key of Object.keys(base)) if (/^(LOCAL_LLM_|LOCAL_HARNESS_|NEXUS_|GIT_)/.test(key) || key === "NODE_TEST_CONTEXT" || key === "FORCE_COLOR" || key === "NO_COLOR") delete base[key];
   const home = env.HOME ?? makeHome();
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-audit-test-tmp-"));
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ["--import", "tsx", "src/index.ts", "audit", ...args], {
       cwd: CLI_DIR,
-      env: { ...base, HOME: home, TMPDIR: tmp, XDG_CONFIG_HOME: path.join(home, ".config"), XDG_DATA_HOME: path.join(home, ".local", "share"), XDG_STATE_HOME: path.join(home, ".local", "state"), XDG_CACHE_HOME: path.join(home, ".cache"), ...env },
+      env: { ...base, HOME: home, TMPDIR: tmp, NO_COLOR: "1", XDG_CONFIG_HOME: path.join(home, ".config"), XDG_DATA_HOME: path.join(home, ".local", "share"), XDG_STATE_HOME: path.join(home, ".local", "state"), XDG_CACHE_HOME: path.join(home, ".cache"), ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
