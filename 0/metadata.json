@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M81J3PK1Y5NVRPVXSB0N3D00",
+  "session_id": "01a1f54f-2cb2-7201-ad27-acf2d9bbd90e",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-22T12:01:55.570222949Z",
+  "branch": "codex/vr1c-hostile-verify-takeover",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "cli/src/core/verify.ts",
+    "cli/src/index.ts",
+    "cli/src/verify_contract.ts",
+    "cli/test/helpers/verify_fixture.ts",
+    "cli/test/verify_hostile.test.ts",
+    "cli/test/verify_sandbox.test.ts",
+    "docs/USER_MANUAL.md",
+    "docs/VERIFY_IN_CI.md"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6-luna",
+  "turn_id": "df4a6e85d95c",
+  "checkpoint_transcript_start": 55413,
+  "transcript_lines_at_start": 55413,
+  "compact_transcript_start": 8258,
+  "token_usage": {
+    "input_tokens": 34482,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 11158016,
+    "output_tokens": 17545,
+    "api_call_count": 56
+  },
+  "redaction": {
+    "replacements": 1450,
+    "layers": {
+      "betterleaks": 406,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 56,
+      "credentialed_uri": 58,
+      "entropy": 1121,
+      "key_context": 0,
+      "provider_token": 12,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 38
+  }
+}
