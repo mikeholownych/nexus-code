@@ -553,6 +553,9 @@ test("CI runs the requirements ledger gate in enforce mode before anything is bu
   // Enforce mode needs a clean worktree, so it runs in test-matrix right after checkout. The later
   // linux-x86_64 call follows a build and stays in report mode.
   const ci = fs.readFileSync(path.resolve(import.meta.dirname, "..", "..", ".github/workflows/ci.yml"), "utf8");
-  const matrix = ci.slice(ci.indexOf("\n  test-matrix:"), ci.indexOf("\n  cloudflare-experiment:"));
+  const start = ci.indexOf("\n  test-matrix:");
+  assert.notEqual(start, -1, "ci.yml defines the test-matrix job");
+  const nextJob = ci.slice(start + 1).search(/\n  [a-zA-Z0-9_-]+:/);
+  const matrix = nextJob === -1 ? ci.slice(start) : ci.slice(start, start + 1 + nextJob);
   assert.match(matrix, /^\s+- run: node scripts\/check_requirements\.mjs --enforce$/m);
 });

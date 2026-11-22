@@ -71,5 +71,5 @@ Core policies governing the project's operation and community interactions:
 
 ## Historical Records
 
-- [Cloudflare Contest Entry](CLOUDFLARE_CONTEST.md) — Documentation of the Cloudflare Workers collaboration service entry.
+- Cloudflare Contest Entry — removed in v1.3.0; it remains in git history, and `v1.2.2` is the last tag that contains it (`git show v1.2.2:docs/CLOUDFLARE_CONTEST.md`).
 - [Historical System Evolution](HISTORICAL.md) — Historical requirement and qualification records (Issue #12).
