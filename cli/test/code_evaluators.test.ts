@@ -15,6 +15,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { AutonomousAgent } from "../src/agent.js";
 import { parseModelResponse } from "../src/parser.js";
 import { DEFAULT_CONTINUATION, HarnessConfig } from "../src/types.js";
+import { ExecutionTracker } from "../src/core/execution_tracking.js";
 import { makeRepo, startGateway } from "./helpers/fixtures.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -437,7 +438,7 @@ test("a delegated subagent's tool calls are counted on the parent turn", { timeo
       : { kind: "text", content: "a.txt says alpha." };
   });
   const config = {
-    endpoint: gw.url, model: "m", maxSteps: 8, temperature: 0, workspace: repo, shell: "bash", approvalMode: "auto", fullAccess: true,
+    endpoint: gw.url, model: "m", maxSteps: 8, maxToolInvocations: 2, temperature: 0, workspace: repo, shell: "bash", approvalMode: "auto", fullAccess: true,
     continuation: { ...DEFAULT_CONTINUATION, stagnationSteps: 30 },
   } as HarnessConfig;
   const agent = new AutonomousAgent(config);
@@ -448,6 +449,85 @@ test("a delegated subagent's tool calls are counted on the parent turn", { timeo
     const turn = await agent.runTurn("Use a subagent to read a.txt.");
     assert.ok((gw.requests as any[]).some(isSubagent), "the subagent ran");
     assert.deepEqual(turn.toolCallSyntax, { native: 1, trailing: 1, structural: 0, invalid: 0, schema: 0 }, JSON.stringify(turn.toolCallSyntax));
+    assert.equal(turn.continuation?.toolInvocations, 2, "the parent spawn and child read share the objective counter");
+  } finally {
+    console.log = log;
+    agent.shutdown();
+    await gw.close();
+    if (saved === undefined) delete process.env.HOME;
+    else process.env.HOME = saved;
+    fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("the objective tool budget blocks delegated dispatches before execution", { timeout: 60_000 }, async () => {
+  const repo = makeRepo({ "a.txt": "alpha\n" });
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-delegated-tool-budget-home-"));
+  const saved = process.env.HOME;
+  process.env.HOME = home;
+  const isSubagent = (body: any) => JSON.stringify(body?.messages ?? []).includes("[Subagent Objective]");
+  const toolResults = (body: any) => (body?.messages ?? []).filter((m: any) => m.role === "tool").length;
+  const gw = await startGateway((_n, body) => {
+    if (isSubagent(body)) {
+      return toolResults(body) === 0
+        ? { kind: "tools", calls: [{ name: "read_file", args: { path: "a.txt" } }] }
+        : { kind: "text", content: "Subagent read a.txt." };
+    }
+    return toolResults(body) === 0
+      ? { kind: "tools", calls: [{ name: "spawn_subagent", args: { prompt: "Read a.txt and report." } }] }
+      : { kind: "text", content: "Delegation returned." };
+  });
+  const config = {
+    endpoint: gw.url, model: "m", maxSteps: 8, maxToolInvocations: 1, temperature: 0, workspace: repo, shell: "bash", approvalMode: "auto", fullAccess: true,
+    continuation: { ...DEFAULT_CONTINUATION, stagnationSteps: 30 },
+  } as HarnessConfig;
+  const agent = new AutonomousAgent(config);
+  (agent as any).ui = new Proxy({}, { get: () => () => {} });
+  const log = console.log;
+  console.log = () => {};
+  try {
+    const turn = await agent.runTurn("Use a subagent to read a.txt.");
+    assert.equal(turn.continuation?.toolInvocations, 1, "the parent spawn consumes the sole objective dispatch");
+    assert.equal((gw.requests as any[]).filter(isSubagent).length, 1, "budget exhaustion ends the child before another inference");
+    const parentRequests = (gw.requests as any[]).filter((body) => !isSubagent(body));
+    assert.ok(parentRequests.some((body) => JSON.stringify(body.messages).includes("TOOL_INVOCATION_BUDGET_EXHAUSTED")),
+      "the parent sees the child's explicit budget exhaustion result");
+  } finally {
+    console.log = log;
+    agent.shutdown();
+    await gw.close();
+    if (saved === undefined) delete process.env.HOME;
+    else process.env.HOME = saved;
+    fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a delegated tool is not dispatched when saving its reservation fails", { timeout: 60_000 }, async () => {
+  const repo = makeRepo({ "a.txt": "alpha\n" });
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-delegated-tool-persistence-home-"));
+  const saved = process.env.HOME;
+  process.env.HOME = home;
+  const gw = await startGateway(() => ({ kind: "tools", calls: [{ name: "read_file", args: { path: "a.txt" } }] }));
+  const config = {
+    endpoint: gw.url, model: "m", maxSteps: 8, maxToolInvocations: 3, temperature: 0, workspace: repo, shell: "bash", approvalMode: "auto", fullAccess: true,
+    continuation: { ...DEFAULT_CONTINUATION, stagnationSteps: 30 },
+  } as HarnessConfig;
+  const agent = new AutonomousAgent(config);
+  (agent as any).ui = new Proxy({}, { get: () => () => {} });
+  const tracker = ExecutionTracker.fresh();
+  (agent as any).sharedToolInvocationBudget = { tracker, maximum: 3, persist: () => false };
+  let dispatches = 0;
+  (agent as any).dispatchToolCall = async () => { dispatches++; throw new Error("must not dispatch"); };
+  const log = console.log;
+  console.log = () => {};
+  try {
+    const result = await agent.runSubagent("Read a.txt.");
+    assert.equal(result.completed, false);
+    assert.match(result.reason ?? "", /PERSISTENCE_FAILED/);
+    assert.equal(tracker.data.toolInvocations, 1, "the attempted allowance remains consumed");
+    assert.equal(dispatches, 0, "no delegated action starts without a durable reservation");
   } finally {
     console.log = log;
     agent.shutdown();
