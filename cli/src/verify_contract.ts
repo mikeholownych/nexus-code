@@ -54,6 +54,8 @@ export type VerifyReason =
   | "TREE_LIMIT_EXCEEDED"
   /** A tree holds something that is not materialised (a submodule). */
   | "UNSUPPORTED_TREE"
+  /** `--sandbox` was requested and the engine cannot confine a command here (or could not build the box for a run). */
+  | "SANDBOX_UNAVAILABLE"
   /** `nexus verify` itself failed; nothing was established. */
   | "INTERNAL_ERROR";
 
@@ -76,7 +78,7 @@ export const VERIFY_EXIT_CODES = [
   { code: 1, name: "option_parse", when: "The command line could not be parsed: an unknown option or an option without its value (the option parser exits before the command runs; no JSON document)." },
   { code: 2, name: "unverified", when: "`REGRESSION_FREE` (the tests pass without showing the change), or `UNVERIFIED` because there is no verifier, no test executed, base and head are the same tree, or an enforced type-check project of the base has no counterpart in the head." },
   { code: 2, name: "usage", when: "A usage error: not a Git working tree, a base or head that does not name a commit, or an invalid option value or combination." },
-  { code: 3, name: "blocked", when: "`BLOCKED`: a person must decide. The discovered verifier is not approved, the change edits verification files or weakens a test without approval, the changed files could not all be classified, the checkout is not trusted, or a tree exceeds the limits or holds a submodule." },
+  { code: 3, name: "blocked", when: "`BLOCKED`: a person must decide. The discovered verifier is not approved, the change edits verification files or weakens a test without approval, the changed files could not all be classified, the checkout is not trusted, a tree exceeds the limits or holds something that is not materialised (a submodule), or `--sandbox` was requested and the engine is not usable." },
   { code: 130, name: "interrupted", when: "Interrupted (SIGINT or SIGTERM). The signal is acted on when the running verifier process ends; a second signal exits at once and may leave no JSON document." },
 ] as const satisfies readonly VerifyExitCode[];
 
@@ -108,6 +110,7 @@ export const VERIFY_REASONS: Record<VerifyReason, { verdict: Exclude<VerifyVerdi
   UNTRUSTED_CHECKOUT: { verdict: "BLOCKED", exit: "blocked" },
   TREE_LIMIT_EXCEEDED: { verdict: "BLOCKED", exit: "blocked" },
   UNSUPPORTED_TREE: { verdict: "BLOCKED", exit: "blocked" },
+  SANDBOX_UNAVAILABLE: { verdict: "BLOCKED", exit: "blocked" },
 };
 
 /** The verdict for a reason; no reason is VERIFIED. */
@@ -145,9 +148,28 @@ export interface VerifyVerifierRecord {
   script?: string;
 }
 
+/** A sandbox engine `--sandbox` can name: Bubblewrap or Docker (the ones `nexus run --sandbox` uses). */
+export type VerifySandboxEngine = "bwrap" | "docker";
+
+/**
+ * How the processes `nexus verify` started on repository content were confined: the verifier on each side, the base's
+ * tests against the head, and the type-checks. One answer for all of them: a run is never started outside a sandbox
+ * that was requested.
+ */
+export interface VerifySandbox {
+  /** `--sandbox` was given. */
+  requested: boolean;
+  /** The engine every process ran in. `none`: no sandbox (not requested, or requested and unavailable, in which case nothing ran). */
+  engine: VerifySandboxEngine | "none";
+  /** The confined processes could use the network (`--sandbox-network`). Always false when `engine` is `none`: an unconfined process has the caller's network, which this member does not describe. */
+  network: boolean;
+}
+
 export interface VerifyRunRecord {
   /** `base_tests_on_head`: the test files as they were on the base, run against the head's code. */
   phase: "base" | "head" | "base_tests_on_head";
+  /** The process ran inside the sandbox named in `sandbox.engine`. Always written; absent only in a document from before `--sandbox` existed (the run was not sandboxed). */
+  sandboxed?: boolean;
   passed: boolean;
   timedOut: boolean;
   /** Null when the process was killed or never started. */
@@ -264,6 +286,8 @@ export interface VerifyJsonResult {
   typecheck: VerifyTypecheck;
   guard: VerifyGuard;
   review: VerifyIngredient;
+  /** Always written; absent only in a document from before `--sandbox` existed (nothing was sandboxed). */
+  sandbox?: VerifySandbox;
   /** Dependency directories of the caller's checkout that were linked into both scratch trees. */
   linkedDependencyDirs: string[];
   limits: VerifyLimits;
