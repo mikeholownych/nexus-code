@@ -34,7 +34,7 @@ Reuse `ContinuationBudget`, `ExecutionTracker`, `ProviderRecoveryController`, `R
 
 **Priority:** P0 · **Complexity:** L · **Dependencies:** WP-P10-01 recommended first; can be implemented independently.
 
-**Gap/evidence:** Direct objective continuation already has finite total-step and per-invocation time ceilings (`cli/src/types.ts`, `cli/src/core/run_turn.ts`), but tool dispatches were not capped cumulatively. `runSubagent` uses its own loop (`cli/src/agent.ts`) and is not yet covered by the direct-turn tracker. Cumulative elapsed time, inference submissions, provider retries and tokens are also not tracked as one durable task budget.
+**Gap/evidence:** Direct objective continuation already has finite total-step and per-invocation time ceilings (`cli/src/types.ts`, `cli/src/core/run_turn.ts`), but tool dispatches were not capped cumulatively. `runSubagent` uses its own loop (`cli/src/agent.ts`) and requires explicit sharing with the direct-turn tracker. Cumulative elapsed time, inference submissions, provider retries and tokens are also not tracked as one durable task budget.
 
 **Affected surfaces:** `types.ts`, `config.ts`, `run_turn.ts`, subagent execution in `agent.ts`, provider recovery, tool deadlines, durable objective/task state, operation runner and CLI/UI reporting.
 
@@ -43,8 +43,8 @@ Reuse `ContinuationBudget`, `ExecutionTracker`, `ProviderRecoveryController`, `R
 **Implementation steps:**
 
 1. Define additive schema fields with migration defaults that do not silently claim prior counters are zero; old tasks resume in a conservative bounded mode or require explicit operator choice.
-2. Add a shared budget tracker passed through direct turns, subagents, work units, provider recovery and tool dispatch.
-3. Enforce before dispatch and before any retry; classify exhaustion as `BLOCKED`/`LIMIT_REACHED`, never `VERIFIED` or successful operation completion.
+2. Add a shared budget tracker passed through direct turns, transient in-turn subagents, durable work units, provider recovery and tool dispatch.
+3. Enforce before direct and delegated dispatch and before any retry; classify exhaustion as `BLOCKED`/`LIMIT_REACHED`, never `VERIFIED` or successful operation completion.
 4. Add ceilings for response streaming and whole-turn wall time, including a finite total timeout for local inference streams; idle timeout remains separate.
 5. Report dimension, configured limit, consumed amount and resume behavior in CLI/TUI result.
 
@@ -52,7 +52,7 @@ Reuse `ContinuationBudget`, `ExecutionTracker`, `ProviderRecoveryController`, `R
 
 **Migration / rollback:** New config defaults may shorten formerly unlimited runs; provide an explicit operator override with a hard documented maximum, not Infinity. Keep old records readable. Rollback must not turn persisted exhausted state into zero; older binaries should refuse unsupported budget schema versions. Residual risk: already-running external calls may finish after cancellation or have unknown outcomes.
 
-**Progress (2026-11-21):** The direct `runTurnImpl` path now persists a per-objective tool invocation ceiling (default 1,000; hard maximum 10,000), admits calls before dispatch, and checkpoints the count before dispatcher effects. A saved ceiling cannot be raised by a later invocation. Legacy execution records explicitly mark tool history incomplete, so migrated counts are not presented as exact. Targeted tests cover bounded distinct writes, resume without budget renewal, admission bounds and legacy lower-bound tracking. Remaining P10-02 work includes sharing the tracker with `runSubagent`, provider recovery, inference/token accounting, cumulative elapsed limits, per-tool deadlines, process-crash reconciliation, and persistence-failure fault injection.
+**Progress (2026-11-22):** The `runTurnImpl` path persists a per-objective tool invocation ceiling (default 1,000; hard maximum 10,000), admits calls before dispatch, and checkpoints the count before dispatcher effects. In-turn `runSubagent` children reserve from the same tracker and persist each reservation before dispatch; exhaustion and failed persistence both stop the child before another effect. A saved ceiling cannot be raised by a later invocation. Legacy execution records explicitly mark tool history incomplete, so migrated counts are not presented as exact. Tests cover bounded direct and delegated calls, resume without budget renewal, admission bounds, legacy lower-bound tracking, failed delegated persistence, and workspace-observer classification. This tranche does not yet cover durable work units, provider recovery/retries, inference or token accounting, cumulative elapsed limits, per-tool deadlines, or process-crash reconciliation.
 
 ## WP-P10-03 — Acceptance evidence integrity and export
 
