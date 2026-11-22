@@ -1,0 +1,86 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M80S8BHETJDP5GXJK1HF5VBY",
+  "strategy": "manual-commit",
+  "branch": "v1/pf1b-capability-negotiation",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".github/workflows/ci.yml",
+    "cli/scripts/diff_coverage.mjs",
+    "cli/scripts/run_coverage.mjs",
+    "cli/scripts/script_args.mjs",
+    "cli/scripts/test_shards.mjs",
+    "cli/src/agent.ts",
+    "cli/src/config.ts",
+    "cli/src/core/execution_tracking.ts",
+    "cli/src/core/objective.ts",
+    "cli/src/core/run_turn.ts",
+    "cli/src/core/turn.ts",
+    "cli/src/doctor.ts",
+    "cli/src/eval_cli.ts",
+    "cli/src/index.ts",
+    "cli/src/types.ts",
+    "cli/src/upgrade.ts",
+    "cli/src/upgrade_journal.ts",
+    "cli/test/check_fmt.test.ts",
+    "cli/test/code_evaluators.test.ts",
+    "cli/test/diff_coverage.test.ts",
+    "cli/test/doctor_state_scan.test.ts",
+    "cli/test/execution_tracking.test.ts",
+    "cli/test/fixtures/protocol_v1_golden.jsonl",
+    "cli/test/objective_continuation.test.ts",
+    "cli/test/protocol_golden.test.ts",
+    "cli/test/protocol_schema.test.ts",
+    "cli/test/upgrade_acceptance.test.ts",
+    "cli/test/upgrade_backup_performance.test.ts",
+    "cli/test/upgrade_download_progress.test.ts",
+    "docs/USER_MANUAL.md",
+    "docs/assurance/POWER_OF_TEN_IMPLEMENTATION_PLAN.md",
+    "docs/evidence/DOWNLOAD_PROGRESS_01.md",
+    "docs/evidence/INSTALL_BACKUP_01.md",
+    "docs/evidence/REVIEW_FIXES_01.md",
+    "docs/evidence/TEST_MATURITY_01.md",
+    "docs/protocol/VERSIONS.json",
+    "docs/protocol/sidecar-v1.schema.json",
+    "docs/releases/v1.2.2.md",
+    "quickstart.md",
+    "scripts/check_fmt.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 38,
+    "cache_creation_tokens": 44031,
+    "cache_read_tokens": 10603912,
+    "output_tokens": 22304,
+    "api_call_count": 17,
+    "subagent_tokens": {
+      "input_tokens": 60,
+      "cache_creation_tokens": 351697,
+      "cache_read_tokens": 3869986,
+      "output_tokens": 32811,
+      "api_call_count": 30
+    }
+  },
+  "redaction": {
+    "replacements": 619,
+    "layers": {
+      "betterleaks": 2,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 43,
+      "credentialed_uri": 3,
+      "entropy": 571,
+      "key_context": 0,
+      "provider_token": 2,
+      "shell_stdin": 0
+    }
+  }
+}
