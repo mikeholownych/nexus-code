@@ -1,0 +1,626 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M80H5P9XFSST76V4Q64EB832",
+  "session_id": "43bcbb67-2cff-4fa8-a05e-f8aa598df73b",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-22T02:25:56.484744425Z",
+  "branch": "v1/v130-sunset-cloudflare-contest",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/dependabot.yml",
+    ".github/workflows/ci.yml",
+    "cli/test/check_requirements.test.ts",
+    "demo/lib/consumer-agent.mjs",
+    "demo/lib/display.mjs",
+    "demo/lib/integrator.mjs",
+    "demo/lib/producer-agent.mjs",
+    "demo/lib/real-agent-runner.mjs",
+    "demo/lib/restricted-code-executor.mjs",
+    "demo/lib/substrate-adapter.mjs",
+    "demo/nexus-demo.mjs",
+    "demo/package-lock.json",
+    "demo/package.json",
+    "demo/test/demo-smoke.test.mjs",
+    "demo/test/real-agent-runner.test.mjs",
+    "demo/test/restricted-code-executor.test.mjs",
+    "demo/test/substrate-adapter.test.mjs",
+    "docs/CLOUDFLARE_CONTEST.md",
+    "docs/CLOUDFLARE_CONTEST_CRITICAL_PATH_ASSESSMENT.md",
+    "docs/DEVELOPMENT.md",
+    "docs/HISTORICAL.md",
+    "docs/README.md",
+    "docs/REPOSITORY_QUALITY.md",
+    "docs/cloudflare/AGENT_COLLABORATION_EXPERIMENT_1_EVIDENCE.json",
+    "docs/cloudflare/AGENT_COLLABORATION_EXPERIMENT_1_EVIDENCE.md",
+    "docs/cloudflare/AGENT_COLLABORATION_EXPERIMENT_1_INDEPENDENT_REVIEW.md",
+    "docs/cloudflare/AGENT_COLLABORATION_EXPERIMENT_1_INITIAL_SIGNAL.json",
+    "docs/cloudflare/AGENT_COLLABORATION_EXPERIMENT_1_PREREGISTRATION.md",
+    "docs/cloudflare/AGENT_COLLABORATION_EXPERIMENT_1_SIGNALS.json",
+    "docs/cloudflare/AGENT_COLLABORATION_EXPERIMENT_1_TRANSCRIPT.json",
+    "docs/cloudflare/AGENT_COLLABORATION_EXPERIMENT_1_UPDATED_SIGNAL.json",
+    "docs/cloudflare/AGENT_COLLABORATION_EXPERIMENT_2_EVIDENCE.json",
+    "docs/cloudflare/AGENT_COLLABORATION_EXPERIMENT_2_EVIDENCE.md",
+    "docs/cloudflare/AGENT_COLLABORATION_EXPERIMENT_2_INDEPENDENT_REVIEW.md",
+    "docs/cloudflare/AGENT_COLLABORATION_EXPERIMENT_2_PREREGISTRATION.md",
+    "docs/cloudflare/AGENT_COLLABORATION_EXPERIMENT_3R_EVIDENCE.md",
+    "docs/cloudflare/AGENT_COLLABORATION_EXPERIMENT_3R_INDEPENDENT_REVIEW.md",
+    "docs/cloudflare/AGENT_COLLABORATION_EXPERIMENT_3R_PREREGISTRATION.md",
+    "docs/cloudflare/AGENT_COLLABORATION_EXPERIMENT_3_EVIDENCE.md",
+    "docs/cloudflare/AGENT_COLLABORATION_EXPERIMENT_3_INDEPENDENT_REVIEW.md",
+    "docs/cloudflare/AGENT_COLLABORATION_EXPERIMENT_3_PREREGISTRATION.md",
+    "docs/cloudflare/AGENT_NATIVE_COLLABORATION_RESEARCH.md",
+    "docs/cloudflare/ARTIFACTS_CAPABILITY_REVIEW.md",
+    "docs/cloudflare/ARTIFACTS_FORK_ISOLATION_ATTEMPT_1.json",
+    "docs/cloudflare/ARTIFACTS_FORK_ISOLATION_EVIDENCE.md",
+    "docs/cloudflare/ARTIFACTS_FORK_ISOLATION_INDEPENDENT_REVIEW.md",
+    "docs/cloudflare/ARTIFACTS_FORK_ISOLATION_RECOVERY_EVIDENCE.json",
+    "docs/cloudflare/ARTIFACTS_SHARED_REF_EVIDENCE.json",
+    "docs/cloudflare/ARTIFACTS_SHARED_REF_EVIDENCE.md",
+    "docs/cloudflare/ARTIFACTS_SHARED_REF_INDEPENDENT_REVIEW.md",
+    "docs/cloudflare/ARTIFACTS_VERTICAL_SLICE_EVIDENCE.md",
+    "docs/cloudflare/ARTIFACT_CREDENTIAL_BROKERAGE_CANARY.md",
+    "docs/cloudflare/ARTIFACT_CREDENTIAL_BROKERAGE_GATE.md",
+    "docs/cloudflare/ARTIFACT_CREDENTIAL_BROKERAGE_INDEPENDENT_REVIEW.md",
+    "docs/cloudflare/ARTIFACT_CREDENTIAL_BROKERAGE_QUALIFICATION.md",
+    "docs/cloudflare/BROKERAGE_INSTALLER_RETRY_EVIDENCE_2026-10-02.md",
+    "docs/cloudflare/BROKERAGE_SECURITY_SUPERSESSION_2026-10-02.md",
+    "docs/cloudflare/BROKERAGE_TRUST_ROOT_INSTALL_PLAN_2026-10-02.md",
+    "docs/cloudflare/BROKERAGE_TRUST_ROOT_INSTALL_REVIEW_PACKAGE_2026-10-02.md",
+    "docs/cloudflare/CF-COLLAB-TOKEN-OUTPUT-001_INDEPENDENT_REVIEW.md",
+    "docs/cloudflare/CF-COLLAB-TOKEN-OUTPUT-001_REMEDIATION.md",
+    "docs/cloudflare/CONTEST_CREDENTIAL_LIFECYCLE_PREQUALIFICATION_2026-10-02.md",
+    "docs/cloudflare/CONTEST_CREDENTIAL_LIFECYCLE_REAL_EXECUTION_2026-10-02.md",
+    "docs/cloudflare/CONTEST_NO_INVENTORY_CREDENTIAL_LIFECYCLE_EVIDENCE_2026-10-02.md",
+    "docs/cloudflare/CONTEST_SUBSTRATE_TRUTH_MATRIX.md",
+    "docs/cloudflare/CONTEST_VERTICAL_SLICE_EVIDENCE.md",
+    "docs/cloudflare/CONTEST_VERTICAL_SLICE_INDEPENDENT_REVIEW.md",
+    "docs/cloudflare/CREATE_FAILURE_DELTA_INVESTIGATION_2026-10-02.md",
+    "docs/cloudflare/KNOWN_ID_REVOCATION_RECOVERY_2026-10-02.md",
+    "docs/cloudflare/OVERNIGHT_CHECKPOINT.md",
+    "docs/cloudflare/POST_OVERNIGHT_RECOVERY_CHECKPOINT.md",
+    "docs/cloudflare/VIDEO_ASSET.md",
+    "docs/cloudflare/evidence/contest-final-video-run-2026-10-03/cloudflare-agent-collaboration-demo.mp4",
+    "experiments/cloudflare-artifacts-vertical-slice/.gitignore",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-fixture/.gitignore",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-fixture/package.json",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-fixture/src/customer-store.ts",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-fixture/test/store.test.ts",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-fixture/tsconfig.json",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/artifacts-token-response.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/artifacts-token-response.test.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/broker-gate-canary.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/broker-gate-helper.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/brokerage-safety-gate.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/cloudflare.config.ts",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/credential-broker-test.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/credential-broker.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/credential-lifecycle-test.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/credential-lifecycle.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/credential-probe-safe-test.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/credential-probe-safe.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/linux-bound-exec-test.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/linux-bound-exec.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/package.json",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/read-work-state.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/real-credential-probe.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/run-experiment-3r.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/src/index.ts",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/src/work-state-contract.ts",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/token-broker-canary.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/tsconfig.json",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/verify-contest-slice-ref.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/vite.config.ts",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-worker/work-state-contract.test.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/cloudflare.config.ts",
+    "experiments/cloudflare-artifacts-vertical-slice/contest-vertical-slice.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/fork-worker/cloudflare.config.ts",
+    "experiments/cloudflare-artifacts-vertical-slice/fork-worker/package.json",
+    "experiments/cloudflare-artifacts-vertical-slice/fork-worker/src/index.ts",
+    "experiments/cloudflare-artifacts-vertical-slice/fork-worker/tsconfig.json",
+    "experiments/cloudflare-artifacts-vertical-slice/fork-worker/vite.config.ts",
+    "experiments/cloudflare-artifacts-vertical-slice/package-lock.json",
+    "experiments/cloudflare-artifacts-vertical-slice/package.json",
+    "experiments/cloudflare-artifacts-vertical-slice/revoke-known-id-recovery/classify-revoke-result-test.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/revoke-known-id-recovery/classify-revoke-result.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/revoke-known-id-recovery/revoke-known-id-once.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/run-e2-recovery.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/run-experiment.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/run-shared-ref-exp2b.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/shared-ref-worker/cloudflare.config.ts",
+    "experiments/cloudflare-artifacts-vertical-slice/shared-ref-worker/package.json",
+    "experiments/cloudflare-artifacts-vertical-slice/shared-ref-worker/src/index.ts",
+    "experiments/cloudflare-artifacts-vertical-slice/shared-ref-worker/tsconfig.json",
+    "experiments/cloudflare-artifacts-vertical-slice/shared-ref-worker/vite.config.ts",
+    "experiments/cloudflare-artifacts-vertical-slice/src/index.ts",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/BUNDLE.sha256",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/README.md",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/bin/nexus-cf-broker",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/broker/artifact-token-response-test.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/broker/artifact-token-response.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/broker/clean-start-check.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/broker/credential-lifecycle-test.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/broker/credential-lifecycle.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/broker/credential-probe-safe-test.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/broker/credential-probe-safe.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/broker/demo-transport-test.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/broker/demo-transport.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/broker/linux-bound-exec-test.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/broker/linux-bound-exec.mjs",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/build-launcher.sh",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/install.sh",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/launcher.c",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/normalize-install.py",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/package-lock.json",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/package.json",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/post-install-qualify.py",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/prepare-manifest.py",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/rollback.sh",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/test-install-python-boundary.py",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/test-launcher.py",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/trusted-object-manifest.json",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/upstream/node-v24.21.0/SHASUMS256.txt",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/upstream/node-v24.21.0/SHASUMS256.txt.sig",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/upstream/node-v24.21.0/pubring.kbx",
+    "experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/verify-install.py",
+    "experiments/cloudflare-artifacts-vertical-slice/tsconfig.json",
+    "experiments/cloudflare-artifacts-vertical-slice/vite.config.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5-2",
+  "turn_id": "0ea49303c336",
+  "checkpoint_transcript_start": 23452,
+  "transcript_lines_at_start": 23452,
+  "compact_transcript_start": 3098,
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 27690,
+    "cache_read_tokens": 4433652,
+    "output_tokens": 17317,
+    "api_call_count": 10,
+    "subagent_tokens": {
+      "input_tokens": 16,
+      "cache_creation_tokens": 170648,
+      "cache_read_tokens": 477575,
+      "output_tokens": 4146,
+      "api_call_count": 8
+    }
+  },
+  "redaction": {
+    "replacements": 544,
+    "layers": {
+      "betterleaks": 2,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 43,
+      "credentialed_uri": 3,
+      "entropy": 498,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-goal-2026-11-17T13:29:00.367810413Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "goal"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "fd06631d1244",
+      "timestamp": "2026-11-17T13:29:00.367810413Z",
+      "native": {
+        "command": "/goal"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/goal",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-loop-2026-11-20T11:44:19.47525418Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "5b09f5a70a2b",
+      "timestamp": "2026-11-20T11:44:19.47525418Z",
+      "native": {
+        "command": "/loop"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/loop",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-loop-2026-11-20T12:20:01.007461722Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "c3cb4d87ba2c",
+      "timestamp": "2026-11-20T12:20:01.007461722Z",
+      "native": {
+        "command": "/loop"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/loop",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-loop-2026-11-21T05:47:01.280422949Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "850f156c08b5",
+      "timestamp": "2026-11-21T05:47:01.280422949Z",
+      "native": {
+        "command": "/loop"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/loop",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-loop-2026-11-21T06:41:01.296859497Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "5d063ff8f02c",
+      "timestamp": "2026-11-21T06:41:01.296859497Z",
+      "native": {
+        "command": "/loop"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/loop",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-loop-2026-11-21T07:02:01.20270203Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "3cc1fc084d4a",
+      "timestamp": "2026-11-21T07:02:01.20270203Z",
+      "native": {
+        "command": "/loop"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/loop",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-loop-2026-11-21T13:16:36.32773625Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "334aa3d042e0",
+      "timestamp": "2026-11-21T13:16:36.32773625Z",
+      "native": {
+        "command": "/loop"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/loop",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-loop-2026-11-21T13:42:01.13558849Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "3c0431877d69",
+      "timestamp": "2026-11-21T13:42:01.13558849Z",
+      "native": {
+        "command": "/loop"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/loop",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-loop-2026-11-21T14:43:00.962928065Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "47354a682089",
+      "timestamp": "2026-11-21T14:43:00.962928065Z",
+      "native": {
+        "command": "/loop"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/loop",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-loop-2026-11-21T15:09:00.954818239Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "478347bc96f9",
+      "timestamp": "2026-11-21T15:09:00.954818239Z",
+      "native": {
+        "command": "/loop"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/loop",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-loop-2026-11-21T16:46:30.997553962Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "107f2fae6e66",
+      "timestamp": "2026-11-21T16:46:30.997553962Z",
+      "native": {
+        "command": "/loop"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/loop",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-loop-2026-11-21T17:12:01.458927625Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "010692edbf79",
+      "timestamp": "2026-11-21T17:12:01.458927625Z",
+      "native": {
+        "command": "/loop"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/loop",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-loop-2026-11-21T20:15:01.913355343Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "11df3232a47f",
+      "timestamp": "2026-11-21T20:15:01.913355343Z",
+      "native": {
+        "command": "/loop"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/loop",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-loop-2026-11-21T20:41:01.349174568Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "5053e607134a",
+      "timestamp": "2026-11-21T20:41:01.349174568Z",
+      "native": {
+        "command": "/loop"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/loop",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-loop-2026-11-21T21:10:01.090046205Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "a71a7d5fdfec",
+      "timestamp": "2026-11-21T21:10:01.090046205Z",
+      "native": {
+        "command": "/loop"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/loop",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-loop-2026-11-21T22:13:00.482765874Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "4e8caea8e1d6",
+      "timestamp": "2026-11-21T22:13:00.482765874Z",
+      "native": {
+        "command": "/loop"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/loop",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-loop-2026-11-21T23:55:01.992455592Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "ad68b710b22a",
+      "timestamp": "2026-11-21T23:55:01.992455592Z",
+      "native": {
+        "command": "/loop"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/loop",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-loop-2026-11-22T00:56:00.629676378Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "loop"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "d75e63e45623",
+      "timestamp": "2026-11-22T00:56:00.629676378Z",
+      "native": {
+        "command": "/loop"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/loop",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-goal-2026-11-22T01:56:08.963876907Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "goal"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "ef359e03fb08",
+      "timestamp": "2026-11-22T01:56:08.963876907Z",
+      "native": {
+        "command": "/goal"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/goal",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 765
+  }
+}
