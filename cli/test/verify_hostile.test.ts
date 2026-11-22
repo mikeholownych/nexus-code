@@ -265,6 +265,7 @@ test("the default sandbox detects a child process reading the baseline test orac
   if (result.reason === "SANDBOX_UNAVAILABLE") return;
   assert.equal(result.verdict, "REGRESSION_FREE", summary(result));
   assert.equal(result.verification?.independent, false);
+  assert.deepEqual(result.runs.map((run) => [run.phase, run.passed, run.executedTests]), [["base", false, true], ["head", true, true]]);
   if (result.sandbox.engine === "bwrap" && spawnSync("strace", ["--version"], { stdio: "ignore" }).status === 0) {
     assert.match(result.verification?.independenceDetail ?? "", /opened.*test-oracle/i);
     assert.deepEqual(result.runs.find((run) => run.phase === "head")?.testFixtureReads, ["test/math.test.mjs"]);
