@@ -72,7 +72,7 @@ describe("SidecarServer: capability negotiation", () => {
     });
   });
 
-  test("a range with no common version is UNSUPPORTED_PROTOCOL naming both ranges, and the sidecar keeps serving", async () => {
+  test("a range with no common version blocks commands until a compatible initialize retry", async () => {
     await withSidecar(async ({ server, events, send }) => {
       await send({ type: "initialize", id: "i1", client: CLIENT, protocol_min: 2, protocol_max: 3 });
       assert.deepEqual(events.at(-1), {
@@ -80,15 +80,21 @@ describe("SidecarServer: capability negotiation", () => {
         message: `No common protocol version: the client speaks 2 to 3, this sidecar speaks ${PROTOCOL_MIN} to ${PROTOCOL_MAX}.`,
       });
       assert.equal(events.some((e) => e.type === "initialized"), false);
-      // Later commands are served: a request with an answer, then a whole turn.
+      // The client cannot fall back to the bootstrap version after declaring that it cannot speak it.
       await send({ type: "receipt", id: "r1" });
-      assert.deepEqual(events.at(-1).type, "receipt");
+      assert.deepEqual(events.at(-1), {
+        v: 1, type: "error", id: "r1", code: "UNSUPPORTED_PROTOCOL",
+        message: `No common protocol version: the client speaks 2 to 3, this sidecar speaks ${PROTOCOL_MIN} to ${PROTOCOL_MAX}.`,
+      });
       await send({ type: "prompt.submit", id: "t1", text: "say done" });
       await server.idle();
-      assert.equal(events.find((e) => e.type === "turn.result")?.turn_id, "t1");
-      // Nothing was settled, so the client may negotiate again with a range the sidecar can serve.
+      assert.equal(events.some((e) => e.type === "turn.result" && e.turn_id === "t1"), false, "no prompt runs under an unsupported protocol");
+      // A compatible retry unblocks the connection.
       await send({ type: "initialize", id: "i2", client: CLIENT, protocol_min: 1, protocol_max: 3 });
       assert.deepEqual(events.at(-1), { v: 1, type: "initialized", id: "i2", protocol: 1, capabilities: [...SIDECAR_CAPABILITIES], experimental: [] });
+      await send({ type: "prompt.submit", id: "t2", text: "say done" });
+      await server.idle();
+      assert.equal(events.find((e) => e.type === "turn.result" && e.turn_id === "t2")?.turn_id, "t2");
     });
   });
 

@@ -135,6 +135,8 @@ export class SidecarServer {
   private readonly experimentalOffered: readonly string[];
   /** What `initialize` settled for this connection; undefined until one succeeds (a client need not send it). */
   private negotiated?: { protocol: number; experimental: readonly string[] };
+  /** A valid initialize request found no common version; block commands until a compatible retry or shutdown. */
+  private unsupportedProtocol?: string;
 
   constructor(options: SidecarOptions) {
     this.app = options.app;
@@ -194,6 +196,15 @@ export class SidecarServer {
     } catch (err) {
       const id = err instanceof ProtocolError ? err.id : undefined;
       this.emit({ type: "error", ...(id ? { id } : {}), code: "BAD_REQUEST", message: (err as Error).message });
+      return;
+    }
+    if (this.unsupportedProtocol && command.type !== "initialize" && command.type !== "shutdown") {
+      this.emit({
+        type: "error",
+        id: "id" in command ? command.id : undefined,
+        code: "UNSUPPORTED_PROTOCOL",
+        message: this.unsupportedProtocol,
+      });
       return;
     }
     switch (command.type) {
@@ -296,13 +307,15 @@ export class SidecarServer {
     }
     const protocol = Math.min(clientMax, PROTOCOL_MAX);
     if (protocol < Math.max(clientMin, PROTOCOL_MIN)) {
+      this.unsupportedProtocol = `No common protocol version: the client speaks ${clientMin} to ${clientMax}, this sidecar speaks ${PROTOCOL_MIN} to ${PROTOCOL_MAX}.`;
       this.emit({
         type: "error", id, code: "UNSUPPORTED_PROTOCOL",
-        message: `No common protocol version: the client speaks ${clientMin} to ${clientMax}, this sidecar speaks ${PROTOCOL_MIN} to ${PROTOCOL_MAX}.`,
+        message: this.unsupportedProtocol,
       });
       return;
     }
     this.negotiated = { protocol, experimental: experimental ? this.experimentalOffered : [] };
+    this.unsupportedProtocol = undefined;
     this.emit({ type: "initialized", id, protocol, capabilities: [...SIDECAR_CAPABILITIES], experimental: [...this.negotiated.experimental] });
   }
 
