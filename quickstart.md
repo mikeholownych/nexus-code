@@ -1,6 +1,6 @@
 # Nexus Code quickstart
 
-Nexus Code is a local coding client. It is separate from the Cloudflare Workers and Artifacts collaboration service in the contest entry.
+Nexus Code is a local coding client.
 
 ## Install
 
