@@ -1,0 +1,7 @@
+[
+  {
+    "schema_version": 1,
+    "schemaSha256": "2ac6f90aba94c641597ce609125da55dc44b3d13f21d3979fc5d016cd1078396",
+    "note": "First published schema of a managed policy document (GV-1), generated from ManagedPolicyFile in cli/src/core/managed_policy.ts on release/v1.3.0: the tables approval, verification, commands, paths, egress, sandbox, mcp, plugins and workspace, and the required schema_version. Nothing was published before it. The policy is a library in this change: nexus does not read a policy file yet."
+  }
+]

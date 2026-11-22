@@ -1,0 +1,235 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "nexus managed policy v1",
+  "description": "Generated from ManagedPolicyFile in cli/src/core/managed_policy.ts by cli/scripts/gen_policy_schema.mjs. Do not edit by hand. The data of a managed policy file (policy.toml): each TOML table is an object, and `schema_version` is required. The schema describes shape only; Nexus's own validator is stricter (see docs/MANAGED_POLICY.md).",
+  "$ref": "#/$defs/ManagedPolicyFile",
+  "$defs": {
+    "ApprovalPolicy": {
+      "description": "`[approval]`: what the operator may not switch on.",
+      "type": "object",
+      "properties": {
+        "disable_auto": {
+          "description": "Approval mode `auto` is unavailable, whatever asks for it.",
+          "type": "boolean"
+        },
+        "disable_full_access": {
+          "description": "Full access is unavailable, whatever asks for it.",
+          "type": "boolean"
+        },
+        "disable_yes": {
+          "description": "`-y` / `--yes` is unavailable.",
+          "type": "boolean"
+        },
+        "require_human": {
+          "description": "Effects that always need a human decision, also under full access.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HumanEffect"
+          }
+        },
+        "strict": {
+          "description": "Shorthand for `disable_auto`, `disable_yes` and `disable_full_access` together.",
+          "type": "boolean"
+        }
+      }
+    },
+    "CommandsPolicy": {
+      "description": "`[commands]`: command prefixes. There is no allow key.",
+      "type": "object",
+      "properties": {
+        "disable_allow_rules": {
+          "description": "The operator's own `allow` command rules are not used.",
+          "type": "boolean"
+        },
+        "forbid": {
+          "description": "Command prefixes that are refused, such as \"git push\".",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "prompt": {
+          "description": "Command prefixes that always ask, also under full access.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "EgressInspectorFloor": {
+      "description": "A floor for the egress inspector.",
+      "enum": [
+        "block",
+        "record"
+      ]
+    },
+    "EgressPolicyTable": {
+      "description": "`[egress]`. A list here is an allowlist: absent means unrestricted, present (even empty) means only these.",
+      "type": "object",
+      "properties": {
+        "allowed_domains": {
+          "description": "The only hosts that may be reached: `example.com`, or `*.example.com` for its subdomains.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "inspector": {
+          "description": "The least egress-inspector mode.",
+          "$ref": "#/$defs/EgressInspectorFloor"
+        },
+        "secret_destinations": {
+          "description": "The only origins a credential may be sent to, such as `https://api.example.com`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "HumanEffect": {
+      "description": "The effects a policy can require a human decision for.",
+      "enum": [
+        "egress",
+        "exec",
+        "write_workspace"
+      ]
+    },
+    "ManagedPolicyFile": {
+      "description": "A managed policy file as data: the tables of `PolicyDocument` and the required `schema_version`. The published schema is generated from this type.",
+      "type": "object",
+      "properties": {
+        "approval": {
+          "$ref": "#/$defs/ApprovalPolicy"
+        },
+        "commands": {
+          "$ref": "#/$defs/CommandsPolicy"
+        },
+        "egress": {
+          "$ref": "#/$defs/EgressPolicyTable"
+        },
+        "mcp": {
+          "$ref": "#/$defs/McpPolicy"
+        },
+        "paths": {
+          "$ref": "#/$defs/PathsPolicy"
+        },
+        "plugins": {
+          "$ref": "#/$defs/PluginsPolicy"
+        },
+        "sandbox": {
+          "$ref": "#/$defs/SandboxPolicy"
+        },
+        "schema_version": {
+          "description": "The version of this document; required.",
+          "const": 1
+        },
+        "verification": {
+          "$ref": "#/$defs/VerificationPolicy"
+        },
+        "workspace": {
+          "$ref": "#/$defs/WorkspacePolicy"
+        }
+      },
+      "required": [
+        "schema_version"
+      ]
+    },
+    "McpPolicy": {
+      "description": "`[mcp]`. `allow` is an allowlist: absent means unrestricted, present (even empty) means only these.",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "description": "The only MCP servers that may start: a server name, `command:/absolute/path` or `url:https://origin`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "disable_workspace": {
+          "description": "MCP servers configured by the workspace are not started.",
+          "type": "boolean"
+        }
+      }
+    },
+    "PathsPolicy": {
+      "description": "`[paths]`.",
+      "type": "object",
+      "properties": {
+        "protected": {
+          "description": "More protected path patterns.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "PluginsPolicy": {
+      "description": "`[plugins]`. `allow` is an allowlist: absent means unrestricted, present (even empty) means only these.",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "description": "The only plugin files that may be imported: `sha256:<64 hex digits>` or `file:/absolute/path`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "disable_workspace": {
+          "description": "Plugins from the workspace are not imported.",
+          "type": "boolean"
+        }
+      }
+    },
+    "SandboxPolicy": {
+      "description": "`[sandbox]`.",
+      "type": "object",
+      "properties": {
+        "forbid_network": {
+          "description": "Sandboxed commands get no network.",
+          "type": "boolean"
+        },
+        "required": {
+          "description": "Commands run only inside the sandbox.",
+          "type": "boolean"
+        }
+      }
+    },
+    "VerificationFloor": {
+      "description": "A floor for verification-path protection. `off` and `record` are not members: a policy cannot ask for less.",
+      "enum": [
+        "approve",
+        "block"
+      ]
+    },
+    "VerificationPolicy": {
+      "description": "`[verification]`: protection of the files that decide whether work is verified.",
+      "type": "object",
+      "properties": {
+        "mode": {
+          "description": "The least protection mode.",
+          "$ref": "#/$defs/VerificationFloor"
+        },
+        "protected": {
+          "description": "More protected verification paths (globs, workspace-relative).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "WorkspacePolicy": {
+      "description": "`[workspace]`.",
+      "type": "object",
+      "properties": {
+        "disable_env_trust": {
+          "description": "`NEXUS_TRUST_WORKSPACE` is ignored.",
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

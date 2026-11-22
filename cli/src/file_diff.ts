@@ -231,7 +231,16 @@ export function previewDiff(diff: string, maxLines = 40, maxChars = 6000): { pre
  * (which reorder what a terminal shows) become `<U+XXXX>`. A terminal never receives a control sequence from a diff.
  */
 export function visibleControls(text: string): string {
-  return text.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, (c) => {
+  // Node's TAP reporter serializes controls in test names as literal `\\u001b` and `\\r` text on some runtimes. Make
+  // those visible too, so captured verifier output cannot smuggle terminal-control spellings through as evidence.
+  const escaped = text.replace(/\\u([0-9a-f]{4})|\\r/gi, (match, hex: string | undefined) => {
+    if (hex === undefined) return "<CR>";
+    const code = Number.parseInt(hex, 16);
+    return /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/.test(String.fromCharCode(code))
+      ? `<U+${hex.toUpperCase()}>`
+      : match;
+  });
+  return escaped.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, (c) => {
     const code = c.charCodeAt(0);
     if (code < 0x20) return String.fromCharCode(0x2400 + code);
     if (code === 0x7f) return "\u2421";

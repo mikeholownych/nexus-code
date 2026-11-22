@@ -14,6 +14,9 @@
  * `base` and `head`; the type-checks run in copies of their own (`base-typecheck`, `head-typecheck`), because a checker
  * may write build output; and the head is judged on `head-pristine`, a copy nothing has run in.
  *
+ * Who can write what: every process started here is sandboxed by default, so the head cannot write the scratch Git
+ * state beside its tree. `--sandbox none` is an explicit operator opt-out for trusted changes only.
+ *
  * Authority: the request names only what to compare. Everything that can raise the verdict (the verifier command, its
  * approval, the declared deliverables, the deadline) comes from the operator context. Anything that cannot be fully
  * evaluated lowers the verdict with a reason that names it; nothing here raises one.
@@ -21,18 +24,20 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import { getBuildIdentity } from "../build_identity.js";
 import { trustedGitArgs } from "../git.js";
+import { isSandboxAvailable, quoteForShell, wrapSandboxedCommand } from "../sandbox.js";
 import { SecurityManager, conditionalConfigChanged, isConditionalConfig, neutersTests } from "../security.js";
 import {
-  MAX_TEST_BYTES, SKIP_DIRS, describeVerifier, discoverTypechecks, discoverVerifier, hasExecutedTests, isFilteredVerifierCommand, isVerifierDeliverableBound,
+  MAX_TEST_BYTES, SKIP_DIRS, buildVerifierEnvironment, describeVerifier, discoverTypechecks, discoverVerifier, hasExecutedTests, isFilteredVerifierCommand, isVerifierDeliverableBound,
   runVerifierShell, typecheckMode, verifierTimeoutSecs, type DiscoveredTypecheck, type TimedExecutor,
 } from "../tester.js";
 import { formatDiagnosticForOutput, safeTerminal } from "../ui.js";
 import {
   VERIFY_RESULT_SCHEMA_VERSION, verifyExitCode, verifyExitNameFor, verifyVerdictFor,
-  type VerifyGuard, type VerifyGuardFinding, type VerifyJsonResult, type VerifyReason, type VerifyRunRecord, type VerifyTreeRef, type VerifyVerifierRecord,
+  type VerifyGuard, type VerifyGuardFinding, type VerifyJsonResult, type VerifyReason, type VerifyRunRecord, type VerifySandbox, type VerifySandboxEngine, type VerifyTreeRef, type VerifyVerifierRecord,
 } from "../verify_contract.js";
 import { GitError, UntrustedCheckoutError, git, printable } from "../worktrunk/git.js";
 import {
@@ -68,10 +73,20 @@ export interface VerifyOperatorContext {
   approvedVerificationEdits?: readonly string[];
   /** Deadline of each verifier run, and of each side's type-checks, in seconds (default: NEXUS_VERIFIER_TIMEOUT_SECS, else 300). */
   timeoutSecs?: number;
+  /** Confine every process started on repository content. Absent: use `auto`; `none` is an explicit trusted-input opt-out. */
+  sandbox?: VerifySandboxRequest;
   /** Aborted to interrupt: acted on between child processes. */
   signal?: AbortSignal;
   /** Progress lines for a person (never part of the result). */
   onProgress?: (message: string) => void;
+}
+
+/** Sandbox policy. `auto` is the default; `none` is an explicit operator opt-out. */
+export interface VerifySandboxRequest {
+  /** `auto`: Bubblewrap when it is usable, else Docker. */
+  engine: "auto" | VerifySandboxEngine | "none";
+  /** Let the confined processes use the network (`--sandbox-network`). Off unless true: no environment setting turns it on. */
+  network?: boolean;
 }
 
 /** The request or the options cannot be acted on: not a working tree, a ref that names no commit, a bad path. */
@@ -266,12 +281,19 @@ function realDirectoryInside(root: string, relative: string): boolean {
 }
 
 /**
- * Links the caller's dependency directories (those the trees do not hold themselves) into every scratch tree, so base
- * and head run with the same installed packages. Bounded; links in the caller's checkout are not followed.
+ * Links the caller's dependency directories into every scratch tree, so base and head run with the same installed
+ * packages. Bounded; links in the caller's checkout are not followed.
+ *
+ * Only a directory that NEITHER tree holds is linked: one a tree holds is part of the change or of the base, not an
+ * installation of the caller's. (When the head commits `node_modules/.bin/node` and the caller's checkout is at the
+ * head, linking the checkout's `node_modules` into the base would hand the base run the head's program, and leave the
+ * verifier's definition unbound on both sides.) `only`: link exactly these, the ones an earlier call returned, so every
+ * copy of a tree gets the same links as the first.
  */
-function linkDependencyDirs(worktree: string, targets: readonly string[]): string[] {
+function linkDependencyDirs(worktree: string, targets: readonly string[], only?: readonly string[]): string[] {
   const linked: string[] = [];
   let scanned = 0;
+  const exists = (file: string) => { try { fs.lstatSync(file); return true; } catch { return false; } };
   const walk = (relative: string, depth: number) => {
     if (depth > 3 || linked.length >= MAX_DEPENDENCY_LINKS) return;
     let entries: fs.Dirent[];
@@ -281,15 +303,16 @@ function linkDependencyDirs(worktree: string, targets: readonly string[]): strin
       if (!entry.isDirectory()) continue;
       const child = path.join(relative, entry.name);
       if (DEPENDENCY_DIRS.includes(entry.name)) {
+        const name = child.split(path.sep).join("/");
+        if (only ? !only.includes(name) : targets.some((target) => exists(path.join(target, child)))) continue;
         let used = false;
         for (const target of targets) {
           const destination = path.join(target, child);
-          if (!realDirectoryInside(target, relative)) continue;
-          try { fs.lstatSync(destination); continue; } catch { /* the tree has nothing there: link it */ }
+          if (!realDirectoryInside(target, relative) || exists(destination)) continue;
           fs.symlinkSync(path.join(worktree, child), destination, "dir");
           used = true;
         }
-        if (used) linked.push(child.split(path.sep).join("/"));
+        if (used) linked.push(name);
       } else if (!SKIP_DIRS.has(entry.name)) {
         walk(child, depth + 1);
       }
@@ -297,6 +320,87 @@ function linkDependencyDirs(worktree: string, targets: readonly string[]): strin
   };
   walk("", 0);
   return linked.sort();
+}
+
+/** The box one confined process runs in. */
+export interface VerifySandboxBox {
+  engine: VerifySandboxEngine;
+  network: boolean;
+  /** The directory that holds every scratch tree of this verification. Nothing in it but the process's own tree is visible in the box. */
+  scratch: string;
+  /** Directories outside the scratch trees the process must be able to read and must not write: the caller's dependency directories the trees link to. */
+  readOnlyDirs: readonly string[];
+}
+
+/** The first engine of the request that passes its own probe (a real confined command, not only a binary on PATH). */
+export function usableSandboxEngine(engine: "auto" | VerifySandboxEngine): VerifySandboxEngine | undefined {
+  return (engine === "auto" ? (["bwrap", "docker"] as const) : [engine]).find((candidate) => isSandboxAvailable(candidate));
+}
+
+/**
+ * The shell line that runs `command` in `directory` inside the box, built by the wrapper `nexus run --sandbox` uses
+ * (sandbox.ts wrapSandboxedCommand: a read-only host, HOME masked with only toolchain directories bound back read-only,
+ * a private /tmp, no network unless allowed, no host processes in sight). On top of that profile:
+ *  - the scratch directory is covered by an empty file system and only `directory` is bound back, writable, so the
+ *    other tree, the pristine copy and the scratch Git objects are neither writable nor visible;
+ *  - each of `readOnlyDirs` is bound read-only at its own path (a link from the tree to it would otherwise dangle
+ *    wherever the caller's checkout sits under HOME or /tmp, and nothing may write it);
+ *  - the environment is the verifier's allowlist (tester.ts buildVerifierEnvironment), as it is without a sandbox, in
+ *    place of the wider one the wrapper gives an agent's commands.
+ * Docker: the same, by the wrapper's `docker run` profile (only `directory` is mounted from the host, so the rest of
+ * the scratch directory does not exist in the container), run by the image's `sh`.
+ * Every path and value is passed as its own quoted argument. Returns `unavailable` with the reason when the wrapper
+ * did not produce this engine's command: the caller must not run `command` then.
+ */
+export function sandboxedVerifierCommand(
+  command: string,
+  directory: string,
+  box: VerifySandboxBox,
+  options: { environment?: Record<string, string>; containerName?: string } = {},
+): { command: string; argv: string[] } | { unavailable: string } {
+  const environment = options.environment ?? buildVerifierEnvironment();
+  if (box.engine === "bwrap") {
+    const wrapped = wrapSandboxedCommand(command, directory, {
+      mode: "bwrap",
+      shell: "bash",
+      network: box.network,
+      customBwrapArgs: [
+        "--tmpfs", box.scratch,
+        "--bind", directory, directory,
+        ...box.readOnlyDirs.flatMap((dir) => ["--ro-bind", dir, dir]),
+        "--clearenv",
+        ...Object.entries({ ...environment, TMPDIR: "/tmp" }).flatMap(([name, value]) => ["--setenv", name, value]),
+      ],
+    });
+    if (!wrapped.sandboxed || wrapped.engine !== "bwrap" || !wrapped.argv?.length) return { unavailable: wrapped.warning ?? "the Bubblewrap profile could not be built" };
+    return { command: wrapped.command, argv: wrapped.argv };
+  }
+  const wrapped = wrapSandboxedCommand(command, directory, { mode: "docker", network: box.network });
+  if (!wrapped.sandboxed || wrapped.engine !== "docker" || !wrapped.argv?.length) return { unavailable: wrapped.warning ?? "the Docker sandbox could not be built" };
+  // The wrapper's form ends `-w <directory> <image> sh -c <command>`; everything before it is the hardened profile, with
+  // only `directory` mounted from the host. Its `--env` entries are replaced and the read-only mounts added.
+  const tail = wrapped.argv.slice(-6);
+  if (wrapped.argv[0] !== "docker" || wrapped.argv[1] !== "run" || tail[0] !== "-w" || tail[1] !== path.resolve(directory) || tail[3] !== "sh" || tail[4] !== "-c" || tail[5] !== command) {
+    return { unavailable: "the Docker sandbox arguments have an unexpected shape" };
+  }
+  // Docker reads `host:container:mode`: a path with a colon would name a different mount.
+  if ([directory, ...box.readOnlyDirs].some((dir) => dir.includes(":"))) return { unavailable: "a path with a colon cannot be mounted in a Docker sandbox" };
+  const profile: string[] = [];
+  for (let i = 0; i < wrapped.argv.length - 6; i++) {
+    if (wrapped.argv[i] === "--env") i++;
+    else profile.push(wrapped.argv[i]);
+  }
+  // HOME, PATH and TMPDIR name host paths; in the container they are the image's (as the wrapper sets them).
+  const inside = { ...environment, HOME: "/tmp", PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", TMPDIR: "/tmp" };
+  const argv = [
+    ...profile,
+    // Named, so a container whose client was killed at the deadline can be removed (the client's death does not stop it).
+    ...(options.containerName ? ["--name", options.containerName] : []),
+    ...Object.entries(inside).flatMap(([name, value]) => ["--env", `${name}=${value}`]),
+    ...box.readOnlyDirs.flatMap((dir) => ["-v", `${dir}:${dir}:ro`]),
+    ...tail,
+  ];
+  return { command: argv.map(quoteForShell).join(" "), argv };
 }
 
 /**
@@ -325,6 +429,7 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
     typecheck: { status: "NOT_RUN", detail: "verification ended before a type-check was due" },
     guard: { status: "NOT_RUN", findings: [], complete: false, detail: "verification ended before the change was read" },
     review: { status: "NOT_RUN", detail: "this version of nexus verify has no reviewer" },
+    sandbox: { requested: operator.sandbox !== undefined && operator.sandbox.engine !== "none", engine: "none", network: false } as VerifySandbox,
     linkedDependencyDirs: [],
     limits: { timeoutSecs, maxTreeFiles: VERIFY_MAX_TREE_FILES, maxTreeBytes: VERIFY_MAX_TREE_BYTES },
     environment: VERIFY_RECORDED_ENVIRONMENT.filter((name) => Boolean(process.env[name])),
@@ -387,11 +492,12 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
     trustedGitArgs(worktree);
 
     let gitEnvironment: Record<string, string> = {};
+    let repositoryFilterOverrides: { args: string[]; env: Record<string, string> } = { args: [], env: {} };
     const run = (args: string[], options: { env?: Record<string, string>; timeoutMs?: number } = {}) => {
       const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
       let result;
       try {
-        result = git(worktree, args, { allowFailure: true, timeoutMs, maxBuffer: GIT_LISTING_BUFFER, env: { ...gitEnvironment, ...(options.env ?? {}) } });
+        result = git(worktree, [...repositoryFilterOverrides.args, ...args], { allowFailure: true, timeoutMs, maxBuffer: GIT_LISTING_BUFFER, env: { ...gitEnvironment, ...repositoryFilterOverrides.env, ...(options.env ?? {}) } });
       } catch (error) {
         if (error instanceof GitError && /ENOBUFS/.test(error.message)) throw new Stop("TREE_LIMIT_EXCEEDED", `the output of git ${args[0]} is larger than ${GIT_LISTING_BUFFER} bytes`);
         throw error;
@@ -415,8 +521,66 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
       if (commit.status !== 0 || !/^[0-9a-f]{40,64}$/.test(commit.stdout.trim())) throw new VerifyUsageError(`${option} ${printable(ref)} does not name a commit in this repository`);
       return { commit: commit.stdout.trim(), tree: must(["rev-parse", "--verify", `${commit.stdout.trim()}^{tree}`]) };
     };
+    /**
+     * Content filters (`filter.<name>.clean`, `.smudge`, `.process`) are commands Git runs while it stages or writes a
+     * file whose `.gitattributes` entry names them, so the tree under review decides WHETHER one runs. Which command
+     * runs is configuration: the operator's (system, global, command line) is theirs to trust, but a definition in the
+     * repository's own configuration (`.git/config`, a worktree's) arrives with the checkout. Each filter key defined
+     * there is overridden, for every Git command below, with the operator-level value, or with nothing. (Hooks and
+     * fsmonitor are already pinned off by worktrunk/git.ts.) Nothing that runs a filter is called before this.
+     */
+    const neutraliseRepositoryFilters = (): { args: string[]; env: Record<string, string> } => {
+      const listed = run(["config", "--show-scope", "-z", "--get-regexp", "^filter\\."]);
+      if (listed.status === 1 && !listed.stdout) return { args: [], env: {} };
+      if (listed.status !== 0) throw new Error(`git config failed: ${printable(listed.stderr.trim().split("\n")[0] ?? "").slice(0, 300) || `exit ${listed.status}`}`);
+      // Records are `scope NUL key LF value NUL` (a key without a value has no LF), in rising precedence.
+      const fields = listed.stdout.split("\0");
+      const operatorValue = new Map<string, string>();
+      const fromRepository = new Set<string>();
+      for (let i = 0; i + 1 < fields.length; i += 2) {
+        const scope = fields[i];
+        const line = fields[i + 1].indexOf("\n");
+        const key = line < 0 ? fields[i + 1] : fields[i + 1].slice(0, line);
+        const value = line < 0 ? "true" : fields[i + 1].slice(line + 1);
+        if (scope === "local" || scope === "worktree") {
+          // A subsection can hold a line break, which this listing cannot tell from the end of the key.
+          if (!/^filter\..+\.[a-z][a-z0-9-]*$/.test(key) || !/\.(clean|smudge|process|required)$/.test(key)) {
+            throw new Stop("UNTRUSTED_CHECKOUT", `the repository's own Git configuration defines a content filter entry that cannot be read back reliably (${printable(key).slice(0, 120)}), so the commands it could run while the trees are written cannot be ruled out`);
+          }
+          fromRepository.add(key);
+        } else if (scope === "system" || scope === "global" || scope === "command") {
+          operatorValue.set(key, value);
+        } else {
+          throw new Error(`git config reported an unknown scope (${printable(scope).slice(0, 40)})`);
+        }
+      }
+      const args: string[] = [];
+      const env: Record<string, string> = {};
+      [...fromRepository].sort().forEach((key, index) => {
+        // --config-env splits at the LAST "=", so a filter name may hold one; the value never passes through an argument.
+        const name = `NEXUS_VERIFY_GIT_FILTER_${index}`;
+        args.push(`--config-env=${key}=${name}`);
+        env[name] = operatorValue.get(key) ?? (key.endsWith(".required") ? "false" : "");
+      });
+      return { args, env };
+    };
     const base = resolveCommit("--base", baseRef);
     const headCommit = request.head === undefined ? undefined : resolveCommit("--head", request.head);
+
+    // Verification runs repository code. Default to confinement and refuse to run if it is unavailable.
+    // `none` is an explicit operator opt-out for changes they trust.
+    const sandboxRequest = operator.sandbox ?? { engine: "auto" as const };
+    let sandboxEngine: VerifySandboxEngine | undefined;
+    if (sandboxRequest.engine !== "none") {
+      sandboxEngine = usableSandboxEngine(sandboxRequest.engine);
+      if (!sandboxEngine) {
+        throw new Stop("SANDBOX_UNAVAILABLE", `the ${sandboxRequest.engine === "auto" ? "default --sandbox auto" : `--sandbox ${sandboxRequest.engine}`} was requested and ${sandboxRequest.engine === "auto" ? "neither Bubblewrap nor Docker" : sandboxRequest.engine === "bwrap" ? "Bubblewrap (bwrap)" : "Docker"} could confine a test command on this host, so nothing was run. Install an engine (see nexus doctor); only use --sandbox none for changes you trust`);
+      }
+      doc.sandbox = { requested: operator.sandbox !== undefined, engine: sandboxEngine, network: sandboxRequest.network === true };
+    } else {
+      doc.sandbox = { requested: false, engine: "none", network: false };
+    }
+    repositoryFilterOverrides = neutraliseRepositoryFilters();
 
     scratch = makeScratch();
     const baseDir = path.join(scratch, "base");
@@ -469,6 +633,9 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
         const tab = record.indexOf("\t");
         const [mode, , , size] = record.slice(0, tab).split(/\s+/);
         if (mode === "160000") throw new Stop("UNSUPPORTED_TREE", `the ${label} tree holds a submodule (${record.slice(tab + 1)}); submodules are not materialised, so the tree cannot be verified as a whole`);
+        // Git's listing is decoded as UTF-8: bytes that are not valid become U+FFFD and the name then leads to no file,
+        // so the guard would take an edited file with such a name for a new one. Refused, not guessed at.
+        if (record.includes("\uFFFD")) throw new Stop("UNSUPPORTED_TREE", `the ${label} tree holds a path that is not valid UTF-8 (${printable(record.slice(tab + 1)).slice(0, 200)}); the files of the change cannot be named reliably, so the tree cannot be verified as a whole`);
         files++;
         bytes += Number(size) || 0;
         if (files > VERIFY_MAX_TREE_FILES) throw new Stop("TREE_LIMIT_EXCEEDED", `the ${label} tree has more than ${VERIFY_MAX_TREE_FILES} files`);
@@ -521,14 +688,33 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
         : `the verifier discovered in the base tree (${command}, from ${description.evidence}) runs repository code and was not approved; nothing was run. Approve it with --approve-verifier ${description.digest}, or every discovered verifier with --yes`);
     }
 
+    /**
+     * Every process started on repository content goes through here: the verifier on each side, the base's tests
+     * against the head, the type-checks. With `--sandbox` the line is run inside the box; a box that cannot be built
+     * ends verification, and the line is never run outside it.
+     */
+    const box: VerifySandboxBox | undefined = sandboxEngine
+      ? { engine: sandboxEngine, network: sandboxRequest.network === true, scratch, readOnlyDirs: doc.linkedDependencyDirs.map((child) => path.join(worktree, child)) }
+      : undefined;
+    const shell = (line: string, directory: string, timeoutMs: number) => {
+      if (!box) return runVerifierShell(line, directory, timeoutMs);
+      const containerName = box.engine === "docker" ? `nexus-verify-${randomUUID()}` : undefined;
+      const confined = sandboxedVerifierCommand(line, directory, box, { containerName });
+      if ("unavailable" in confined) throw new Stop("SANDBOX_UNAVAILABLE", `the ${box.engine} sandbox could not be built for a run, so the run was not started: ${confined.unavailable}`);
+      const ran = runVerifierShell(confined.command, directory, timeoutMs);
+      // Killing the Docker client at the deadline leaves its container running: remove it by name.
+      if (containerName && (ran.timedOut || ran.exitCode === null)) spawnSync("docker", ["rm", "--force", containerName], { stdio: "ignore", timeout: 30_000 });
+      return ran;
+    };
     const execute = async (phase: VerifyRunRecord["phase"], directory: string) => {
       await checkpoint();
-      progress(`running ${command} (${phase === "base" ? "base" : phase === "head" ? "head" : "base tests against head code"})`);
+      progress(`running ${command} (${phase === "base" ? "base" : phase === "head" ? "head" : "base tests against head code"}${box ? `, in the ${box.engine} sandbox` : ""})`);
       const begun = Date.now();
-      const ran = runVerifierShell(command, directory, timeoutSecs * 1000);
+      const ran = shell(command, directory, timeoutSecs * 1000);
       const executedTests = hasExecutedTests(ran.output);
       doc.runs.push({
         phase,
+        sandboxed: Boolean(box),
         passed: ran.success,
         timedOut: ran.timedOut,
         exitCode: ran.exitCode,
@@ -572,7 +758,11 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
     const unboundDetail = bindsWorkspaceDefinition && !baseline.verifier?.size && baseline.verifierUnbindableReason
       ? `the verifier's definition could not be bound (${baseline.verifierUnbindableReason}), so it was not verified unchanged (the candidate could have edited it) and the pass is regression evidence only`
       : undefined;
-    if (bindsWorkspaceDefinition && !unboundDetail && verifierDefinitionChangedSince(headDir, baseline)) {
+    // `make` reads GNUmakefile, then makefile, before Makefile; the definition bound from the base is the Makefile the
+    // verifier was discovered in (and what it includes). A head that adds or edits a file make prefers has replaced
+    // the target without touching that definition.
+    const shadowsMakefile = /^make(\s|$)/.test(command) && changed.some((file) => file === "GNUmakefile" || file === "makefile");
+    if (bindsWorkspaceDefinition && !unboundDetail && (shadowsMakefile || verifierDefinitionChangedSince(headDir, baseline))) {
       const captured = Boolean(baseline.verifier?.size);
       const detail = captured
         ? `the head changes a file that defines the verifier (${command}) or that the base's tests import and that is not a declared deliverable, so the verifier was not run on the head: its output could not establish verification${deliverables.length ? "" : ". If the changed file is the product under test, declare it with --deliverable-file"}`
@@ -590,7 +780,7 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
     // product). Everything judged from here on reads a second, untouched copy of the head tree.
     const headPristine = path.join(scratch, "head-pristine");
     materialise(headTree, headPristine, "head", headIndex, true);
-    linkDependencyDirs(worktree, [headPristine]);
+    linkDependencyDirs(worktree, [headPristine], doc.linkedDependencyDirs);
 
     // ---- The type-checks (completion_oracle.ts runTypecheckOracleImpl): only after a passing verifier, as the agent does. ----
     const mode = typecheckMode(undefined, source === "configured");
@@ -608,7 +798,7 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
       const headTypecheck = path.join(scratch, "head-typecheck");
       materialise(base.tree, baseTypecheck, "base", baseIndex, true);
       materialise(headTree, headTypecheck, "head", headIndex, true);
-      linkDependencyDirs(worktree, [baseTypecheck, headTypecheck]);
+      linkDependencyDirs(worktree, [baseTypecheck, headTypecheck], doc.linkedDependencyDirs);
       const headChecks = discoverTypechecks(headTypecheck);
       const baseChecks = discoverTypechecks(baseTypecheck);
       const inHead = new Set(headChecks.map(typecheckProjectKey));
@@ -617,7 +807,7 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
       const executorIn = (directory: string, side: string): TimedExecutor => async (line, secs) => {
         await checkpoint();
         progress(`running ${line} (type-check, ${side})`);
-        const ran = runVerifierShell(line, directory, secs * 1000);
+        const ran = shell(line, directory, secs * 1000);
         return { success: true, output: JSON.stringify({ exit_code: ran.exitCode, stdout: ran.output, stderr: "", timed_out: ran.timedOut }) };
       };
       try {
@@ -719,6 +909,7 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
 export function renderVerifyText(result: VerifyJsonResult): string {
   const lines: string[] = [];
   const row = (label: string, value: string) => lines.push(`  ${label.padEnd(13)}${value}`);
+  const sandbox: VerifySandbox = result.sandbox ?? { requested: false, engine: "none", network: false };
   const side = (tree: VerifyTreeRef) => `${tree.ref}${tree.commit ? ` ${tree.commit.slice(0, 12)}` : ""} (tree ${tree.tree.slice(0, 12)})`;
   lines.push(`nexus verify: ${result.verdict}${result.reason && result.reason !== result.verdict ? ` (${result.reason})` : ""}`);
   if (result.detail) row("why", result.detail);
@@ -742,7 +933,10 @@ export function renderVerifyText(result: VerifyJsonResult): string {
       ? `${result.deliverables.join(", ")} (${result.verification.isDeliverableBound ? "every one is imported by a test that existed on the base" : "not all shown to be covered by tests that existed on the base"})`
       : "none declared (--deliverable-file): the best possible verdict is REGRESSION_FREE");
   }
-  if (result.linkedDependencyDirs.length) row("linked", `${result.linkedDependencyDirs.join(", ")} (from the caller's checkout)`);
+  if (result.linkedDependencyDirs.length) row("linked", `${result.linkedDependencyDirs.join(", ")} (from the caller's checkout${sandbox.engine === "none" ? "" : "; read-only in the sandbox"})`);
+  row("sandbox", sandbox.engine !== "none"
+    ? `${sandbox.engine}: every run confined to its own scratch tree, ${sandbox.network ? "WITH network (--sandbox-network)" : "no network"}`
+    : sandbox.requested ? "requested, and nothing was run" : "none: repository code ran with your privileges (see --sandbox)");
   if (result.typecheck.status !== "NOT_RUN") {
     const projects = result.verification?.typecheck?.projects ?? [];
     row("type-check", `${result.typecheck.status}${result.typecheck.mode ? ` (${result.typecheck.mode})` : ""}${result.typecheck.detail ? `: ${result.typecheck.detail}` : ""}`);

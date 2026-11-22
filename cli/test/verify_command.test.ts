@@ -486,7 +486,7 @@ test("an internal failure lowers the verdict (UNVERIFIED, INTERNAL_ERROR, exit 1
     process.env.TMPDIR = tmp;
     try {
       // The progress callback runs once both trees are about to be written: a failure there is a failure inside verify.
-      const result = await verifyChange({ worktree: repo }, { approveDiscoveredVerifier: true, deliverables: ["src/math.js"], onProgress: () => { throw new Error("injected failure"); } });
+      const result = await verifyChange({ worktree: repo }, { approveDiscoveredVerifier: true, deliverables: ["src/math.js"], sandbox: { engine: "none" }, onProgress: () => { throw new Error("injected failure"); } });
       assert.equal(result.verdict, "UNVERIFIED");
       assert.equal(result.outcome, "UNVERIFIED");
       assert.equal(result.reason, "INTERNAL_ERROR");
@@ -507,7 +507,7 @@ test("an interrupt is acted on when the running verifier ends: exit 130, an erro
     // The verifier signals the nexus process itself (its parent, or its grandparent when it runs under `timeout`), then
     // ends: nothing here waits for a deadline.
     const signalNexus = 'p=$PPID; if [ "$(ps -o comm= -p $p)" = timeout ]; then p=$(ps -o ppid= -p $p); fi; kill -INT $p';
-    const run = await runCli(["-w", repo, "--verifier", signalNexus, "--json"]);
+    const run = await runCli(["-w", repo, "--verifier", signalNexus, "--sandbox", "none", "--json"]);
     assert.equal(run.code, verifyExitCode("interrupted"), run.stderr);
     const doc = consume(run);
     assert.deepEqual(Object.keys(doc), ["schema_version", "error", "exitCode"]);
