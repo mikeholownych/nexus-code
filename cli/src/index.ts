@@ -60,6 +60,7 @@ function buildConfig(options: any): HarnessConfig {
   }
 }
 import { registerOperationCommands } from "./operation_cli.js";
+import { registerAuditCommands } from "./audit_cli.js";
 import pc from "picocolors";
 
 import * as os from "node:os";
@@ -1122,7 +1123,7 @@ program
     console.log();
   });
 
-program
+const auditCommand = program
   .command("audit")
   .description("Inspect tool execution audit log and execution metrics")
   .option("-n, --limit <number>", "Number of recent records to display", "25")
@@ -1167,6 +1168,8 @@ program
     }
     console.log();
   });
+// GV-2: `nexus audit export` and `nexus audit verify`; `nexus audit` with any other argument is a usage error.
+registerAuditCommands(auditCommand);
 
 program
   .command("serve-mcp")

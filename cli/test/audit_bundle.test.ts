@@ -8,6 +8,7 @@ import { after, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { generateKeyPairSync } from "node:crypto";
 import { AUDIT_LIMITS } from "../src/audit_contract.js";
 import { AUDIT_UNSIGNED_CAVEAT, AuditBundleError, auditManifestBytes, auditPathProblem, buildAuditManifest, renderAuditVerifyText, verifyAuditBundle, writeAuditBundle } from "../src/core/audit_bundle.js";
 import { canonicalJson, verifyChain } from "../src/core/hash_chain.js";
@@ -498,8 +499,9 @@ describe("verifying an unsigned bundle (G-5)", () => {
   });
 
   test("a bundle that carries manifest.sig.json is never reported as plainly intact: the signature is unchecked (exit 2), and file findings are still reported", () => {
-    const { dir } = writeFixture();
-    fs.writeFileSync(path.join(dir, "manifest.sig.json"), '{"schema_version":1}\n');
+    const pair = generateKeyPairSync("ed25519");
+    const dir = path.join(tempDir(), "signed");
+    writeAuditBundle(fixtureInput(), { out: dir, now: FIXED_NOW, bundleId: FIXED_ID, durable: false, signingKey: pair.privateKey });
     const unchecked = check(dir);
     assert.deepEqual([unchecked.exit, unchecked.code, unchecked.result.signature, unchecked.result.findings_total], ["signature_unchecked", 2, "unchecked", 0]);
     assert.equal(unchecked.result.files.matched, 10);
@@ -515,9 +517,31 @@ describe("verifying an unsigned bundle (G-5)", () => {
     fs.symlinkSync(path.join(linked.parent, "nowhere"), path.join(linked.dir, "manifest.sig.json"));
     assert.deepEqual([check(linked.dir).exit, check(linked.dir).kinds], ["tampered", ["unsafe_entry"]]);
 
-    // No public key is accepted before signing exists: asking for one is an error, not a silent "intact".
-    const asked = verifyAuditBundle(writeFixture().dir, { publicKey: "key.pem" } as any);
-    assert.deepEqual([asked.exit, asked.document], ["usage", { schema_version: 1, error: "unsupported verification option: publicKey", exitCode: 2 }]);
+    const asked = verifyAuditBundle(writeFixture().dir, { publicKey: generateKeyPairSync("ed25519").publicKey });
+    assert.equal(asked.exit, "tampered", "supplying a key for an unsigned bundle fails closed");
+    assert.equal((asked.document as any).findings[0].kind, "signature_missing");
+  });
+
+  test("Ed25519 signing binds the exact manifest; verification checks key identity and signature", () => {
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+    const parent = tempDir();
+    const signed = writeAuditBundle(fixtureInput(), { out: path.join(parent, "signed"), now: FIXED_NOW, bundleId: FIXED_ID, durable: false, signingKey: privateKey });
+    const envelopePath = path.join(signed.dir, "manifest.sig.json");
+    const envelope = JSON.parse(fs.readFileSync(envelopePath, "utf8"));
+    assertManifestValid(envelope);
+    assert.deepEqual([fs.statSync(envelopePath).mode & 0o777, envelope.algorithm, envelope.signed_file, envelope.manifest_sha256], [0o600, "ed25519", "manifest.json", signed.manifestSha256]);
+    const checked = check(signed.dir, { publicKey });
+    assert.deepEqual([checked.exit, checked.code, checked.result.result, checked.result.signature, checked.result.files.matched], ["intact_signed", 0, "intact_signed", "valid", 10]);
+    const unchecked = check(signed.dir);
+    assert.deepEqual([unchecked.exit, unchecked.code, unchecked.result.result, unchecked.result.signature], ["signature_unchecked", 2, "signature_unchecked", "unchecked"]);
+    const wrongKey = check(signed.dir, { publicKey: generateKeyPairSync("ed25519").publicKey });
+    assert.deepEqual([wrongKey.exit, wrongKey.result.signature, wrongKey.kinds], ["tampered", "invalid", ["signature_key_mismatch"]]);
+    const manifest = JSON.parse(fs.readFileSync(path.join(signed.dir, "manifest.json"), "utf8"));
+    manifest.subject.status = "failed";
+    fs.writeFileSync(path.join(signed.dir, "manifest.json"), `${canonicalJson(manifest)}\n`);
+    const rewritten = check(signed.dir, { publicKey });
+    assert.equal(rewritten.exit, "tampered", "recomputing manifest hashes cannot forge the operator's signature");
+    assert.ok(rewritten.kinds.includes("signature_invalid"));
   });
 
   test("what the manifest says about a log that is not a failure is a note: not closed, a bounded excerpt, already broken at export", () => {
