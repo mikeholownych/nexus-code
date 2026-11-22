@@ -1,0 +1,507 @@
+continue
+
+---
+
+Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.
+
+---
+
+<task-notification>
+<task-id>bzift6omx</task-id>
+<tool-use-id>toolu_01CaXRGfJMBCx6Ta31menX5G</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/bzift6omx.output</output-file>
+<status>failed</status>
+<summary>Background command "until [ -f /tmp/claude-1000/live3_done ]; do sleep 60; done; rtk wc -l /home/mike/nexus-wt/invariants/eval/out/cc3-branch/results.jsonl /home/mike/nexus-wt/invariants-base/eval/out/cc3-base/results.jsonl" failed with exit code 1</summary>
+</task-notification>
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+<task-notification>
+<summary>Goal check-in: background work still running</summary>
+</task-notification>
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+<task-notification>
+<task-id>bp42qc0ug</task-id>
+<tool-use-id>toolu_01EtjVRVU1YbCnms1eHojTJ2</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/bp42qc0ug.output</output-file>
+<status>completed</status>
+<summary>Background command "umask 022; ONLY=cc-minimal-fix,cc-refactor-edge,cc-keep-rationale,cc-no-side-effect,cc-deliberate-abstraction; cd /home/mike/nexus-wt/invariants &amp;&amp; rm -rf eval/out/cc3-branch &amp;&amp; node eval/run.mjs --config eval/configs/pilot-nexus-deep.json --out eval/out/cc3-branch --only $ONLY --runs 5 &gt; /tmp/claude-1000/live3_branch.log 2&gt;&amp;1; cd /home/mike/nexus-wt/invariants-base &amp;&amp; rm -rf eval/out/cc3-base &amp;&amp; node eval/run.mjs --config eval/configs/pilot-nexus-deep.json --out eval/out/cc3-base --only $ONLY --runs 5 &gt; /tmp/claude-1000/live3_base.log 2&gt;&amp;1; wc -l /home/mike/nexus-wt/invariants/eval/out/cc3-branch/results.jsonl /home/mike/nexus-wt/invariants-base/eval/out/cc3-base/results.jsonl" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+<task-notification>
+<task-id>byltcghld</task-id>
+<tool-use-id>toolu_011pGVuCegcG1zS8PYagFdxp</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/byltcghld.output</output-file>
+<status>completed</status>
+<summary>Monitor "#664 linux-x86_64 completion" stream ended</summary>
+<event>linux-x86_64=pass
+test-matrix (22)=pass
+test-matrix (24)=pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b4a8n973p</task-id>
+<tool-use-id>toolu_018FigXWuJHfqmJ6AqxN2Frh</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/b4a8n973p.output</output-file>
+<status>completed</status>
+<summary>Monitor "#666 checks, main CI, CX-4 measurement completion" stream ended</summary>
+<event>CHECKS/MAIN RESOLVED: linux-x86_64=pass test-matrix (22)=pass test-matrix (24)=pass  main=completed/success runs=22 done=no</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+<task-notification>
+<summary>Goal check-in: background work still running</summary>
+</task-notification>
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+<task-notification>
+<task-id>bthi0tdyl</task-id>
+<summary>Monitor event: "CX-4 measurement completion"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<summary>Goal check-in: continuing after the last turn ended early</summary>
+</task-notification>
+
+---
+
+Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.
+
+---
+
+<task-notification>
+<task-id>bvbm0fdub</task-id>
+<summary>Monitor event: "#667 required checks and main CI resolved"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bwtpefz49</task-id>
+<tool-use-id>toolu_01RXNHYCKeXo9rNse44rs1TA</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/bwtpefz49.output</output-file>
+<status>completed</status>
+<summary>Monitor "PR #671 required checks resolved" stream ended</summary>
+<event>PR671 RESOLVED: linux-x86_64=fail test-matrix (22)=fail test-matrix (24)=fail</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bber47kqv</task-id>
+<summary>Monitor event: "PR #671 and #672 required checks resolved"</summary>
+<event>PR671 RESOLVED: linux-x86_64=fail test-matrix (22)=fail test-matrix (24)=fail</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bdzuz54up</task-id>
+<summary>Monitor event: "PR #671 (re-run) and #672 required checks resolved"</summary>
+<event>PR672 RESOLVED: linux-x86_64=pass test-matrix (22)=pass test-matrix (24)=pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bber47kqv</task-id>
+<tool-use-id>toolu_01TUaCnhF3GpaV74YtLLZzW3</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/bber47kqv.output</output-file>
+<status>completed</status>
+<summary>Monitor "PR #671 and #672 required checks resolved" stream ended</summary>
+<event>PR672 RESOLVED: linux-x86_64=pass test-matrix (22)=pass test-matrix (24)=pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bdzuz54up</task-id>
+<summary>Monitor event: "PR #671 (re-run) and #672 required checks resolved"</summary>
+<event>PR671 RESOLVED: linux-x86_64=fail test-matrix (22)=fail test-matrix (24)=fail</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bdzuz54up</task-id>
+<tool-use-id>toolu_017dteCyY7LYxjrWPAM6vGSH</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/bdzuz54up.output</output-file>
+<status>completed</status>
+<summary>Monitor "PR #671 (re-run) and #672 required checks resolved" stream ended</summary>
+</task-notification>
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+<task-notification>
+<task-id>b9mfykwav</task-id>
+<tool-use-id>toolu_01XyvoCSMSpX2EihkbLYRdL6</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/b9mfykwav.output</output-file>
+<status>completed</status>
+<summary>Monitor "PR #672 required checks completed at its exact head" stream ended</summary>
+<event>PR672 at 22c2debf1b091dfaea9d27f3e72cfa9106417f29: linux-x86_64=completed/success test-matrix (22)=completed/success test-matrix (24)=completed/failure main=completed/success/308635d0</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bqvy623p7</task-id>
+<tool-use-id>toolu_018LyYWJ3UGuyU61FUKV6ouP</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/bqvy623p7.output</output-file>
+<status>completed</status>
+<summary>Monitor "PR #672 required checks after re-run, exact head" stream ended</summary>
+<event>PR672 at 22c2debf1b091dfaea9d27f3e72cfa9106417f29: linux-x86_64=completed/success test-matrix (22)=completed/success test-matrix (24)=completed/success main=completed/success/308635d0</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+<task-notification>
+<task-id>bwt91ynlc</task-id>
+<summary>Monitor event: "PC-1 sample reaches 20 runs, or #671 and #672 both merge"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b96haehat</task-id>
+<tool-use-id>toolu_011h7FSYthWkFmw3cDybfbTi</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/b96haehat.output</output-file>
+<status>completed</status>
+<summary>Monitor "PC-1 sample reaches 20 completed runs" stream ended</summary>
+<event>PC1 SAMPLE READY: 20 runs; #671 OPEN 860596ec: linux-x86_64=fail test-matrix (22)=fail test-matrix (24)=fail</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+<task-notification>
+<task-id>bx5vgq6i0</task-id>
+<summary>Monitor event: "PR #675 (PC-1 evidence) required checks at exact head"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bt24cs3kf</task-id>
+<summary>Monitor event: "PR #671 required checks complete at its current head"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bzdvmuv03</task-id>
+<summary>Monitor event: "PR #671 merges, or its required checks complete at a new head"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+<task-notification>
+<task-id>b945lsxrf</task-id>
+<tool-use-id>toolu_01CFyiZkPCHso4egPVsK7C9W</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/b945lsxrf.output</output-file>
+<status>completed</status>
+<summary>Monitor "Probe PR #678 required checks complete (does the Docker worker start on the runner?)" stream ended</summary>
+<event>PROBE678 at 39c1febb: linux-x86_64=completed/success test-matrix (22)=completed/success test-matrix (24)=completed/success | #671 MERGED UNKNOWN b010bad0 | main  92b3d77a</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b2abms1li</task-id>
+<summary>Monitor event: "#679 checks complete and main CI settled"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<summary>Goal check-in: background work no longer running · idle check-ins paused until your next message</summary>
+</task-notification>
+
+---
+
+Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.
+
+---
+
+<task-notification>
+<task-id>bg8o4u75n</task-id>
+<summary>Monitor event: "Flooded-environment suite finishes"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bd20ma8oi</task-id>
+<summary>Monitor event: "PR #681 required checks complete at its exact head"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+from now on, nothing gets merged into main until the release is ready to be tagged. a master release branch is to be created and all development work lands on that release branch until it is ready to be merged to main.
+
+---
+
+I meant after v1.2.2 lands
+
+---
+
+my branching direction starts with v1.3.0 (after v1.2.2 lands)
+
+---
+
+release/vx.x.x should be the standard release branch naming
+
+---
+
+that should resolve any accidental application of future release work that's already being done from landing early.
+
+---
+
+no.. but going forward from v1.3.0 that should be avoidable.
+
+---
+
+as an aside, a new inference model has been added into enterprise/auto so there are now 3 different models (the original 2 on the B65 GPUS.. and a new on the new MS-S1 Max host)
+
+---
+
+yes, I meant engineering/auto
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+catalogue should now be complete
+
+---
+
+<task-notification>
+<task-id>b8ans3z8r</task-id>
+<summary>Monitor event: "Release-prep PR #683 checks complete at head c1fcafa6; runner-like suite finishes"</summary>
+<event>FLOOD2 DONE: exit=1</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+https://github.com/vercel-labs/skills/pull/2638 was submitted to include nexus code in vercel-labs npx skills client list. the merge is blocked becuase the commit is not signed.
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+<task-notification>
+<task-id>b8ans3z8r</task-id>
+<tool-use-id>toolu_017ooGda82iahPungWJFF81M</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/b8ans3z8r.output</output-file>
+<status>completed</status>
+<summary>Monitor "Release-prep PR #683 checks complete at head c1fcafa6; runner-like suite finishes" stream ended</summary>
+<event>PR683 at c1fcafa6: linux-x86_64=completed/success test-matrix (22)=completed/success test-matrix (24)=completed/success | main CodeQL:success/4f553c24,CI:success/4f553c24</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+<task-notification>
+<task-id>bw3ae7g1i</task-id>
+<summary>Monitor event: "main CI finishes on the v1.2.2-rc.1 release-prep merge commit 2d314098"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<summary>Goal check-in: background work still running</summary>
+</task-notification>
+
+---
+
+SSH to both hosts needs to be accessible from any private IP address.
+
+---
+
+<task-notification>
+<task-id>bv40m6aud</task-id>
+<tool-use-id>toolu_01Dz2UCUeJQaZR8rDnnpQfEd</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/bv40m6aud.output</output-file>
+<status>completed</status>
+<summary>Monitor "Release workflow for v1.2.2-rc.1 finishes or a job fails" stream ended</summary>
+<event>RELEASE RUN DONE: completed/success | package=comp/success | assets: prerelease=true compatibility.json,install.sh,nexus-linux-x86_64-v1.2.2-rc.1.tar.gz,sbom.cdx.json,sbom.cdx.json.sha256,sbom.json,sbom.json.sha256,SHA256SUMS,THIRD_PARTY_NOTICES.txt</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+scratch that last message. wrong window
+
+---
+
+CI has completed
+
+---
+
+<task-notification>
+<task-id>b87zzth8e</task-id>
+<summary>Monitor event: "G1.1-4 tool-call matrix on the v1.2.2-rc.1 archive finishes"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+<task-notification>
+<task-id>brasblu8r</task-id>
+<tool-use-id>toolu_017kSPoj8JrtvwzJ9yopB58n</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/brasblu8r.output</output-file>
+<status>completed</status>
+<summary>Monitor "G1.1-4 tool-call matrix on the v1.2.2-rc.1 archive finishes" stream ended</summary>
+<event>G1.1-4 RUN DONE: exit=0 start 2026-11-21T21:41:39Z end 2026-11-21T22:28:19Z  | out: {"candidate":{"archiveSha256":"57bdf05addf81726ecfd59c9f31352e1c2736288dd6b84de26a5326bcffec79b","sourceCommit":"2d314098d8a5b6d9863d22f791007b27f65d2956","sourceTree":"a9a3642781190607f8b522a796c14e9f722d696d"},"providers":[{"provider":"gateway","passed":true,"totals":{"attempts":200,"native_valid":200,"repaired":0,"schema_invalid":0,"invalid":0}},{"provider":"gateway","passed":true,"totals":{"attempts":200,"nat...(truncated)</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bi25j4awd</task-id>
+<summary>Monitor event: "Required checks complete on evidence PR #685 and stable PR #686"</summary>
+<event>PR686 at ce2c951e: linux-x86_64=completed/success test-matrix (22)=completed/success test-matrix (24)=completed/success</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<summary>Goal check-in: background work still running</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b19kdymat</task-id>
+<tool-use-id>toolu_01JVhbqrRfc5pKfGzU4eRhsq</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/b19kdymat.output</output-file>
+<status>completed</status>
+<summary>Monitor "main CI finishes on the stable v1.2.2 merge commit 8ffb83cb" stream ended</summary>
+<event>MAIN at 8ffb83cb: CI=completed/success CodeQL=completed/cancelled | main head now 06ef7fd2</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+once v1.3.0 work starts, priority follows:
+
+
+<pasted_content id="2d81">
+     1. PF-1: publish the client protocol — JSON Schema generated from cli/src/protocol.ts, checked-in schema, TS/Rust parity test, capability negotiation, wire fixtures.
+     2. PF-2: version nexus run --json and document exit codes.
+     3. GV-4: telemetry transparency and opt-out, settling PC-5.
+     4. GV-3: hash-chain the flight recorder and verification log.
+     5. VR-1: nexus verify as a CI gate.
+</pasted_content id="2d81">
+
+---
+
+<task-notification>
+<task-id>b90shti2d</task-id>
+<summary>Monitor event: "Release workflow for stable v1.2.2 finishes"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>br2ynrphg</task-id>
+<tool-use-id>toolu_01MAD4Ajzy7VuFTzggZquZuY</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/br2ynrphg.output</output-file>
+<status>completed</status>
+<summary>Monitor "Release workflow for stable v1.2.2 finishes" stream ended</summary>
+<event>STABLE RELEASE RUN DONE: completed/success | package=comp/success | draft=true prerelease=false assets=compatibility.json,install.sh,nexus-linux-x86_64-v1.2.2.tar.gz,sbom.cdx.json,sbom.cdx.json.sha256,sbom.json,sbom.json.sha256,SHA256SUMS,THIRD_PARTY_NOTICES.txt</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
