@@ -137,13 +137,32 @@ function foldUnitLedgers(operation: DurableOperationState, store: OperationStore
   return ledger;
 }
 
+/** Objective supplied to a fresh durable role task; the tester sees implementation evidence folded into the parent. */
+export function objectiveLedgerForGoalUnit(
+  operationId: string,
+  unit: WorkUnit,
+  store: OperationStore,
+  workspace: string,
+): ObjectiveLedger | undefined {
+  if (unit.role !== "implementer" && unit.role !== "tester") return undefined;
+  const operation = store.load(operationId);
+  if (!isGoal(operation)) return undefined;
+  const ledger = unit.role === "tester"
+    ? foldUnitLedgers(operation, store, workspace)
+    : store.manager.loadTaskState(operationId, workspace).objective ?? undefined;
+  return ledger ? structuredClone(ledger) : undefined;
+}
+
 export class GoalOrchestrator {
   private readonly store: OperationStore;
   private readonly executor: WorkUnitExecutor;
 
   constructor(private readonly config: HarnessConfig, private readonly options: GoalRunnerOptions = {}) {
     this.store = options.store ?? new OperationStore(config.workspace);
-    this.executor = options.executor ?? new AgentWorkUnitExecutor({ baseConfig: { ...config, maxSteps: Math.min(config.maxSteps, 15) } });
+    this.executor = options.executor ?? new AgentWorkUnitExecutor({
+      baseConfig: { ...config, maxSteps: Math.min(config.maxSteps, 15) },
+      objectiveLedgerForUnit: (operationId, unit) => objectiveLedgerForGoalUnit(operationId, unit, this.store, this.config.workspace),
+    });
   }
 
   list(): GoalResult[] {
