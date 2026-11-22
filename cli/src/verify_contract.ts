@@ -1,15 +1,20 @@
 /**
  * VR-1: the machine contract of `nexus verify`: the verdicts, the process exit codes and the JSON document `--json`
  * prints (the same document `--receipt <file>` writes). docs/USER_MANUAL.md documents the exit codes from the table
- * below and test/verify_command.test.ts fails when the manual falls behind. The types are plain data (no functions, no
- * index signatures) so a schema can be generated from them, as scripts/gen_run_result_schema.mjs does for `nexus run`.
+ * below and test/verify_command.test.ts fails when the manual falls behind. The published schema
+ * (docs/protocol/verify-result-v1.schema.json) is generated from the types here by scripts/gen_verify_result_schema.mjs,
+ * so they are plain data (no functions, no index signatures); test/verify_schema.test.ts fails when it falls behind.
  */
-import type { EngineeringOutcome, VerificationEvidence } from "./core/turn.js";
+import type { EngineeringOutcome, TypecheckEvidence, VerificationEvidence } from "./core/turn.js";
+import type { TypecheckBaselineRecord } from "./core/typecheck_evidence.js";
 import type { EvidenceOutcomeReason } from "./core/verification_outcome.js";
+import type { VerificationClass, VerificationMode } from "./security.js";
+import type { TypecheckMode } from "./tester.js";
 
 /**
  * Version of the document `nexus verify --json` prints. Adding an optional member keeps the version; removing or
- * renaming a member, or changing a member's type or meaning, bumps it.
+ * renaming a member, or changing a member's type or meaning, bumps it. Every change is recorded in
+ * docs/protocol/VERIFY_RESULT_VERSIONS.json.
  */
 export const VERIFY_RESULT_SCHEMA_VERSION = 1;
 
@@ -29,8 +34,18 @@ export type VerifyReason =
   | "VERIFIER_DEFINITION_CHANGED"
   /** The verifier is an inline program whose definition cannot be captured, so it was not run on the head. */
   | "VERIFIER_DEFINITION_NOT_CAPTURED"
-  /** A type-check project the agent would enforce applies, and this version does not run type-checks. */
+  /** An enforced type-check failed on the head: an error in a changed file, or one the base did not have. */
+  | "TYPECHECK_FAILED"
+  /** An enforced type-check did not finish within the deadline. */
+  | "TYPECHECK_TIMED_OUT"
+  /** An enforced type-check could not be run: its tool is not installed, or its configuration is one this checker cannot run. */
+  | "TYPECHECK_UNAVAILABLE"
+  /** Type-checking is enforced and a project of the base tree has no counterpart in the head, so no evidence exists for it. */
   | "TYPECHECK_NOT_RUN"
+  /** The change edits verification files (or weakens a test) and the edit was not approved, or the base's policy refuses such edits. */
+  | "VERIFICATION_EDIT_BLOCKED"
+  /** Not every changed file could be classified, so the guard's findings are not the whole picture. */
+  | "GUARD_INCOMPLETE"
   /** A verifier discovered in the repository needs the operator's approval. */
   | "VERIFIER_NOT_APPROVED"
   /** Git was refused in the checkout (a planted or rewritten `.git`). */
@@ -56,12 +71,12 @@ export interface VerifyExitCode {
  */
 export const VERIFY_EXIT_CODES = [
   { code: 0, name: "verified", when: "`VERIFIED`: the change is shown by evidence independent of it." },
-  { code: 1, name: "failed", when: "`UNVERIFIED` with outcome `NOT_ESTABLISHED`: the verifier failed or timed out on the head, or the head changed the verifier's own definition so it was not run." },
+  { code: 1, name: "failed", when: "`UNVERIFIED` with outcome `NOT_ESTABLISHED`: the verifier failed or timed out on the head, an enforced type-check failed, timed out or could not be run, or the head changed the verifier's own definition so it was not run." },
   { code: 1, name: "error", when: "`UNVERIFIED` with reason `INTERNAL_ERROR`: `nexus verify` itself could not finish, so nothing was established." },
   { code: 1, name: "option_parse", when: "The command line could not be parsed: an unknown option or an option without its value (the option parser exits before the command runs; no JSON document)." },
-  { code: 2, name: "unverified", when: "`REGRESSION_FREE` (the tests pass without showing the change), or `UNVERIFIED` because there is no verifier, no test executed, base and head are the same tree, or an enforced type-check applies that this version does not run." },
+  { code: 2, name: "unverified", when: "`REGRESSION_FREE` (the tests pass without showing the change), or `UNVERIFIED` because there is no verifier, no test executed, base and head are the same tree, or an enforced type-check project of the base has no counterpart in the head." },
   { code: 2, name: "usage", when: "A usage error: not a Git working tree, a base or head that does not name a commit, or an invalid option value or combination." },
-  { code: 3, name: "blocked", when: "`BLOCKED`: a person must decide. The discovered verifier is not approved, the checkout is not trusted, or a tree exceeds the limits or holds a submodule." },
+  { code: 3, name: "blocked", when: "`BLOCKED`: a person must decide. The discovered verifier is not approved, the change edits verification files or weakens a test without approval, the changed files could not all be classified, the checkout is not trusted, or a tree exceeds the limits or holds a submodule." },
   { code: 130, name: "interrupted", when: "Interrupted (SIGINT or SIGTERM). The signal is acted on when the running verifier process ends; a second signal exits at once and may leave no JSON document." },
 ] as const satisfies readonly VerifyExitCode[];
 
@@ -79,12 +94,17 @@ export const VERIFY_REASONS: Record<VerifyReason, { verdict: Exclude<VerifyVerdi
   VERIFICATION_NOT_RUN: { verdict: "UNVERIFIED", exit: "unverified" },
   NOTHING_TO_VERIFY: { verdict: "UNVERIFIED", exit: "unverified" },
   TYPECHECK_NOT_RUN: { verdict: "UNVERIFIED", exit: "unverified" },
+  TYPECHECK_FAILED: { verdict: "UNVERIFIED", exit: "failed" },
+  TYPECHECK_TIMED_OUT: { verdict: "UNVERIFIED", exit: "failed" },
+  TYPECHECK_UNAVAILABLE: { verdict: "UNVERIFIED", exit: "failed" },
   VERIFIER_FAILED: { verdict: "UNVERIFIED", exit: "failed" },
   VERIFIER_TIMED_OUT: { verdict: "UNVERIFIED", exit: "failed" },
   VERIFIER_DEFINITION_CHANGED: { verdict: "UNVERIFIED", exit: "failed" },
   VERIFIER_DEFINITION_NOT_CAPTURED: { verdict: "UNVERIFIED", exit: "failed" },
   INTERNAL_ERROR: { verdict: "UNVERIFIED", exit: "error" },
   VERIFIER_NOT_APPROVED: { verdict: "BLOCKED", exit: "blocked" },
+  VERIFICATION_EDIT_BLOCKED: { verdict: "BLOCKED", exit: "blocked" },
+  GUARD_INCOMPLETE: { verdict: "BLOCKED", exit: "blocked" },
   UNTRUSTED_CHECKOUT: { verdict: "BLOCKED", exit: "blocked" },
   TREE_LIMIT_EXCEEDED: { verdict: "BLOCKED", exit: "blocked" },
   UNSUPPORTED_TREE: { verdict: "BLOCKED", exit: "blocked" },
@@ -160,8 +180,54 @@ export interface VerifyIngredient {
   detail?: string;
 }
 
+/**
+ * The project type-checks. The evidence of every project (tool, configuration, status, counts, tool hash) is in
+ * `verification.typecheck.projects`; this is the summary and the base side.
+ */
+export interface VerifyTypecheck {
+  /**
+   * NOT_RUN: the verifier did not pass on the head (or verification stopped earlier), so no type-check was run.
+   * Otherwise the combined status of the head's projects, as in `verification.typecheck.status`.
+   */
+  status: "NOT_RUN" | TypecheckEvidence["status"];
+  /** `enforce`: a failing check lowers the verdict. `record`: recorded only (your own `--verifier`). `off`: disabled by NEXUS_TYPECHECK. */
+  mode?: TypecheckMode;
+  detail?: string;
+  /** The same projects on the base tree: what a "new" error on the head is measured against. */
+  baseline?: TypecheckBaselineRecord[];
+  /** Projects of the base tree that the head no longer has (tool and configuration path). */
+  missingFromHead?: string[];
+}
+
+/** One changed file that decides how the change is verified. */
+export interface VerifyGuardFinding {
+  path: string;
+  class: VerificationClass;
+  kind: "added" | "modified" | "deleted";
+  /** For a test file: what the edit removed (a heuristic over the text). Absent when nothing was detected. */
+  weakening?: string[];
+  /** The edit needs `--approve-verification-edit <path>`: a verification configuration file, or a weakened test. */
+  requiresApproval: boolean;
+  /** The operator approved this path. Approval lets the verdict be reported; it never makes the change VERIFIED. */
+  approved: boolean;
+}
+
+/** The verification-file guard: which changed files define or weaken the verification, under the BASE tree's policy. */
+export interface VerifyGuard {
+  /** NOT_RUN: verification stopped before the change was read. CLEAR: nothing waits for a decision. BLOCKED: a finding does, or the scan is incomplete. */
+  status: "NOT_RUN" | "CLEAR" | "BLOCKED";
+  /** `approve`: a finding that requires approval blocks until approved. `block`: it blocks, and approval is not accepted. */
+  mode?: VerificationMode;
+  /** `base_tree`: the base tree's `.nexus-security.json` (it can only tighten). `default`: the base tree has none. The head's is never read. */
+  policySource?: "base_tree" | "default";
+  findings: VerifyGuardFinding[];
+  /** False when a changed file could not be classified (unreadable, too large, or too many findings). */
+  complete: boolean;
+  detail?: string;
+}
+
 export interface VerifyLimits {
-  /** Deadline of each verifier run, in seconds. */
+  /** Deadline of each verifier run, and of the type-checks of each side, in seconds. */
   timeoutSecs: number;
   maxTreeFiles: number;
   maxTreeBytes: number;
@@ -188,13 +254,15 @@ export interface VerifyJsonResult {
   verifier?: VerifyVerifierRecord;
   /** The operator-declared deliverable files. */
   deliverables: string[];
+  /** The paths given with `--approve-verification-edit`. */
+  approvedVerificationEdits: string[];
   /** Every verifier process that ran, in order. */
   runs: VerifyRunRecord[];
   baseline?: VerifyBaselineSummary;
   /** The evidence the outcome was derived from. */
   verification?: VerificationEvidence;
-  typecheck: VerifyIngredient;
-  guard: VerifyIngredient;
+  typecheck: VerifyTypecheck;
+  guard: VerifyGuard;
   review: VerifyIngredient;
   /** Dependency directories of the caller's checkout that were linked into both scratch trees. */
   linkedDependencyDirs: string[];

@@ -681,7 +681,8 @@ program
   .option("--deliverable-file <path>", "Product file the change is meant to deliver, relative to the tree; VERIFIED needs at least one (repeatable)", collectDeliverableFile, [])
   .option("-y, --yes", "Approve whatever verifier is discovered in the base tree")
   .option("--approve-verifier <sha256>", "Approve the discovered verifier with exactly this digest (printed when approval is needed)")
-  .option("--timeout-secs <n>", "Deadline of each verifier run in seconds (default: NEXUS_VERIFIER_TIMEOUT_SECS, else 300)")
+  .option("--approve-verification-edit <path>", "Approve the change's edit to this verification file (a weakened test, CI, build or test configuration); it lifts BLOCKED and never makes the change VERIFIED (repeatable)", collectDeliverableFile, [])
+  .option("--timeout-secs <n>", "Deadline of each verifier run, and of each side's type-checks, in seconds (default: NEXUS_VERIFIER_TIMEOUT_SECS, else 300)")
   .option("--receipt <file>", "Also write the result document (the receipt) to this file")
   .option("-j, --json", "Print the result as one JSON document on stdout (see the manual: nexus verify)")
   .action(async (_options: any, cmd: Command) => {
@@ -719,6 +720,7 @@ program
           approveDiscoveredVerifier: Boolean(options.yes),
           approvedVerifierDigest: options.approveVerifier,
           deliverables: options.deliverableFile ?? [],
+          approvedVerificationEdits: options.approveVerificationEdit ?? [],
           timeoutSecs,
           signal: abort.signal,
           onProgress: isJson ? undefined : (message) => console.error(pc.dim(message)),
