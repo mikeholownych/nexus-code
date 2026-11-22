@@ -82,6 +82,10 @@ function readLink(record: unknown): ChainLink | undefined {
   return { seq: seq as number, prev, hash };
 }
 
+function hasChainField(record: unknown): boolean {
+  return record !== null && typeof record === "object" && Object.prototype.hasOwnProperty.call(record, "chain");
+}
+
 /**
  * Check a log read back from disk. `records` are the parsed records in file order; pass `null` for a line that could
  * not be parsed, so it is reported at its position instead of being skipped.
@@ -89,13 +93,19 @@ function readLink(record: unknown): ChainLink | undefined {
 export function verifyChain(records: ReadonlyArray<unknown>): ChainVerdict {
   const total = records.length;
   if (total === 0) return { status: "intact", records: 0 };
-  if (records.every((record) => record !== null && readLink(record) === undefined)) return { status: "unchained", records: total };
+  if (records.every((record) => record !== null && readLink(record) === undefined && !hasChainField(record))) {
+    return { status: "unchained", records: total };
+  }
   let previous: ChainLink | undefined;
   for (let at = 0; at < total; at++) {
     const record = records[at];
     const link = readLink(record);
     if (!link) {
-      const detail = record === null ? "this line is not a readable record" : "this record has no chain link, but the log is chained";
+      const detail = record === null
+        ? "this line is not a readable record"
+        : hasChainField(record)
+          ? "this record has a malformed chain link"
+          : "this record has no chain link, but the log is chained";
       return { status: "broken", records: total, at, problem: "unlinked", detail };
     }
     const expectedSeq = previous ? previous.seq + 1 : 0;
