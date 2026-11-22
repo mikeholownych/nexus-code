@@ -1,0 +1,64 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M80XT5CSNZAG8ZS540VH9HTF",
+  "strategy": "manual-commit",
+  "branch": "v1/vr1b-typecheck-guard-schema",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "cli/scripts/gen_run_result_schema.mjs",
+    "cli/scripts/gen_verify_result_schema.mjs",
+    "cli/scripts/result_schema.mjs",
+    "cli/src/core/regression_obligations.ts",
+    "cli/src/core/typecheck_evidence.ts",
+    "cli/src/core/verify.ts",
+    "cli/src/index.ts",
+    "cli/src/security.ts",
+    "cli/src/verify_contract.ts",
+    "cli/test/helpers/verify_fixture.ts",
+    "cli/test/typecheck_evidence.test.ts",
+    "cli/test/verify_command.test.ts",
+    "cli/test/verify_schema.test.ts",
+    "cli/test/verify_typecheck_guard.test.ts",
+    "docs/USER_MANUAL.md",
+    "docs/protocol/README.md",
+    "docs/protocol/VERIFY_RESULT_VERSIONS.json",
+    "docs/protocol/verify-result-v1.schema.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 18613,
+    "cache_read_tokens": 6873124,
+    "output_tokens": 8407,
+    "api_call_count": 10,
+    "subagent_tokens": {
+      "input_tokens": 120,
+      "cache_creation_tokens": 284769,
+      "cache_read_tokens": 15990113,
+      "output_tokens": 135339,
+      "api_call_count": 60
+    }
+  },
+  "redaction": {
+    "replacements": 646,
+    "layers": {
+      "betterleaks": 2,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 43,
+      "credentialed_uri": 3,
+      "entropy": 598,
+      "key_context": 0,
+      "provider_token": 2,
+      "shell_stdin": 0
+    }
+  }
+}
