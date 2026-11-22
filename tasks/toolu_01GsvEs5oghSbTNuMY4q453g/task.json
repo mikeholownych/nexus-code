@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01GsvEs5oghSbTNuMY4q453g",
+  "agent_id": "ac841da5f5a31d11d",
+  "subagent_type": "Plan",
+  "task_description": "Plan LSP maturity and enhancement",
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 122712,
+    "cache_read_tokens": 1192360,
+    "output_tokens": 23933,
+    "api_call_count": 15
+  },
+  "started_at": "2026-11-22T11:38:57.482182016Z",
+  "completed_at": "2026-11-22T11:44:17.599025021Z"
+}

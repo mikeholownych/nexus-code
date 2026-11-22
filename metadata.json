@@ -1,0 +1,61 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M81HX9X6MZR8X4KFWP547WH4",
+  "strategy": "manual-commit",
+  "branch": "v1/gv1-managed-policy-lib",
+  "checkpoints_count": 14,
+  "files_touched": [
+    "cli/scripts/gen_policy_schema.mjs",
+    "cli/src/core/managed_policy.ts",
+    "cli/src/core/managed_policy_inputs.ts",
+    "cli/src/core/managed_policy_load.ts",
+    "cli/src/core/managed_policy_toml.ts",
+    "cli/test/helpers/policy_fixture.ts",
+    "cli/test/managed_policy_integrity.test.ts",
+    "cli/test/managed_policy_load.test.ts",
+    "cli/test/managed_policy_merge.test.ts",
+    "cli/test/managed_policy_schema.test.ts",
+    "cli/test/managed_policy_toml.test.ts",
+    "docs/MANAGED_POLICY.md",
+    "docs/protocol/POLICY_VERSIONS.json",
+    "docs/protocol/README.md",
+    "docs/protocol/policy-v1.schema.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 116,
+    "cache_creation_tokens": 123032,
+    "cache_read_tokens": 37018668,
+    "output_tokens": 69678,
+    "api_call_count": 47,
+    "subagent_tokens": {
+      "input_tokens": 478,
+      "cache_creation_tokens": 1232558,
+      "cache_read_tokens": 67359069,
+      "output_tokens": 514698,
+      "api_call_count": 239
+    }
+  },
+  "redaction": {
+    "replacements": 739,
+    "layers": {
+      "betterleaks": 2,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 43,
+      "credentialed_uri": 3,
+      "entropy": 691,
+      "key_context": 0,
+      "provider_token": 2,
+      "shell_stdin": 0
+    }
+  }
+}

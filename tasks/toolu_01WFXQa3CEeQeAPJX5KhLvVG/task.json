@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01WFXQa3CEeQeAPJX5KhLvVG",
+  "agent_id": "ab6ba8d6d497482d0",
+  "subagent_type": "Plan",
+  "task_description": "Plan GV-1 managed policy",
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 170173,
+    "cache_read_tokens": 2289752,
+    "output_tokens": 47551,
+    "api_call_count": 22
+  },
+  "started_at": "2026-11-22T11:20:55.540834297Z",
+  "completed_at": "2026-11-22T11:29:17.73683358Z"
+}
