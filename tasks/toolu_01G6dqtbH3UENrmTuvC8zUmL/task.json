@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01G6dqtbH3UENrmTuvC8zUmL",
+  "agent_id": "a9b241390b02b8bcd",
+  "subagent_type": "general-purpose",
+  "task_description": "LS-1 S1 LSP characterisation tests",
+  "token_usage": {
+    "input_tokens": 40,
+    "cache_creation_tokens": 163182,
+    "cache_read_tokens": 2517884,
+    "output_tokens": 59043,
+    "api_call_count": 20
+  },
+  "started_at": "2026-11-22T11:45:58.240111922Z",
+  "completed_at": "2026-11-22T12:03:22.535462701Z"
+}
