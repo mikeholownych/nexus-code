@@ -66,6 +66,20 @@ describe("effect classes", () => {
     }
   });
 
+  test("read_tool_output is registered as internal only when output masking is enabled", () => {
+    const previous = process.env.NEXUS_TOOL_OUTPUT_MASK_TOKENS;
+    process.env.NEXUS_TOOL_OUTPUT_MASK_TOKENS = "2000";
+    const repo = makeRepo();
+    const agent = agentFor("http://127.0.0.1:9/v1", repo, fs.mkdtempSync(path.join(os.tmpdir(), "nexus-approval-state-")));
+    try {
+      assert.equal(agent.capabilityRegistry.getByToolName("read_tool_output")?.effect, "internal");
+    } finally {
+      agent.shutdown();
+      fs.rmSync(repo, { recursive: true, force: true });
+      if (previous === undefined) delete process.env.NEXUS_TOOL_OUTPUT_MASK_TOKENS; else process.env.NEXUS_TOOL_OUTPUT_MASK_TOKENS = previous;
+    }
+  });
+
   test("review mode asks before writes, commands and egress; never before reads, delegation or bookkeeping", () => {
     const asked = EFFECT_CLASSES.filter(needsOperatorDecision);
     assert.deepEqual([...asked].sort(), ["egress", "exec", "write_workspace"]);

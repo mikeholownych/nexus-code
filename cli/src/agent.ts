@@ -58,7 +58,7 @@ import { snapshotModel } from "./core/models_snapshot.js";
 import { ProviderRecoveryController, RecoveryCancelled, RecoveryClock, RecoveryHooks, RecoveryPolicy, realRecoveryClock, recoveryPolicyFromEnv, startupProblemWarning, startupEndpointProblems, type StartupEndpointProblem } from "./core/provider_recovery.js";
 import { LocalTraceRecorder, type SpanHandle, type TraceAttributes, type TraceStatus } from "./core/trace.js";
 import { ObjectiveLedger, SteeringConflict, READ_OBJECTIVE_CAPABILITY, REQUIREMENTS_CAPABILITY, STEERING_PREFIX, invalidateVerified, requirementDone, blockedRequirements, gatingRequirements, isNewObjective, ledgerNeedsPinning, openRequirements, priorAttempt, queueSteering, steeringNegations, recordSteeringConflict, resolveSteeringConflict, settleSteeringConflicts, recoveryInput, renderPinnedLedger, missingGatingRequirements, PINNED_LEDGER_PREFIX, renderRecoveryContext, trackingOf } from "./core/objective.js";
-import { maskToolOutputs, maskThresholdFromEnv } from "./core/tool_output_mask.js";
+import { maskToolOutputs, maskThresholdFromEnv, READ_TOOL_OUTPUT_CAPABILITY } from "./core/tool_output_mask.js";
 import { ELIDED_FINDINGS_PREFIX, READ_FINDINGS_CAPABILITY, READ_ARCHIVE_CAPABILITY, readArchive, condenseFinding, elidedFindingsNote, findingId, incompleteOutputNotice, indexFinding, isCondensedFinding } from "./core/findings.js";
 import { FILE_EDIT_TOOLS, snapshot } from "./file_diff.js";
 import { TurnEvidence, TurnReason } from "./core/turn.js";
@@ -199,6 +199,8 @@ export class AutonomousAgent {
   private findingsShown = { reduced: 0, total: 0 };
   /** Whether the last durable record showed any finding only condensed, indexed or not at all. */
   private findingsCondensed = false;
+  /** Masking and its recovery tool are a per-agent opt-in captured at construction. */
+  private readonly toolOutputMaskThreshold = maskThresholdFromEnv();
   private stepNoticeStep = 0;
   /** A response of this step was cut off after running this long; its first tool result says so (see submitGuardingLength). */
   private cutResponse: { step: number; seconds: number } | undefined;
@@ -582,6 +584,7 @@ export class AutonomousAgent {
     }
     this.capabilityRegistry.register(READ_FINDINGS_CAPABILITY);
     this.capabilityRegistry.register(READ_ARCHIVE_CAPABILITY);
+    if (this.toolOutputMaskThreshold) this.capabilityRegistry.register(READ_TOOL_OUTPUT_CAPABILITY);
     this.capabilityRegistry.register(ENABLE_TOOLS_CAPABILITY);
     this.setupSpineHandlers();
     this.loadCommandRules();
@@ -1328,6 +1331,8 @@ export class AutonomousAgent {
       ...(this.offersRequirements() ? [REQUIREMENTS_CAPABILITY.toolDefinition as ToolDefinition] : []),
       READ_FINDINGS_CAPABILITY.toolDefinition as ToolDefinition,
       READ_ARCHIVE_CAPABILITY.toolDefinition as ToolDefinition,
+      // Keep the retrieval capability out of normal requests unless masking is enabled.
+      ...(this.toolOutputMaskThreshold ? [READ_TOOL_OUTPUT_CAPABILITY.toolDefinition as ToolDefinition] : []),
       ...this.mcpManager.getToolDefinitions(),
       ...this.pluginManager.getCustomToolDefinitions(),
     ];
@@ -2281,7 +2286,7 @@ export class AutonomousAgent {
    */
   private requestMessages(source: ChatMessage[] = this.messages): ChatMessage[] {
     // CX-4: old tool results the model already acted on are masked last, so presence checks above see the stored ones.
-    return maskToolOutputs(this.requestMessagesUnmasked(source), maskThresholdFromEnv());
+    return maskToolOutputs(this.requestMessagesUnmasked(source), this.toolOutputMaskThreshold);
   }
 
   private requestMessagesUnmasked(source: ChatMessage[]): ChatMessage[] {
@@ -3201,8 +3206,8 @@ export class AutonomousAgent {
       if (message.role !== "tool" || unseen.has(index) || typeof message.tool_call_id !== "string") return;
       const key = callKeys.get(message.tool_call_id);
       const text = normalizeMessageContent(message.content).text.join("");
-      // What read_findings and read_objective return is already in this memory, in full.
-      if (!key || !wanted.has(key) || key.startsWith("read_findings ") || key.startsWith("read_objective ") || key.startsWith("read_archive ") || pending.some((item) => item.key === key) || !text || text.startsWith("Error executing ")) return;
+      // Retrieval tools return source material that remains available in the conversation or archive.
+      if (!key || !wanted.has(key) || key.startsWith("read_findings ") || key.startsWith("read_objective ") || key.startsWith("read_archive ") || key.startsWith("read_tool_output ") || pending.some((item) => item.key === key) || !text || text.startsWith("Error executing ")) return;
       const partial = isTruncatedObservation(message);
       const output = withoutStepNotices(text);
       pending.push({ key, text: output, partial, digest: partial ? undefined : outputDigest(output) });
