@@ -369,7 +369,7 @@ describe("complete private state/config backup restore",()=>{
  it("reports byte progress while a single large file is still being copied",()=>{
   const home=fs.mkdtempSync(path.join(os.tmpdir(),"nexus-backup-large-progress-"));
   const originalNow=Date.now;
-  const originalWriteSync=fsDefault.writeSync;
+  const originalCopyFileSync=fsDefault.copyFileSync;
   let fakeNow=0;
   let advancedClock=false;
   const progress:Array<{filesCopied:number;bytesCopied:number}>=[];
@@ -379,11 +379,13 @@ describe("complete private state/config backup restore",()=>{
    fs.chmodSync(path.join(home,".nexus"),0o700);fs.chmodSync(source,0o700);
    fs.writeFileSync(path.join(source,"large-task.json"),Buffer.alloc(128*1024,0x61),{mode:0o600});
    Date.now=()=>fakeNow;
-   fsDefault.writeSync=((...args:Parameters<typeof originalWriteSync>)=>{
-    const written=originalWriteSync(...args);
+   // A CoW clone is a single copyFileSync call, so advance the clock there
+   // instead of inside a chunked write loop.
+   fsDefault.copyFileSync=((...args:Parameters<typeof originalCopyFileSync>)=>{
+    const result=originalCopyFileSync(...args);
     if(!advancedClock){fakeNow=5_000;advancedClock=true;}
-    return written;
-   }) as typeof fsDefault.writeSync;
+    return result;
+   }) as typeof fsDefault.copyFileSync;
    syncBuiltinESMExports();
 
    const backup=createPreMigrationBackup(home,item=>progress.push(item));
@@ -392,7 +394,7 @@ describe("complete private state/config backup restore",()=>{
    assert.deepEqual(progress.at(-1),{filesCopied:1,bytesCopied:128*1024});
   }finally{
    Date.now=originalNow;
-   fsDefault.writeSync=originalWriteSync;
+   fsDefault.copyFileSync=originalCopyFileSync;
    syncBuiltinESMExports();
    fs.rmSync(home,{recursive:true,force:true});
   }
@@ -570,27 +572,26 @@ describe("complete private state/config backup restore",()=>{
 
  it("preserves an existing backup when exclusive creation reports EEXIST",()=>{
   const home=fs.mkdtempSync(path.join(os.tmpdir(),"nexus-backup-eexist-"));
-  const originalOpenSync=fsDefault.openSync;
+  const originalCopyFileSync=fsDefault.copyFileSync;
   let collidedPath:string|undefined;
   try{
    const configDir=path.join(home,".config/nexus");
    fs.mkdirSync(configDir,{recursive:true,mode:0o700});
    fs.chmodSync(path.join(home,".config"),0o700);fs.chmodSync(configDir,0o700);
    fs.writeFileSync(path.join(configDir,"config.env"),"MODEL=source\n",{mode:0o600});
-   fsDefault.openSync=((file:any,flags:any,mode?:any)=>{
-    if(!collidedPath && typeof file==="string" && file.includes(`${path.sep}config.env.bak.`) && (flags & fs.constants.O_EXCL)!==0){
-     collidedPath=file;
-     const fd=originalOpenSync(file,fs.constants.O_WRONLY|fs.constants.O_CREAT|fs.constants.O_EXCL,0o600);
-     try{fsDefault.writeSync(fd,"keep pre-existing backup\n");}finally{fsDefault.closeSync(fd);}
+   fsDefault.copyFileSync=((source:any,destination:any,flags:any)=>{
+    if(!collidedPath && typeof destination==="string" && destination.includes(`${path.sep}config.env.bak.`)){
+     collidedPath=destination;
+     fs.writeFileSync(destination,"keep pre-existing backup\n",{mode:0o600,flag:"wx"});
      throw Object.assign(new Error("backup already exists"),{code:"EEXIST"});
     }
-    return originalOpenSync(file,flags,mode);
-   }) as typeof fsDefault.openSync;
+    return originalCopyFileSync(source,destination,flags);
+   }) as typeof fsDefault.copyFileSync;
    syncBuiltinESMExports();
    assert.throws(()=>createPreMigrationBackup(home),(error:any)=>error.code==="EEXIST");
    assert.ok(collidedPath,"exclusive backup creation was attempted");
   }finally{
-   fsDefault.openSync=originalOpenSync;
+   fsDefault.copyFileSync=originalCopyFileSync;
    syncBuiltinESMExports();
   }
   try{assert.equal(fs.readFileSync(collidedPath!,"utf8"),"keep pre-existing backup\n");}

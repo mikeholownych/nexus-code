@@ -3,7 +3,7 @@ import * as assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { allShardsPassed, partitionTestFiles, runShards } from "../scripts/test_shards.mjs";
+import { allShardsPassed, durationKey, loadTestDurations, partitionTestFiles, runShards } from "../scripts/test_shards.mjs";
 
 test("CLI test sharding assigns every file once and keeps shared evaluator mount tests together", () => {
   const files = [
@@ -74,4 +74,45 @@ test("a single failed shard fails the aggregate result", () => {
   assert.equal(allShardsPassed([{ code: 0 }, { code: 0 }]), true);
   assert.equal(allShardsPassed([{ code: 0 }, { code: 1 }]), false);
   assert.equal(allShardsPassed([{ code: 0 }, { code: null }]), false);
+});
+
+test("measured durations take precedence over file size when balancing shards", () => {
+  const files = ["test/small_but_slow.test.ts", "test/large_but_fast.test.ts", "test/unmeasured.test.ts"];
+  // Size alone puts the large file first; a 240 s measurement must move the slow file onto the other shard.
+  const sizes = new Map(files.map((file) => [file, file.includes("large") ? 90_000 : 100]));
+  const bySize = partitionTestFiles(files, 2, (file) => sizes.get(file)!, {});
+  assert.ok(bySize[0].includes("test/large_but_fast.test.ts"));
+  const durations = { "test/small_but_slow.test.ts": 240, "test/large_but_fast.test.ts": 2 };
+  const byDuration = partitionTestFiles(files, 2, (file) => sizes.get(file)!, durations);
+  assert.deepEqual(byDuration.flat().slice().sort(), files.slice().sort(), "every file is still assigned exactly once");
+  assert.ok(byDuration[0].includes("test/small_but_slow.test.ts"), "the slowest measured file anchors the first shard");
+  assert.ok(byDuration[1].includes("test/large_but_fast.test.ts"), "a fast measured file must not anchor a shard");
+});
+
+test("durationKey and loadTestDurations accept POSIX paths and ignore malformed manifests", () => {
+  assert.equal(durationKey("test/a.test.ts"), "test/a.test.ts");
+  assert.equal(durationKey("/work/cli/test/a.test.ts", "/work/cli"), "test/a.test.ts");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-durations-"));
+  const manifest = path.join(root, "durations.json");
+  try {
+    fs.writeFileSync(manifest, JSON.stringify({ "test/a.test.ts": 12.5, "test/b.test.ts": -1, "test/c.test.ts": "slow" }));
+    const previous = process.env.NEXUS_TEST_DURATIONS;
+    process.env.NEXUS_TEST_DURATIONS = manifest;
+    try {
+      assert.deepEqual(loadTestDurations(), { "test/a.test.ts": 12.5 });
+    } finally {
+      if (previous === undefined) delete process.env.NEXUS_TEST_DURATIONS;
+      else process.env.NEXUS_TEST_DURATIONS = previous;
+    }
+    fs.writeFileSync(manifest, "{not json");
+    process.env.NEXUS_TEST_DURATIONS = manifest;
+    try {
+      assert.deepEqual(loadTestDurations(), {});
+    } finally {
+      if (previous === undefined) delete process.env.NEXUS_TEST_DURATIONS;
+      else process.env.NEXUS_TEST_DURATIONS = previous;
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

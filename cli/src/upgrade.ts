@@ -123,6 +123,8 @@ export interface UpgradeExecutionResult {
   attestationVerified?: boolean;
 }
 
+export type DownloadProgressCallback = (bytes: number, total?: number) => void;
+
 export interface UpgradeOptions {
   check?: boolean;
   version?: string;
@@ -694,12 +696,41 @@ function isDownloadConnectionReset(error: any): boolean {
   return false;
 }
 
+function parseDownloadLength(header: string | null): number | undefined {
+  if (!header) return undefined;
+  const value = Number(header.trim());
+  return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function formatProgressBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KiB", "MiB", "GiB"];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return `${value.toFixed(1)} ${units[unit]}`;
+}
+
+/** Progress detail text with bounded, safe byte counts and a 0–100 percent. */
+export function formatDownloadProgressDetail(bytes: number, total?: number): string {
+  const safeBytes = Number.isSafeInteger(bytes) && bytes >= 0 ? Math.min(bytes, MAX_DOWNLOAD_BYTES) : 0;
+  const safeTotal = typeof total === "number" && Number.isSafeInteger(total) && total > 0 ? Math.min(total, MAX_DOWNLOAD_BYTES) : undefined;
+  if (safeTotal === undefined) return `Downloaded ${formatProgressBytes(safeBytes)}.`;
+  const percent = Math.min(100, Math.floor((safeBytes / safeTotal) * 100));
+  return `Downloaded ${formatProgressBytes(safeBytes)} of ${formatProgressBytes(safeTotal)} (${percent}%).`;
+}
+
 export async function downloadFile(
   url: string,
   destPath: string,
   signal?: AbortSignal,
   timeoutMs = 60000,
-  maxHops = 5
+  maxHops = 5,
+  onProgress?: DownloadProgressCallback,
+  progressIntervalMs = 250
 ): Promise<void> {
   let currentUrl = url;
   let hops = 0;
@@ -753,12 +784,9 @@ export async function downloadFile(
         throw new Error(`HTTP ${res.status} downloading from ${safeDownloadOrigin(currentUrl)}`);
       }
 
-      const contentLengthHeader = res.headers.get("content-length");
-      if (contentLengthHeader) {
-        const contentLength = parseInt(contentLengthHeader, 10);
-        if (contentLength > MAX_DOWNLOAD_BYTES) {
-          throw new Error(`Download size (${contentLength} bytes) exceeds maximum allowed limit (${MAX_DOWNLOAD_BYTES} bytes)`);
-        }
+      const declaredTotal = parseDownloadLength(res.headers.get("content-length"));
+      if (declaredTotal !== undefined && declaredTotal > MAX_DOWNLOAD_BYTES) {
+        throw new Error(`Download size (${declaredTotal} bytes) exceeds maximum allowed limit (${MAX_DOWNLOAD_BYTES} bytes)`);
       }
 
       const fileStream = fs.createWriteStream(destPath);
@@ -767,6 +795,17 @@ export async function downloadFile(
       }
 
       let bytesDownloaded = 0;
+      let lastReportedBytes = -1;
+      let lastReportAt = 0;
+      const reportProgress = (force = false) => {
+        if (!onProgress || (!force && bytesDownloaded === lastReportedBytes)) return;
+        const now = Date.now();
+        if (!force && now - lastReportAt < progressIntervalMs) return;
+        lastReportAt = now;
+        lastReportedBytes = bytesDownloaded;
+        try { onProgress(bytesDownloaded, declaredTotal); } catch {}
+      };
+      reportProgress(true);
       const reader = res.body.getReader();
 
       try {
@@ -776,6 +815,7 @@ export async function downloadFile(
           function pump() {
             reader.read().then(({ done, value }) => {
               if (done) {
+                reportProgress(true);
                 fileStream.end();
                 return;
               }
@@ -784,6 +824,7 @@ export async function downloadFile(
                 reject(new Error(`Download exceeded maximum limit of ${MAX_DOWNLOAD_BYTES} bytes`));
                 return;
               }
+              reportProgress();
               fileStream.write(Buffer.from(value), (err) => {
                 if (err) reject(err);
                 else pump();
@@ -1078,7 +1119,10 @@ export async function performUpgrade(
     const localSums = path.join(tmpDir, "SHA256SUMS");
     const localCompat = path.join(tmpDir, "compatibility.json");
 
-    await downloadFile(archiveUrl, localArchive, options?.signal, options?.timeoutMs);
+    const reportArchiveProgress: DownloadProgressCallback | undefined = options?.onProgress
+      ? (bytes, total) => options.onProgress?.("download_progress", formatDownloadProgressDetail(bytes, total))
+      : undefined;
+    await downloadFile(archiveUrl, localArchive, options?.signal, options?.timeoutMs, 5, reportArchiveProgress);
     options?.onProgress?.("verifying_checksum", "Verifying release checksums...");
     await downloadFile(checksumsUrl, localSums, options?.signal, options?.timeoutMs);
 
