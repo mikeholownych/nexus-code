@@ -275,11 +275,21 @@ describe("Public Release Upgrade Acceptance (REQ-REL-116, ACC-UPG-07..14)", () =
     assert.equal(comparison.action, "upgrade");
     assert.equal(comparison.canUpgrade, true);
 
-    // 4. Perform upgrade
-    const result = await performUpgrade(comparison, { prefix: tmpPrefix, timeoutMs: 5000 });
+    // 4. Perform upgrade. The progress callback is exercised against the real local
+    // release server, not by inspecting upgrade.ts source text.
+    const stages: Array<{ stage: string; detail?: string }> = [];
+    const result = await performUpgrade(comparison, {
+      prefix: tmpPrefix,
+      timeoutMs: 5000,
+      onProgress(stage, detail) { stages.push({ stage, detail }); },
+    });
     assert.equal(result.success, true);
     assert.equal(result.previousVersion, oldVersion);
     assert.equal(result.newVersion, "v1.0.0");
+    assert.ok(
+      stages.some((item) => item.stage === "download_progress" && /^Downloaded \d/.test(item.detail ?? "")),
+      "the archive download reports formatted byte details through onProgress",
+    );
 
     // 5. Verify launcher symlink points to new version
     assert.equal(fs.realpathSync(binNexus), fs.realpathSync(path.join(tmpPrefix, "lib", "nexus", "v1.0.0", "bin", "nexus")));

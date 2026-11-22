@@ -1,0 +1,181 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { GoalOrchestrator, goalStatus } from "../src/goal.js";
+import { executeGoalCommand } from "../src/goal_command.js";
+import { routeSlash } from "../src/slash/router.js";
+import { findSlash } from "../src/slash/catalog.js";
+import { replReadOnlyAllowed } from "../src/repl.js";
+import { applyRequirementUpdates, createLedger } from "../src/core/objective.js";
+import { newOperation } from "../src/core/operation.js";
+import { OperationStore, type WorkUnitExecutor } from "../src/core/operation_runner.js";
+import type { ResourceDescriptor } from "../src/core/resources.js";
+import type { HarnessConfig } from "../src/types.js";
+import { TeamOrchestrator } from "../src/team.js";
+
+const resource = (id: string, model: string): ResourceDescriptor => ({
+  id,
+  provider: "fixture",
+  endpoint: `http://127.0.0.1:${id === "a" ? 1 : 2}/v1`,
+  model,
+  capabilities: ["tools"],
+  qualifications: ["research", "architecture", "implementation", "verification", "review"],
+  maxConcurrentUnits: 1,
+  rank: 0,
+});
+
+function fixture() {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-goal-workspace-"));
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-goal-state-"));
+  const config: HarnessConfig = {
+    endpoint: "http://127.0.0.1:1/v1",
+    model: "model-a",
+    maxSteps: 4,
+    temperature: 0,
+    workspace,
+    shell: "bash",
+  };
+  const store = new OperationStore(workspace, stateDir);
+  return {
+    workspace,
+    stateDir,
+    config,
+    store,
+    resources: [resource("a", "model-a"), resource("b", "model-b")],
+    cleanup: () => {
+      fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    },
+  };
+}
+
+function acceptingExecutor(): WorkUnitExecutor {
+  return {
+    async run(unit) {
+      return {
+        kind: "completed",
+        summary: unit.id === "review" ? "ACCEPT: observed the verified candidate" : `${unit.id} complete`,
+        outcome: unit.id === "verify" ? "VERIFIED" : "COMPLETED",
+        ...(unit.id === "verify" ? { verification: { command: "npm test", status: "PASSED", hasExecutedTests: true } } : {}),
+      };
+    },
+  };
+}
+
+test("/goal is registered in the shared sidecar/TUI catalogue and read-only routing is explicit", async () => {
+  const f = fixture();
+  try {
+    assert.equal(findSlash("goal")?.cancellable, true);
+    assert.equal(replReadOnlyAllowed("goal", "status"), true);
+    assert.equal(replReadOnlyAllowed("goal", "requirements R1"), true);
+    assert.equal(replReadOnlyAllowed("goal", "requirements descope goal-1 R1 obsolete"), false);
+    assert.equal(replReadOnlyAllowed("goal", "resume"), false);
+    const host = { app: { getConfig: () => f.config } } as any;
+    const routed = await routeSlash(host, "goal", "list", new AbortController().signal);
+    assert.equal(routed.kind, "reply");
+    assert.match(routed.output, /No goals/);
+    const empty = await executeGoalCommand("", f.config);
+    assert.equal(empty.success, false);
+    assert.match(empty.output, /Usage: \/goal/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("a full goal uses the existing team DAG, waits for verification before independent review, and persists its objective ledger", async () => {
+  const f = fixture();
+  try {
+    const orchestrator = new GoalOrchestrator(f.config, {
+      store: f.store,
+      executor: acceptingExecutor(),
+      resources: f.resources,
+      maxInProcessWaitMs: 10_000,
+    });
+    const result = await orchestrator.start("Implement a verified Unicode task: naïve path handling");
+    assert.match(result.id, /^goal-/);
+    assert.equal(result.operation.units.find((unit) => unit.id === "review")?.dependsOn.includes("verify"), true);
+    assert.equal(result.operation.units.find((unit) => unit.id === "review")?.requires.independentOf?.includes("implement"), true);
+    assert.equal(result.operation.status, "COMPLETE");
+    assert.equal(result.status, "BLOCKED", "a successful scheduler outcome alone must not close the goal ledger");
+    assert.match(result.reason ?? "", /Requirements remain open/);
+    const task = f.store.manager.loadTaskState(result.id, f.workspace);
+    assert.equal(task.objective?.objective, "Implement a verified Unicode task: naïve path handling");
+    assert.equal(task.objective?.requirements[0]?.status, "open");
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("a goal completes only with a closed requirement ledger, passing verifier and independent ACCEPT receipt", () => {
+  const f = fixture();
+  try {
+    const team = new TeamOrchestrator(f.config, { id: "goal-accepted", independentReview: true, resources: f.resources });
+    const operation = team.plan("full", "Implement the feature");
+    operation.status = "COMPLETE";
+    for (const unit of operation.units) {
+      unit.status = "COMPLETE";
+      unit.modelsUsed = unit.id === "review" ? ["model-b"] : ["model-a"];
+      unit.result = {
+        summary: unit.id === "review" ? "ACCEPT: verifier passed and evidence supports the feature" : `${unit.id} done`,
+        completedAt: new Date().toISOString(),
+        resourceId: "fixture",
+        outcome: "COMPLETED",
+        ...(unit.id === "verify" ? { verification: { command: "npm test", status: "PASSED", hasExecutedTests: true } } : {}),
+      };
+    }
+    const ledger = createLedger("Implement the feature");
+    const updated = applyRequirementUpdates(ledger, [{ id: "R1", status: "implemented", evidence: ["src/feature.ts changed"] }]);
+    assert.equal(updated.ok, true);
+    assert.equal(goalStatus(operation, ledger).status, "COMPLETE");
+
+    operation.units.find((unit) => unit.id === "review")!.modelsUsed = ["model-a"];
+    assert.equal(goalStatus(operation, ledger).status, "BLOCKED");
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("pause and resume preserve the same goal record and objective ledger", async () => {
+  const f = fixture();
+  try {
+    const operation = newOperation("goal-pause-resume", "Continue safely", [{ id: "work", prompt: "work" }], f.resources, Date.now());
+    f.store.save(operation);
+    const task = f.store.manager.loadTaskState(operation.id, f.workspace);
+    task.objective = createLedger(operation.objective);
+    f.store.manager.saveTaskState(task);
+    const orchestrator = new GoalOrchestrator(f.config, { store: f.store, executor: acceptingExecutor(), resources: f.resources });
+    const paused = await orchestrator.pause(operation.id);
+    assert.equal(paused.operation.status, "PAUSED");
+    const resumed = await orchestrator.resume(operation.id);
+    assert.equal(resumed.operation.status, "COMPLETE");
+    assert.equal(f.store.manager.loadTaskState(operation.id, f.workspace).objective?.objective, operation.objective);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("multiple eligible goals require an explicit id and descoping requires separate operator acceptance", async () => {
+  const f = fixture();
+  try {
+    const first = newOperation("goal-one", "First goal", [{ id: "work", prompt: "work" }], f.resources, Date.now());
+    const second = newOperation("goal-two", "Second goal", [{ id: "work", prompt: "work" }], f.resources, Date.now());
+    for (const operation of [first, second]) {
+      f.store.save(operation);
+      const task = f.store.manager.loadTaskState(operation.id, f.workspace);
+      task.objective = createLedger(operation.objective);
+      f.store.manager.saveTaskState(task);
+    }
+    const orchestrator = new GoalOrchestrator(f.config, { store: f.store, resources: f.resources });
+    assert.throws(() => orchestrator.resolveTarget(), /multiple active goals/);
+    await orchestrator.pause("goal-one");
+    const proposed = orchestrator.updateDescoping("descope", "R1", "The requirement is obsolete", "goal-one");
+    assert.equal(proposed.requirements[0].status, "descoped");
+    assert.equal(proposed.requirements[0].operatorAccepted, undefined);
+    const accepted = orchestrator.updateDescoping("accept", "R1", undefined, "goal-one");
+    assert.equal(accepted.requirements[0].operatorAccepted, true);
+  } finally {
+    f.cleanup();
+  }
+});

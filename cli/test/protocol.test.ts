@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { capText, encodeEvent, parseCommand, projectTurn, ProtocolError, toolSubject, toolSummary, MAX_TEXT_FIELD } from "../src/protocol.js";
+import { capText, encodeEvent, parseCommand, projectTurn, ProtocolError, toolSubject, toolSummary, MAX_TEXT_FIELD, MAX_CLIENT_FIELD, MAX_PROTOCOL_NUMBER, PROTOCOL_MAX, PROTOCOL_MIN } from "../src/protocol.js";
 import type { TurnResult } from "../src/core/turn.js";
 
 describe("protocol: encodeEvent", () => {
@@ -54,6 +54,49 @@ describe("protocol: parseCommand", () => {
     assert.throws(() => parseCommand('{"v":1,"type":"prompt.submit","text":"x"}'), /requires id/);
     assert.throws(() => parseCommand('{"v":1,"type":"bogus","id":"z"}'), (err: unknown) => err instanceof ProtocolError && err.id === "z");
     assert.throws(() => parseCommand('{"v":1,"type":"prompt.submit","id":"t9","text":"   "}'), (err: unknown) => err instanceof ProtocolError && err.id === "t9");
+  });
+});
+
+describe("protocol: initialize and the accepted version range", () => {
+  const initialize = (fields: Record<string, unknown>) => JSON.stringify({ v: 1, type: "initialize", id: "i1", client: { name: "c", version: "1.0" }, ...fields });
+  const refused = (fields: Record<string, unknown>, reason: RegExp) =>
+    assert.throws(() => parseCommand(initialize(fields)), (err: unknown) => err instanceof ProtocolError && err.id === "i1" && reason.test(err.message), `${JSON.stringify(fields)} -> ${reason}`);
+
+  test("a valid initialize parses; an omitted range is the message's own version and experimental defaults to off", () => {
+    assert.deepEqual(parseCommand(initialize({})), { type: "initialize", id: "i1", client: { name: "c", version: "1.0" }, protocol_min: 1, protocol_max: 1, experimental: false });
+    assert.deepEqual(
+      parseCommand(initialize({ client: { name: "n".repeat(MAX_CLIENT_FIELD), version: "2", extra: true }, protocol_min: 1, protocol_max: MAX_PROTOCOL_NUMBER, experimental: true, added_later: 1 })),
+      { type: "initialize", id: "i1", client: { name: "n".repeat(MAX_CLIENT_FIELD), version: "2" }, protocol_min: 1, protocol_max: MAX_PROTOCOL_NUMBER, experimental: true },
+    );
+    // A range the sidecar cannot serve is still a well-formed request: the sidecar answers it with UNSUPPORTED_PROTOCOL.
+    assert.deepEqual(parseCommand(initialize({ protocol_min: 7, protocol_max: 9 })), { type: "initialize", id: "i1", client: { name: "c", version: "1.0" }, protocol_min: 7, protocol_max: 9, experimental: false });
+  });
+
+  test("each invalid initialize is refused with the reason", () => {
+    assert.throws(() => parseCommand('{"v":1,"type":"initialize","client":{"name":"c","version":"1"}}'), /initialize requires id/);
+    for (const client of [undefined, null, "c", 7, ["c", "1"]]) refused({ client }, /requires client: \{ name, version \}/);
+    refused({ client: { version: "1" } }, /requires client\.name: a non-empty string/);
+    refused({ client: { name: 7, version: "1" } }, /requires client\.name: a non-empty string/);
+    refused({ client: { name: "  ", version: "1" } }, /requires client\.name: a non-empty string/);
+    refused({ client: { name: "c" } }, /requires client\.version: a non-empty string/);
+    refused({ client: { name: "c", version: 1 } }, /requires client\.version: a non-empty string/);
+    refused({ client: { name: "n".repeat(MAX_CLIENT_FIELD + 1), version: "1" } }, /client\.name is longer than 100 characters/);
+    refused({ client: { name: "c", version: "9".repeat(MAX_CLIENT_FIELD + 1) } }, /client\.version is longer than 100 characters/);
+    for (const bad of [1.5, -1, 0, "1", null, true, MAX_PROTOCOL_NUMBER + 1, 1e400]) {
+      refused({ protocol_min: bad, protocol_max: 2 }, /protocol_min must be an integer from 1 to 65535/);
+      refused({ protocol_min: 1, protocol_max: bad }, /protocol_max must be an integer from 1 to 65535/);
+    }
+    refused({ protocol_min: 1 }, /protocol_min and protocol_max together/);
+    refused({ protocol_max: 1 }, /protocol_min and protocol_max together/);
+    refused({ protocol_min: 3, protocol_max: 2 }, /protocol_min \(3\) is greater than protocol_max \(2\)/);
+    for (const experimental of ["true", 1, null]) refused({ experimental }, /experimental must be a boolean/);
+  });
+
+  test("v inside the sidecar's range is accepted and anything outside it is refused", () => {
+    for (let v = PROTOCOL_MIN; v <= PROTOCOL_MAX; v++) assert.deepEqual(parseCommand(JSON.stringify({ v, type: "cancel" })), { type: "cancel" });
+    for (const v of [PROTOCOL_MIN - 1, PROTOCOL_MAX + 1, 1.5, "1", null, undefined, true]) {
+      assert.throws(() => parseCommand(JSON.stringify({ v, type: "cancel", id: "c1" })), (err: unknown) => err instanceof ProtocolError && err.id === "c1" && err.message === `unsupported protocol version: ${String(v)}`, String(v));
+    }
   });
 });
 

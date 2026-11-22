@@ -33,7 +33,7 @@ Newlines (and U+2028/U+2029) inside strings are escaped, so one event is always 
 | `tool.end` | `call_id`, `tool`, `success`, `output_chars`, `error`?, `denied`? | The call ends. `error` is redacted and at most 500 characters; `denied` is `true` when the operator's policy refused the call. The output itself is in the evidence of the final result. |
 | `security.injection_suspected` | `tool`, `step`, `signals` | A tool result was labelled and fenced as suspected prompt injection (CS-7). `signals` are rule ids; the content is never in the event. |
 | `notice` | `text` | Something the operator should know (redacted, at most 500 characters). |
-| `result` | The same document `--json` prints (`taskId`, `success`, `status`, `output`, `plan`, `validationReceipts`, `tokenStats`, `exitCode`, …), plus `cloudUsage` when a cloud provider was used | Once, last, when the task finished. |
+| `result` | The same document `--json` prints, starting with its `schema_version` (see "`nexus run --json`" in the user manual and `docs/protocol/run-result-v1.schema.json`) (`taskId`, `success`, `status`, `output`, `plan`, `validationReceipts`, `tokenStats`, `exitCode`, …), plus `cloudUsage` when a cloud provider was used | Once, last, when the task finished. |
 | `error` | `taskId`, `message` (redacted) | Once, last, instead of `result`, when the run failed before producing one. |
 
 The process exit code is the same as for `--json`; `result.exitCode` repeats it. A run that is killed mid-way ends

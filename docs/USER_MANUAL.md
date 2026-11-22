@@ -55,6 +55,121 @@ nexus run "Refactor the authentication handler to support JWT rotation and add u
 ```
 Free-text task execution requires the explicit `nexus run "<prompt>"` subcommand. Passing unknown subcommand names or free text without `run` is treated as a command error (REQ-REL-104 / DEC-14).
 
+### `nexus run --json`
+`nexus run --json` (or `--output json`) writes exactly one JSON document to stdout and nothing else; progress and diagnostics go to stderr. The document is a contract for scripts and CI:
+
+- Its first member is `schema_version` (an integer, now `1`). Adding an optional member keeps the version; removing or renaming a member, or changing a member's type or meaning, raises it. Ignore members you do not know, and refuse a `schema_version` you do not know.
+- The schema is published as `docs/protocol/run-result-v1.schema.json` (JSON Schema draft 2020-12), generated from the types in `cli/src/run_contract.ts`; each change is recorded in `docs/protocol/RUN_RESULT_VERSIONS.json` (see `docs/protocol/README.md`).
+- A task that ran to an ending, whatever the ending, prints a **result**: `schema_version`, `taskId`, `success`, `status` (`completed`, `failed` or `interrupted`), `prompt`, `output`, `plan`, `milestones`, `candidateId`, `candidateIdentity`, `validationReceipts`, `worktreeBinding`, `tokenStats`, `durationMs`, `error` (when the task raised one), `logs`, `turn` (the authoritative ending: `turn.execution`, `turn.outcome`, `turn.reason`), `exitCode` (the process exit code), and `cloudUsage` when a cloud provider was used.
+- A run that throws before it has a result (for example `--resume <id>` of a task with no saved state) prints an **error document** instead: `schema_version`, `taskId`, `success` (`false`), `status` (`failed`), `prompt`, `output`, `plan`, `milestones`, `validationReceipts`, `tokenStats`, `durationMs` and `error`. It has no `turn` and no `exitCode`: that is how to tell it from a result.
+- A usage error (exit code 2 before the run starts) prints its message on stderr and nothing on stdout.
+- `--output stream-json` (`docs/STREAM_JSON.md`) is a separate, line-by-line format with its own `schemaVersion` on every event. Its final `result` event carries the same result object, so that event also has `schema_version`; its `error` event (`taskId`, `message`) is a different shape from the error document above.
+
+The task can be given without putting it on the command line:
+
+```bash
+nexus run --json --input-json task.json     # a JSON document in a file
+nexus run --json --input-json - < task.json # the same document on stdin
+echo "Fix the failing test" | nexus run --json   # plain task text on stdin
+```
+
+- `--input-json <file|->` reads `{ "schema_version": 1, "task": "<text>" }`. `schema_version` must be `1` and `task` a non-empty string. Only `task` is read: every other member is ignored, so the document cannot choose the approval mode, `--yes`, the sandbox, the endpoint, credentials or the workspace. Those come from the command line and your configuration only.
+- With no task argument, no `--input-json` and no `--resume` or `--fork-session`, a stdin that is not a terminal is read as the task text. If that stdin is never closed, `nexus run` waits for it.
+- The input is limited to 1048576 bytes (1 MiB) and must be UTF-8; a larger input is refused, never cut short. A task given both as an argument and with `--input-json`, an invalid document, or an empty stdin is a usage error (exit code 2).
+
+### Exit codes of `nexus run`
+| Code | Name | When |
+|---|---|---|
+| 0 | `ok` | The task completed and its changes were verified (`VERIFIED`), or it changed nothing that needs verifying (`NOT_REQUIRED`). |
+| 1 | `failed` | Any other ending: the task failed, was blocked (a question for the operator, a capacity or convergence stop), reached a limit, or completed without establishing a result; or the run threw an error. |
+| 1 | `missing_prompt` | No task was given as an argument and `--resume` was not used (with a terminal on stdin and no `--input-json`). |
+| 1 | `option_parse` | The command line could not be parsed: an unknown option or an option without its value (the option parser exits before the command runs). |
+| 2 | `unverified` | The task completed but nothing verifies the change (`UNVERIFIED`), or the tests passed without covering it (`REGRESSION_FREE`). |
+| 2 | `usage` | A usage error before the run started: an invalid option value or combination, or an invalid, oversized or empty `--input-json` or stdin task. |
+| 2 | `resume_unavailable` | `--resume` found no task in the workspace, or `--fork-session` could not make the copy. |
+| 2 | `task_not_found` | The task named by `--resume <id>` has no saved state. |
+| 130 | `interrupted` | The task was interrupted (SIGINT). A second SIGINT exits at once with this code and may leave no JSON document. |
+
+Exit code 2 has four meanings and exit code 1 has three, so the exit code alone cannot tell them apart. With `--json`, read the document: a result with `turn.outcome` `UNVERIFIED` or `REGRESSION_FREE` is the `unverified` row; an error document (no `turn`) is `task_not_found` or a thrown error; an empty stdout means the run never started (`usage`, `resume_unavailable`, `missing_prompt`, `option_parse`), and stderr has the message. For a result, `exitCode` in the document equals the process exit code.
+
+### `nexus verify`
+`nexus verify` gives a verdict on a change that Nexus did not necessarily make: a pull request, a patch, another tool's output, your own edits. It uses no model. It runs the project's verifier on the code before the change and on the code after it, and applies the rules `nexus run` applies to its own work.
+
+```bash
+nexus verify --deliverable-file src/parser.ts                         # the working tree against HEAD
+nexus verify --base origin/main --head my-branch --deliverable-file src/parser.ts   # one commit against another
+nexus verify --base origin/main --verifier "npm test" --json --receipt verify.json
+nexus verify --base origin/main --head my-branch -y --approve-verification-edit test/parser.test.ts   # after reading that edit
+```
+
+**Two modes.** Without `--head`, the change is the working tree of `--worktree` (default: the current directory, which must be the top of the Git working tree): tracked and untracked files that are not ignored, compared with `--base` (default `HEAD`). With `--head <ref>`, the change is that commit compared with `--base`. In both modes each side is written to its own scratch directory and the verifier runs there; your checkout, its index and its `.git` are not written, and the scratch directories are removed when the command ends, on an error or an interrupt too.
+
+**Which verifier runs.** `--verifier <command>` is your own command (source `configured`) and needs no approval. Without it, one is discovered from the files of the **base** tree, never the head: the head is the change under test, so a head that rewrites `scripts.test` or adds a test script of its own does not get to choose the judge. A discovered verifier runs repository code, so it needs your approval: `nexus verify` stops with `BLOCKED` (exit code 3) and prints the command, the script it resolves to and a sha256 digest of both. Approve that exact verifier with `--approve-verifier <digest>`, or whatever is discovered with `--yes`. A base tree that defines no verifier gives `UNVERIFIED` (`NO_APPLICABLE_VERIFIER`). Each verifier run has a deadline (`--timeout-secs`, else `NEXUS_VERIFIER_TIMEOUT_SECS`, else 300 seconds); the type-checks of each side share one deadline of the same length.
+
+**Deliverables.** `--deliverable-file <path>` (repeatable) names a product file the change is meant to deliver. `VERIFIED` requires at least one, requires every changed file that is not a test to be one, and requires every one to be imported by a test file that already existed on the base. Without `--deliverable-file` the verdict is never `VERIFIED`.
+
+| Verdict | Meaning |
+|---|---|
+| `VERIFIED` | Evidence independent of the change shows it (see below). |
+| `REGRESSION_FREE` | The tests pass on the change, which shows only that nothing they cover broke. |
+| `UNVERIFIED` | Nothing was established. `outcome` and `reason` in the result say why: the verifier or an enforced type-check failed or timed out, the verifier ran no test or does not exist, or base and head are the same tree. |
+| `BLOCKED` | A person must decide before anything is run or concluded: approve the verifier, or read and approve an edit to the verification itself. |
+
+#### Exit codes of `nexus verify`
+| Code | Name | When |
+|---|---|---|
+| 0 | `verified` | `VERIFIED`: the change is shown by evidence independent of it. |
+| 1 | `failed` | `UNVERIFIED` with outcome `NOT_ESTABLISHED`: the verifier failed or timed out on the head, an enforced type-check failed, timed out or could not be run, or the head changed the verifier's own definition so it was not run. |
+| 1 | `error` | `UNVERIFIED` with reason `INTERNAL_ERROR`: `nexus verify` itself could not finish, so nothing was established. |
+| 1 | `option_parse` | The command line could not be parsed: an unknown option or an option without its value (the option parser exits before the command runs; no JSON document). |
+| 2 | `unverified` | `REGRESSION_FREE` (the tests pass without showing the change), or `UNVERIFIED` because there is no verifier, no test executed, base and head are the same tree, or an enforced type-check project of the base has no counterpart in the head. |
+| 2 | `usage` | A usage error: not a Git working tree, a base or head that does not name a commit, or an invalid option value or combination. |
+| 3 | `blocked` | `BLOCKED`: a person must decide. The discovered verifier is not approved, the change edits verification files or weakens a test without approval, the changed files could not all be classified, the checkout is not trusted, or a tree exceeds the limits or holds a submodule. |
+| 130 | `interrupted` | Interrupted (SIGINT or SIGTERM). The signal is acted on when the running verifier process ends; a second signal exits at once and may leave no JSON document. |
+
+Only `VERIFIED` exits 0. An empty change is not a success: you chose the base. Codes 1 and 2 each have several meanings; with `--json`, read `verdict`, `outcome` and `reason` in the document.
+
+**Type-checks.** When the verifier passes on the head, the project's type-checks run as they do at the end of a `nexus run` task: one per configured project (`tsconfig.json` with `tsc`, `Cargo.toml` with `cargo check --offline --locked`, `go.mod` with `go vet`, a configured `pyright` or `mypy`), found in the head tree, each run on the base too so that an error can be told apart from one that was already there. They run in scratch copies of their own (never in your checkout, and never in the copy the head is judged on), with the verifier's scrubbed environment and deadline. Approving the verifier (`--yes`, `--approve-verifier`) also covers these runs: there is no separate approval, and the head's code has by then already run as the tests. A discovered verifier makes the checks **enforced**; with your own `--verifier` they are **recorded only** unless `NEXUS_TYPECHECK=enforce`; `NEXUS_TYPECHECK=off` disables them (no check runs, none can lower the verdict, and the variable is named in `environment`). What each status of an enforced check does to the verdict, which is what `nexus run` does:
+
+| Status | Meaning | Enforced: verdict |
+|---|---|---|
+| `PASSED` | No error. | Not lowered. |
+| `PREEXISTING` | Errors exist, none in a changed file and none that the base did not have. | Not lowered. |
+| `FAILED` | An error in a changed file, or one the base did not have (a caller the change broke in a file it did not touch). | `UNVERIFIED` (`TYPECHECK_FAILED`), exit 1. |
+| `TIMED_OUT` | The check, or the shared deadline, ran out. | `UNVERIFIED` (`TYPECHECK_TIMED_OUT`), exit 1. |
+| `UNAVAILABLE` | The tool is not installed, or the project scan was cut short. | `UNVERIFIED` (`TYPECHECK_UNAVAILABLE`), exit 1. If the tool was found but could not be started when probed: recorded, **not lowered**. |
+| `NOT_APPLICABLE` | No project, or type-checking is off: not lowered. A configuration the checker cannot run (a solution-style `tsconfig.json`) also has this status. | For the configuration that cannot be run: `UNVERIFIED` (`TYPECHECK_UNAVAILABLE`), exit 1. |
+| `ENVIRONMENT` | The check ran and its failure cannot be attributed: no error has a file location (a configuration error, missing type packages), or it ended without an exit status. | Recorded, **not lowered**. |
+
+So a change can be `VERIFIED` while a type-check ended `ENVIRONMENT`, `PREEXISTING`, or `UNAVAILABLE` at the probe: `VERIFIED` does not claim the change type-checks unless the status is `PASSED`. Read `typecheck.status`, and `verification.typecheck.projects` for each project's tool, configuration path and hash, tool hash and version, exit code and error counts (`errorCount`, `introducedCount` against the base, `baselineErrorCount`). When the base run of a project did not pass cleanly or with located errors, there is no baseline for it, and an error in an untouched file then counts as `PREEXISTING`; `typecheck.baseline` shows each base run. One rule goes beyond `nexus run`: when the checks are enforced and the base has a project the head no longer has, a passing result is withheld as `UNVERIFIED` (`TYPECHECK_NOT_RUN`, exit 2), because nothing can be type-checked under a project that is gone. (For TypeScript this does not arise: every `tsconfig.json` is part of the verifier's definition, so removing or editing one is `VERIFIER_DEFINITION_CHANGED`.) No type-check runs when the verifier did not pass.
+
+**The verification-file guard.** Every changed file is classified, and the ones that decide how the change is verified are listed in `guard.findings` with their `class`, `kind` (`added`, `modified`, `deleted`) and, for a test file, `weakening`:
+
+- **Verification configuration** (`ci`, `build`, `test_config`, `verifier_script`, `package_scripts`, `policy`): CI workflows, `Makefile` and similar, test-runner configuration, scripts named for testing or checking, `.nexus-security.json`, and `package.json`, `pyproject.toml` and `setup.cfg` when the edit touches the keys or sections that decide how tests run. Adding, changing or deleting one needs approval.
+- **Test files.** A new test file is recorded and needs nothing. A changed one is recorded, and needs approval only when the edit looks like a weakening: `removed` (the file is deleted or emptied), `skipped` (a skip marker was added), `fewer-assertions`, `neutered` (the added lines hold `.only`, an early exit or return, or an unclosed comment), or `unverifiable-change` (the file could not be read to tell). These are heuristics over the text: they can flag a harmless edit and miss a subtle one. The independence rule below is what keeps a weakened test from making a change `VERIFIED`.
+
+A finding that needs approval and does not have it makes the verdict `BLOCKED` (`VERIFICATION_EDIT_BLOCKED`, exit 3). Read the edit, then approve it with `--approve-verification-edit <path>` (repeatable; the path as listed). **Approval lifts `BLOCKED` and nothing else**: a change with an approved finding is never `VERIFIED`, however the tests come out; its best verdict is `REGRESSION_FREE`, and the verifier rules still apply (an approved edit to `scripts.test` is still `VERIFIER_DEFINITION_CHANGED`). If a changed verification file cannot be classified (not a regular file, larger than 256 KiB), or there are more than 1000 findings, `guard.complete` is false and the verdict is `BLOCKED` (`GUARD_INCOMPLETE`) whatever was approved.
+
+The guard's policy is the **base** tree's `.nexus-security.json` (`guard.policySource` is `base_tree`, or `default` when the base has none), read as an untrusted repository's: its `verificationPaths` can tighten the guard (`mode: "block"` refuses these edits even when you approve them; `extra` adds paths) and cannot relax it (`off`, `record` and `allow` are ignored). The head's `.nexus-security.json` is never read as policy; it is a finding. `nexus verify` does not consult your list of trusted workspaces, and `NEXUS_TRUST_WORKSPACE=1` does not change this (it is named in `environment` when set): trusting a checkout is not trusting the commit under review.
+
+**When several things are true.** A head that was run and did not pass keeps its own reason and exit 1 (`VERIFIER_FAILED`, `VERIFIER_TIMED_OUT`, `TYPECHECK_FAILED`, `TYPECHECK_TIMED_OUT`, `TYPECHECK_UNAVAILABLE`), with the guard's findings still listed: "it fails" is reported before "a person must decide". A discovered verifier that is not approved keeps `VERIFIER_NOT_APPROVED` (nothing was run). In every other case an unapproved finding or an incomplete scan is `BLOCKED`: over `REGRESSION_FREE`, over an `UNVERIFIED` that would exit 2, and over a head that was not run because it redefines the verifier. `detail` then says what the result was without the finding.
+
+**What `VERIFIED` claims.** Tests that existed on the base, run under the verifier definition the base had, failed on the base and pass on the change (when the change edits test files, the base's test files are run against the change's code and must pass), or your own `--verifier` command passed with the test files unchanged; and those pre-existing tests import every declared deliverable; no enforced type-check failed, timed out or was unavailable; and the change edits no verification configuration and weakens no test by the guard's heuristics. It does not claim that the change is correct beyond what those tests check, that it type-checks when a check could not run or be attributed (see the table above), that it is free of security problems, or that a person or a model reviewed it.
+
+**The result.** The text output states the verdict, the reason, both sides (commit and tree), the verifier, each run, the type-checks, the guard's findings and what was not run. `--json` prints exactly one JSON document on stdout (progress goes to stderr) and `--receipt <file>` writes the same document to a file. Its first member is `schema_version` (now `1`); `exitCode` equals the process exit code. A result has `verdict`, `outcome`, `reason`, `detail`, `base` and `head` (`ref`, `commit`, `tree`), `changedFiles`, `verifier` (`command`, `source`, `digest`, `approval`), `deliverables`, `approvedVerificationEdits`, `runs` (one entry per verifier process, with a sha256 of its output), `baseline`, `verification` (with the type-check evidence under `typecheck`), `typecheck` (`status`, `mode`, `baseline`, `missingFromHead`), `guard` (`status`, `mode`, `policySource`, `findings`, `complete`), `review` (`NOT_RUN`: this version has no reviewer), `linkedDependencyDirs`, `limits` and `environment`: the names, never the values, of the variables that can affect a verdict and were set (`NEXUS_TRUST_WORKSPACE`, `NEXUS_TYPECHECK`, `NEXUS_VERIFIER_TIMEOUT_SECS`, `NEXUS_VERIFIER_ENV_PASSTHROUGH`). A usage error or an interrupt prints an error document instead (`schema_version`, `error`, `exitCode`); a command line that cannot be parsed prints no document. The document's JSON Schema is `docs/protocol/verify-result-v1.schema.json`, generated from the types in `cli/src/verify_contract.ts`; `docs/protocol/VERIFY_RESULT_VERSIONS.json` records each version decision (an added optional member keeps `schema_version`; a removed or renamed member, or a changed type or meaning, bumps it). Objects are open: ignore members you do not know.
+
+**Limits.**
+- The verifier and the type-checks are repository code (a Cargo check runs build scripts) and run with your privileges, outside any sandbox: on the base and on the head. Run `nexus verify` on changes you would be willing to run the tests of, or inside a container.
+- A verifier you supply with `--verifier` is trusted as yours. A command that prints a test runner's summary without running tests is not detected.
+- The tests run the change's own code in their process. A change written to deceive its tests from inside that process (product code that alters the test runner) is not detected. Files a run writes into its own scratch tree do not affect the verdict, which is judged on a second copy written after the run; code that deliberately attacks the other scratch directories or the `nexus` process itself is not defended against without a sandbox.
+- Dependency directories of your checkout that the trees do not hold themselves (`node_modules`, `vendor`, `.venv`, `venv`) are linked into both scratch trees so both sides run with the same installed packages; a verifier that writes into them writes into your checkout's copy. With a `node_modules` directory an `npm test` verifier cannot be bound to the base, so the verdict is at most `REGRESSION_FREE`. Build output directories are not linked.
+- The type-checker a project names is the one that runs: for TypeScript the tree's own `node_modules/.bin/tsc` when it has one (through the linked `node_modules`, your checkout's), else `tsc` on `PATH`. Its hash is recorded (`toolSha256`), not judged.
+- A Cargo type-check builds into a directory of its own, removed when the command ends, so every run compiles the dependencies again (offline).
+- This version has no reviewer; the result reports `review` as `NOT_RUN`.
+- A change to a file the base's tests import that is not a declared deliverable counts as a change to the verifier: the verifier is not run on the head and the result is `UNVERIFIED` (`VERIFIER_DEFINITION_CHANGED`).
+- A tree with more than 20000 files or 512 MiB, or one that holds a submodule, is `BLOCKED`: it is never verified in part.
+- An interrupt is acted on when the running verifier process ends (within its deadline).
+
 ### Viewing Tool Audit Logs
 To inspect recent tool executions, filter errors, or track latency:
 ```bash
