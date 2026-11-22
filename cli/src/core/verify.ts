@@ -155,6 +155,21 @@ function splitStraceArguments(value: string): string[] {
   return args;
 }
 
+function quotedStraceArgument(value: string): string | undefined {
+  let index = 0;
+  while (/\s/.test(value[index] ?? "")) index++;
+  if (value[index] !== '"') return undefined;
+  index++;
+  let result = "";
+  while (index < value.length) {
+    const character = value[index++]!;
+    if (character === '"') return result;
+    result += character;
+    if (character === "\\" && index < value.length) result += value[index++]!;
+  }
+  return undefined;
+}
+
 function decodeStraceString(value: string): string {
   const bytes: number[] = [];
   for (let index = 0; index < value.length;) {
@@ -226,7 +241,7 @@ function observedWorkspacePaths(logPath: string, workspace: string): Map<string,
       if (processCreate) workingDirectories.set(processCreate, cwd);
       if (/\bchdir\(/.test(line) && /\)\s+=\s+0(?:\s|$)/.test(line)) {
         const call = line.slice(line.indexOf("(") + 1, line.lastIndexOf(" = "));
-        const quoted = /^\s*"((?:\\.|[^"])*)"/.exec(call)?.[1];
+        const quoted = quotedStraceArgument(call);
         if (quoted) {
           const decoded = decodeStraceString(quoted);
           workingDirectories.set(pid, path.resolve(cwd, decoded));
@@ -252,7 +267,7 @@ function observedWorkspacePaths(logPath: string, workspace: string): Map<string,
           const openat = /\bopenat2?\(/.test(line);
           const dir = /(?:AT_FDCWD|\d+)<(.+)>/.exec(args[0] ?? "")?.[1];
           const pathArg = args[openat ? 1 : 0] ?? "";
-          const quoted = /^\s*"((?:\\.|[^"])*)"/.exec(pathArg)?.[1];
+          const quoted = quotedStraceArgument(pathArg);
           if (quoted) {
             const decoded = decodeStraceString(quoted);
             record(path.isAbsolute(decoded) ? decoded : path.resolve(dir ? decodeStraceString(dir) : cwd, decoded));
@@ -272,7 +287,7 @@ function observedWorkspacePaths(logPath: string, workspace: string): Map<string,
         const args = splitStraceArguments(call);
         const dir = /(?:AT_FDCWD|\d+)<(.+)>/.exec(args[0] ?? "")?.[1];
         const pathArg = /(?:newfstatat|statx|faccessat|readlinkat)\(/.test(line) ? args[1] ?? "" : args[0] ?? "";
-        const quoted = /^\s*"((?:\\.|[^"])*)"/.exec(pathArg)?.[1];
+        const quoted = quotedStraceArgument(pathArg);
         if (quoted) {
           const decoded = decodeStraceString(quoted);
           record(path.isAbsolute(decoded) ? decoded : path.resolve(dir ? decodeStraceString(dir) : cwd, decoded));
