@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01DJG826nbBc7WJ3sNAxW6RJ",
+  "agent_id": "afeb9f516b3160ac0",
+  "subagent_type": "general-purpose",
+  "task_description": "LS-1 S3 LSP timeouts readiness",
+  "token_usage": {
+    "input_tokens": 80,
+    "cache_creation_tokens": 594846,
+    "cache_read_tokens": 7825872,
+    "output_tokens": 128494,
+    "api_call_count": 40
+  },
+  "started_at": "2026-11-22T12:54:54.062665607Z",
+  "completed_at": "2026-11-22T16:39:20.793231309Z"
+}
