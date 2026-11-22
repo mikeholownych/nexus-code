@@ -7,50 +7,18 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { fileURLToPath } from "node:url";
-import { VERIFY_EXIT_CODES, VERIFY_REASONS, VERIFY_RESULT_SCHEMA_VERSION, verifyExitCode, verifyExitNameFor, verifyVerdictFor, type VerifyReason } from "../src/verify_contract.js";
+import { VERIFY_EXIT_CODES, VERIFY_REASONS, verifyExitCode, verifyExitNameFor, verifyVerdictFor, type VerifyReason } from "../src/verify_contract.js";
 import { VERIFY_MAX_TREE_FILES, VERIFY_RECORDED_ENVIRONMENT, verifyChange } from "../src/core/verify.js";
-import { makeHome, makeRepo } from "./helpers/fixtures.js";
+import {
+  BAD, BASE_FILES, BASE_VERIFIER_DIGEST, CLI_DIR, DELIVERABLE, GOOD, MATH_BROKEN, PACKAGE, TEST_FILE, TEST_FULL, TEST_WEAKENED,
+  commit, consume, consumeResult, git, head, runCli, withRepos, writeFiles,
+} from "./helpers/verify_fixture.js";
 
-const CLI_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const MANUAL = path.resolve(CLI_DIR, "..", "docs", "USER_MANUAL.md");
-
-// ---- The fixture: one product file with a bug, one test file whose second test fails because of it ----
-
-const PACKAGE = JSON.stringify({ name: "verify-fixture", version: "1.0.0", private: true, type: "module", scripts: { test: "node --test" } });
-const MATH_BUGGY = "export const add = (a, b) => a - b;\nexport const double = (a) => a * 2;\n";
-const MATH_FIXED = "export const add = (a, b) => a + b;\nexport const double = (a) => a * 2;\n";
-const MATH_BROKEN = "export const add = (a, b) => a - b;\nexport const double = (a) => a * 3;\n";
-const TEST_HEAD = 'import test from "node:test";\nimport assert from "node:assert/strict";\nimport { add, double } from "../src/math.js";\ntest("double", () => assert.equal(double(2), 4));\n';
-const TEST_FULL = `${TEST_HEAD}test("add", () => assert.equal(add(2, 3), 5));\n`;
-/** The known-bad change: the bug stays and the failing test is deleted. */
-const TEST_WEAKENED = TEST_HEAD;
-const BASE_FILES = { "package.json": PACKAGE, "src/math.js": MATH_BUGGY, "test/math.test.mjs": TEST_FULL };
-const GOOD = { "src/math.js": MATH_FIXED };
-const BAD = { "test/math.test.mjs": TEST_WEAKENED };
-/** sha256 of "npm test\nnode --test": the digest of the verifier the BASE tree defines. */
-const BASE_VERIFIER_DIGEST = createHash("sha256").update("npm test\nnode --test").digest("hex");
-const DELIVERABLE = ["--deliverable-file", "src/math.js"];
-
-const git = (repo: string, ...args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-const head = (repo: string) => git(repo, "rev-parse", "HEAD");
-
-function writeFiles(repo: string, files: Record<string, string>): void {
-  for (const [name, content] of Object.entries(files)) {
-    fs.mkdirSync(path.dirname(path.join(repo, name)), { recursive: true });
-    fs.writeFileSync(path.join(repo, name), content);
-  }
-}
-
-/** Commits `files` on top of the current commit and returns the new commit. */
-function commit(repo: string, files: Record<string, string>, author = "t <t@t.invalid>"): string {
-  writeFiles(repo, files);
-  git(repo, "add", "-A");
-  git(repo, "-c", "user.name=committer", "-c", "user.email=c@c.invalid", "commit", "-q", "--author", author, "-m", "change");
-  return head(repo);
-}
+/** The operator has read the weakened test and lets the result be reported; the verdict is then what the tests show. */
+const APPROVE_TEST_EDIT = ["--approve-verification-edit", TEST_FILE];
 
 /** A digest of everything under `root`: every file's bytes, every link's target, every directory, `.git` included. */
 function treeDigest(root: string): string {
@@ -68,75 +36,7 @@ function treeDigest(root: string): string {
   return hash.digest("hex");
 }
 
-interface CliRun { code: number | null; stdout: string; stderr: string; leftovers: string[] }
-
-/**
- * Runs `nexus verify <args>` (the source entry) with a throwaway HOME, its own temp directory and no operator
- * environment. `leftovers`: what verify left in that temp directory (its scratch trees and verifier output files).
- */
-function runCli(args: string[], extraEnv: Record<string, string> = {}): Promise<CliRun> {
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) if (/^(LOCAL_LLM_|LOCAL_HARNESS_|NEXUS_|GIT_)/.test(key) || key === "NODE_TEST_CONTEXT") delete env[key];
-  const home = makeHome();
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-verify-test-tmp-"));
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--import", "tsx", "src/index.ts", "verify", ...args], {
-      cwd: CLI_DIR,
-      env: { ...env, HOME: home, TMPDIR: tmp, XDG_CONFIG_HOME: path.join(home, ".config"), XDG_DATA_HOME: path.join(home, ".local", "share"), XDG_STATE_HOME: path.join(home, ".local", "state"), XDG_CACHE_HOME: path.join(home, ".cache"), ...extraEnv },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout!.on("data", (chunk) => (stdout += chunk));
-    child.stderr!.on("data", (chunk) => (stderr += chunk));
-    child.on("error", reject);
-    child.on("close", (code) => {
-      const leftovers = fs.readdirSync(tmp).filter((name) => name.startsWith("nexus-"));
-      fs.rmSync(tmp, { recursive: true, force: true });
-      fs.rmSync(home, { recursive: true, force: true });
-      resolve({ code, stdout, stderr, leftovers });
-    });
-  });
-}
-
-/** What a consumer does: stdout is exactly one JSON document, `schema_version` first, `exitCode` the process exit code. */
-function consume(run: CliRun): any {
-  let doc: any;
-  try {
-    doc = JSON.parse(run.stdout);
-  } catch {
-    assert.fail(`stdout is not one JSON document: ${run.stdout.slice(0, 200)}\nstderr: ${run.stderr.slice(0, 400)}`);
-  }
-  assert.equal(run.stdout, `${JSON.stringify(doc, null, 2)}\n`, "nothing but the document on stdout");
-  assert.equal(Object.keys(doc)[0], "schema_version");
-  assert.equal(doc.schema_version, VERIFY_RESULT_SCHEMA_VERSION);
-  assert.equal(doc.exitCode, run.code, "exitCode repeats the process exit code");
-  assert.deepEqual(run.leftovers, [], "no scratch directory is left behind");
-  return doc;
-}
-
-/** A result document: the verdict, the exit code and the reason agree with the contract's tables, and the ingredients this version does not run say so. */
-function consumeResult(run: CliRun): any {
-  const doc = consume(run);
-  assert.equal(doc.verdict, verifyVerdictFor(doc.reason), `${doc.verdict}/${doc.reason}: ${doc.detail}`);
-  assert.equal(doc.exitCode, verifyExitCode(verifyExitNameFor(doc.reason)));
-  assert.equal(doc.verdict === "VERIFIED", run.code === 0, "exit 0 if and only if VERIFIED");
-  assert.equal(doc.verdict === "VERIFIED", doc.outcome === "VERIFIED");
-  for (const ingredient of ["typecheck", "guard", "review"]) assert.equal(doc[ingredient].status, "NOT_RUN", ingredient);
-  return doc;
-}
-
 const phases = (doc: any): string[] => doc.runs.map((ran: any) => ran.phase);
-
-/** Runs `check` on fresh repositories built from the given files and removes them afterwards. */
-async function withRepos<T>(files: Array<Record<string, string>>, check: (...repos: string[]) => Promise<T>): Promise<T> {
-  const repos = files.map((set) => makeRepo(set));
-  try {
-    return await check(...repos);
-  } finally {
-    for (const repo of repos) fs.rmSync(repo, { recursive: true, force: true });
-  }
-}
 
 // ---- The contract tables ----
 
@@ -202,6 +102,9 @@ test("a fix that makes the base's failing test pass is VERIFIED (exit 0); the te
       assert.equal(doc.verification.isDeliverableBound, true);
       assert.deepEqual(doc.environment, []);
       assert.deepEqual(doc.linkedDependencyDirs, []);
+      assert.deepEqual(doc.typecheck, { status: "NOT_APPLICABLE", mode: "enforce", detail: "the head tree has no configured type-check project" });
+      assert.deepEqual(doc.guard, { status: "CLEAR", mode: "approve", policySource: "default", findings: [], complete: true });
+      assert.deepEqual(doc.approvedVerificationEdits, []);
       // --receipt writes the same document.
       assert.equal(fs.readFileSync(receipt, "utf8"), json.stdout);
 
@@ -210,7 +113,9 @@ test("a fix that makes the base's failing test pass is VERIFIED (exit 0); the te
       assert.match(text.stdout, /^ {2}verifier +npm test \(discovered in the base tree: package\.json:scripts\.test; approved by --yes\)$/m);
       assert.match(text.stdout, /^ {2}base run +failed \(exit 1\); tests ran$/m);
       assert.match(text.stdout, /^ {2}head run +passed; tests ran$/m);
-      assert.match(text.stdout, /^ {2}not run +type-check, verification-file guard, review$/m);
+      assert.match(text.stdout, /^ {2}type-check +NOT_APPLICABLE \(enforce\): the head tree has no configured type-check project$/m);
+      assert.match(text.stdout, /^ {2}guard +CLEAR \(mode approve, default policy\): 0 changed verification file\(s\)$/m);
+      assert.match(text.stdout, /^ {2}not run +review$/m);
       assert.deepEqual(text.leftovers, []);
     } finally {
       fs.rmSync(receipt, { force: true });
@@ -218,11 +123,22 @@ test("a fix that makes the base's failing test pass is VERIFIED (exit 0); the te
   });
 });
 
-test("the known-bad change (the failing test deleted, the bug left in) is NOT VERIFIED: the base's tests still fail on the head", async () => {
+test("the known-bad change (the failing test deleted, the bug left in) is NOT VERIFIED: BLOCKED until the test edit is approved, and then the base's tests still fail on the head", async () => {
   await withRepos([BASE_FILES], async (repo) => {
     const base = head(repo);
     const bad = commit(repo, BAD);
-    const doc = consumeResult(await runCli(["-w", repo, "--base", base, "--head", bad, ...DELIVERABLE, "-y", "--json"]));
+    const [unapproved, approved] = await Promise.all([
+      runCli(["-w", repo, "--base", base, "--head", bad, ...DELIVERABLE, "-y", "--json"]),
+      runCli(["-w", repo, "--base", base, "--head", bad, ...DELIVERABLE, "-y", "--json", ...APPROVE_TEST_EDIT]),
+    ]);
+    const blocked = consumeResult(unapproved);
+    assert.equal(blocked.verdict, "BLOCKED");
+    assert.equal(blocked.reason, "VERIFICATION_EDIT_BLOCKED");
+    assert.equal(unapproved.code, verifyExitCode("blocked"));
+    assert.deepEqual(blocked.guard.findings, [{ path: TEST_FILE, class: "test_file", kind: "modified", weakening: ["fewer-assertions"], requiresApproval: true, approved: false }]);
+    const doc = consumeResult(approved);
+    assert.deepEqual(doc.approvedVerificationEdits, [TEST_FILE]);
+    assert.equal(doc.guard.findings[0].approved, true);
     assert.notEqual(doc.verdict, "VERIFIED");
     assert.equal(doc.verdict, "REGRESSION_FREE");
     assert.equal(doc.exitCode, 2);
@@ -241,7 +157,7 @@ test("a head whose weakened test restores itself while it runs is still judged o
     // after the run would find the tests "unchanged".
     const selfRestoring = `${TEST_WEAKENED}import fs from "node:fs";\nfs.writeFileSync(new URL(import.meta.url), ${JSON.stringify(TEST_FULL)});\n`;
     const bad = commit(repo, { "test/math.test.mjs": selfRestoring });
-    const doc = consumeResult(await runCli(["-w", repo, "--base", base, "--head", bad, ...DELIVERABLE, "-y", "--json"]));
+    const doc = consumeResult(await runCli(["-w", repo, "--base", base, "--head", bad, ...DELIVERABLE, "-y", "--json", ...APPROVE_TEST_EDIT]));
     assert.equal(doc.runs[1].passed, true, "the head's own run passes");
     assert.notEqual(doc.verdict, "VERIFIED");
     assert.equal(doc.verification.independent, false);
@@ -273,8 +189,9 @@ test("the head cannot choose its own verifier: a rewritten scripts.test is not r
   const noScript = JSON.stringify({ name: "verify-fixture", version: "1.0.0", private: true, type: "module" });
   await withRepos([BASE_FILES, { ...BASE_FILES, "package.json": noScript }], async (rewritten, added) => {
     const [first, second] = await Promise.all([
-      (async () => { const base = head(rewritten); return runCli(["-w", rewritten, "--base", base, "--head", commit(rewritten, { "package.json": fake }), ...DELIVERABLE, "-y", "--json"]); })(),
-      (async () => { const base = head(added); return runCli(["-w", added, "--base", base, "--head", commit(added, { "package.json": fake }), ...DELIVERABLE, "-y", "--json"]); })(),
+      // The edit to package.json's scripts is approved here, so the verdict is what the verifier rules give (test/verify_typecheck_guard.test.ts covers the unapproved edit).
+      (async () => { const base = head(rewritten); return runCli(["-w", rewritten, "--base", base, "--head", commit(rewritten, { "package.json": fake }), ...DELIVERABLE, "-y", "--json", "--approve-verification-edit", "package.json"]); })(),
+      (async () => { const base = head(added); return runCli(["-w", added, "--base", base, "--head", commit(added, { "package.json": fake }), ...DELIVERABLE, "-y", "--json", "--approve-verification-edit", "package.json"]); })(),
     ]);
     const doc = consumeResult(first);
     assert.notEqual(doc.verdict, "VERIFIED");
@@ -381,9 +298,9 @@ test("harness parity: the same bad bytes applied with git apply in a plain repos
     }
     writeFiles(appliedBesideState, NEXUS_STATE);
     const [applied, committed, besideState] = await Promise.all([
-      runCli(["-w", plain, ...DELIVERABLE, "-y", "--json"]),
-      runCli(["-w", withState, "--base", stateBase, "--head", stateHead, ...DELIVERABLE, "-y", "--json"]),
-      runCli(["-w", appliedBesideState, ...DELIVERABLE, "-y", "--json"]),
+      runCli(["-w", plain, ...DELIVERABLE, "-y", "--json", ...APPROVE_TEST_EDIT]),
+      runCli(["-w", withState, "--base", stateBase, "--head", stateHead, ...DELIVERABLE, "-y", "--json", ...APPROVE_TEST_EDIT]),
+      runCli(["-w", appliedBesideState, ...DELIVERABLE, "-y", "--json", ...APPROVE_TEST_EDIT]),
     ]);
     const a = consumeResult(applied);
     const b = consumeResult(committed);
@@ -393,7 +310,7 @@ test("harness parity: the same bad bytes applied with git apply in a plain repos
     assert.equal(b.head.workingTree, false);
     assert.equal(a.head.tree, b.head.tree, "the same bytes");
     assert.equal(c.head.tree, b.head.tree, "Nexus's own state is not part of the change");
-    const verdict = (doc: any) => ({ verdict: doc.verdict, outcome: doc.outcome, reason: doc.reason, exitCode: doc.exitCode, independent: doc.verification.independent, detail: doc.detail });
+    const verdict = (doc: any) => ({ verdict: doc.verdict, outcome: doc.outcome, reason: doc.reason, exitCode: doc.exitCode, independent: doc.verification.independent, detail: doc.detail, guard: doc.guard });
     assert.deepEqual(verdict(a), verdict(b));
     assert.deepEqual(verdict(c), verdict(b));
     assert.equal(a.verdict, "REGRESSION_FREE");
@@ -443,8 +360,8 @@ test("a checkout with node_modules: it is linked into both scratch trees, the np
 test("verdict-affecting environment variables are recorded by name, never by value, and do not change the verdict", async () => {
   await withRepos([BASE_FILES], async (repo) => {
     const base = head(repo);
-    // The head also ships a policy file that would switch a guard off: it is repository content and decides nothing.
-    const bad = commit(repo, { ...BAD, ".nexus-security.json": '{"verificationGuard":"off"}\n' });
+    // The head also ships a policy file that would switch the guard off: it is repository content and decides nothing.
+    const bad = commit(repo, { ...BAD, ".nexus-security.json": '{"verificationPaths":{"mode":"off"}}\n' });
     const args = ["-w", repo, "--base", base, "--head", bad, ...DELIVERABLE, "-y", "--json"];
     const [plain, withEnv] = await Promise.all([
       runCli(args),
@@ -456,8 +373,9 @@ test("verdict-affecting environment variables are recorded by name, never by val
     assert.deepEqual(b.environment, ["NEXUS_TRUST_WORKSPACE", "NEXUS_VERIFIER_TIMEOUT_SECS"]);
     assert.equal(withEnv.stdout.includes("value-that-must-not-appear"), false);
     assert.equal(b.limits.timeoutSecs, 240);
-    assert.notEqual(a.verdict, "VERIFIED");
-    assert.deepEqual([b.verdict, b.outcome, b.reason], [a.verdict, a.outcome, a.reason]);
+    assert.equal(a.verdict, "BLOCKED", "the weakened test and the policy file are findings; neither the head's policy nor the variable lifts them");
+    assert.deepEqual(a.guard.findings.map((finding: any) => [finding.path, finding.class]), [[".nexus-security.json", "policy"], [TEST_FILE, "test_file"]]);
+    assert.deepEqual([b.verdict, b.outcome, b.reason, b.guard], [a.verdict, a.outcome, a.reason, a.guard]);
   });
 });
 

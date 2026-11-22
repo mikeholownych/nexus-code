@@ -1,0 +1,7 @@
+[
+  {
+    "schema_version": 1,
+    "schemaSha256": "1b064514e1002dac6fa622e028a358a8ab4c6d95b0186dd23631360f55ce249e",
+    "note": "First published schema of the nexus verify --json document (also the receipt --receipt writes), generated from VerifyJsonOutput in cli/src/verify_contract.ts on release/v1.3.0. Nothing was published before it: the document of the first nexus verify slice had no schema, and its typecheck and guard members (then always NOT_RUN) take their real shapes here."
+  }
+]
