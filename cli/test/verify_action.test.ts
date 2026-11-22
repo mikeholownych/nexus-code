@@ -248,7 +248,10 @@ test("verify action: a real fix exits 0 with verdict VERIFIED and a receipt; the
     assert.deepEqual(validate(verified.receipt, VERIFY_SCHEMA, VERIFY_SCHEMA), [], "the receipt is the result document");
     assert.equal(verified.receipt.verdict, "VERIFIED");
     assert.equal(verified.receipt.base.commit, goodBase);
-    assert.deepEqual(verified.receipt.sandbox, { requested: false, engine: "none", network: false });
+    assert.equal(verified.receipt.sandbox.requested, false, "the action used default confinement without an explicit sandbox input");
+    assert.ok(["bwrap", "docker"].includes(verified.receipt.sandbox.engine), "a verified result must record the effective confinement engine");
+    assert.equal(verified.receipt.sandbox.network, false);
+    assert.deepEqual(verified.receipt.runs.map((ran: any) => ran.sandboxed), [true, true]);
     assert.match(verified.summary, /^### nexus verify: VERIFIED \(exit 0\)\n/);
     assert.equal(verified.out, "", "the document goes to a file, not to the job log");
 
