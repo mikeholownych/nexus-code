@@ -37,31 +37,37 @@ test("the newest version-ledger entry records the current schema and protocol ve
   assert.equal(ledger[ledger.length - 1].schemaSha256, sha256(checkedIn));
 });
 
-// Golden records that predate a field the type now requires. The Rust client still accepts them (older sidecars), so
-// they stay in the corpus; each must fail for exactly the reason listed, so this list can only shrink.
-const GOLDEN_MISSING_REQUIRED: Record<string, string[]> = {
-  "tool.end": ["$: missing required evidence"],
+// Golden records marked `older_sidecar` are what a sidecar sent before a field became required: the record lists the
+// fields it lacks. The Rust client still accepts them (`#[serde(default)]`), so they stay in the corpus as tolerance
+// records; every other record must be valid as the protocol stands. This list is the complete set of such gaps and
+// can only shrink: a new required field is a breaking change, not a new tolerance.
+const OLDER_SIDECAR_GAPS: Record<string, string[]> = {
+  hello: ["commands"],
+  "tool.end": ["evidence"],
 };
 
-test("every golden corpus record validates against the schema for its direction", () => {
+test("every golden corpus record validates against the schema for its direction, older-sidecar records excepted for exactly the fields they name", () => {
   const corpus = fileURLToPath(new URL("./fixtures/protocol_v1_golden.jsonl", import.meta.url));
   const records = fs.readFileSync(corpus, "utf8").split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
   assert.ok(records.length >= 8);
-  const exceptions = new Set(Object.keys(GOLDEN_MISSING_REQUIRED));
+  const tolerated: Record<string, string[]> = {};
   for (const record of records) {
     const message = JSON.parse(record.json);
     const errors = check(message, record.direction);
-    // A later record of the same name that carries the field (the hello with the negotiation fields) is not a gap.
-    const gaps = record.direction === "event" ? (GOLDEN_MISSING_REQUIRED[record.name] ?? []).filter((gap) => !(gap.replace("$: missing required ", "") in message)) : [];
-    const expected = gaps.length ? gaps : undefined;
-    if (expected) {
-      exceptions.delete(record.name);
-      assert.deepEqual(errors.filter((error) => !error.includes("oneOf alternative")), expected, `${record.name}: known gap`);
-    } else {
+    if (record.older_sidecar === undefined) {
       assert.deepEqual(errors, [], `${record.direction} ${record.name}`);
+      continue;
     }
+    assert.equal(record.direction, "event", "only the sidecar's events have older forms a client tolerates");
+    assert.equal(tolerated[record.name], undefined, `${record.name}: one older-sidecar record per event`);
+    tolerated[record.name] = record.older_sidecar;
+    assert.deepEqual(
+      errors.filter((error) => !error.includes("oneOf alternative")),
+      record.older_sidecar.map((field: string) => `$: missing required ${field}`),
+      `${record.name}: an older-sidecar record is invalid only for the fields it names`,
+    );
   }
-  assert.deepEqual([...exceptions], [], "a listed exception has no golden record");
+  assert.deepEqual(tolerated, OLDER_SIDECAR_GAPS);
 });
 
 test("messages built to the current types validate", () => {
