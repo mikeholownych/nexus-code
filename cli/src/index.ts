@@ -684,8 +684,8 @@ program
   .option("--approve-verifier <sha256>", "Approve the discovered verifier with exactly this digest (printed when approval is needed)")
   .option("--approve-verification-edit <path>", "Approve the change's edit to this verification file (a weakened test, CI, build or test configuration); it lifts BLOCKED and never makes the change VERIFIED (repeatable)", collectDeliverableFile, [])
   .option("--timeout-secs <n>", "Deadline of each verifier run, and of each side's type-checks, in seconds (default: NEXUS_VERIFIER_TIMEOUT_SECS, else 300)")
-  .option("--sandbox [engine]", "Confine every process verify starts on repository code (the verifier, the type-checks): auto, bwrap or docker (default: auto). BLOCKED when the engine is not usable")
-  .option("--sandbox-network", "With --sandbox: let the confined processes use the network (off by default)")
+  .option("--sandbox [engine]", "Confine every process verify starts on repository code: auto, bwrap or docker (default: auto); none explicitly opts out")
+  .option("--sandbox-network", "Let sandboxed verification processes use the network (off by default; incompatible with --sandbox none)")
   .option("--receipt <file>", "Also write the result document (the receipt) to this file")
   .option("-j, --json", "Print the result as one JSON document on stdout (see the manual: nexus verify)")
   .action(async (_options: any, cmd: Command) => {
@@ -705,14 +705,18 @@ program
     if (options.verifier !== undefined && !String(options.verifier).trim()) return fail("usage", "--verifier needs a command");
     if (options.approveVerifier !== undefined && !/^[0-9a-fA-F]{64}$/.test(String(options.approveVerifier).trim())) return fail("usage", "--approve-verifier needs the 64-character sha256 digest printed when approval is needed");
     if (options.verifier !== undefined && (options.yes || options.approveVerifier !== undefined)) return fail("usage", "--verifier is your own command and needs no approval: do not combine it with --yes or --approve-verifier");
-    // The engine names `nexus run --sandbox` takes; `none` is its "no sandbox".
-    let sandbox: VerifySandboxRequest | undefined;
-    if (options.sandbox !== undefined && options.sandbox !== false && options.sandbox !== "none") {
+    // Verification executes repository code, so confinement is the default. `none` is an explicit opt-out.
+    let sandbox: VerifySandboxRequest;
+    if (options.sandbox === "none") {
+      sandbox = { engine: "none" };
+    } else if (options.sandbox === undefined || options.sandbox === false || options.sandbox === true) {
+      sandbox = { engine: "auto", network: Boolean(options.sandboxNetwork) };
+    } else {
       const engine = options.sandbox === true ? "auto" : String(options.sandbox);
       if (engine !== "auto" && engine !== "bwrap" && engine !== "docker") return fail("usage", "--sandbox takes auto, bwrap, docker or none");
       sandbox = { engine, network: Boolean(options.sandboxNetwork) };
     }
-    if (options.sandboxNetwork && !sandbox) return fail("usage", "--sandbox-network needs --sandbox: without a sandbox the verifier already runs with your network access");
+    if (options.sandboxNetwork && sandbox.engine === "none") return fail("usage", "--sandbox-network cannot be used with --sandbox none");
 
     // The first signal stops verification once the running verifier process ends; a second one exits at once.
     const abort = new AbortController();

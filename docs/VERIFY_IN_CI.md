@@ -76,7 +76,7 @@ Why each part is there:
 - `fetch-depth: 0`: the base commit must be in the clone. The action's default base is the event's `pull_request.base.sha`; its default head is the checked-out commit (`HEAD`, GitHub's merge commit of the pull request).
 - `verifier` is your own command, written in the workflow file. It is a shell command and runs as given: never build it from an event field. Without it, the verifier is discovered in the **base** commit and the first run ends `BLOCKED` with a digest; put that digest under `approve-verifier` once you have read the command. There is no input that approves whatever is discovered.
 - `deliverable-files`: without at least one, the verdict is never `VERIFIED`.
-- `sandbox`: see below. For pull requests from people you do not trust it is not optional.
+- `sandbox`: see below. Empty uses `auto`; for untrusted pull requests the action must not set it to `none`.
 
 Every input and event field reaches the action's script as an environment variable and is passed to `nexus` as one quoted argument; no `${{ }}` expression appears in a script.
 
@@ -96,20 +96,20 @@ Outputs: `verdict`, `reason`, `blocked`, `exit-code`, `receipt-path`. The receip
 
 ## The sandbox
 
-Without `--sandbox`, the verifier, the type-checks and the tests are the change's code running with the job's privileges, and a change written to attack the verification itself can defeat it: `test/verify_hostile.test.ts` holds a head that rewrites the scratch state beside its own tree and is reported `VERIFIED` while fixing nothing. With `--sandbox bwrap` (or `docker`, or `auto`) every process `nexus verify` starts on repository code runs confined:
+By default, `nexus verify` uses `--sandbox auto`: Bubblewrap when usable, otherwise Docker. It blocks with `SANDBOX_UNAVAILABLE` if neither engine can confine the run; it never silently falls back to executing repository code with the caller's privileges. Every process it starts on repository code runs confined:
 
-| | Without `--sandbox` | With `--sandbox` |
+| | Default (`auto`) | Explicit `--sandbox none` |
 |---|---|---|
 | The run's own scratch tree | writable | writable |
-| The other scratch trees, the pristine copy the head is judged on, the scratch Git index and objects | **writable** | not visible |
-| Your checkout and its `.git` | **writable** | read-only, or not visible when it is under HOME or `/tmp` |
-| Linked dependency directories (`node_modules`, `vendor`, `.venv`, `venv` of your checkout) | **writable** | read-only |
-| HOME | readable and writable | masked; toolchain directories read-only |
-| Network | the job's | none, unless `--sandbox-network` |
-| Other processes (`/proc`), processes that outlive the run | visible; can survive | not visible; end with the run |
+| The other scratch trees, the pristine copy the head is judged on, the scratch Git index and objects | not visible | **writable** |
+| Your checkout and its `.git` | read-only, or not visible when under HOME or `/tmp` | **writable** |
+| Linked dependency directories (`node_modules`, `vendor`, `.venv`, `venv` of your checkout) | read-only | **writable** |
+| HOME | masked; toolchain directories read-only | readable and writable |
+| Network | none, unless `--sandbox-network` | the job's |
+| Other processes (`/proc`), processes that outlive the run | not visible; end with the run | visible; can survive |
 | Environment | the verifier's allowlist | the same allowlist |
 
-The receipt records it: `sandbox.requested`, `sandbox.engine` (`bwrap`, `docker` or `none`), `sandbox.network`, and `sandboxed` on every run. When the engine is not usable the verdict is `BLOCKED` (`SANDBOX_UNAVAILABLE`, exit 3) and nothing is run: there is no fallback to running unconfined. A sandbox changes no verdict rule; it only takes authority away from the code under test.
+`--sandbox none` is an explicit opt-out for trusted changes. The hostile scratch-index rewrite is still possible when an operator deliberately opts out; it is prevented by the default sandbox. The receipt records the choice: `sandbox.requested`, `sandbox.engine` (`bwrap`, `docker`, or `none`), `sandbox.network`, and `sandboxed` on every run. A sandbox changes no verdict rule; it only takes authority away from the code under test.
 
 Engines: Bubblewrap needs unprivileged user namespaces. The Docker engine runs the commands in the pinned Alpine image of `nexus run --sandbox docker`, which has a shell and no toolchain, so a real verifier needs your own image (`NEXUS_SANDBOX_DOCKER_IMAGE`, pinned by digest, set in the workflow's `env`, never from the pull request).
 
@@ -134,8 +134,8 @@ Each row is a test; "prevented" means no effect on the verdict, "lowered" means 
 | The head adds a fake `node` in the tree, a `bin` entry, a `preinstall` hook | prevented: none is consulted; the real tests run | `verify_hostile`: "fake `node` at the top of the tree" |
 | Product code reads the expected value from the test file | **limit**: `VERIFIED` claims what the tests check, no more | `verify_hostile`: "documented limit: product code that reads the expected value" |
 | A test rewrites test files, the product or itself while it runs | prevented: judged on a copy no code ran in | `verify_command`: "restores itself while it runs"; `verify_hostile`: "rewrites the base's test file"; `verify_typecheck_guard`: "the pristine-copy rule" |
-| A test rewrites the scratch state beside its tree | **limit without `--sandbox`** (reported `VERIFIED`); prevented with it | `verify_hostile`: "WITHOUT --sandbox", "WITH --sandbox bwrap" |
-| A test writes the caller's checkout or its dependency directory | **limit without `--sandbox`**; denied with it | `verify_sandbox`: "a hostile test cannot write the caller's checkout" |
+| A test rewrites the scratch state beside its tree | prevented by the default sandbox; possible only with explicit `--sandbox none` | `verify_hostile`: default confinement, explicit opt-out |
+| A test writes the caller's checkout or its dependency directory | denied by the default sandbox; possible only with explicit `--sandbox none` | `verify_sandbox`: "a hostile test cannot write the caller's checkout" |
 | `NEXUS_TRUST_WORKSPACE`, `NEXUS_TYPECHECK`, `NEXUS_VERIFIER_TIMEOUT_SECS`, `NEXUS_VERIFIER_ENV_PASSTHROUGH`, `NEXUS_SANDBOX_NETWORK` set by the caller | recorded by name; none raises the known-bad change (`NEXUS_TYPECHECK=off` disables type-checks, as documented) | `verify_hostile`: "each verdict-affecting environment variable"; `verify_command`: "recorded by name" |
 | Base equal to head | lowered: `NOTHING_TO_VERIFY`, exit 2 | `verify_command`: "base equal to head" |
 | A head that is an ancestor of the base; a base chosen after the weakening | lowered: `VERIFIER_FAILED`; at most `REGRESSION_FREE` | `verify_hostile`: "ancestor of the base", "base chosen after the commit that weakened" |
@@ -156,7 +156,7 @@ Each row is a test; "prevented" means no effect on the verdict, "lowered" means 
 
 ## Limits that remain
 
-- Without `--sandbox`, a change written to attack the verification can raise its own verdict (above). With it, the remaining trust is in the engine, in what you installed into the dependency directories, and in your own `--verifier`.
+- With explicit `--sandbox none`, a change written to attack the verification can raise its own verdict (above). The default fails closed; remaining trust is in the sandbox engine, in what you installed into dependency directories, and in your own `--verifier`.
 - `VERIFIED` is a statement about tests, not about correctness, safety or review.
 - An approved verification edit is your decision: read the file first. Approval never yields `VERIFIED`, but a runner configuration you approved (a `conftest.py`) can make failing tests report `REGRESSION_FREE`.
 - Content filters in your own Git configuration (Git LFS) run when the tree's attributes select them; ones defined in the repository's own configuration do not, so a file they would have converted is read and written as stored.

@@ -180,8 +180,8 @@ test("--sandbox with an engine that is not usable is BLOCKED (SANDBOX_UNAVAILABL
         assert.match(renderVerifyText(run.result), /^nexus verify: BLOCKED \(SANDBOX_UNAVAILABLE\)\n/);
         assert.match(renderVerifyText(run.result), /\n  sandbox +requested, and nothing was run\n/);
       }
-      // The same change with no --sandbox runs, and says it was not sandboxed.
-      const plain = await verifyInProcess({ worktree: repo, base, head: fixed }, { verifierCommand: `touch '${marker}'; node --test`, deliverables: ["src/math.js"] }, { env: { PATH: engines.PATH } });
+      // The explicit trusted-input opt-out runs unconfined and says so in its receipt.
+      const plain = await verifyInProcess({ worktree: repo, base, head: fixed }, { verifierCommand: `touch '${marker}'; node --test`, deliverables: ["src/math.js"], sandbox: { engine: "none" } }, { env: { PATH: engines.PATH } });
       assert.equal(plain.result.verdict, "REGRESSION_FREE", plain.result.detail); // a compound command cannot be bound, so it never shows more than this
       assert.deepEqual(plain.result.sandbox, { requested: false, engine: "none", network: false });
       assert.deepEqual(plain.result.runs.map((ran) => ran.sandboxed), [false, false]);
@@ -194,23 +194,26 @@ test("--sandbox with an engine that is not usable is BLOCKED (SANDBOX_UNAVAILABL
   });
 });
 
-test("CLI: --sandbox takes auto, bwrap, docker or none; --sandbox-network needs --sandbox; an unusable engine exits 3 with the document", { timeout: 180_000 }, async () => {
+test("CLI: sandbox defaults to auto, --sandbox takes auto, bwrap, docker or none, and unavailable confinement blocks", { timeout: 180_000 }, async () => {
   await withRepos([BASE_FILES], async (repo) => {
     const base = head(repo);
     const fixed = commit(repo, GOOD);
     const engines = fakeEngines({ bwrap: "refuses", docker: "refuses" });
     try {
       const common = ["-w", repo, "--base", base, "--head", fixed, "--verifier", "node --test", "--deliverable-file", "src/math.js", "--json"];
-      const [unknown, networkAlone, refused, none] = await Promise.all([
+      const [unknown, defaultRefused, refused, none, networkNone] = await Promise.all([
         runCli([...common, "--sandbox", "chroot"]),
-        runCli([...common, "--sandbox-network"]),
+        runCli(common, { PATH: engines.PATH }),
         runCli([...common, "--sandbox", "bwrap", "--sandbox-network"], { PATH: engines.PATH }),
         runCli([...common, "--sandbox", "none"], { PATH: engines.PATH }),
+        runCli([...common, "--sandbox", "none", "--sandbox-network"]),
       ]);
       assert.equal(unknown.code, 2);
       assert.match(consume(unknown).error, /--sandbox takes auto, bwrap, docker or none/);
-      assert.equal(networkAlone.code, 2);
-      assert.match(consume(networkAlone).error, /--sandbox-network needs --sandbox/);
+      const defaultBlocked = consumeResult(defaultRefused);
+      assert.equal(defaultRefused.code, 3);
+      assert.equal(defaultBlocked.reason, "SANDBOX_UNAVAILABLE", "the default must not run verifier code without a sandbox");
+      assert.deepEqual(defaultBlocked.runs, []);
       const blocked = consumeResult(refused);
       assert.equal(refused.code, 3);
       assert.equal(blocked.reason, "SANDBOX_UNAVAILABLE");
@@ -218,6 +221,8 @@ test("CLI: --sandbox takes auto, bwrap, docker or none; --sandbox-network needs 
       const plain = consumeResult(none);
       assert.equal(plain.verdict, "VERIFIED", plain.detail);
       assert.deepEqual(plain.sandbox, { requested: false, engine: "none", network: false });
+      assert.equal(networkNone.code, 2);
+      assert.match(consume(networkNone).error, /--sandbox-network cannot be used with --sandbox none/);
     } finally {
       fs.rmSync(engines.dir, { recursive: true, force: true });
     }
@@ -311,14 +316,14 @@ describe("the real Bubblewrap box", { skip: BWRAP_SKIP }, () => {
       assert.match(renderVerifyText(good.result), /\n  sandbox +bwrap: every run confined to its own scratch tree, no network\n/);
       // The rules are the ones without a sandbox: the same request, confined and not, gets the same verdict and reason.
       const auto = await verifyInProcess({ worktree: repo, base, head: fixed }, { approveDiscoveredVerifier: true, sandbox: { engine: "auto", network: true } });
-      const plain = await verifyInProcess({ worktree: repo, base, head: fixed }, { approveDiscoveredVerifier: true });
+      const plain = await verifyInProcess({ worktree: repo, base, head: fixed }, { approveDiscoveredVerifier: true, sandbox: { engine: "none" } });
       assert.notEqual(auto.result.verdict, "VERIFIED", "no declared deliverable");
       assert.deepEqual([auto.result.verdict, auto.result.outcome, auto.result.reason], [plain.result.verdict, plain.result.outcome, plain.result.reason]);
       assert.deepEqual(auto.result.sandbox, { requested: true, engine: "bwrap", network: true });
     });
   });
 
-  test("verify --sandbox bwrap: a hostile test cannot write the caller's checkout or its linked dependency directory, which the tests can still read; without --sandbox it can (the documented limit)", { timeout: 180_000 }, async () => {
+test("verify --sandbox bwrap: a hostile test cannot write the caller's checkout or its linked dependency directory; explicit --sandbox none can", { timeout: 180_000 }, async () => {
     const files = {
       ...BASE_FILES,
       ".gitignore": "node_modules/\n",
@@ -336,7 +341,7 @@ describe("the real Bubblewrap box", { skip: BWRAP_SKIP }, () => {
           "",
         ].join("\n");
         const hostile = commit(repo, { "src/math.js": MATH_FIXED, "test/attack.test.mjs": attack });
-        const run = await verifyInProcess({ worktree: repo, base, head: hostile }, { verifierCommand: "node --test", deliverables: ["src/math.js"], ...(sandboxed ? { sandbox: { engine: "bwrap" as const } } : {}) });
+        const run = await verifyInProcess({ worktree: repo, base, head: hostile }, { verifierCommand: "node --test", deliverables: ["src/math.js"], sandbox: { engine: sandboxed ? "bwrap" : "none" } });
         assert.deepEqual(run.result.linkedDependencyDirs, ["node_modules"]);
         assert.equal(run.result.runs.find((ran) => ran.phase === "head")?.passed, true, JSON.stringify(run.result.runs));
         assert.notEqual(run.result.verdict, "VERIFIED");

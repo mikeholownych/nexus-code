@@ -14,9 +14,8 @@
  * `base` and `head`; the type-checks run in copies of their own (`base-typecheck`, `head-typecheck`), because a checker
  * may write build output; and the head is judged on `head-pristine`, a copy nothing has run in.
  *
- * Who can write what: without `--sandbox` every process started here runs as the caller, so "nothing has run in" is a
- * rule this module keeps, not one the head's code is held to (it can write the scratch directory beside its tree). With
- * `--sandbox` each process sees its own tree and nothing else of the scratch directory (sandboxedVerifierCommand).
+ * Who can write what: every process started here is sandboxed by default, so the head cannot write the scratch Git
+ * state beside its tree. `--sandbox none` is an explicit operator opt-out for trusted changes only.
  *
  * Authority: the request names only what to compare. Everything that can raise the verdict (the verifier command, its
  * approval, the declared deliverables, the deadline) comes from the operator context. Anything that cannot be fully
@@ -74,7 +73,7 @@ export interface VerifyOperatorContext {
   approvedVerificationEdits?: readonly string[];
   /** Deadline of each verifier run, and of each side's type-checks, in seconds (default: NEXUS_VERIFIER_TIMEOUT_SECS, else 300). */
   timeoutSecs?: number;
-  /** Confine every process started on repository content (`--sandbox`). Absent: they run with the caller's privileges. */
+  /** Confine every process started on repository content. Absent: use `auto`; `none` is an explicit trusted-input opt-out. */
   sandbox?: VerifySandboxRequest;
   /** Aborted to interrupt: acted on between child processes. */
   signal?: AbortSignal;
@@ -82,10 +81,10 @@ export interface VerifyOperatorContext {
   onProgress?: (message: string) => void;
 }
 
-/** `--sandbox`. It can only take authority away from the processes `nexus verify` starts; it changes no verdict rule. */
+/** Sandbox policy. `auto` is the default; `none` is an explicit operator opt-out. */
 export interface VerifySandboxRequest {
   /** `auto`: Bubblewrap when it is usable, else Docker. */
-  engine: "auto" | VerifySandboxEngine;
+  engine: "auto" | VerifySandboxEngine | "none";
   /** Let the confined processes use the network (`--sandbox-network`). Off unless true: no environment setting turns it on. */
   network?: boolean;
 }
@@ -334,7 +333,7 @@ export interface VerifySandboxBox {
 }
 
 /** The first engine of the request that passes its own probe (a real confined command, not only a binary on PATH). */
-export function usableSandboxEngine(engine: VerifySandboxRequest["engine"]): VerifySandboxEngine | undefined {
+export function usableSandboxEngine(engine: "auto" | VerifySandboxEngine): VerifySandboxEngine | undefined {
   return (engine === "auto" ? (["bwrap", "docker"] as const) : [engine]).find((candidate) => isSandboxAvailable(candidate));
 }
 
@@ -430,7 +429,7 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
     typecheck: { status: "NOT_RUN", detail: "verification ended before a type-check was due" },
     guard: { status: "NOT_RUN", findings: [], complete: false, detail: "verification ended before the change was read" },
     review: { status: "NOT_RUN", detail: "this version of nexus verify has no reviewer" },
-    sandbox: { requested: Boolean(operator.sandbox), engine: "none", network: false } as VerifySandbox,
+    sandbox: { requested: (operator.sandbox?.engine ?? "auto") !== "none", engine: "none", network: false } as VerifySandbox,
     linkedDependencyDirs: [],
     limits: { timeoutSecs, maxTreeFiles: VERIFY_MAX_TREE_FILES, maxTreeBytes: VERIFY_MAX_TREE_BYTES },
     environment: VERIFY_RECORDED_ENVIRONMENT.filter((name) => Boolean(process.env[name])),
@@ -568,14 +567,18 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
     const base = resolveCommit("--base", baseRef);
     const headCommit = request.head === undefined ? undefined : resolveCommit("--head", request.head);
 
-    // A sandbox that was asked for and cannot be had is a refusal: nothing is run outside it.
+    // Verification runs repository code. Default to confinement and refuse to run if it is unavailable.
+    // `none` is an explicit operator opt-out for changes they trust.
+    const sandboxRequest = operator.sandbox ?? { engine: "auto" as const };
     let sandboxEngine: VerifySandboxEngine | undefined;
-    if (operator.sandbox) {
-      sandboxEngine = usableSandboxEngine(operator.sandbox.engine);
+    if (sandboxRequest.engine !== "none") {
+      sandboxEngine = usableSandboxEngine(sandboxRequest.engine);
       if (!sandboxEngine) {
-        throw new Stop("SANDBOX_UNAVAILABLE", `--sandbox ${operator.sandbox.engine} was requested and ${operator.sandbox.engine === "auto" ? "neither Bubblewrap nor Docker" : operator.sandbox.engine === "bwrap" ? "Bubblewrap (bwrap)" : "Docker"} could confine a test command on this host, so nothing was run. Install the engine (see nexus doctor), or run without --sandbox to run the repository's code with your own privileges`);
+        throw new Stop("SANDBOX_UNAVAILABLE", `the ${sandboxRequest.engine === "auto" ? "default --sandbox auto" : `--sandbox ${sandboxRequest.engine}`} was requested and ${sandboxRequest.engine === "auto" ? "neither Bubblewrap nor Docker" : sandboxRequest.engine === "bwrap" ? "Bubblewrap (bwrap)" : "Docker"} could confine a test command on this host, so nothing was run. Install an engine (see nexus doctor); only use --sandbox none for changes you trust`);
       }
-      doc.sandbox = { requested: true, engine: sandboxEngine, network: operator.sandbox.network === true };
+      doc.sandbox = { requested: true, engine: sandboxEngine, network: sandboxRequest.network === true };
+    } else {
+      doc.sandbox = { requested: false, engine: "none", network: false };
     }
     repositoryFilterOverrides = neutraliseRepositoryFilters();
 
@@ -691,7 +694,7 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
      * ends verification, and the line is never run outside it.
      */
     const box: VerifySandboxBox | undefined = sandboxEngine
-      ? { engine: sandboxEngine, network: operator.sandbox?.network === true, scratch, readOnlyDirs: doc.linkedDependencyDirs.map((child) => path.join(worktree, child)) }
+      ? { engine: sandboxEngine, network: sandboxRequest.network === true, scratch, readOnlyDirs: doc.linkedDependencyDirs.map((child) => path.join(worktree, child)) }
       : undefined;
     const shell = (line: string, directory: string, timeoutMs: number) => {
       if (!box) return runVerifierShell(line, directory, timeoutMs);

@@ -78,7 +78,7 @@ export const VERIFY_EXIT_CODES = [
   { code: 1, name: "option_parse", when: "The command line could not be parsed: an unknown option or an option without its value (the option parser exits before the command runs; no JSON document)." },
   { code: 2, name: "unverified", when: "`REGRESSION_FREE` (the tests pass without showing the change), or `UNVERIFIED` because there is no verifier, no test executed, base and head are the same tree, or an enforced type-check project of the base has no counterpart in the head." },
   { code: 2, name: "usage", when: "A usage error: not a Git working tree, a base or head that does not name a commit, or an invalid option value or combination." },
-  { code: 3, name: "blocked", when: "`BLOCKED`: a person must decide. The discovered verifier is not approved, the change edits verification files or weakens a test without approval, the changed files could not all be classified, the checkout is not trusted, a tree exceeds the limits or holds something that is not materialised (a submodule), or `--sandbox` was requested and the engine is not usable." },
+  { code: 3, name: "blocked", when: "`BLOCKED`: a person must decide. The discovered verifier is not approved, the change edits verification files or weakens a test without approval, the changed files could not all be classified, the checkout is not trusted, a tree exceeds the limits or holds something that is not materialised (a submodule), or the default/selected sandbox engine is not usable." },
   { code: 130, name: "interrupted", when: "Interrupted (SIGINT or SIGTERM). The signal is acted on when the running verifier process ends; a second signal exits at once and may leave no JSON document." },
 ] as const satisfies readonly VerifyExitCode[];
 
@@ -157,7 +157,7 @@ export type VerifySandboxEngine = "bwrap" | "docker";
  * that was requested.
  */
 export interface VerifySandbox {
-  /** `--sandbox` was given. */
+  /** Confinement was selected (including the default `auto`). */
   requested: boolean;
   /** The engine every process ran in. `none`: no sandbox (not requested, or requested and unavailable, in which case nothing ran). */
   engine: VerifySandboxEngine | "none";

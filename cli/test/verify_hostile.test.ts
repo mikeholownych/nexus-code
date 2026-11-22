@@ -28,8 +28,8 @@ import {
   commit, consume, consumeResult, git, head, runCli, verifyInProcess, withRepos, writeFiles,
 } from "./helpers/verify_fixture.js";
 
-const OPERATOR: VerifyOperatorContext = { approveDiscoveredVerifier: true, deliverables: ["src/math.js"] };
-const OWN_VERIFIER: VerifyOperatorContext = { verifierCommand: "node --test", deliverables: ["src/math.js"] };
+const OPERATOR: VerifyOperatorContext = { approveDiscoveredVerifier: true, deliverables: ["src/math.js"], sandbox: { engine: "none" } };
+const OWN_VERIFIER: VerifyOperatorContext = { verifierCommand: "node --test", deliverables: ["src/math.js"], sandbox: { engine: "none" } };
 /** The bug stays, and the declared deliverable still counts as changed. */
 const STILL_BUGGY = `${MATH_BUGGY}// touched\n`;
 /** The failing assertion rewritten to expect the bug: the same number of tests and assertions, so no heuristic flags it. */
@@ -290,16 +290,25 @@ function scratchTamperingHead(): Record<string, string> {
   return { "src/math.js": STILL_BUGGY, [TEST_FILE]: TEST_EXPECTS_BUG, "test/zz_tamper.test.mjs": tamper };
 }
 
-// LIMIT (documented in the manual: "Limits"): without --sandbox the head's code runs as the caller and can write the
-// scratch directory beside its own tree. This head rewrites the scratch index, so the "pristine" copy written after
-// the run holds a fixed product and the base's test file, and a change that fixes nothing is reported VERIFIED. This
-// is the reason a gate on untrusted changes must use --sandbox (the next test). If this assertion ever fails because
-// the result is no longer VERIFIED, the limit was closed: update the manual and docs/VERIFY_IN_CI.md.
-test("documented limit: WITHOUT --sandbox a hostile head test that rewrites the scratch index behind the pristine copy gets a change that fixes nothing reported VERIFIED", { timeout: 120_000 }, async () => {
-  const result = await attempt(BASE_FILES, scratchTamperingHead());
+// Explicit opt-out retained for trusted local changes. The default is tested separately and must confine or block.
+test("explicit --sandbox none allows a hostile head test to rewrite the scratch index and forge VERIFIED", { timeout: 120_000 }, async () => {
+  const result = await attempt(BASE_FILES, scratchTamperingHead(), { ...OPERATOR, sandbox: { engine: "none" } });
   assert.equal(result.verdict, "VERIFIED", `the limit this test documents has changed: ${summary(result)}`);
   assert.deepEqual(result.sandbox, { requested: false, engine: "none", network: false }, "and the receipt says the runs were not sandboxed");
   assert.deepEqual(result.runs.map((ran) => ran.sandboxed), result.runs.map(() => false));
+});
+
+test("default verification confines the hostile scratch-index rewrite or blocks when no sandbox is available", { timeout: 120_000 }, async () => {
+  const result = await attempt(BASE_FILES, scratchTamperingHead(), { approveDiscoveredVerifier: true, deliverables: ["src/math.js"] });
+  notVerified(result);
+  assert.equal(result.sandbox?.requested, true, "default verification must request confinement");
+  if (result.sandbox?.engine === "none") {
+    assert.equal(result.reason, "SANDBOX_UNAVAILABLE");
+    assert.deepEqual(result.runs, [], "a missing sandbox must block before running repository code");
+  } else {
+    assert.ok(result.runs.length > 0);
+    assert.ok(result.runs.every((run) => run.sandboxed), "all default runs must be confined");
+  }
 });
 
 // PREVENTED with --sandbox: the scratch directory is not in the box, so the same head cannot reach the index, and the

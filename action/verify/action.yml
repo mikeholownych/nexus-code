@@ -28,10 +28,10 @@ inputs:
     description: Tree-relative verification files (a weakened test, CI, build or test configuration) whose edit you have read and approve, one per line. Approval lifts BLOCKED and never makes the change VERIFIED.
     default: ""
   sandbox:
-    description: Confine every process started on the repository's code - auto, bwrap or docker. Empty - no sandbox (the change's code runs with the job's privileges). Use one for changes you do not trust. BLOCKED when the engine is not usable on the runner.
+    description: Confine every process started on the repository's code - auto, bwrap or docker. Empty uses auto (Bubblewrap, then Docker); set none only for changes you trust. BLOCKED when the default or selected engine is not usable on the runner.
     default: ""
   sandbox-network:
-    description: '"true" lets the confined processes use the network. Only with sandbox.'
+    description: '"true" lets the confined processes use the network. The sandbox is enabled by default.'
     default: "false"
   timeout-secs:
     description: Deadline of each verifier run, and of each side's type-checks, in seconds. Empty - 300.
