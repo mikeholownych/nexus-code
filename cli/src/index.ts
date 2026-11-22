@@ -39,6 +39,8 @@ import { redactDiagnosticForOutput } from "./core/persistence_protection.js";
 import { formatDiagnosticForOutput } from "./ui.js";
 import { streamEventSink, streamObserver } from "./stream_json.js";
 import { RUN_RESULT_SCHEMA_VERSION, resolveRunTask, runExitCode, runJsonResult } from "./run_contract.js";
+import { VERIFY_RESULT_SCHEMA_VERSION, verifyExitCode, type VerifyJsonError } from "./verify_contract.js";
+import { VerifyInterrupted, VerifyUsageError, renderVerifyText, verifyChange } from "./core/verify.js";
 
 function collectAnswer(value: string, previous: string[] = []): string[] {
   return [...previous, value];
@@ -665,6 +667,81 @@ program
       const exitCode = runExitCode((err instanceof TaskStateNotFoundError || err?.name === "TaskStateNotFoundError") ? "task_not_found" : "failed");
       app.shutdown();
       exitAfterFlush(exitCode);
+    }
+  });
+
+// VR-1: the verdict on a change Nexus did not necessarily make (src/core/verify.ts; contract in src/verify_contract.ts).
+program
+  .command("verify")
+  .description("Verify a change without a model: run the verifier on the base and on the change, and report VERIFIED, REGRESSION_FREE, UNVERIFIED or BLOCKED")
+  .option("-w, --worktree <path>", "Top of the Git working tree (default: current directory); with no --head, its working tree is the change")
+  .option("--base <ref>", "Commit the change starts from (default: HEAD)")
+  .option("--head <ref>", "Commit that holds the change (default: the working tree)")
+  .option("--verifier <command>", "Your own verifier command (otherwise one is discovered in the base tree and needs approval)")
+  .option("--deliverable-file <path>", "Product file the change is meant to deliver, relative to the tree; VERIFIED needs at least one (repeatable)", collectDeliverableFile, [])
+  .option("-y, --yes", "Approve whatever verifier is discovered in the base tree")
+  .option("--approve-verifier <sha256>", "Approve the discovered verifier with exactly this digest (printed when approval is needed)")
+  .option("--timeout-secs <n>", "Deadline of each verifier run in seconds (default: NEXUS_VERIFIER_TIMEOUT_SECS, else 300)")
+  .option("--receipt <file>", "Also write the result document (the receipt) to this file")
+  .option("-j, --json", "Print the result as one JSON document on stdout (see the manual: nexus verify)")
+  .action(async (_options: any, cmd: Command) => {
+    const options = commandOptions(cmd);
+    const isJson = Boolean(options.json);
+    const fail = (name: "usage" | "interrupted", message: string) => {
+      const exitCode = verifyExitCode(name);
+      console.error(`error: ${formatDiagnosticForOutput(message)}`);
+      if (isJson) console.log(JSON.stringify({ schema_version: VERIFY_RESULT_SCHEMA_VERSION, error: redactDiagnosticForOutput(message), exitCode } satisfies VerifyJsonError, null, 2));
+      exitAfterFlush(exitCode);
+    };
+    let timeoutSecs: number | undefined;
+    if (options.timeoutSecs !== undefined) {
+      timeoutSecs = Number(options.timeoutSecs);
+      if (!Number.isInteger(timeoutSecs) || timeoutSecs < 1 || timeoutSecs > 86_400) return fail("usage", "--timeout-secs must be a whole number of seconds from 1 to 86400");
+    }
+    if (options.verifier !== undefined && !String(options.verifier).trim()) return fail("usage", "--verifier needs a command");
+    if (options.approveVerifier !== undefined && !/^[0-9a-fA-F]{64}$/.test(String(options.approveVerifier).trim())) return fail("usage", "--approve-verifier needs the 64-character sha256 digest printed when approval is needed");
+    if (options.verifier !== undefined && (options.yes || options.approveVerifier !== undefined)) return fail("usage", "--verifier is your own command and needs no approval: do not combine it with --yes or --approve-verifier");
+
+    // The first signal stops verification once the running verifier process ends; a second one exits at once.
+    const abort = new AbortController();
+    const onSignal = () => {
+      if (abort.signal.aborted) process.exit(verifyExitCode("interrupted"));
+      abort.abort();
+      if (!isJson) console.error(pc.yellow("\nInterrupt received: stopping after the running verifier process (signal again to exit at once)."));
+    };
+    process.on("SIGINT", onSignal);
+    process.on("SIGTERM", onSignal);
+    try {
+      const result = await verifyChange(
+        { worktree: path.resolve(options.worktree ?? process.cwd()), base: options.base, head: options.head },
+        {
+          verifierCommand: options.verifier,
+          approveDiscoveredVerifier: Boolean(options.yes),
+          approvedVerifierDigest: options.approveVerifier,
+          deliverables: options.deliverableFile ?? [],
+          timeoutSecs,
+          signal: abort.signal,
+          onProgress: isJson ? undefined : (message) => console.error(pc.dim(message)),
+        },
+      );
+      const document = `${JSON.stringify(result, null, 2)}\n`;
+      if (options.receipt !== undefined) {
+        try {
+          fs.writeFileSync(path.resolve(String(options.receipt)), document);
+        } catch (err: any) {
+          return fail("usage", `--receipt: cannot write ${options.receipt} (${err?.code ?? "error"}); the verdict was ${result.verdict}`);
+        }
+      }
+      if (isJson) process.stdout.write(document);
+      else console.log(renderVerifyText(result));
+      exitAfterFlush(result.exitCode);
+    } catch (err: any) {
+      if (err instanceof VerifyUsageError) return fail("usage", err.message);
+      if (err instanceof VerifyInterrupted) return fail("interrupted", "interrupted: no verdict was reached");
+      throw err;
+    } finally {
+      process.removeListener("SIGINT", onSignal);
+      process.removeListener("SIGTERM", onSignal);
     }
   });
 
