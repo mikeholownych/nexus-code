@@ -2,8 +2,9 @@
 
 ## Scope
 
-One PR on `v1/review-fixes-01`, based on `origin/release/v1.3.0` head `028a0826`. All confirmed findings
-from the independent review are fixed here. No merge, tag or publish is part of this slice.
+One PR on `v1/review-fixes-01`, started at `origin/release/v1.3.0` head `028a0826` and merged the
+release head `b253ee3d` into the slice before pushing. All confirmed findings from the independent
+review are fixed here. No merge, tag or publish is part of this slice.
 
 The one finding rejected by direct verification needs no change: the copy-on-write fallback still uses
 chunked `readSync`/`writeSync` with per-chunk `onBytesCopied` callbacks
@@ -26,7 +27,7 @@ asserts that behavior.
 | Evidence/doc drift | Updated TEST_MATURITY_01, INSTALL_BACKUP_01 and DOWNLOAD_PROGRESS_01 to match the code and measurements. |
 | Standalone config backup counted but not manifested | `config.env` is recorded as a config manifest entry; entries now match counted files. |
 | Stale quickstart prerelease pin | The examples now describe the published `v1.2.2` stable tag. |
-| Protocol golden `hello` omitted required `commands` | The shared corpus carries a typed slash-command catalogue, with a test asserting its shape on both sides. |
+| Protocol golden `hello` omitted required `commands` | The shared corpus carries a typed slash-command catalogue, with a test asserting its shape on both sides. The newer protocol-schema test's "known gap" exception for `hello` was removed because that gap is now closed. |
 | Duration metrics imply full-process timing | Documented that timing starts at the first top-level `node:test` event and excludes startup/module load. |
 
 ## Verification
@@ -34,16 +35,16 @@ asserts that behavior.
 Measured on this worktree with a throwaway `HOME`:
 
 - `npm --prefix cli run build`: pass (TypeScript build).
-- Affected test files on Node 22: 36 tests, 36 pass, 0 fail, 0 skipped.
-- Same affected test files on Node 24 (via `npx node@24`): 36 tests, 36 pass, 0 fail, 0 skipped.
+- Affected test files on Node 22: 43 tests, 43 pass, 0 fail, 0 skipped.
+- Same affected test files on Node 24 (via `npx node@24`): 43 tests, 43 pass, 0 fail, 0 skipped.
 - `cargo test --locked --manifest-path core/Cargo.toml golden_protocol_v1_corpus`: 1 pass.
 - `node cli/scripts/test_shards.mjs test/diff_coverage.test.ts` from the repository root: pass.
 - `run_coverage.mjs --tier=unit --out <absolute path>` from the repository root: lcov written.
 - `NEXUS_COVERAGE_OUT=<absolute path> run_coverage.mjs --tier=unit` from the repository root: lcov written.
-- `diff_coverage.mjs --lcov <absolute path> --base 028a0826 --include-worktree --json <absolute path>`:
+- `diff_coverage.mjs --lcov <absolute path> --base b253ee3d --include-worktree --json <absolute path>`:
   report written; the advisory percent is `null` because the unit tier does not include the changed
   upgrade tests.
-- `bash scripts/check_fmt.sh` with `NEXUS_FMT_BASE=028a0826`: no changed Rust files, exit 0.
+- `bash scripts/check_fmt.sh` with `NEXUS_FMT_BASE=b253ee3d`: no changed Rust files, exit 0.
 - `.github/workflows/ci.yml` parses as YAML. The full required CI run is still pending.
 
 ## Reference coding

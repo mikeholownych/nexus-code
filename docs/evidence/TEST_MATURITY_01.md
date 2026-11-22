@@ -111,7 +111,7 @@ Queried the local XERJ node (`xerj v1.0.0-rc.104`) after indexing this project's
 | T0-2 | static gates in inner loop | none | `make lint` = 0 (typecheck + clippy + changed-file rustfmt, fail-closed base); 2 focused check_fmt tests pass | measured locally |
 | T0-3 | Rust suite | not recorded before this slice | `cargo test --locked`: 458 tests across six binaries, 0 failures (396 in `nexus-tui`, including the new golden corpus test); `tsc` build = 0 | measured locally |
 | T1-1 | duration-based sharding | file size only | measured duration preferred (startup excluded); 5 sharder tests pass, including root-cwd invocation | measured locally |
-| T1-2 | protocol golden corpus | mirrored types, no shared bytes | 8 records, typed `hello.commands`; TS 4/4 and Rust 1/1 tests pass | measured locally |
+| T1-2 | protocol golden corpus | mirrored types, no shared bytes | 8 records, typed `hello.commands`; TS 4/4 golden and 7/7 schema tests pass, Rust 1/1 | measured locally |
 | T2-1 | diff coverage | none | advisory CI job added; threshold held at 0 until measured. Reporter destination and lcov argument/path parsing fixed; CI rerun pending | wired, not calibrated |
 | T3-1 | real-capability release evidence | absent | unchanged; no stable-tag claim made | open |
 
