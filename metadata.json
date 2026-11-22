@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M81KN6B5T63Z0BMGMVNVSPAZ",
+  "strategy": "manual-commit",
+  "branch": "codex/vr1c-hostile-verify-takeover",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "cli/src/verify_contract.ts",
+    "cli/test/helpers/verify_fixture.ts",
+    "cli/test/verify_hostile.test.ts",
+    "cli/test/verify_schema.test.ts",
+    "docs/USER_MANUAL.md",
+    "docs/VERIFY_IN_CI.md",
+    "docs/protocol/README.md",
+    "docs/protocol/VERIFY_RESULT_VERSIONS.json",
+    "docs/protocol/verify-result-v2.schema.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 44445,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 12334208,
+    "output_tokens": 7282,
+    "api_call_count": 56
+  },
+  "redaction": {
+    "replacements": 1450,
+    "layers": {
+      "betterleaks": 406,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 56,
+      "credentialed_uri": 58,
+      "entropy": 1121,
+      "key_context": 0,
+      "provider_token": 12,
+      "shell_stdin": 0
+    }
+  }
+}
