@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_012ia3r1kt51m2CabdvFxmR1",
+  "agent_id": "a943df781576236f0",
+  "subagent_type": "general-purpose",
+  "task_description": "PF-2 run --json contract",
+  "token_usage": {
+    "input_tokens": 102,
+    "cache_creation_tokens": 336014,
+    "cache_read_tokens": 6532739,
+    "output_tokens": 61615,
+    "api_call_count": 50
+  },
+  "started_at": "2026-11-22T03:42:39.924650357Z",
+  "completed_at": "2026-11-22T03:43:48.272257656Z"
+}
