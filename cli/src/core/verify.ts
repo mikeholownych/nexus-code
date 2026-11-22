@@ -6,7 +6,13 @@
  * from the operator or discovered in the BASE tree (the head is the change under test and cannot choose its own judge),
  * it is run on the base and on the head, and the outcome is derived by the same rules the agent applies to its own
  * work: this module re-composes captureChangeBaselineImpl / judgeIndependenceImpl (core/completion_oracle.ts) and the
- * evidence built in core/spine_handlers.ts, and derives the outcome with outcomeFromEvidence.
+ * evidence built in core/spine_handlers.ts, and derives the outcome with outcomeFromEvidence. The project type-checks
+ * run on both sides as the agent's oracle runs them (core/typecheck_evidence.ts), and every changed file that defines
+ * or weakens the verification is a guard finding, classified under the BASE tree's policy.
+ *
+ * Where each thing is read: the guard reads both trees before any repository code has run in them; the verifier runs in
+ * `base` and `head`; the type-checks run in copies of their own (`base-typecheck`, `head-typecheck`), because a checker
+ * may write build output; and the head is judged on `head-pristine`, a copy nothing has run in.
  *
  * Authority: the request names only what to compare. Everything that can raise the verdict (the verifier command, its
  * approval, the declared deliverables, the deadline) comes from the operator context. Anything that cannot be fully
@@ -18,21 +24,24 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { getBuildIdentity } from "../build_identity.js";
 import { trustedGitArgs } from "../git.js";
+import { SecurityManager, conditionalConfigChanged, isConditionalConfig, neutersTests } from "../security.js";
 import {
-  SKIP_DIRS, describeVerifier, discoverTypechecks, discoverVerifier, hasExecutedTests, isFilteredVerifierCommand, isVerifierDeliverableBound,
-  runVerifierShell, typecheckMode, verifierTimeoutSecs,
+  MAX_TEST_BYTES, SKIP_DIRS, describeVerifier, discoverTypechecks, discoverVerifier, hasExecutedTests, isFilteredVerifierCommand, isVerifierDeliverableBound,
+  runVerifierShell, typecheckMode, verifierTimeoutSecs, type DiscoveredTypecheck, type TimedExecutor,
 } from "../tester.js";
 import { formatDiagnosticForOutput, safeTerminal } from "../ui.js";
 import {
   VERIFY_RESULT_SCHEMA_VERSION, verifyExitCode, verifyExitNameFor, verifyVerdictFor,
-  type VerifyJsonResult, type VerifyReason, type VerifyRunRecord, type VerifyTreeRef, type VerifyVerifierRecord,
+  type VerifyGuard, type VerifyGuardFinding, type VerifyJsonResult, type VerifyReason, type VerifyRunRecord, type VerifyTreeRef, type VerifyVerifierRecord,
 } from "../verify_contract.js";
 import { GitError, UntrustedCheckoutError, git, printable } from "../worktrunk/git.js";
 import {
   isInlineProgramVerifier, judgeWithoutCopy, prepareBaselineTestsCopy, requiresWorkspaceVerifierDefinitionBinding, snapshotTests,
   snapshotVerifierDefinitionWithReason, testsChangedSince, verifierDefinitionChangedSince, type ChangeBaseline, type Independence,
 } from "./independent_check.js";
-import type { VerificationEvidence } from "./turn.js";
+import { classifyTestEdit } from "./regression_obligations.js";
+import type { TypecheckEvidence, VerificationEvidence } from "./turn.js";
+import { captureTypecheckBaseline, collectTypecheckEvidence, typecheckNotApplicable, typecheckProjectKey, worstTypecheckBlock } from "./typecheck_evidence.js";
 import { outcomeFromEvidence } from "./verification_outcome.js";
 
 /** What to compare. Nothing here can raise the verdict, so this is the part a remote caller may supply. */
@@ -55,7 +64,9 @@ export interface VerifyOperatorContext {
   approvedVerifierDigest?: string;
   /** Workspace-relative product files the change is meant to deliver. */
   deliverables?: readonly string[];
-  /** Deadline of each verifier run in seconds (default: NEXUS_VERIFIER_TIMEOUT_SECS, else 300). */
+  /** Workspace-relative verification files whose edit the operator approves (`--approve-verification-edit`). */
+  approvedVerificationEdits?: readonly string[];
+  /** Deadline of each verifier run, and of each side's type-checks, in seconds (default: NEXUS_VERIFIER_TIMEOUT_SECS, else 300). */
   timeoutSecs?: number;
   /** Aborted to interrupt: acted on between child processes. */
   signal?: AbortSignal;
@@ -90,6 +101,12 @@ const DEPENDENCY_DIRS: readonly string[] = ["node_modules", "vendor", ".venv", "
 const MAX_DEPENDENCY_LINKS = 64;
 const MAX_DEPENDENCY_SCAN = 2000;
 const MAX_LISTED_CHANGES = 200;
+/** Most guard findings one result lists. A change with more is BLOCKED as incompletely classified, never listed in part as if whole. */
+export const VERIFY_MAX_GUARD_FINDINGS = 1000;
+/** Largest verification file whose text the guard reads to classify an edit. */
+export const VERIFY_MAX_GUARD_FILE_BYTES = MAX_TEST_BYTES;
+/** Reasons that say the head was run and did not pass. They outrank a guard finding: "it fails" is reported before "a person must decide". */
+const HEAD_RUN_FAILURES: readonly VerifyReason[] = ["VERIFIER_FAILED", "VERIFIER_TIMED_OUT", "TYPECHECK_FAILED", "TYPECHECK_TIMED_OUT", "TYPECHECK_UNAVAILABLE"];
 const WORKING_TREE = "(working tree)";
 /** Variables that can change the verdict or what the verifier sees: their NAMES are recorded when set. */
 export const VERIFY_RECORDED_ENVIRONMENT: readonly string[] = ["NEXUS_TRUST_WORKSPACE", "NEXUS_TYPECHECK", "NEXUS_VERIFIER_TIMEOUT_SECS", "NEXUS_VERIFIER_ENV_PASSTHROUGH"];
@@ -126,13 +143,112 @@ function validRef(ref: string): boolean {
   return ref.length > 0 && ref.length <= 256 && !ref.startsWith("-") && !/[\0\r\n]/.test(ref);
 }
 
-/** A declared deliverable as a normalised workspace-relative path; a path that is absolute or leaves the tree is refused. */
-function normaliseDeliverable(file: string): string {
+/** An operator-named file as a normalised workspace-relative path; a path that is absolute or leaves the tree is refused. */
+function normaliseTreePath(option: string, file: string): string {
   const normal = path.posix.normalize(file.trim().replace(/\\/g, "/")).replace(/^\.\//, "");
   if (!normal || normal === "." || normal.startsWith("../") || normal === ".." || path.isAbsolute(normal) || /[\0\r\n]/.test(normal)) {
-    throw new VerifyUsageError(`--deliverable-file ${printable(file)} is not a path inside the working tree`);
+    throw new VerifyUsageError(`${option} ${printable(file)} is not a path inside the working tree`);
   }
   return normal;
+}
+
+/**
+ * The verification-file guard: every changed file that decides how the change is verified, and for a test file what
+ * the edit took away. Call it before any repository code has run in `baseDir` or `headDir`.
+ *
+ * The policy (mode, extra paths) is the BASE tree's `.nexus-security.json`, read as an UNTRUSTED repository's: it can
+ * tighten the guard (mode `block`, more paths) and never relax it. The head's policy file is never read as policy; it
+ * is itself a finding. NEXUS_TRUST_WORKSPACE is deliberately not honoured: the operator's trust in a checkout is not
+ * trust in the commit under review, so the variable is taken out of the environment while the policy is loaded.
+ */
+function classifyVerificationEdits(baseDir: string, headDir: string, changed: readonly string[], approved: ReadonlySet<string>): VerifyGuard {
+  const trustOverride = process.env.NEXUS_TRUST_WORKSPACE;
+  delete process.env.NEXUS_TRUST_WORKSPACE;
+  let manager: SecurityManager;
+  try {
+    manager = new SecurityManager(baseDir);
+  } finally {
+    if (trustOverride !== undefined) process.env.NEXUS_TRUST_WORKSPACE = trustOverride;
+  }
+  const mode = manager.getPolicy().verificationPaths?.mode ?? "approve";
+  const present = (directory: string, rel: string) => {
+    try { fs.lstatSync(path.join(directory, rel)); return true; } catch { return false; }
+  };
+  /** The file's text; null when it is absent; undefined when it cannot be read as a small regular file. */
+  const read = (directory: string, rel: string): string | null | undefined => {
+    const file = path.join(directory, rel);
+    let stat: fs.Stats;
+    try { stat = fs.lstatSync(file); } catch { return null; }
+    if (!stat.isFile() || stat.size > VERIFY_MAX_GUARD_FILE_BYTES) return undefined;
+    try { return fs.readFileSync(file, "utf8"); } catch { return undefined; }
+  };
+  const findings: VerifyGuardFinding[] = [];
+  const unclassified: string[] = [];
+  for (const rel of changed) {
+    const found = manager.classifyVerificationPath(rel);
+    if (!found) continue;
+    const inBase = present(baseDir, rel);
+    const inHead = present(headDir, rel);
+    const kind: VerifyGuardFinding["kind"] = !inBase ? "added" : !inHead ? "deleted" : "modified";
+    let weakening: string[] | undefined;
+    let requiresApproval = found.class !== "test_file";
+    if (found.class === "test_file") {
+      // A new test file is free, as it is for the agent's file tools (security.ts verificationEditDecision).
+      if (kind === "deleted") weakening = ["removed"];
+      else if (kind === "modified") {
+        const before = read(baseDir, rel);
+        const after = read(headDir, rel);
+        if (typeof before !== "string" || typeof after !== "string") {
+          unclassified.push(rel);
+          weakening = ["unverifiable-change"];
+        } else {
+          const kinds: string[] = classifyTestEdit(before, after).map((signal) => signal.kind);
+          const was = new Set(before.split("\n"));
+          if (!kinds.includes("skipped") && neutersTests(after.split("\n").filter((line) => !was.has(line)).join("\n"))) kinds.push("neutered");
+          if (kinds.length) weakening = kinds;
+        }
+      }
+      requiresApproval = weakening !== undefined;
+    } else if (isConditionalConfig(rel) && kind !== "deleted") {
+      // package.json, pyproject.toml, setup.cfg: only the keys or sections that decide how tests run are verification configuration.
+      const before = read(baseDir, rel);
+      const after = read(headDir, rel);
+      if (before === undefined || typeof after !== "string") unclassified.push(rel);
+      else {
+        let touches = true;
+        try { touches = conditionalConfigChanged(rel, before, after); } catch { /* not parseable: treated as a verification edit */ }
+        if (!touches) continue;
+      }
+    }
+    if (findings.length >= VERIFY_MAX_GUARD_FINDINGS) {
+      return {
+        status: "BLOCKED", mode, policySource: present(baseDir, ".nexus-security.json") ? "base_tree" : "default", findings, complete: false,
+        detail: `the change touches more than ${VERIFY_MAX_GUARD_FINDINGS} verification files; the findings listed are not all of them`,
+      };
+    }
+    findings.push({ path: printable(rel), class: found.class, kind, ...(weakening ? { weakening } : {}), requiresApproval, approved: requiresApproval && approved.has(rel) });
+  }
+  const complete = unclassified.length === 0;
+  const enforced = mode === "approve" || mode === "block";
+  const waiting = enforced && findings.some((finding) => finding.requiresApproval && (mode === "block" || !finding.approved));
+  return {
+    status: !complete || waiting ? "BLOCKED" : "CLEAR",
+    mode,
+    policySource: present(baseDir, ".nexus-security.json") ? "base_tree" : "default",
+    findings,
+    complete,
+    ...(complete ? {} : { detail: `could not be read to classify the edit (not a regular file, or larger than ${VERIFY_MAX_GUARD_FILE_BYTES} bytes): ${unclassified.slice(0, 5).map((rel) => printable(rel)).join(", ")}${unclassified.length > 5 ? ` and ${unclassified.length - 5} more` : ""}` }),
+  };
+}
+
+const describeFinding = (finding: VerifyGuardFinding) => `${finding.path} (${finding.class}, ${finding.kind}${finding.weakening ? `: ${finding.weakening.join(", ")}` : ""})`;
+
+/** Cargo's type-check builds into a directory of its own under the temp directory, named in its command (tester.ts). Removed here, since the tree it belongs to is a scratch copy. */
+function removeTypecheckBuildOutput(checks: readonly DiscoveredTypecheck[]): void {
+  for (const check of checks) {
+    const target = check.tool === "cargo" ? check.command.match(/^CARGO_TARGET_DIR='([^']+)' /)?.[1] : undefined;
+    if (target && path.dirname(target) === os.tmpdir() && /^nexus-typecheck-[0-9a-f]{16}$/.test(path.basename(target))) fs.rmSync(target, { recursive: true, force: true });
+  }
 }
 
 /** Whether `relative` below `root` is reached through real directories only (no link on the way). */
@@ -191,7 +307,8 @@ function linkDependencyDirs(worktree: string, targets: readonly string[]): strin
 export async function verifyChange(request: VerifyRequest, operator: VerifyOperatorContext = {}): Promise<VerifyJsonResult> {
   const started = Date.now();
   const timeoutSecs = verifierTimeoutSecs(operator.timeoutSecs);
-  const deliverables = [...new Set((operator.deliverables ?? []).map(normaliseDeliverable))];
+  const deliverables = [...new Set((operator.deliverables ?? []).map((file) => normaliseTreePath("--deliverable-file", file)))];
+  const approvedEdits = [...new Set((operator.approvedVerificationEdits ?? []).map((file) => normaliseTreePath("--approve-verification-edit", file)))];
   const progress = (message: string) => operator.onProgress?.(message);
   // Child processes run synchronously: yielding here is what lets a signal handler run between them.
   const checkpoint = async () => {
@@ -203,9 +320,10 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
     changedFiles: [],
     changedFileCount: 0,
     deliverables,
+    approvedVerificationEdits: approvedEdits.map((file) => printable(file)),
     runs: [],
-    typecheck: { status: "NOT_RUN", detail: "this version of nexus verify does not run type-checks" },
-    guard: { status: "NOT_RUN", detail: "this version of nexus verify does not classify edits to verification files" },
+    typecheck: { status: "NOT_RUN", detail: "verification ended before a type-check was due" },
+    guard: { status: "NOT_RUN", findings: [], complete: false, detail: "verification ended before the change was read" },
     review: { status: "NOT_RUN", detail: "this version of nexus verify has no reviewer" },
     linkedDependencyDirs: [],
     limits: { timeoutSecs, maxTreeFiles: VERIFY_MAX_TREE_FILES, maxTreeBytes: VERIFY_MAX_TREE_BYTES },
@@ -227,6 +345,29 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
       ...rest,
       durationMs: Date.now() - started,
     };
+  };
+  /**
+   * The verdict once the guard has read the change. Precedence: a head that was run and did not pass keeps its reason
+   * (exit 1); a verifier that was not approved keeps its (nothing ran); otherwise a guard finding that waits for a
+   * decision, or an incomplete scan, is BLOCKED whatever the tests showed. An approved finding never blocks and never
+   * leaves the change VERIFIED: what was approved is the report, not the weakening.
+   */
+  const conclude = (outcome: VerifyJsonResult["outcome"], reason: VerifyReason | undefined, detail: string | undefined): VerifyJsonResult => {
+    const guard = doc.guard;
+    const needing = guard.findings.filter((finding) => finding.requiresApproval);
+    if (guard.status === "BLOCKED" && reason !== "VERIFIER_NOT_APPROVED" && !(reason && HEAD_RUN_FAILURES.includes(reason))) {
+      const otherwise = `Without this the result was ${verifyVerdictFor(reason)}${reason && reason !== verifyVerdictFor(reason) ? ` (${reason})` : ""}.`;
+      if (!guard.complete) return finish("UNVERIFIED", "GUARD_INCOMPLETE", `not every changed file could be classified, so the change may edit how it is verified in ways not listed: ${guard.detail}. ${otherwise}`);
+      const waiting = needing.filter((finding) => guard.mode === "block" || !finding.approved);
+      const listed = `${waiting.slice(0, 5).map(describeFinding).join("; ")}${waiting.length > 5 ? `; and ${waiting.length - 5} more` : ""}`;
+      return finish("UNVERIFIED", "VERIFICATION_EDIT_BLOCKED", guard.mode === "block"
+        ? `the change edits how it is verified, and the base tree's policy (mode block) refuses such edits: ${listed}. ${otherwise}`
+        : `the change edits how it is verified, and the edit was not approved: ${listed}. Approve each with --approve-verification-edit <path> after reading it; approval lets the result be reported and never makes the change VERIFIED. ${otherwise}`);
+    }
+    if (outcome === "VERIFIED" && needing.length) {
+      return finish("REGRESSION_FREE", "REGRESSION_FREE", `Tests pass, but the change edits how it is verified (${needing.slice(0, 5).map(describeFinding).join("; ")}${needing.length > 5 ? `; and ${needing.length - 5} more` : ""}). The approval given with --approve-verification-edit lets the result be reported; it does not make the change verified.`);
+    }
+    return finish(outcome, reason, detail);
   };
 
   let worktree: string;
@@ -338,12 +479,13 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
       must(["checkout-index", "-a", `--prefix=${directory}${path.sep}`], { env: index, timeoutMs: GIT_TREE_TIMEOUT_MS });
     };
     progress(`materialising base ${base.commit.slice(0, 12)} and head ${headCommit ? headCommit.commit.slice(0, 12) : WORKING_TREE}`);
-    materialise(base.tree, baseDir, "base", { GIT_INDEX_FILE: path.join(scratch, "base.index") }, false);
+    const baseIndex = { GIT_INDEX_FILE: path.join(scratch, "base.index") };
+    materialise(base.tree, baseDir, "base", baseIndex, false);
     await checkpoint();
     materialise(headTree, headDir, "head", headIndex, !headCommit);
     doc.linkedDependencyDirs = linkDependencyDirs(worktree, [baseDir, headDir]);
     // Read now, before any repository code runs in these trees.
-    const typecheckProjects = [...discoverTypechecks(headDir), ...discoverTypechecks(baseDir)];
+    doc.guard = classifyVerificationEdits(baseDir, headDir, changed, new Set(approvedEdits));
     await checkpoint();
 
     // ---- The verifier: the operator's, or the one the BASE tree defines. The head never chooses it. ----
@@ -355,7 +497,7 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
       const evidence: VerificationEvidence = { status: "NO_APPLICABLE_VERIFIER", at: new Date().toISOString() };
       doc.verification = evidence;
       const derived = outcomeFromEvidence(evidence);
-      return finish(derived.outcome, derived.reason, `the base tree defines no verifier${atHead ? ` (the head defines ${atHead.command}, but the head is the change under test and cannot choose its own verifier)` : ""}; give one with --verifier`);
+      return conclude(derived.outcome, derived.reason, `the base tree defines no verifier${atHead ? ` (the head defines ${atHead.command}, but the head is the change under test and cannot choose its own verifier)` : ""}; give one with --verifier`);
     }
     const command = description.command;
     const approval: VerifyVerifierRecord["approval"] = configured
@@ -374,7 +516,7 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
       ...(description.script !== undefined && description.script !== command ? { script: capped(safeTerminal(description.script), 2000) } : {}),
     };
     if (approval === "none") {
-      return finish("UNVERIFIED", "VERIFIER_NOT_APPROVED", operator.approvedVerifierDigest !== undefined
+      return conclude("UNVERIFIED", "VERIFIER_NOT_APPROVED", operator.approvedVerifierDigest !== undefined
         ? `the digest given with --approve-verifier does not match the verifier discovered in the base tree (${command}, digest ${description.digest}); nothing was run`
         : `the verifier discovered in the base tree (${command}, from ${description.evidence}) runs repository code and was not approved; nothing was run. Approve it with --approve-verifier ${description.digest}, or every discovered verifier with --yes`);
     }
@@ -440,7 +582,7 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
       };
       doc.verification = evidence;
       // The ladder's reason here is VERIFIER_FAILED; the verifier did not run, so the reason says what happened instead.
-      return finish(outcomeFromEvidence(evidence).outcome, captured ? "VERIFIER_DEFINITION_CHANGED" : "VERIFIER_DEFINITION_NOT_CAPTURED", detail);
+      return conclude(outcomeFromEvidence(evidence).outcome, captured ? "VERIFIER_DEFINITION_CHANGED" : "VERIFIER_DEFINITION_NOT_CAPTURED", detail);
     }
 
     const headRun = await execute("head", headDir);
@@ -449,6 +591,64 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
     const headPristine = path.join(scratch, "head-pristine");
     materialise(headTree, headPristine, "head", headIndex, true);
     linkDependencyDirs(worktree, [headPristine]);
+
+    // ---- The type-checks (completion_oracle.ts runTypecheckOracleImpl): only after a passing verifier, as the agent does. ----
+    const mode = typecheckMode(undefined, source === "configured");
+    let typecheck: TypecheckEvidence | undefined;
+    let typecheckBlock: { reason: VerifyReason; detail: string } | undefined;
+    let typecheckMissing: string[] = [];
+    if (!headRun.success) {
+      doc.typecheck = { status: "NOT_RUN", mode, detail: "the verifier did not pass on the head, so no type-check was run" };
+    } else if (mode === "off") {
+      typecheck = typecheckNotApplicable(mode, new Date().toISOString());
+      doc.typecheck = { status: typecheck.status, mode, detail: "type-checking is disabled by NEXUS_TYPECHECK in the launcher's environment; no type-check was run and none can lower the verdict" };
+    } else {
+      // Copies of their own: a checker may write build output, and nothing the verifier wrote into its tree is checked.
+      const baseTypecheck = path.join(scratch, "base-typecheck");
+      const headTypecheck = path.join(scratch, "head-typecheck");
+      materialise(base.tree, baseTypecheck, "base", baseIndex, true);
+      materialise(headTree, headTypecheck, "head", headIndex, true);
+      linkDependencyDirs(worktree, [baseTypecheck, headTypecheck]);
+      const headChecks = discoverTypechecks(headTypecheck);
+      const baseChecks = discoverTypechecks(baseTypecheck);
+      const inHead = new Set(headChecks.map(typecheckProjectKey));
+      typecheckMissing = baseChecks.filter((check) => !check.discoveryIncomplete && !inHead.has(typecheckProjectKey(check))).map((check) => `${check.tool} under ${check.configPath}`);
+      // The verifier's shell: the same scrubbed environment and the same hard deadline, in the copy's directory.
+      const executorIn = (directory: string, side: string): TimedExecutor => async (line, secs) => {
+        await checkpoint();
+        progress(`running ${line} (type-check, ${side})`);
+        const ran = runVerifierShell(line, directory, secs * 1000);
+        return { success: true, output: JSON.stringify({ exit_code: ran.exitCode, stdout: ran.output, stderr: "", timed_out: ran.timedOut }) };
+      };
+      try {
+        if (!headChecks.length) {
+          typecheck = typecheckNotApplicable(mode, new Date().toISOString());
+          doc.typecheck = { status: typecheck.status, mode, detail: "the head tree has no configured type-check project" };
+        } else {
+          const baseline = await captureTypecheckBaseline({ checks: baseChecks.filter((check) => inHead.has(typecheckProjectKey(check))), execute: executorIn(baseTypecheck, "base"), workspace: baseTypecheck, deadlineSecs: timeoutSecs });
+          const collected = await collectTypecheckEvidence({
+            checks: headChecks,
+            enforced: mode === "enforce",
+            execute: executorIn(headTypecheck, "head"),
+            workspace: headTypecheck,
+            // The change is the difference between the two trees; nothing a process wrote while running is part of it.
+            modified: new Set(changed.map((file) => path.join(headTypecheck, file))),
+            budgetSecs: timeoutSecs,
+            baselines: baseline.baselines,
+          });
+          typecheck = collected.evidence;
+          doc.typecheck = { status: typecheck.status, mode, baseline: baseline.records };
+          const worst = worstTypecheckBlock(collected.blocks);
+          if (worst) typecheckBlock = { reason: `TYPECHECK_${worst.kind}`, detail: `the verifier passed, but a type-check that is enforced did not: ${worst.message.trim().replace(/\s*\n\s*/g, " | ")}` };
+        }
+      } finally {
+        removeTypecheckBuildOutput([...headChecks, ...baseChecks]);
+      }
+      if (typecheckMissing.length) doc.typecheck.missingFromHead = typecheckMissing;
+      await checkpoint();
+    }
+    const testsAndTypesPass = headRun.success && !typecheckBlock;
+
     const baselineTestsChanged = !tests || testsChangedSince(headPristine, tests);
     const configuredTestsStable = source !== "configured" || !baselineTestsChanged;
     const isDeliverableBound = headRun.executedTests && configuredTestsStable &&
@@ -475,14 +675,16 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
     };
     const independence: Independence | undefined = unboundDetail
       ? { independent: false, detail: unboundDetail }
-      : source === "discovered" && headRun.success && isDeliverableBound ? await judgeIndependence() : undefined;
+      : source === "discovered" && testsAndTypesPass && isDeliverableBound ? await judgeIndependence() : undefined;
 
+    // spine_handlers.ts: a passing verifier whose enforced type-check blocks is recorded as FAILED.
     const evidence: VerificationEvidence = {
-      status: headRun.success ? "PASSED" : headRun.timedOut ? "TIMED_OUT" : "FAILED",
+      status: testsAndTypesPass ? "PASSED" : headRun.timedOut ? "TIMED_OUT" : "FAILED",
       command,
       source,
-      exitSuccess: headRun.success,
+      exitSuccess: testsAndTypesPass,
       hasExecutedTests: headRun.executedTests,
+      ...(typecheck ? { typecheck } : {}),
       isDeliverableBound,
       filtered: isFilteredVerifierCommand(command),
       ...(unboundDetail ? { definitionBound: false as const } : {}),
@@ -494,16 +696,15 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
     doc.verification = evidence;
     const derived = outcomeFromEvidence(evidence);
 
-    // The agent fails a passing verifier when an enforced type-check fails (spine_handlers.ts). This version runs no
-    // type-check, so where one would be enforced a passing result is withheld rather than reported unchecked.
-    if (evidence.status === "PASSED" && evidence.hasExecutedTests && typecheckMode(undefined, source === "configured") === "enforce") {
-      if (typecheckProjects.length) {
-        const named = [...new Set(typecheckProjects.map((check) => `${check.tool} under ${check.configPath}`))].slice(0, 4).join(", ");
-        doc.typecheck = { status: "NOT_RUN", detail: `an enforced type-check applies (${named}) and was not run` };
-        return finish("UNVERIFIED", "TYPECHECK_NOT_RUN", `the verifier passed (${derived.outcome} by tests alone), but a type-check the agent would enforce applies (${named}) and this version of nexus verify does not run type-checks`);
-      }
+    // The ladder's reason for a blocking type-check is VERIFIER_FAILED; the verifier passed, so the reason names the type-check.
+    if (typecheckBlock) return conclude(derived.outcome, typecheckBlock.reason, capped(typecheckBlock.detail, 500));
+    // No agent rule covers a project the head removed: its check cannot be run on the head, so nothing shows the change
+    // type-checks under it. Enforced, that withholds a passing result (lowered, never raised).
+    if (mode === "enforce" && typecheckMissing.length && evidence.status === "PASSED" && evidence.hasExecutedTests) {
+      doc.typecheck.detail = `a type-check project of the base tree is not in the head, so it was not run: ${typecheckMissing.slice(0, 4).join(", ")}`;
+      return conclude("UNVERIFIED", "TYPECHECK_NOT_RUN", `the verifier passed (${derived.outcome} by tests alone), but type-checking is enforced and the head no longer has a project the base tree has (${typecheckMissing.slice(0, 4).join(", ")}), so no type-check evidence exists for it. If the project was removed on purpose, say so with NEXUS_TYPECHECK=off`);
     }
-    return finish(derived.outcome, derived.reason, derived.detail);
+    return conclude(derived.outcome, derived.reason, derived.detail);
   } catch (error) {
     if (error instanceof VerifyUsageError || error instanceof VerifyInterrupted) throw error;
     if (error instanceof Stop) return finish("UNVERIFIED", error.reason, error.detail);
@@ -542,8 +743,26 @@ export function renderVerifyText(result: VerifyJsonResult): string {
       : "none declared (--deliverable-file): the best possible verdict is REGRESSION_FREE");
   }
   if (result.linkedDependencyDirs.length) row("linked", `${result.linkedDependencyDirs.join(", ")} (from the caller's checkout)`);
-  row("not run", "type-check, verification-file guard, review");
-  if (result.typecheck.detail && result.reason === "TYPECHECK_NOT_RUN") row("  type-check", result.typecheck.detail);
+  if (result.typecheck.status !== "NOT_RUN") {
+    const projects = result.verification?.typecheck?.projects ?? [];
+    row("type-check", `${result.typecheck.status}${result.typecheck.mode ? ` (${result.typecheck.mode})` : ""}${result.typecheck.detail ? `: ${result.typecheck.detail}` : ""}`);
+    for (const project of projects.slice(0, 8)) {
+      const counts = project.errorCount === undefined ? "" : `, ${project.errorCount} error(s)${project.introducedCount === undefined ? "" : `, ${project.introducedCount} not on the base`}`;
+      row("", `${project.status}: ${project.tool} ${project.scope ?? ""}${counts}`);
+      for (const diagnostic of (project.status === "FAILED" ? project.firstDiagnostics ?? [] : []).slice(0, 3)) lines.push(`    | ${diagnostic}`);
+    }
+  }
+  if (result.guard.status !== "NOT_RUN") {
+    const policy = `mode ${result.guard.mode}, ${result.guard.policySource === "base_tree" ? "the base tree's .nexus-security.json" : "default policy"}`;
+    row("guard", `${result.guard.status} (${policy}): ${result.guard.findings.length} changed verification file(s)${result.guard.complete ? "" : `; INCOMPLETE: ${result.guard.detail}`}`);
+    for (const finding of result.guard.findings.slice(0, 20)) {
+      const decision = !finding.requiresApproval ? "recorded" : result.guard.mode === "block" ? "REFUSED (mode block)" : finding.approved ? "approved by --approve-verification-edit" : "NOT APPROVED";
+      row("", `${finding.path}: ${finding.class}, ${finding.kind}${finding.weakening ? `, weakening: ${finding.weakening.join(", ")}` : ""}; ${decision}`);
+    }
+    if (result.guard.findings.length > 20) row("", `and ${result.guard.findings.length - 20} more (see --json)`);
+  }
+  const notRun = [result.typecheck.status === "NOT_RUN" ? "type-check" : "", result.guard.status === "NOT_RUN" ? "verification-file guard" : "", "review"].filter(Boolean);
+  row("not run", notRun.join(", "));
   if (result.environment.length) row("environment", `set: ${result.environment.join(", ")}`);
   const failed = [...result.runs].reverse().find((ran) => ran.phase === "head" && !ran.passed);
   if (failed?.outputTail) lines.push("  head output (end; untrusted repository output):", ...failed.outputTail.trimEnd().split("\n").slice(-30).map((line) => `    | ${line}`));
