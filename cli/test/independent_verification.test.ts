@@ -322,9 +322,12 @@ describe("VERIFIED needs evidence Nexus did not write", () => {
       // The candidate writes a weakened test whose module body puts the base test back before it exits. A comparison
       // made after the verifier sees the base content and would call the tests "unchanged"; the digest taken before
       // the run catches the substitution.
+      // The test runner loads this weakened body (which passes against ADD_BUGGY), but loading it immediately restores
+      // the original failing test on disk. A post-run-only comparison therefore sees the base test and would miss that
+      // the passing run used different bytes.
+      const weakened = ADD_TEST.replace("add(2, 3), 5", "add(2, 3), -1");
       const selfRestoring =
-        `const fs = require("node:fs");\nfs.writeFileSync(__filename, ${JSON.stringify(ADD_TEST)});\n` +
-        ADD_TEST.replace("add(2, 3), 5", "add(2, 3), -1");
+        `const fs = require("node:fs");\nfs.writeFileSync(__filename, ${JSON.stringify(ADD_TEST)});\n` + weakened;
       const { turn } = await run(
         {
           "package.json": PKG,
@@ -335,6 +338,7 @@ describe("VERIFIED needs evidence Nexus did not write", () => {
         "npm test fails; fix it.",
         { trustedDeliverableFiles: ["math.js"] },
       );
+      assert.equal(turn.verification?.status, "PASSED", "the attack fixture must produce a passing verifier run");
       assert.notEqual(turn.outcome, "VERIFIED", `${turn.outcome}: ${turn.detail}`);
       assert.match(
         turn.verification?.independenceDetail ?? "",
