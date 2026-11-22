@@ -1610,11 +1610,12 @@ export class RustCoreBridge {
     if (toolName === "lsp_hover") {
       try {
         const lsp = await this.lspManager();
-        const res = await lsp.hover(args.path, Number(args.line), Number(args.character));
+        const res = await lsp.hover(args.path, Number(args.line), Number(args.character), this.turnSignal);
         return {
-          success: res.found,
+          // "The server answered and has nothing here" is an answer: it reaches the model as its plain statement.
+          success: res.found || res.answered === true,
           output: res.hoverText || "No hover info",
-          error: res.error,
+          error: res.error && res.detail ? `${res.error}\n${res.detail}` : res.error,
         };
       } catch (err: any) {
         return { success: false, output: "", error: `LSP error: ${err.message}` };
@@ -1624,11 +1625,11 @@ export class RustCoreBridge {
     if (toolName === "lsp_definition") {
       try {
         const lsp = await this.lspManager();
-        const res = await lsp.definition(args.path, Number(args.line), Number(args.character));
+        const res = await lsp.definition(args.path, Number(args.line), Number(args.character), this.turnSignal);
         return {
-          success: res.found,
-          output: JSON.stringify(res.locations || [], null, 2),
-          error: res.error,
+          success: res.found || res.answered === true,
+          output: res.answered ? res.message! : JSON.stringify(res.locations || [], null, 2),
+          error: res.error && res.detail ? `${res.error}\n${res.detail}` : res.error,
         };
       } catch (err: any) {
         return { success: false, output: "", error: `LSP error: ${err.message}` };
@@ -1638,9 +1639,10 @@ export class RustCoreBridge {
     if (toolName === "lsp_diagnostics") {
       try {
         const lsp = await this.lspManager();
-        const res = await lsp.diagnostics(String(args.path || ""));
+        // No timeout of its own: the manager applies the server's timings (cold start, warm query, post-edit settle).
+        const res = await lsp.diagnostics(String(args.path || ""), undefined, this.turnSignal);
         if (res.status === "unavailable") {
-          return { success: false, output: "", error: `lsp_diagnostics unavailable: ${res.reason} This is not evidence the file is free of errors.` };
+          return { success: false, output: "", error: `lsp_diagnostics unavailable: ${res.reason} This is not evidence the file is free of errors.${res.detail ? `\n${res.detail}` : ""}` };
         }
         const file = String(args.path || "");
         return {

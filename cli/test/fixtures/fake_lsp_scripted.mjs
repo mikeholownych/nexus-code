@@ -21,9 +21,11 @@
 //   initialize       "never" (no answer), or the result object (default {capabilities: {}})
 //   hover            "fromText": answer from the held text with contents = JSON {word, docs} where `word` is the
 //                    identifier at the position (character read as a UTF-16 offset) and `docs` maps basename -> held text;
-//                    or {"<basename>" | "*": <result>}: a scripted result per file (null = no hover)
+//                    or {"<basename>" | "*": <result>}: a scripted result per file (null = no hover, "never" = no reply)
 //   definition       "fromText": the Location of the first `def <word>` in any held document, else null;
-//                    or {"<basename>" | "*": <result>}
+//                    or {"<basename>" | "*": <result>} ("never" = no reply)
+//   loadedOn         a method ("test/release"): until it is received, hover and definition answer null, as a server
+//                    that has not loaded the project yet does
 //   diagnostic       how `textDocument/diagnostic` is answered (announce `diagnosticProvider` through `initialize`):
 //                    "fromText": a full report with one item whose message names the file and the text held for every
 //                    document (so a file's report depends on the others), with that message as resultId; or
@@ -48,6 +50,7 @@ const elide = (_k, v) => (_k === "text" && typeof v === "string" && v.length > 2
 const log = (entry) => fs.appendFileSync(S.log, `${JSON.stringify(entry, elide)}\n`);
 const docs = new Map(); // uri -> text
 const sent = new Map(); // server request id -> method
+let loaded = !S.loadedOn;
 let rootUri = "";
 let nextId = 1;
 let buf = Buffer.alloc(0);
@@ -113,6 +116,7 @@ function wordAt(uri, position) {
 
 function answer(script, m, fromText) {
   const uri = m.params.textDocument.uri;
+  if (!loaded) return null;
   if (script === "fromText") return fromText(uri, wordAt(uri, m.params.position));
   const scripted = script?.[base(uri)] ?? script?.["*"] ?? null;
   return fill(scripted, { uri });
@@ -150,6 +154,7 @@ function handle(m) {
   }
   const doc = m.params?.textDocument;
   if (m.method === "initialize") rootUri = m.params.rootUri;
+  if (m.method === S.loadedOn) loaded = true;
   if (m.method === "textDocument/didOpen") docs.set(doc.uri, doc.text);
   if (m.method === "textDocument/didChange") docs.set(doc.uri, m.params.contentChanges.at(-1).text);
   if (m.method === "textDocument/didClose") docs.delete(doc.uri);
@@ -168,8 +173,10 @@ function handle(m) {
     if (S.initialize !== "never") send({ id: m.id, result: S.initialize ?? { capabilities: {} } });
   } else if (m.method === "shutdown") {
     if (!S.ignoreShutdown) send({ id: m.id, result: null });
-  } else if (m.method === "textDocument/hover") send({ id: m.id, result: answer(S.hover, m, hoverFromText) });
-  else if (m.method === "textDocument/definition") send({ id: m.id, result: answer(S.definition, m, definitionFromText) });
+  } else if (m.method === "textDocument/hover" || m.method === "textDocument/definition") {
+    const result = m.method === "textDocument/hover" ? answer(S.hover, m, hoverFromText) : answer(S.definition, m, definitionFromText);
+    if (result !== "never") send({ id: m.id, result });
+  }
   else if (m.method === "textDocument/diagnostic") {
     const scripted = diagnosticAnswer(m);
     if (scripted === "never") return;

@@ -60,7 +60,8 @@ test("a file deleted while open is closed before the next query, and asking for 
     const after = await s.tool("lsp_definition", { path: "a.ts", line: 1, character: 1 });
     assert.deepEqual(await closedUris(s), [s.uri("b.ts")]);
     assert.deepEqual((await s.received("textDocument/definition")).at(-1)!.docs, { [s.uri("a.ts")]: "helper\n" }, "the server answered without the deleted file's text");
-    assert.deepEqual(after, { success: false, output: "[]", error: undefined });
+    // Since slice S3 "the server answered and has nothing" is a successful answer that says so (it was { success: false, output: "[]" }).
+    assert.deepEqual(after, { success: true, output: "No definition found for a.ts:1:1: the language server answered and has nothing to go to from this position.", error: undefined });
     assert.deepEqual(await s.tool("lsp_hover", { path: "b.ts", line: 1, character: 1 }), { success: false, output: "No hover info", error: unreadable("b.ts") });
     assert.equal(((await s.client()) as any).documents.size, 1);
   } finally {
@@ -309,13 +310,16 @@ test("push, staged server: a progress cycle that began before another file's cha
   );
   try {
     assert.deepEqual(await messages(s, "a.ts"), ["a1"]); // 1500 ms: the staged quiet period after "load"
-    await s.mgr.hover("b.ts", 1, 1);
-    await s.mgr.hover("c.ts", 1, 1);
+    // Opened without a question (warmUp): since slice S3 a hover that comes back empty while progress is open ("early")
+    // is asked again until the server is ready or the call's deadline, which is not what this test is about.
+    await s.mgr.warmUp("b.ts");
+    await s.mgr.warmUp("c.ts");
+    await s.sync(); // warmUp asks nothing, so nothing has come back yet: the begin of "early" must have arrived before b.ts changes
 
     fs.writeFileSync(path.join(s.ws, "b.ts"), "b2");
     // 2000 ms: longer than the 1500 ms quiet period, so a client that counted the early cycle would answer inside it.
     const waiting = s.mgr.diagnostics("a.ts", 2000);
-    await s.sync(); // b.ts's change is sent
+    await s.seen("textDocument/didChange", "b.ts"); // b.ts's change is sent
     await (await s.client()).sendRequest("test/release", {}); // the cycle that began before it ends
     assert.deepEqual(await waiting, superseded("a.ts", 2000));
 

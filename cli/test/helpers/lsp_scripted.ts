@@ -11,10 +11,10 @@ import { syncBuiltinESMExports } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { LspBridgeManager, type LspClient } from "../../src/lsp.js";
+import { LspBridgeManager, type LspClient, type LspTimings } from "../../src/lsp.js";
 import { RustCoreBridge } from "../../src/tools.js";
 
-const FAKE = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "fake_lsp_scripted.mjs");
+export const FAKE = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "fake_lsp_scripted.mjs");
 
 export type Entry = { event: string; method?: string; id?: unknown; params?: any; docs?: Record<string, any>; to?: string; result?: unknown; error?: unknown; pid?: number; signal?: string };
 
@@ -62,15 +62,34 @@ export interface Opened {
   log: () => Promise<Entry[]>;
   received: (method: string) => Promise<Entry[]>;
   /**
+   * Waits until the server has received `method` for the file `name`, and until everything it sent in response has
+   * reached the client. Use it after starting a query WITHOUT awaiting it: the query reads the file system before it
+   * writes anything, so a bare `sync()` can overtake its notifications (seen as a flake under load).
+   */
+  seen: (method: string, name: string) => Promise<void>;
+  /**
    * The log as it is on disk now, without the barrier. Only for a server that cannot answer it (never initialised,
    * deliberately unresponsive, already stopped), or inside a polling check.
    */
   rawLog: () => Entry[];
+  /** The scenario the fake reads at its start: `node fake_lsp_scripted.mjs <scenarioFile>`. */
+  scenarioFile: string;
+  /** Sets the turn's abort signal on the bridge, as the agent does for the tool calls of a turn. */
+  turnSignal: (signal: AbortSignal | undefined) => void;
   /** Shuts everything down, asserts every process the fake logged (server, grandchild) is gone, removes the temp tree. */
   close: () => Promise<void>;
 }
 
-export function open(scenario: Record<string, unknown>, files: Record<string, string>, opts: { awaitProgress?: boolean; cmd?: string; viaSymlink?: boolean; wsName?: string } = {}): Opened {
+/**
+ * `timings`: the manager's overrides of the product's timings. By default only the cold-start allowance is set, to 0: the
+ * fake is ready the moment it has answered `initialize`, so an empty hover is "nothing here" at once and no test waits
+ * out a warm-up it is not about. "product": no override at all (the product's values, seconds long).
+ */
+export function open(
+  scenario: Record<string, unknown>,
+  files: Record<string, string>,
+  opts: { awaitProgress?: boolean; cmd?: string; args?: string[]; viaSymlink?: boolean; wsName?: string; timings?: Partial<LspTimings> | "product"; gate?: () => string | null } = {},
+): Opened {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "nexus-lsp-char-")));
   const real = path.join(root, opts.wsName ?? "ws");
   fs.mkdirSync(real);
@@ -87,7 +106,9 @@ export function open(scenario: Record<string, unknown>, files: Record<string, st
   const scenarioFile = path.join(root, "scenario.json");
   fs.writeFileSync(scenarioFile, JSON.stringify({ ...scenario, log: logFile }));
   const mgr = new LspBridgeManager(ws, {
-    servers: { ".ts": { cmd: opts.cmd ?? process.execPath, args: opts.cmd ? [] : [FAKE, scenarioFile], languageId: "typescript", awaitProgress: opts.awaitProgress === true } },
+    servers: { ".ts": { cmd: opts.cmd ?? process.execPath, args: opts.args ?? (opts.cmd ? [] : [FAKE, scenarioFile]), languageId: "typescript", awaitProgress: opts.awaitProgress === true } },
+    ...(opts.timings === "product" ? {} : { timings: opts.timings ?? { coldStartMs: 0 } }),
+    ...(opts.gate ? { gate: opts.gate } : {}),
   });
   const bridge = new RustCoreBridge(ws);
   (bridge as any).lsp = mgr;
@@ -115,7 +136,17 @@ export function open(scenario: Record<string, unknown>, files: Record<string, st
     sync,
     log,
     received: async (method) => (await log()).filter((e) => e.event === "recv" && e.method === method),
+    seen: async (method, name) => {
+      for (const end = performance.now() + 10_000; ; await sleep(10)) {
+        if ((await log()).some((e) => e.event === "recv" && e.method === method && String(e.params?.textDocument?.uri ?? "").endsWith(`/${name}`))) break;
+        assert.ok(performance.now() < end, `the server never received ${method} for ${name}`);
+      }
+      // The server answered that message before this round trip's reply, so the client has what it sent.
+      await (await client()).sendRequest("test/sync", {});
+    },
     rawLog,
+    scenarioFile,
+    turnSignal: (signal) => bridge.setTurnSignal(signal),
     close: async () => {
       bridge.shutdown();
       mgr.shutdownAll();
