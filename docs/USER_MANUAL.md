@@ -55,6 +55,43 @@ nexus run "Refactor the authentication handler to support JWT rotation and add u
 ```
 Free-text task execution requires the explicit `nexus run "<prompt>"` subcommand. Passing unknown subcommand names or free text without `run` is treated as a command error (REQ-REL-104 / DEC-14).
 
+### `nexus run --json`
+`nexus run --json` (or `--output json`) writes exactly one JSON document to stdout and nothing else; progress and diagnostics go to stderr. The document is a contract for scripts and CI:
+
+- Its first member is `schema_version` (an integer, now `1`). Adding an optional member keeps the version; removing or renaming a member, or changing a member's type or meaning, raises it. Ignore members you do not know, and refuse a `schema_version` you do not know.
+- The schema is published as `docs/protocol/run-result-v1.schema.json` (JSON Schema draft 2020-12), generated from the types in `cli/src/run_contract.ts`; each change is recorded in `docs/protocol/RUN_RESULT_VERSIONS.json` (see `docs/protocol/README.md`).
+- A task that ran to an ending, whatever the ending, prints a **result**: `schema_version`, `taskId`, `success`, `status` (`completed`, `failed` or `interrupted`), `prompt`, `output`, `plan`, `milestones`, `candidateId`, `candidateIdentity`, `validationReceipts`, `worktreeBinding`, `tokenStats`, `durationMs`, `error` (when the task raised one), `logs`, `turn` (the authoritative ending: `turn.execution`, `turn.outcome`, `turn.reason`), `exitCode` (the process exit code), and `cloudUsage` when a cloud provider was used.
+- A run that throws before it has a result (for example `--resume <id>` of a task with no saved state) prints an **error document** instead: `schema_version`, `taskId`, `success` (`false`), `status` (`failed`), `prompt`, `output`, `plan`, `milestones`, `validationReceipts`, `tokenStats`, `durationMs` and `error`. It has no `turn` and no `exitCode`: that is how to tell it from a result.
+- A usage error (exit code 2 before the run starts) prints its message on stderr and nothing on stdout.
+- `--output stream-json` (`docs/STREAM_JSON.md`) is a separate, line-by-line format with its own `schemaVersion` on every event. Its final `result` event carries the same result object, so that event also has `schema_version`; its `error` event (`taskId`, `message`) is a different shape from the error document above.
+
+The task can be given without putting it on the command line:
+
+```bash
+nexus run --json --input-json task.json     # a JSON document in a file
+nexus run --json --input-json - < task.json # the same document on stdin
+echo "Fix the failing test" | nexus run --json   # plain task text on stdin
+```
+
+- `--input-json <file|->` reads `{ "schema_version": 1, "task": "<text>" }`. `schema_version` must be `1` and `task` a non-empty string. Only `task` is read: every other member is ignored, so the document cannot choose the approval mode, `--yes`, the sandbox, the endpoint, credentials or the workspace. Those come from the command line and your configuration only.
+- With no task argument, no `--input-json` and no `--resume` or `--fork-session`, a stdin that is not a terminal is read as the task text. If that stdin is never closed, `nexus run` waits for it.
+- The input is limited to 1048576 bytes (1 MiB) and must be UTF-8; a larger input is refused, never cut short. A task given both as an argument and with `--input-json`, an invalid document, or an empty stdin is a usage error (exit code 2).
+
+### Exit codes of `nexus run`
+| Code | Name | When |
+|---|---|---|
+| 0 | `ok` | The task completed and its changes were verified (`VERIFIED`), or it changed nothing that needs verifying (`NOT_REQUIRED`). |
+| 1 | `failed` | Any other ending: the task failed, was blocked (a question for the operator, a capacity or convergence stop), reached a limit, or completed without establishing a result; or the run threw an error. |
+| 1 | `missing_prompt` | No task was given as an argument and `--resume` was not used (with a terminal on stdin and no `--input-json`). |
+| 1 | `option_parse` | The command line could not be parsed: an unknown option or an option without its value (the option parser exits before the command runs). |
+| 2 | `unverified` | The task completed but nothing verifies the change (`UNVERIFIED`), or the tests passed without covering it (`REGRESSION_FREE`). |
+| 2 | `usage` | A usage error before the run started: an invalid option value or combination, or an invalid, oversized or empty `--input-json` or stdin task. |
+| 2 | `resume_unavailable` | `--resume` found no task in the workspace, or `--fork-session` could not make the copy. |
+| 2 | `task_not_found` | The task named by `--resume <id>` has no saved state. |
+| 130 | `interrupted` | The task was interrupted (SIGINT). A second SIGINT exits at once with this code and may leave no JSON document. |
+
+Exit code 2 has four meanings and exit code 1 has three, so the exit code alone cannot tell them apart. With `--json`, read the document: a result with `turn.outcome` `UNVERIFIED` or `REGRESSION_FREE` is the `unverified` row; an error document (no `turn`) is `task_not_found` or a thrown error; an empty stdout means the run never started (`usage`, `resume_unavailable`, `missing_prompt`, `option_parse`), and stderr has the message. For a result, `exitCode` in the document equals the process exit code.
+
 ### Viewing Tool Audit Logs
 To inspect recent tool executions, filter errors, or track latency:
 ```bash
