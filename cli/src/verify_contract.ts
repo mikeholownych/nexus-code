@@ -170,7 +170,7 @@ export interface VerifyRunRecord {
   phase: "base" | "head" | "base_tests_on_head";
   /** The process ran inside the sandbox named in `sandbox.engine`. Always written; absent only in a document from before `--sandbox` existed (the run was not sandboxed). */
   sandboxed?: boolean;
-  /** Baseline test-oracle files opened more often by this candidate run than by the base run. Such a pass is not independent. */
+  /** Test-oracle files or candidate-only workspace paths opened/observed more often than by the base run. Such a pass is not independent. */
   testFixtureReads?: string[];
   passed: boolean;
   timedOut: boolean;

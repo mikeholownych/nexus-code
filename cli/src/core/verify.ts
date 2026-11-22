@@ -22,6 +22,7 @@
  * evaluated lowers the verdict with a reason that names it; nothing here raises one.
  */
 import fs from "node:fs";
+import { Buffer } from "node:buffer";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -32,7 +33,7 @@ import { isSandboxAvailable, quoteForShell, wrapSandboxedCommand } from "../sand
 import { SecurityManager, conditionalConfigChanged, isConditionalConfig, neutersTests } from "../security.js";
 import {
   MAX_TEST_BYTES, SKIP_DIRS, buildVerifierEnvironment, describeVerifier, discoverTypechecks, discoverVerifier, hasExecutedTests, isFilteredVerifierCommand, isVerifierDeliverableBound,
-  runVerifierShell, typecheckMode, verifierTimeoutSecs, type DiscoveredTypecheck, type TimedExecutor,
+  runVerifierShell, typecheckMode, verifierTimeoutSecs, workspaceRuntimeFiles, type DiscoveredTypecheck, type TimedExecutor,
 } from "../tester.js";
 import { formatDiagnosticForOutput, safeTerminal } from "../ui.js";
 import {
@@ -128,21 +129,157 @@ function findStrace(): string | undefined {
 }
 
 function traceCommand(strace: string, command: string, logPath: string): string {
-  return `${quoteForShell(strace)} -f -qq -yy -e trace=open,openat,openat2 -o ${quoteForShell(logPath)} -- bash -c ${quoteForShell(command)}`;
+  return `${quoteForShell(strace)} -f -qq -yy -e trace=%file,getdents,getdents64 -o ${quoteForShell(logPath)} -- bash -c ${quoteForShell(command)}`;
 }
 
-/** Count successful opens of files under the run tree, using strace's resolved fd path rather than argv text. */
-function openedWorkspaceFiles(logPath: string, workspace: string): Map<string, number> | undefined {
+function splitStraceArguments(value: string): string[] {
+  const args: string[] = [];
+  let start = 0;
+  let quoted = false;
+  let escaped = false;
+  let angleDepth = 0;
+  for (let index = 0; index < value.length; index++) {
+    const character = value[index]!;
+    if (escaped) { escaped = false; continue; }
+    if (quoted && character === "\\") { escaped = true; continue; }
+    if (character === '"') { quoted = !quoted; continue; }
+    if (quoted) continue;
+    if (character === "<") { angleDepth++; continue; }
+    if (character === ">" && angleDepth > 0) { angleDepth--; continue; }
+    if (character === "," && angleDepth === 0) {
+      args.push(value.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+  args.push(value.slice(start).trim());
+  return args;
+}
+
+function decodeStraceString(value: string): string {
+  const bytes: number[] = [];
+  for (let index = 0; index < value.length;) {
+    const character = value[index++]!;
+    if (character !== "\\") {
+      bytes.push(...Buffer.from(character, "utf8"));
+      continue;
+    }
+    const octal = /^[0-7]{3}/.exec(value.slice(index))?.[0];
+    if (octal) {
+      bytes.push(parseInt(octal, 8));
+      index += octal.length;
+      continue;
+    }
+    const hex = /^x([0-9a-fA-F]{2})/.exec(value.slice(index));
+    if (hex) {
+      bytes.push(parseInt(hex[1]!, 16));
+      index += hex[0].length;
+      continue;
+    }
+    const escaped = value[index++];
+    const controls: Record<string, number> = { a: 7, b: 8, f: 12, n: 10, r: 13, t: 9, v: 11 };
+    if (escaped === undefined) { bytes.push(92); break; }
+    if (escaped in controls) bytes.push(controls[escaped]!);
+    else bytes.push(...Buffer.from(escaped, "utf8"));
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
+/** Count workspace file and directory observations, including metadata and directory enumeration. */
+function observedWorkspacePaths(logPath: string, workspace: string): Map<string, number> | undefined {
   try {
     const counts = new Map<string, number>();
+    const workingDirectories = new Map<string, string>();
     for (const line of fs.readFileSync(logPath, "utf8").split("\n")) {
-      if (!/,\s*(?:O_RDONLY|O_RDWR)(?:[|,)])|flags=(?:O_RDONLY|O_RDWR)/.test(line)) continue;
-      const opened = /=\s*\d+<([^>]+)>/.exec(line)?.[1];
-      if (!opened || !path.isAbsolute(opened)) continue;
-      const relative = path.relative(workspace, opened);
-      if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) continue;
-      const key = relative.replace(/\\/g, "/");
-      counts.set(key, (counts.get(key) ?? 0) + 1);
+      const pid = /^(\d+)\s/.exec(line)?.[1] ?? "root";
+      const cwd = workingDirectories.get(pid) ?? workspace;
+      const record = (observedPath: string | undefined) => {
+        if (!observedPath || !path.isAbsolute(observedPath)) return;
+        let resolvedObservation = path.normalize(observedPath);
+        if (/^\/dev\/(?:fd(?:\/.*)?|stdin|stdout|stderr)$/.test(resolvedObservation)) {
+          resolvedObservation = workspace;
+        }
+        const procAlias = /^\/proc\/(self|thread-self|\d+)\/(cwd|root|fd|fdinfo)(?:\/(.*))?$/.exec(resolvedObservation);
+        if (procAlias) {
+          const [, owner, kind, suffix = ""] = procAlias;
+          if (kind === "cwd") {
+            const targetCwd = owner === "self" || owner === "thread-self"
+              ? cwd
+              : workingDirectories.get(owner) ?? cwd;
+            resolvedObservation = path.resolve(targetCwd, suffix);
+          } else if (kind === "root" && suffix) {
+            resolvedObservation = path.resolve("/", suffix);
+          } else {
+            // An fd/root alias can expose workspace metadata even when the
+            // target fd cannot be correlated from this trace. Record a
+            // conservative workspace-root observation instead of dropping it.
+            resolvedObservation = workspace;
+          }
+        }
+        const relative = path.relative(workspace, resolvedObservation);
+        if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return;
+        const key = relative ? relative.replace(/\\/g, "/") : ".";
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      };
+
+      // Keep relative metadata/open paths resolvable across chdir and fork.
+      const processCreate = /\b(?:clone3?|fork|vfork)\(/.test(line) ? /\)\s+=\s+(\d+)/.exec(line)?.[1] : undefined;
+      if (processCreate) workingDirectories.set(processCreate, cwd);
+      if (/\bchdir\(/.test(line) && /\)\s+=\s+0(?:\s|$)/.test(line)) {
+        const call = line.slice(line.indexOf("(") + 1, line.lastIndexOf(" = "));
+        const quoted = /^\s*"((?:\\.|[^"])*)"/.exec(call)?.[1];
+        if (quoted) {
+          const decoded = decodeStraceString(quoted);
+          workingDirectories.set(pid, path.resolve(cwd, decoded));
+        }
+        continue;
+      }
+      if (/\bfchdir\(/.test(line) && /\)\s+=\s+0(?:\s|$)/.test(line)) {
+        const descriptor = /fchdir\(\d+<(.+)>/.exec(line)?.[1];
+        if (descriptor) workingDirectories.set(pid, decodeStraceString(descriptor));
+        continue;
+      }
+
+      // -yy annotates returned descriptors and directory descriptors with
+      // their resolved paths. Include open attempts as metadata observations,
+      // successful directory descriptors, and getdents reads.
+      const openedPath = /=\s*\d+<(.+)>/.exec(line)?.[1];
+      const decodedOpenedPath = openedPath ? decodeStraceString(openedPath) : undefined;
+      if (/(?:open|openat|openat2)\(/.test(line)) {
+        if (decodedOpenedPath) record(decodedOpenedPath);
+        else {
+          const call = line.slice(line.indexOf("(") + 1, line.lastIndexOf(" = "));
+          const args = splitStraceArguments(call);
+          const openat = /\bopenat2?\(/.test(line);
+          const dir = /(?:AT_FDCWD|\d+)<(.+)>/.exec(args[0] ?? "")?.[1];
+          const pathArg = args[openat ? 1 : 0] ?? "";
+          const quoted = /^\s*"((?:\\.|[^"])*)"/.exec(pathArg)?.[1];
+          if (quoted) {
+            const decoded = decodeStraceString(quoted);
+            record(path.isAbsolute(decoded) ? decoded : path.resolve(dir ? decodeStraceString(dir) : cwd, decoded));
+          }
+        }
+      }
+      if (/getdents(?:64)?\(/.test(line)) {
+        const directory = /getdents(?:64)?\(\d+<(.+)>/.exec(line)?.[1];
+        record(directory ? decodeStraceString(directory) : undefined);
+        continue;
+      }
+
+      // Metadata syscalls carry a path argument. Resolve relative paths against
+      // the annotated dirfd emitted by -yy; absolute paths need no dirfd.
+      if (/(?:stat|lstat|newfstatat|statx|access|faccessat2?|readlink|readlinkat)\(/.test(line)) {
+        const call = line.slice(line.indexOf("(") + 1, line.lastIndexOf(" = "));
+        const args = splitStraceArguments(call);
+        const dir = /(?:AT_FDCWD|\d+)<(.+)>/.exec(args[0] ?? "")?.[1];
+        const pathArg = /(?:newfstatat|statx|faccessat|readlinkat)\(/.test(line) ? args[1] ?? "" : args[0] ?? "";
+        const quoted = /^\s*"((?:\\.|[^"])*)"/.exec(pathArg)?.[1];
+        if (quoted) {
+          const decoded = decodeStraceString(quoted);
+          record(path.isAbsolute(decoded) ? decoded : path.resolve(dir ? decodeStraceString(dir) : cwd, decoded));
+        } else if (dir) {
+          record(dir);
+        }
+      }
     }
     return counts;
   } catch {
@@ -761,7 +898,7 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
       }
       const ran = runVerifierShell(wrappedCommand, directory, timeoutMs);
       if (phase && tracePath) {
-        const opened = openedWorkspaceFiles(tracePath, directory);
+        const opened = observedWorkspacePaths(tracePath, directory);
         fs.rmSync(tracePath, { force: true });
         fileAccessTraces.set(phase, opened
           ? { available: true, detail: "candidate process file opens were traced", opened }
@@ -797,7 +934,8 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
     // ---- The baseline (completion_oracle.ts captureChangeBaselineImpl): the base run and the base tree's tests and verifier definition. ----
     // The snapshots are taken before the run, so nothing the verifier writes into its tree is mistaken for the base.
     const tests = snapshotTests(baseDir);
-    const definition = snapshotVerifierDefinitionWithReason(baseDir, command, deliverables);
+    const testSupportFiles = new Set<string>();
+    const definition = snapshotVerifierDefinitionWithReason(baseDir, command, deliverables, testSupportFiles);
     const baseRun = await execute("base", baseDir);
     const baseline: ChangeBaseline = {
       command,
@@ -847,7 +985,39 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
     const headPristine = path.join(scratch, "head-pristine");
     materialise(headTree, headPristine, "head", headIndex, true);
     linkDependencyDirs(worktree, [headPristine], doc.linkedDependencyDirs);
-    const oracleTestFiles = new Set(tests?.keys() ?? []);
+    const oracleTestFiles = new Set([...(tests?.keys() ?? []), ...testSupportFiles]);
+    // The runtime trace also finds fixture/data files opened indirectly by test helpers (for example with
+    // readFileSync on a path assembled at runtime). Paths in the baseline product graph are ordinary code inputs;
+    // other workspace files observed by the test run are part of its oracle boundary.
+    const baselineProductFiles = workspaceRuntimeFiles(baseDir);
+    const baselineOpenedFiles = fileAccessTraces.get("base")?.opened;
+    const trustedFiles = new Set(deliverables.map((file) => path.relative(baseDir, path.resolve(baseDir, file)).replace(/\\/g, "/")));
+    const baselineObservedUnattributedOracles = new Set<string>();
+    const testSideSources = [
+      ...(tests?.values() ?? []),
+      ...[...testSupportFiles].map((file) => {
+        try { return fs.readFileSync(path.join(baseDir, file), "utf8"); } catch { return ""; }
+      }),
+    ];
+    // If test code or its support modules can perform file/subprocess reads,
+    // aggregate trace counts cannot attribute a baseline oracle read to the
+    // test harness versus candidate code. Treat those paths as ambiguous.
+    const testSideMayReadWorkspaceFiles = testSideSources.some((sourceText) =>
+      /\b(?:node:)?(?:fs(?:\/promises)?|child_process)\b|process\.binding\s*\(\s*["']fs["']|\b(?:import|require|createRequire)\s*\(|\b(?:readFile|open|createReadStream|spawn|exec)\w*\s*\(/i.test(sourceText),
+    );
+    if (baselineOpenedFiles) {
+      for (const file of baselineOpenedFiles.keys()) {
+        if (!baselineProductFiles.has(file) && !trustedFiles.has(file)) oracleTestFiles.add(file);
+        // Aggregate syscall counts cannot tell a test/helper read from a
+        // candidate read of the same oracle. If test-side code can read files
+        // and the baseline opened a non-test, non-product workspace file, a
+        // larger baseline count could mask a candidate read. Keep it unverified.
+        if (testSideMayReadWorkspaceFiles && !tests?.has(file) &&
+            !baselineProductFiles.has(file) && !trustedFiles.has(file)) {
+          baselineObservedUnattributedOracles.add(file);
+        }
+      }
+    }
 
     // ---- The type-checks (completion_oracle.ts runTypecheckOracleImpl): only after a passing verifier, as the agent does. ----
     const mode = typecheckMode(undefined, source === "configured");
@@ -921,11 +1091,27 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
       if (!tests) {
         return { independent: false, detail: "the baseline test file set could not be captured, so test-oracle access could not be evaluated" };
       }
+      if (baselineObservedUnattributedOracles.size) {
+        const files = [...baselineObservedUnattributedOracles].sort();
+        return { independent: false, detail: `aggregate runtime tracing cannot separate baseline test reads from candidate reads of workspace oracle/support file(s): ${files.join(", ")}` };
+      }
       const reads = extraTestFileOpens(before.opened!, after.opened!, oracleTestFiles);
-      if (reads.length) {
+      // A passing candidate can reach a fixture only after its changed behavior
+      // makes a conditional test branch run. Such a path is absent from both
+      // static imports and the failing baseline trace. Treat candidate-only
+      // reads outside the baseline product graph and declared deliverables as
+      // oracle reads too. This is intentionally conservative: configuration
+      // or other workspace data first opened on the head may lower the verdict.
+      const trustedFiles = new Set(deliverables.map((file) => path.relative(baseDir, path.resolve(baseDir, file)).replace(/\\/g, "/")));
+      const candidateOnlyWorkspaceReads = [...after.opened!.keys()].filter((file) =>
+        (after.opened!.get(file) ?? 0) > (before.opened!.get(file) ?? 0) &&
+        !baselineProductFiles.has(file) && !trustedFiles.has(file),
+      );
+      const allOracleReads = [...new Set([...reads, ...candidateOnlyWorkspaceReads])].sort();
+      if (allOracleReads.length) {
         const run = doc.runs.find((record) => record.phase === phase);
-        if (run) run.testFixtureReads = reads;
-        return { independent: false, detail: `${phase} execution opened test-oracle file(s) more often than the base execution: ${reads.join(", ")}` };
+        if (run) run.testFixtureReads = allOracleReads;
+        return { independent: false, detail: `${phase} execution opened test-oracle or candidate-only workspace file(s) more often than the base execution: ${allOracleReads.join(", ")}` };
       }
       return { independent: true, detail: "the candidate run did not open baseline or candidate test-oracle files beyond the test runner's baseline access" };
     };

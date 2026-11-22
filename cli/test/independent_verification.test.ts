@@ -22,7 +22,7 @@ import {
 } from "../src/core/independent_check.js";
 import { DEFAULT_CONTINUATION, HarnessConfig } from "../src/types.js";
 import { startGateway, Reply } from "./helpers/fixtures.js";
-import { isWorkspaceTestSupportFile } from "../src/tester.js";
+import { discoverWorkspaceTestFiles, isWorkspaceTestSupportFile, MAX_TEST_FILES } from "../src/tester.js";
 
 const quiet = (agent: AutonomousAgent): AutonomousAgent => {
   (agent as any).ui = new Proxy({}, { get: () => () => {} });
@@ -54,6 +54,39 @@ const done: Reply = {
   kind: "tools",
   calls: [{ name: "task_completed", args: { summary: "done" } }],
 };
+
+test("verification refuses incomplete bounded test discovery", () => {
+  const deepRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-deep-test-discovery-"));
+  const manyRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-wide-test-discovery-"));
+  const linkRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-linked-test-discovery-"));
+  try {
+    const deepTest = path.join(deepRoot, "a", "b", "c", "d", "e", "f", "g", "hidden.test.js");
+    fs.mkdirSync(path.dirname(deepTest), { recursive: true });
+    fs.writeFileSync(deepTest, "test('hidden oracle', () => {});\n");
+    const deep = discoverWorkspaceTestFiles(deepRoot);
+    assert.equal(deep.complete, false);
+    assert.equal(snapshotTests(deepRoot), null);
+
+    fs.mkdirSync(path.join(linkRoot, "real-tests"));
+    fs.writeFileSync(path.join(linkRoot, "real-tests", "hidden.test.js"), "");
+    fs.symlinkSync("real-tests", path.join(linkRoot, "tests"), "dir");
+    assert.equal(discoverWorkspaceTestFiles(linkRoot).complete, false);
+    assert.equal(snapshotTests(linkRoot), null);
+
+    for (let index = 0; index <= MAX_TEST_FILES; index++) {
+      fs.writeFileSync(path.join(manyRoot, `case-${String(index).padStart(4, "0")}.test.js`), "");
+    }
+    const many = discoverWorkspaceTestFiles(manyRoot);
+    assert.equal(many.files.length, MAX_TEST_FILES);
+    assert.equal(many.complete, false);
+    assert.equal(snapshotTests(manyRoot), null);
+    assert.equal(snapshotVerifierDefinition(manyRoot, "node --test"), null);
+  } finally {
+    fs.rmSync(deepRoot, { recursive: true, force: true });
+    fs.rmSync(manyRoot, { recursive: true, force: true });
+    fs.rmSync(linkRoot, { recursive: true, force: true });
+  }
+});
 
 function repo(files: Record<string, string>): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-independent-"));

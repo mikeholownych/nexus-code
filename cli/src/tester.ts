@@ -959,32 +959,80 @@ export function isTestPath(relativePath: string): boolean {
   return TEST_PATH.test(relativePath);
 }
 export const SKIP_DIRS = new Set(["node_modules", ".git", "target", "dist", "build", "vendor", ".venv", "venv", "__pycache__", ".nexus"]);
-const MAX_TEST_FILES = 2000;
+export const MAX_TEST_FILES = 2000;
+const MAX_TEST_DISCOVERY_PROBE_DEPTH = 128;
+const MAX_TEST_DISCOVERY_ENTRIES = 100_000;
 export const MAX_TEST_BYTES = 256 * 1024;
 
-/** Test files of a workspace (bounded: depth 6, 2000 files, generated and dependency directories skipped). */
-export function workspaceTestFiles(root: string): string[] {
+export interface WorkspaceTestDiscovery {
+  files: string[];
+  complete: boolean;
+}
+
+/**
+ * Discover workspace test files. A bounded or unreadable traversal is explicitly
+ * incomplete so security-sensitive callers can refuse to treat a subset as the
+ * complete test oracle set.
+ */
+export function discoverWorkspaceTestFiles(root: string): WorkspaceTestDiscovery {
+  const workspace = path.resolve(root);
   const found: string[] = [];
-  const walk = (dir: string, depth: number) => {
-    if (depth > 6 || found.length >= MAX_TEST_FILES) return;
+  let complete = true;
+  let stopped = false;
+  let visitedEntries = 0;
+  const walk = (dir: string, depth: number, probeOnly = depth > 6) => {
+    if (stopped) return;
+    if (depth > MAX_TEST_DISCOVERY_PROBE_DEPTH) {
+      complete = false;
+      stopped = true;
+      return;
+    }
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
     } catch {
+      complete = false;
+      stopped = true;
       return;
     }
     for (const entry of entries) {
-      if (found.length >= MAX_TEST_FILES) return;
+      if (++visitedEntries > MAX_TEST_DISCOVERY_ENTRIES) {
+        complete = false;
+        stopped = true;
+        return;
+      }
       const full = path.join(dir, entry.name);
+      if ((entry.isDirectory() || entry.isSymbolicLink()) && SKIP_DIRS.has(entry.name)) continue;
+      if (entry.isSymbolicLink()) {
+        complete = false;
+        stopped = true;
+        return;
+      }
       if (entry.isDirectory()) {
-        if (!SKIP_DIRS.has(entry.name)) walk(full, depth + 1);
-      } else if (TEST_PATH.test(path.relative(root, full))) {
+        walk(full, depth + 1, probeOnly || depth >= 6);
+      } else if (TEST_PATH.test(path.relative(workspace, full))) {
+        if (probeOnly) {
+          complete = false;
+          stopped = true;
+          return;
+        }
+        if (found.length >= MAX_TEST_FILES) {
+          complete = false;
+          stopped = true;
+          return;
+        }
         found.push(full);
       }
+      if (stopped) return;
     }
   };
-  walk(root, 0);
-  return found;
+  walk(workspace, 0);
+  return { files: found, complete };
+}
+
+/** Compatibility helper for non-security-sensitive callers that need a bounded list. */
+export function workspaceTestFiles(root: string): string[] {
+  return discoverWorkspaceTestFiles(root).files;
 }
 
 function isSafeWorkspaceFile(root: string, relative: string): boolean {
