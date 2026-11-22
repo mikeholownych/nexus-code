@@ -114,6 +114,14 @@ describe("chain", () => {
     assert.equal(verifyChain([null]).status, "broken");
   });
 
+  test("malformed chain metadata is broken even when every record has it", () => {
+    const verdict = verifyChain([
+      { type: "a", chain: { seq: "bad", prev: "not-a-hash", hash: "not-a-hash" } },
+      { type: "b", chain: null },
+    ]);
+    assert.deepEqual([verdict.status, (verdict as any).at, (verdict as any).problem], ["broken", 0, "unlinked"]);
+  });
+
   test("LIMIT: records cut from the end leave a shorter chain that still verifies", () => {
     const records = reread(chainOf(base));
     records.pop();

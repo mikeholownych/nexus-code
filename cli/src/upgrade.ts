@@ -696,10 +696,17 @@ function isDownloadConnectionReset(error: any): boolean {
   return false;
 }
 
-function parseDownloadLength(header: string | null): number | undefined {
+/** Strict decimal parsing: a non-empty malformed or oversized header is an error, never "unknown". */
+export function parseDownloadLength(header: string | null): number | undefined {
   if (!header) return undefined;
-  const value = Number(header.trim());
-  return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  const value = header.trim();
+  if (!value) return undefined;
+  if (!/^\d+$/.test(value)) throw new Error(`Invalid Content-Length header (${value})`);
+  const parsed = BigInt(value);
+  if (parsed > BigInt(MAX_DOWNLOAD_BYTES)) {
+    throw new Error(`Download size (${value} bytes) exceeds maximum allowed limit (${MAX_DOWNLOAD_BYTES} bytes)`);
+  }
+  return Number(parsed);
 }
 
 function formatProgressBytes(bytes: number): string {
@@ -803,7 +810,10 @@ export async function downloadFile(
         if (!force && now - lastReportAt < progressIntervalMs) return;
         lastReportAt = now;
         lastReportedBytes = bytesDownloaded;
-        try { onProgress(bytesDownloaded, declaredTotal); } catch {}
+        // A server that under-reports Content-Length must not make progress show a
+        // premature 100%. Drop the total once the observed byte count exceeds it.
+        const reportTotal = declaredTotal !== undefined && bytesDownloaded <= declaredTotal ? declaredTotal : undefined;
+        try { onProgress(bytesDownloaded, reportTotal); } catch {}
       };
       reportProgress(true);
       const reader = res.body.getReader();
