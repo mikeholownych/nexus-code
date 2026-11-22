@@ -1,0 +1,79 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M80VCNA692W59MZC54CX27D6",
+  "strategy": "manual-commit",
+  "branch": "v1/vr1-nexus-verify",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".github/workflows/ci.yml",
+    "README.md",
+    "cli/scripts/diff_coverage.mjs",
+    "cli/scripts/run_coverage.mjs",
+    "cli/scripts/script_args.mjs",
+    "cli/scripts/test_shards.mjs",
+    "cli/src/protocol.ts",
+    "cli/src/sidecar.ts",
+    "cli/src/upgrade.ts",
+    "cli/src/upgrade_journal.ts",
+    "cli/test/check_fmt.test.ts",
+    "cli/test/diff_coverage.test.ts",
+    "cli/test/fixtures/protocol_v1_golden.jsonl",
+    "cli/test/protocol.test.ts",
+    "cli/test/protocol_golden.test.ts",
+    "cli/test/protocol_schema.test.ts",
+    "cli/test/sidecar.test.ts",
+    "cli/test/sidecar_initialize.test.ts",
+    "cli/test/sidecar_projection.test.ts",
+    "cli/test/upgrade_acceptance.test.ts",
+    "cli/test/upgrade_backup_performance.test.ts",
+    "cli/test/upgrade_download_progress.test.ts",
+    "core/src/bin/nexus_tui/live_state.rs",
+    "core/src/bin/nexus_tui/protocol.rs",
+    "docs/evidence/DOWNLOAD_PROGRESS_01.md",
+    "docs/evidence/INSTALL_BACKUP_01.md",
+    "docs/evidence/REVIEW_FIXES_01.md",
+    "docs/evidence/TEST_MATURITY_01.md",
+    "docs/protocol/VERSIONS.json",
+    "docs/protocol/sidecar-v1.schema.json",
+    "docs/releases/v1.2.2.md",
+    "quickstart.md",
+    "scripts/check_fmt.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 42,
+    "cache_creation_tokens": 23927,
+    "cache_read_tokens": 12003777,
+    "output_tokens": 15246,
+    "api_call_count": 18,
+    "subagent_tokens": {
+      "input_tokens": 22,
+      "cache_creation_tokens": 73765,
+      "cache_read_tokens": 2677272,
+      "output_tokens": 8725,
+      "api_call_count": 10
+    }
+  },
+  "redaction": {
+    "replacements": 631,
+    "layers": {
+      "betterleaks": 2,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 43,
+      "credentialed_uri": 3,
+      "entropy": 583,
+      "key_context": 0,
+      "provider_token": 2,
+      "shell_stdin": 0
+    }
+  }
+}
