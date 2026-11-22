@@ -187,6 +187,9 @@ test("CURRENT (defect 2): diagnostics published for a file before its first open
     assert.deepEqual(records(b.output), [{ tool: "lsp:fake", severity: "error", file: "b.ts", line: 1, column: 1, message: "published before open, no version" }]);
     assert.equal(c.success, true);
     assert.deepEqual(records(c.output), [{ tool: "lsp:fake", severity: "error", file: "c.ts", line: 1, column: 1, message: "published before open, version 99" }], "a version that is not the opened document's (1) is accepted too");
+    // The last answer came from the client's cache, so the fake may not have logged that didOpen yet: one round trip
+    // orders the log behind every notification already written (failed once on Node 22 in CI without it).
+    await s.sync();
     assert.deepEqual(s.received("textDocument/didOpen").map((e) => [e.params.textDocument.uri, e.params.textDocument.version]), [[s.uri("a.ts"), 1], [s.uri("b.ts"), 1], [s.uri("c.ts"), 1]]);
   } finally {
     await s.close();
@@ -550,6 +553,7 @@ test("CURRENT (defect 12): every file ever queried stays open with its full text
     const client = (await s.client()) as any;
     assert.equal(client.opened.size, 20);
     assert.equal(client.diagnosticsMap.size, 20);
+    await s.sync();
     assert.equal(s.received("textDocument/didOpen").length, 20);
     assert.equal(s.received("textDocument/didClose").length, 0);
     assert.equal(Object.keys(s.log().at(-1)!.docs!).length, 20, "the server holds all 20 too");
