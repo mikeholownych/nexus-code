@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01SDCUUeM5yXBG6w1Xf4jBHe",
+  "agent_id": "a504ac11f106d7e88",
+  "subagent_type": "general-purpose",
+  "task_description": "LS-1 S2 LSP freshness fixes",
+  "token_usage": {
+    "input_tokens": 52,
+    "cache_creation_tokens": 357128,
+    "cache_read_tokens": 4265672,
+    "output_tokens": 94827,
+    "api_call_count": 26
+  },
+  "started_at": "2026-11-22T12:06:28.530844593Z",
+  "completed_at": "2026-11-22T12:30:16.29721227Z"
+}

@@ -1,0 +1,63 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M81KS1QZ6E8H4MG3FAWPFTHF",
+  "strategy": "manual-commit",
+  "branch": "v1/gv1-managed-policy-lib",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cli/src/audit_cli.ts",
+    "cli/src/audit_contract.ts",
+    "cli/src/audit_export.ts",
+    "cli/src/core/audit_bundle.ts",
+    "cli/src/index.ts",
+    "cli/test/audit_bundle.test.ts",
+    "cli/test/audit_command.test.ts",
+    "cli/test/audit_export.test.ts",
+    "cli/test/audit_schema.test.ts",
+    "cli/test/helpers/audit_fixture.ts",
+    "docs/AUDIT.md",
+    "docs/USER_MANUAL.md",
+    "docs/protocol/AUDIT_BUNDLE_VERSIONS.json",
+    "docs/protocol/AUDIT_VERIFY_RESULT_VERSIONS.json",
+    "docs/protocol/README.md",
+    "docs/protocol/audit-bundle-v1.schema.json",
+    "docs/protocol/audit-verify-result-v1.schema.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 13186,
+    "cache_read_tokens": 6324924,
+    "output_tokens": 8743,
+    "api_call_count": 7,
+    "subagent_tokens": {
+      "input_tokens": 12,
+      "cache_creation_tokens": 95830,
+      "cache_read_tokens": 596178,
+      "output_tokens": 7281,
+      "api_call_count": 6
+    }
+  },
+  "redaction": {
+    "replacements": 753,
+    "layers": {
+      "betterleaks": 2,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 43,
+      "credentialed_uri": 3,
+      "entropy": 705,
+      "key_context": 0,
+      "provider_token": 2,
+      "shell_stdin": 0
+    }
+  }
+}
