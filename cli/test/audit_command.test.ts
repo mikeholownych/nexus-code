@@ -21,6 +21,15 @@ after(cleanTemp);
 const MANUAL = path.resolve(CLI_DIR, "..", "docs", "USER_MANUAL.md");
 const stateEnv = (subject: SubjectFixture): Record<string, string> => ({ NEXUS_STATE_DIR: path.join(subject.root, "state") });
 
+/** Keep the real-CLI subprocess fan-out bounded on slower CI workers. */
+async function runAuditBatch(calls: Array<() => Promise<AuditCliRun>>, concurrency = 2): Promise<AuditCliRun[]> {
+  const results: AuditCliRun[] = [];
+  for (let start = 0; start < calls.length; start += concurrency) {
+    results.push(...await Promise.all(calls.slice(start, start + concurrency).map((call) => call())));
+  }
+  return results;
+}
+
 /** What a consumer does with `--json`: stdout is exactly one document of the published schema, and `exitCode` is the process's. */
 function consume(run: AuditCliRun): any {
   let document: any;
@@ -94,12 +103,12 @@ test("the round trip through the commands: export a saved task, verify it, alter
     return { file, copy };
   });
   assert.equal(new Set(manifest.files.map((file) => file.role)).size, 11, "one file of each kind");
-  const [text, json, expected, unexpected, ...flipped] = await Promise.all([
-    runAudit(["verify", dir]),
-    runAudit(["verify", dir, "--json"]),
-    runAudit(["verify", dir, "--expect-manifest-sha256", hash!.toUpperCase()]),
-    runAudit(["verify", dir, "--json", "--expect-manifest-sha256", "0".repeat(64)]),
-    ...altered.map(({ copy }) => runAudit(["verify", copy, "--json"])),
+  const [text, json, expected, unexpected, ...flipped] = await runAuditBatch([
+    () => runAudit(["verify", dir]),
+    () => runAudit(["verify", dir, "--json"]),
+    () => runAudit(["verify", dir, "--expect-manifest-sha256", hash!.toUpperCase()]),
+    () => runAudit(["verify", dir, "--json", "--expect-manifest-sha256", "0".repeat(64)]),
+    ...altered.map(({ copy }) => () => runAudit(["verify", copy, "--json"])),
   ]);
 
   assert.equal(text.code, 0, text.stderr);
@@ -143,13 +152,13 @@ test("`nexus audit` still prints the tool audit log, byte for byte, and refuses 
   fs.writeFileSync(path.join(home, ".nexus", "audit.log"), `${records.join("\n")}\n`);
   const bundle = path.join(home, "some-bundle");
   const env = { HOME: home };
-  const [plain, limited, errors, bogus, typo, typoWithOption] = await Promise.all([
-    runAudit([], env),
-    runAudit(["--limit", "5"], env),
-    runAudit(["--errors", "-n", "3"], env),
-    runAudit(["bogus", "x"], env),
-    runAudit(["verfy", bundle], env),
-    runAudit(["--limit", "5", "exprot", "task-1"], env),
+  const [plain, limited, errors, bogus, typo, typoWithOption] = await runAuditBatch([
+    () => runAudit([], env),
+    () => runAudit(["--limit", "5"], env),
+    () => runAudit(["--errors", "-n", "3"], env),
+    () => runAudit(["bogus", "x"], env),
+    () => runAudit(["verfy", bundle], env),
+    () => runAudit(["--limit", "5", "exprot", "task-1"], env),
   ]);
   assert.deepEqual([plain.code, plain.stdout, plain.stderr], [0, all, ""]);
   assert.deepEqual([limited.code, limited.stdout, limited.stderr], [0, lastFive, ""]);
@@ -190,16 +199,16 @@ test("an unknown option, a missing argument or an extra one is a parse error, no
   const subject = savedSubject({ flight: false, diff: false });
   const env = stateEnv(subject);
   const out = subject.out("never");
-  const runs = await Promise.all([
-    runAudit(["export", subject.id, "--out", out, "--private-key", "k.pem"], env),
+  const runs = await runAuditBatch([
+    () => runAudit(["export", subject.id, "--out", out, "--private-key", "k.pem"], env),
     // `--errors` and `--tool` are options of `nexus audit` itself: after a subcommand they are not silently taken by it.
-    runAudit(["export", subject.id, "--out", out, "--errors"], env),
-    runAudit(["verify", subject.root, "--verify-key", "k.pem"], env),
-    runAudit(["verify", subject.root, "--tool", "x"], env),
-    runAudit(["export", "--out", out], env),
-    runAudit(["export", subject.id, "extra", "--out", out], env),
-    runAudit(["verify"], env),
-    runAudit(["verify", subject.root, "extra"], env),
+    () => runAudit(["export", subject.id, "--out", out, "--errors"], env),
+    () => runAudit(["verify", subject.root, "--verify-key", "k.pem"], env),
+    () => runAudit(["verify", subject.root, "--tool", "x"], env),
+    () => runAudit(["export", "--out", out], env),
+    () => runAudit(["export", subject.id, "extra", "--out", out], env),
+    () => runAudit(["verify"], env),
+    () => runAudit(["verify", subject.root, "extra"], env),
   ]);
   const messages = [/unknown option '--private-key'/, /unknown option '--errors'/, /unknown option '--verify-key'/, /unknown option '--tool'/, /missing required argument 'id'/, /too many arguments/, /missing required argument 'bundle-dir'/, /too many arguments/];
   for (const [index, run] of runs.entries()) {
@@ -221,18 +230,18 @@ test("`--json` prints one document of the published schema for every outcome, wi
   const takenBefore = snapshot(taken);
   const aFile = path.join(subject.root, "a-file");
   fs.writeFileSync(aFile, "x");
-  const [written, unknown, prefix, traversal, absolute, empty, exists, strict, noDir, notDir, unknownText] = await Promise.all([
-    runAudit(["export", subject.id, "--json", "--out", out], env),
-    runAudit(["export", "no-such-task", "--json"], env),
-    runAudit(["export", subject.id.slice(0, -1), "--json"], env),
-    runAudit(["export", "../x", "--json"], env),
-    runAudit(["export", path.join(subject.tasks, subject.id), "--json"], env),
-    runAudit(["export", "", "--json"], env),
-    runAudit(["export", subject.id, "--json", "--out", taken], env),
-    runAudit(["export", subject.id, "--json", "--redact", "strict", "--out", subject.out("strict")], env),
-    runAudit(["verify", path.join(subject.root, "no-such-bundle"), "--json"]),
-    runAudit(["verify", aFile, "--json"]),
-    runAudit(["export", "no-such-task"], env),
+  const [written, unknown, prefix, traversal, absolute, empty, exists, strict, noDir, notDir, unknownText] = await runAuditBatch([
+    () => runAudit(["export", subject.id, "--json", "--out", out], env),
+    () => runAudit(["export", "no-such-task", "--json"], env),
+    () => runAudit(["export", subject.id.slice(0, -1), "--json"], env),
+    () => runAudit(["export", "../x", "--json"], env),
+    () => runAudit(["export", path.join(subject.tasks, subject.id), "--json"], env),
+    () => runAudit(["export", "", "--json"], env),
+    () => runAudit(["export", subject.id, "--json", "--out", taken], env),
+    () => runAudit(["export", subject.id, "--json", "--redact", "strict", "--out", subject.out("strict")], env),
+    () => runAudit(["verify", path.join(subject.root, "no-such-bundle"), "--json"]),
+    () => runAudit(["verify", aFile, "--json"]),
+    () => runAudit(["export", "no-such-task"], env),
   ]);
 
   const document = consume(written);
