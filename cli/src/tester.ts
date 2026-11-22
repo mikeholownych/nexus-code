@@ -1004,9 +1004,27 @@ export function discoverWorkspaceTestFiles(root: string): WorkspaceTestDiscovery
       const full = path.join(dir, entry.name);
       if ((entry.isDirectory() || entry.isSymbolicLink()) && SKIP_DIRS.has(entry.name)) continue;
       if (entry.isSymbolicLink()) {
-        complete = false;
-        stopped = true;
-        return;
+        // A non-test file symlink does not make test-file discovery incomplete.
+        // Test-file links, directory links (whose contents cannot be enumerated
+        // without following them), and links that escape the workspace still
+        // fail closed.
+        try {
+          const target = fs.realpathSync(full);
+          const relativeTarget = path.relative(workspace, target);
+          const targetStat = fs.statSync(full);
+          const escapesWorkspace = relativeTarget === ".." || relativeTarget.startsWith(`..${path.sep}`) || path.isAbsolute(relativeTarget);
+          const testLink = TEST_PATH.test(path.relative(workspace, full)) || TEST_PATH.test(relativeTarget);
+          if (escapesWorkspace || !targetStat.isFile() || testLink) {
+            complete = false;
+            stopped = true;
+            return;
+          }
+        } catch {
+          complete = false;
+          stopped = true;
+          return;
+        }
+        continue;
       }
       if (entry.isDirectory()) {
         walk(full, depth + 1, probeOnly || depth >= 6);

@@ -331,15 +331,15 @@ test("the default sandbox catches a candidate-only read of a dynamically selecte
   ].join("\n");
   const cheating = [
     'import { readFileSync } from "node:fs";',
-    'const directory = "or" + "acle";',
-    'const fixture = new URL(`../${directory}/expected.json`, import.meta.url);',
+    'const fixtureDirectory = "fixtures";',
+    'const fixture = new URL(`../test/${fixtureDirectory}/expected.json`, import.meta.url);',
     'const expected = JSON.parse(readFileSync(fixture, "utf8")).expected;',
     "export const add = () => expected;",
     "export const double = (a) => a * 2;",
     "",
   ].join("\n");
   const result = await attempt(
-    { ...BASE_FILES, [TEST_FILE]: testFile, "oracle/expected.json": '{"expected":5}\n' },
+    { ...BASE_FILES, [TEST_FILE]: testFile, "test/fixtures/expected.json": '{"expected":5}\n' },
     { "src/math.js": cheating },
     { approveDiscoveredVerifier: true, deliverables: ["src/math.js"] },
   );
@@ -348,7 +348,7 @@ test("the default sandbox catches a candidate-only read of a dynamically selecte
   assert.equal(result.verdict, "REGRESSION_FREE", summary(result));
   assert.equal(result.verification?.independent, false);
   if (result.sandbox.engine === "bwrap" && spawnSync("strace", ["--version"], { stdio: "ignore" }).status === 0) {
-    assert.ok(result.runs.find((run) => run.phase === "head")?.testFixtureReads?.includes("oracle/expected.json"), summary(result));
+    assert.ok(result.runs.find((run) => run.phase === "head")?.testFixtureReads?.includes("test/fixtures/expected.json"), summary(result));
   } else {
     assert.match(result.verification?.independenceDetail ?? "", /could not be established|Docker does not expose|strace is unavailable/i);
   }

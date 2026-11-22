@@ -59,6 +59,7 @@ test("verification refuses incomplete bounded test discovery", () => {
   const deepRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-deep-test-discovery-"));
   const manyRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-wide-test-discovery-"));
   const linkRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-linked-test-discovery-"));
+  const testFileLinkRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-linked-test-file-discovery-"));
   try {
     const deepTest = path.join(deepRoot, "a", "b", "c", "d", "e", "f", "g", "hidden.test.js");
     fs.mkdirSync(path.dirname(deepTest), { recursive: true });
@@ -73,6 +74,13 @@ test("verification refuses incomplete bounded test discovery", () => {
     assert.equal(discoverWorkspaceTestFiles(linkRoot).complete, false);
     assert.equal(snapshotTests(linkRoot), null);
 
+    fs.mkdirSync(path.join(testFileLinkRoot, "helpers"));
+    fs.mkdirSync(path.join(testFileLinkRoot, "test"));
+    fs.writeFileSync(path.join(testFileLinkRoot, "helpers", "hidden.js"), "test('hidden oracle', () => {});\n");
+    fs.symlinkSync(path.join(testFileLinkRoot, "helpers", "hidden.js"), path.join(testFileLinkRoot, "test", "hidden.test.js"));
+    assert.equal(discoverWorkspaceTestFiles(testFileLinkRoot).complete, false);
+    assert.equal(snapshotTests(testFileLinkRoot), null);
+
     for (let index = 0; index <= MAX_TEST_FILES; index++) {
       fs.writeFileSync(path.join(manyRoot, `case-${String(index).padStart(4, "0")}.test.js`), "");
     }
@@ -85,6 +93,7 @@ test("verification refuses incomplete bounded test discovery", () => {
     fs.rmSync(deepRoot, { recursive: true, force: true });
     fs.rmSync(manyRoot, { recursive: true, force: true });
     fs.rmSync(linkRoot, { recursive: true, force: true });
+    fs.rmSync(testFileLinkRoot, { recursive: true, force: true });
   }
 });
 

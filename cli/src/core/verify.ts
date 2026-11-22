@@ -132,6 +132,17 @@ function traceCommand(strace: string, command: string, logPath: string): string 
   return `${quoteForShell(strace)} -f -qq -yy -e trace=%file,getdents,getdents64 -o ${quoteForShell(logPath)} -- bash -c ${quoteForShell(command)}`;
 }
 
+/** A test runner opening its test source is routine; data under a test directory remains an oracle candidate. */
+function isTestRunnerSourceFile(relativePath: string): boolean {
+  const normalized = relativePath.replace(/\\/g, "/");
+  const basename = path.posix.basename(normalized);
+  if (!/\.(?:[cm]?js|tsx?|py|rs|go)$/i.test(basename)) return false;
+  return /(?:^|[._-])(?:test|spec)(?:[._-]|$)/i.test(basename) ||
+    /^(?:test|spec)[_-].+\.(?:[cm]?js|tsx?|py)$/i.test(basename) ||
+    /_(?:test)\.(?:rs|go|py)$/i.test(basename) ||
+    /(?:^|\/)test\.(?:[cm]?js|tsx?|py)$/i.test(normalized);
+}
+
 function splitStraceArguments(value: string): string[] {
   const args: string[] = [];
   let start = 0;
@@ -1020,6 +1031,20 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
     const testSideMayReadWorkspaceFiles = testSideSources.some((sourceText) =>
       /\b(?:node:)?(?:fs(?:\/promises)?|child_process)\b|process\.binding\s*\(\s*["']fs["']|\b(?:import|require|createRequire)\s*\(|\b(?:readFile|open|createReadStream|spawn|exec)\w*\s*\(/i.test(sourceText),
     );
+    // The runtime trace also includes node:test and the verifier itself. Only
+    // attribute a candidate-only path to the product when changed product code
+    // can perform workspace reads; otherwise ordinary runner discovery (for
+    // example opening `.` or a newly-added test file) would poison every run.
+    const candidateProductMayReadWorkspaceFiles = changed
+      .filter((file) => !tests?.has(file) && !tests?.has(`./${file}`) && !/(^|\/)(?:test|tests|__tests__)\//i.test(file) && !/\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(file) && /\.(?:[cm]?js|tsx?)$/i.test(file))
+      .some((file) => {
+        try {
+          const sourceText = fs.readFileSync(path.join(headDir, file), "utf8");
+          return /\b(?:node:)?(?:fs(?:\/promises)?|child_process)\b|process\.binding\s*\(\s*["']fs["']|\b(?:import|require|createRequire)\s*\(|\b(?:readFile|open|createReadStream|readdir|stat|access|spawn|exec)\w*\s*\(/i.test(sourceText);
+        } catch {
+          return true;
+        }
+      });
     if (baselineOpenedFiles) {
       for (const file of baselineOpenedFiles.keys()) {
         if (!baselineProductFiles.has(file) && !trustedFiles.has(file)) oracleTestFiles.add(file);
@@ -1118,10 +1143,19 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
       // oracle reads too. This is intentionally conservative: configuration
       // or other workspace data first opened on the head may lower the verdict.
       const trustedFiles = new Set(deliverables.map((file) => path.relative(baseDir, path.resolve(baseDir, file)).replace(/\\/g, "/")));
-      const candidateOnlyWorkspaceReads = [...after.opened!.keys()].filter((file) =>
-        (after.opened!.get(file) ?? 0) > (before.opened!.get(file) ?? 0) &&
-        !baselineProductFiles.has(file) && !trustedFiles.has(file),
-      );
+      const candidateOnlyWorkspaceReads = candidateProductMayReadWorkspaceFiles ? [...after.opened!.keys()].filter((file) => {
+        if ((after.opened!.get(file) ?? 0) <= (before.opened!.get(file) ?? 0) || baselineProductFiles.has(file) || trustedFiles.has(file)) return false;
+        // Tracing also observes the test runner enumerating its directory and
+        // opening newly added test files. Baseline tests remain covered by
+        // extraTestFileOpens above; a new test is not part of the baseline
+        // oracle merely because the runner loaded it.
+        if (isTestRunnerSourceFile(file)) return false;
+        try {
+          return !fs.statSync(path.resolve(headDir, file)).isDirectory();
+        } catch {
+          return true;
+        }
+      }) : [];
       const allOracleReads = [...new Set([...reads, ...candidateOnlyWorkspaceReads])].sort();
       if (allOracleReads.length) {
         const run = doc.runs.find((record) => record.phase === phase);

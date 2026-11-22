@@ -18,5 +18,10 @@
     "schema_version": 2,
     "schemaSha256": "04cd4b6ff75600795d7e3f78bbc856836da947a03584dd80cfec048359b937ff",
     "note": "Add optional runs[].testFixtureReads for successful candidate-run opens of baseline test-oracle files beyond the base-run count. The producer writes it when runtime file tracing detects such access; consumers may ignore it, but independent-verification consumers should downgrade the result because the candidate consulted its test oracle."
+  },
+  {
+    "schema_version": 2,
+    "schemaSha256": "cc9dd93bbcb45c51151a1ed1bd7cf7f66ef48d8a7234f4d8e742186dce6f9ea4",
+    "note": "Clarify that runs[].testFixtureReads includes candidate-only workspace paths and test-support data observed by runtime tracing. This is a documentation-only schema change; existing consumers already accept the same optional string-array member, so schema_version stays 2."
   }
 ]

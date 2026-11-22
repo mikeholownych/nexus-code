@@ -635,7 +635,7 @@
           "type": "boolean"
         },
         "testFixtureReads": {
-          "description": "Baseline test-oracle files opened more often by this candidate run than by the base run. Such a pass is not independent.",
+          "description": "Test-oracle files or candidate-only workspace paths opened/observed more often than by the base run. Such a pass is not independent; paths can include test-support data, not only test files.",
           "type": "array",
           "items": {
             "type": "string"
