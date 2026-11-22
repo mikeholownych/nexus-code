@@ -1172,6 +1172,7 @@ mod tests {
         let mut events = 0;
         let mut commands = 0;
         let mut negotiation = Vec::new();
+        let mut older_sidecar = 0;
         for (index, line) in corpus.lines().enumerate() {
             if line.trim().is_empty() {
                 continue;
@@ -1203,6 +1204,18 @@ mod tests {
                         event.is_ok(),
                         "the Rust client must accept sidecar event {name}"
                     );
+                    // A record marked `older_sidecar` lacks fields the protocol now requires; it is in the corpus
+                    // because this client must keep accepting it.
+                    if let Some(missing) = record["older_sidecar"].as_array() {
+                        older_sidecar += 1;
+                        for field in missing {
+                            let field = field.as_str().expect("older_sidecar lists field names");
+                            assert!(
+                                value.get(field).is_none(),
+                                "older-sidecar record {name} must lack {field}"
+                            );
+                        }
+                    }
                     match event {
                         Ok(Event::Hello {
                             protocol,
@@ -1286,6 +1299,10 @@ mod tests {
         assert!(
             events >= 4 && commands >= 4,
             "the corpus must cover both wire directions"
+        );
+        assert_eq!(
+            older_sidecar, 2,
+            "the corpus keeps its older-sidecar tolerance records (hello without commands, tool.end without evidence)"
         );
         negotiation.sort_unstable();
         assert_eq!(
@@ -1375,6 +1392,335 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<Value>(&line).unwrap(),
             serde_json::json!({"v":1,"type":"initialize","id":"i1","client":{"name":"nexus-tui","version":"1.3.0"},"protocol_min":1,"protocol_max":1,"experimental":false})
+        );
+    }
+
+    // ---- Parity with the TypeScript types (cli/src/protocol.ts), driven by the published schema ----
+    //
+    // `Event` and `Command` are written by hand. These tests replace keeping them in step by eye: the schema
+    // generated from the TypeScript types says what exists on the wire, and every difference from this file is
+    // either a failure or an entry in one of the lists below, which must stay exact.
+
+    use std::collections::{BTreeMap, BTreeSet};
+
+    /// Schema fields this client does not read, per event. A field the TypeScript type gains fails
+    /// `schema_samples_parse_as_their_own_event_variants` until `Event` reads it or it is listed here.
+    const EVENT_FIELDS_NOT_READ: &[(&str, &[&str])] = &[
+        // The live view shows one turn at a time and matches tool events by `call_id`, so it never reads `turn_id`.
+        ("activity", &["turn_id"]),
+        // `preview` is the older, plain-text form of `review`.
+        ("approval.request", &["preview", "turn_id"]),
+        ("checkpoint.choice.request", &["turn_id"]),
+        ("file.diff", &["turn_id"]),
+        // The pid of the sidecar is the child this client spawned.
+        ("hello", &["pid"]),
+        ("stream.stall", &["turn_id"]),
+        // The record is found again by the request `id`; the transcript already holds what the call was.
+        ("tool.detail", &["evidence", "subject", "tool"]),
+        // `evidence` is taken from `tool.start`.
+        ("tool.end", &["evidence", "turn_id"]),
+        ("tool.start", &["turn_id"]),
+        ("turn.result", &["turn_id"]),
+        // The header shows `workspace_name`.
+        ("session.state", &["workspace"]),
+    ];
+
+    /// Commands the schema defines and this client has no variant for. A command the TypeScript union gains fails
+    /// `rust_commands_are_the_checked_in_fixture_and_published_commands` until it is added to `Command` or here.
+    const COMMANDS_NOT_SENT: &[&str] = &[
+        // The live view answers a blocked turn at its approval prompt (`approve` / `deny`), not with `answer`.
+        "answer",
+    ];
+
+    /// One of every `Command` variant, with each optional field both absent and present.
+    fn command_representatives() -> Vec<Command> {
+        let id = || "c1".to_string();
+        vec![
+            Command::Initialize {
+                id: id(),
+                client: ClientInfo {
+                    name: "nexus-tui".into(),
+                    version: "1.3.0".into(),
+                },
+                protocol_min: PROTOCOL_MIN,
+                protocol_max: PROTOCOL_MAX,
+                experimental: false,
+            },
+            Command::PromptSubmit {
+                id: id(),
+                text: "fix\nit".into(),
+            },
+            Command::Steer {
+                id: id(),
+                text: "use tabs".into(),
+            },
+            Command::Cancel,
+            Command::Approve {
+                id: id(),
+                always: true,
+            },
+            Command::Deny { id: id() },
+            Command::CheckpointChoice {
+                id: id(),
+                choice: "retry".into(),
+            },
+            Command::Slash {
+                id: id(),
+                command: "diff".into(),
+                args: String::new(),
+            },
+            Command::ToolDetail {
+                id: id(),
+                evidence: "e1".into(),
+            },
+            Command::Receipt { id: id() },
+            Command::ModelsList { id: id() },
+            Command::ModelSelect {
+                id: id(),
+                provider: "local".into(),
+                model: "m".into(),
+            },
+            Command::ProviderConnect {
+                id: id(),
+                provider: "local".into(),
+                method: "endpoint".into(),
+                key: None,
+                endpoint: None,
+            },
+            Command::ProviderConnect {
+                id: id(),
+                provider: "local".into(),
+                method: "api-key".into(),
+                key: Some(Secret("not-a-real-key".into())),
+                endpoint: Some("http://127.0.0.1:1/v1".into()),
+            },
+            Command::ProviderCancel { id: id() },
+            Command::ProviderLocalCancel { id: id() },
+            Command::ProviderDisconnect {
+                id: id(),
+                provider: "local".into(),
+            },
+            Command::Shutdown,
+        ]
+    }
+
+    fn repo_file(relative: &str) -> String {
+        let path = format!("{}/../{relative}", env!("CARGO_MANIFEST_DIR"));
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path} must be checked in: {e}"))
+    }
+
+    /// Message type → its field names (without `v` and `type`), for one direction of the published schema.
+    fn schema_messages(def: &str) -> BTreeMap<String, BTreeSet<String>> {
+        let schema: Value = serde_json::from_str(&repo_file(&format!(
+            "docs/protocol/sidecar-v{PROTOCOL_VERSION}.schema.json"
+        )))
+        .expect("the schema is JSON");
+        let variants = schema["$defs"][def]["oneOf"]
+            .as_array()
+            .unwrap_or_else(|| panic!("the schema defines {def}"));
+        variants
+            .iter()
+            .map(|variant| {
+                let name = variant["properties"]["type"]["const"]
+                    .as_str()
+                    .expect("a message variant has a constant type");
+                let fields = variant["properties"]
+                    .as_object()
+                    .expect("a message variant has properties")
+                    .keys()
+                    .filter(|field| *field != "v" && *field != "type")
+                    .cloned()
+                    .collect();
+                (name.to_string(), fields)
+            })
+            .collect()
+    }
+
+    /// The wire names of the variants of `pub enum <name>` in this file, read from the source: each variant's
+    /// `#[serde(rename = "...")]`. Rust has no way to list an enum's variants, and a list kept by hand in a test
+    /// would be the hand-sync this replaces. Every variant must carry a rename (the `#[serde(other)]` fallback
+    /// excepted), which is asserted, so a variant cannot be missed.
+    fn rust_wire_names(name: &str) -> BTreeSet<String> {
+        let source = include_str!("protocol.rs");
+        let opening = format!("pub enum {name} {{\n");
+        let start = source
+            .find(&opening)
+            .unwrap_or_else(|| panic!("enum {name} is declared in protocol.rs"));
+        let body = &source[start + opening.len()..];
+        let body = &body[..body.find("\n}\n").expect("the enum body ends")];
+        let mut names = BTreeSet::new();
+        let (mut variants, mut fallbacks) = (0, 0);
+        for line in body.lines() {
+            // Variant-level lines are indented by exactly four spaces; fields and their attributes by eight.
+            let Some(item) = line
+                .strip_prefix("    ")
+                .filter(|rest| !rest.starts_with(' '))
+            else {
+                continue;
+            };
+            if let Some(rest) = item.strip_prefix("#[serde(rename = \"") {
+                let wire = rest
+                    .strip_suffix("\")]")
+                    .unwrap_or_else(|| panic!("unexpected rename attribute: {line}"));
+                assert!(
+                    names.insert(wire.to_string()),
+                    "{name}: two variants are renamed {wire}"
+                );
+            } else if item == "#[serde(other)]" {
+                fallbacks += 1;
+            } else if item.starts_with(|c: char| c.is_ascii_uppercase()) {
+                variants += 1;
+            }
+        }
+        assert!(!names.is_empty(), "{name} has variants");
+        assert_eq!(
+            variants,
+            names.len() + fallbacks,
+            "every {name} variant needs #[serde(rename = \"<wire type>\")]"
+        );
+        names
+    }
+
+    /// The top-level field names of a parsed message, from its derived `Debug` form (`{:#?}` puts each field of
+    /// the variant on its own line, indented by four spaces). No field of `Event` is renamed, so these are the
+    /// wire names.
+    fn fields_read(debug: &str) -> BTreeSet<String> {
+        debug
+            .lines()
+            .filter_map(|line| line.strip_prefix("    "))
+            .filter(|rest| rest.starts_with(|c: char| c.is_ascii_lowercase()))
+            .filter_map(|rest| rest.split_once(": ").map(|(field, _)| field.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn schema_samples_parse_as_their_own_event_variants() {
+        let published = schema_messages("SidecarEvent");
+        // Every event the schema publishes has a variant here, and every variant here is a published event.
+        assert_eq!(
+            rust_wire_names("Event"),
+            published.keys().cloned().collect(),
+            "the Rust Event enum and the schema's events differ: add the variant, or regenerate the schema"
+        );
+        let not_read: BTreeMap<&str, BTreeSet<String>> = EVENT_FIELDS_NOT_READ
+            .iter()
+            .map(|(event, fields)| (*event, fields.iter().map(|f| f.to_string()).collect()))
+            .collect();
+        assert_eq!(
+            not_read.len(),
+            EVENT_FIELDS_NOT_READ.len(),
+            "EVENT_FIELDS_NOT_READ lists an event twice"
+        );
+        for event in not_read.keys() {
+            assert!(
+                published.contains_key(*event),
+                "EVENT_FIELDS_NOT_READ names {event}, which the schema does not define"
+            );
+        }
+
+        let samples = repo_file(&format!(
+            "cli/test/fixtures/protocol_v{PROTOCOL_VERSION}_schema_samples.jsonl"
+        ));
+        let mut seen = BTreeSet::new();
+        for line in samples.lines() {
+            let record: Value = serde_json::from_str(line).expect("a sample record is JSON");
+            if record["direction"] != "event" {
+                continue;
+            }
+            let name = record["name"].as_str().expect("a sample has a name");
+            let shape = record["shape"].as_str().expect("a sample has a shape");
+            let json = record["json"].as_str().expect("a sample has json");
+            let event = parse_event(json).unwrap_or_else(|err| {
+                panic!("the {shape} {name} sample does not parse: {err}\n{json}\nThe TypeScript type allows this message; make the Rust field optional or add what is missing.")
+            });
+            let debug = format!("{event:#?}");
+            // `Event::Unknown` and `Review::Unknown` are what a type or shape this client lacks parses as.
+            let fallback = debug.lines().any(|line| {
+                let value = line.trim().trim_end_matches(',');
+                value == "Unknown" || value.ends_with(": Unknown")
+            });
+            assert!(
+                !fallback,
+                "the {shape} {name} sample parsed as an unknown variant: {debug}"
+            );
+            seen.insert((name.to_string(), shape.to_string()));
+            if shape != "full" {
+                continue;
+            }
+            let read = fields_read(&debug);
+            let fields = &published[name];
+            assert_eq!(
+                read.difference(fields).collect::<Vec<_>>(),
+                Vec::<&String>::new(),
+                "{name}: Rust reads fields the schema does not define"
+            );
+            assert_eq!(
+                fields.difference(&read).cloned().collect::<BTreeSet<_>>(),
+                not_read.get(name).cloned().unwrap_or_default(),
+                "{name}: the schema fields this client does not read must equal EVENT_FIELDS_NOT_READ"
+            );
+        }
+        for name in published.keys() {
+            for shape in ["minimal", "full"] {
+                assert!(
+                    seen.contains(&(name.clone(), shape.to_string())),
+                    "no {shape} sample for {name}: run `node cli/scripts/gen_protocol_samples.mjs`"
+                );
+            }
+        }
+    }
+
+    /// The fixture holds the exact lines this client writes, one command per line. This test keeps it equal to
+    /// what `encode_command` produces today; `cli/test/protocol_parity.test.ts` validates each line against the
+    /// schema and gives it to the sidecar's `parseCommand`. So a field renamed here fails there. Rewrite the
+    /// fixture with `NEXUS_UPDATE_PROTOCOL_FIXTURES=1 cargo test --bin nexus-tui rust_commands`.
+    #[test]
+    fn rust_commands_are_the_checked_in_fixture_and_published_commands() {
+        let relative =
+            format!("cli/test/fixtures/protocol_v{PROTOCOL_VERSION}_rust_commands.jsonl");
+        let encoded: String = command_representatives()
+            .iter()
+            .map(encode_command)
+            .collect();
+        if std::env::var_os("NEXUS_UPDATE_PROTOCOL_FIXTURES").is_some() {
+            std::fs::write(
+                format!("{}/../{relative}", env!("CARGO_MANIFEST_DIR")),
+                &encoded,
+            )
+            .expect("the fixture is writable");
+        }
+        assert_eq!(
+            repo_file(&relative),
+            encoded,
+            "{relative} is not what the client serializes: rerun with NEXUS_UPDATE_PROTOCOL_FIXTURES=1 and review the diff"
+        );
+
+        let sent: BTreeSet<String> = encoded
+            .lines()
+            .map(|line| {
+                let value: Value = serde_json::from_str(line).expect("a command line is JSON");
+                assert_eq!(value["v"], Value::from(PROTOCOL_VERSION));
+                value["type"]
+                    .as_str()
+                    .expect("a command has a type")
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(
+            sent,
+            rust_wire_names("Command"),
+            "command_representatives must hold every Command variant"
+        );
+        let published: BTreeSet<String> = schema_messages("SidecarCommand").into_keys().collect();
+        assert_eq!(
+            sent.difference(&published).collect::<Vec<_>>(),
+            Vec::<&String>::new(),
+            "this client can send a command the schema does not define"
+        );
+        assert_eq!(
+            published.difference(&sent).cloned().collect::<Vec<_>>(),
+            COMMANDS_NOT_SENT,
+            "the published commands this client has no variant for must equal COMMANDS_NOT_SENT"
         );
     }
 }

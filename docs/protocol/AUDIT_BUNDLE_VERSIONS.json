@@ -1,0 +1,7 @@
+[
+  {
+    "schema_version": 1,
+    "schemaSha256": "5137795d995a9bf8290b423c4ea1784aa5810a2b5880b30c5423a7d63c4d9bf6",
+    "note": "First published schema of the audit bundle (GV-2), generated from AuditBundleDocument in cli/src/audit_contract.ts on release/v1.3.0: manifest.json (AuditManifest) and the detached signature envelope manifest.sig.json (AuditSignatureEnvelope). Nothing was published before it. The envelope is declared so the schema does not change when signing lands; nothing writes or checks one yet."
+  }
+]

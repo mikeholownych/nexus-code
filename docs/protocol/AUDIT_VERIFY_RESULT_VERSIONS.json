@@ -1,0 +1,7 @@
+[
+  {
+    "schema_version": 1,
+    "schemaSha256": "8f5d1c5a9697802d8f9a662b7089d9573b66b36e43dbcdd579966dfffcd27429",
+    "note": "First published schema of the audit bundle verification document (GV-2), generated from AuditVerifyOutput in cli/src/audit_contract.ts on release/v1.3.0. Nothing was published before it. The signature finding kinds, the signature statuses valid, invalid and missing, the result intact_signed and public_key_sha256 are declared so the schema does not change when signing lands; nothing produces them yet."
+  }
+]
