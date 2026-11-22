@@ -72,6 +72,8 @@ export interface HarnessConfig {
    * `maxSteps` ends the turn (LIMIT_REACHED), the legacy single-segment behaviour.
    */
   continuation?: ContinuationBudget;
+  /** Maximum tool dispatches for one objective, including when automatic continuation is disabled. */
+  maxToolInvocations?: number;
   /** Identical-tool-call thresholds (soft: corrective note; hard: TOOL_CALL_LOOP for an observer, scaled for commands and polls). Independent of `continuation`. */
   repeatedCalls?: { soft: number; hard: number };
   temperature: number;       // Default 0.2 for precise coding
@@ -160,6 +162,8 @@ export interface ExecutionResult {
 export interface ContinuationBudget {
   /** Maximum steps for one objective across runs and resumes (STEP_BUDGET_EXHAUSTED). */
   maxTotalSteps: number;
+  /** Maximum tool dispatches for one objective across turns and resumes. */
+  maxToolInvocations?: number;
   /** Maximum wall-clock minutes for one invocation (TIME_BUDGET_EXHAUSTED). */
   maxTurnMinutes: number;
   /**
@@ -181,6 +185,8 @@ export interface ContinuationBudget {
 /** Hard upper bounds keep an operator override finite even when a config or direct API caller bypasses CLI parsing. */
 export const MAX_CONTINUATION_STEPS = 5_000;
 export const MAX_CONTINUATION_MINUTES = 4_320;
+export const DEFAULT_MAX_TOOL_INVOCATIONS = 1_000;
+export const MAX_TOOL_INVOCATIONS = 10_000;
 
 export function assertValidContinuationBudget(budget: ContinuationBudget | undefined): void {
   if (!budget) return;
@@ -190,6 +196,9 @@ export function assertValidContinuationBudget(budget: ContinuationBudget | undef
   if (!Number.isFinite(budget.maxTurnMinutes) || budget.maxTurnMinutes < 1 / 60 || budget.maxTurnMinutes > MAX_CONTINUATION_MINUTES) {
     throw new Error(`Invalid continuation time budget: expected a finite value from 1 second to ${MAX_CONTINUATION_MINUTES} minutes.`);
   }
+  if (budget.maxToolInvocations !== undefined && (!Number.isSafeInteger(budget.maxToolInvocations) || budget.maxToolInvocations < 1 || budget.maxToolInvocations > MAX_TOOL_INVOCATIONS)) {
+    throw new Error(`Invalid tool invocation budget: expected an integer from 1 to ${MAX_TOOL_INVOCATIONS}.`);
+  }
 }
 
 /** Failed verifier attempts on changing candidates that show no convergence before the turn stops (see ContinuationBudget). */
@@ -197,6 +206,7 @@ export const DEFAULT_CONVERGENCE_ATTEMPTS = 3;
 
 export const DEFAULT_CONTINUATION: ContinuationBudget = {
   maxTotalSteps: 500,
+  maxToolInvocations: DEFAULT_MAX_TOOL_INVOCATIONS,
   maxTurnMinutes: 480,
   stagnationSteps: 12,
   maxRecoveries: 2,

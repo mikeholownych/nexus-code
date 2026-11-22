@@ -15,7 +15,7 @@ import { DEFAULT_OPERATION_POLICY } from "./core/operation.js";
 import { setSandboxNetworkFlag } from "./sandbox_network.js";
 import { readSmallFile } from "./core/checkout_trust.js";
 import { resolveRepeatedCallSettings } from "./core/repeated_calls.js";
-import { ContinuationBudget, DEFAULT_CONTINUATION, DEFAULT_CONVERGENCE_ATTEMPTS, MAX_CONTINUATION_MINUTES, MAX_CONTINUATION_STEPS, HarnessConfig, ApprovalMode } from "./types.js";
+import { ContinuationBudget, DEFAULT_CONTINUATION, DEFAULT_CONVERGENCE_ATTEMPTS, DEFAULT_MAX_TOOL_INVOCATIONS, MAX_CONTINUATION_MINUTES, MAX_CONTINUATION_STEPS, MAX_TOOL_INVOCATIONS, HarnessConfig, ApprovalMode } from "./types.js";
 
 /** A project `.env` larger than this is ignored (it is repository-controlled). */
 const MAX_PROJECT_ENV_BYTES = 256 * 1024;
@@ -182,6 +182,7 @@ const PROJECT_ENV_KEYS = new Set([
   "NEXUS_TASK_CLASS",
   "NEXUS_CONTINUATION",
   "NEXUS_MAX_TOTAL_STEPS",
+  "NEXUS_MAX_TOOL_INVOCATIONS",
   "NEXUS_MAX_TURN_MINUTES",
   "NEXUS_STAGNATION_STEPS",
   "NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS",
@@ -431,6 +432,7 @@ export function buildConfig(options: any): HarnessConfig {
   const workspace = options.workspace ? path.resolve(options.workspace) : process.cwd();
   const maxSteps = options.maxSteps ? parseInt(options.maxSteps, 10) : 30;
   const continuation = continuationBudget(options);
+  const maxToolInvocations = toolInvocationLimit(options);
   const repeatedCalls = repeatedCallSettings();
   const temperature = options.temperature ? parseFloat(options.temperature) : 0.2;
   const shell = options.shell || operatorSetting("LOCAL_HARNESS_SHELL") || process.env.LOCAL_HARNESS_SHELL || "bash";
@@ -526,6 +528,7 @@ export function buildConfig(options: any): HarnessConfig {
     ...(credentialOrigin ? { credentialOrigin } : {}),
     workspace,
     maxSteps,
+    maxToolInvocations,
     ...(continuation ? { continuation } : {}),
     repeatedCalls: { soft: repeatedCalls.soft, hard: repeatedCalls.hard },
     temperature,
@@ -759,10 +762,21 @@ export function continuationBudget(options: any): ContinuationBudget | undefined
   return {
     ...DEFAULT_CONTINUATION,
     maxTotalSteps: Number.isFinite(steps) ? Math.floor(steps) : steps,
+    maxToolInvocations: toolInvocationLimit(options),
     maxTurnMinutes: positive(options.maxTurnMinutes, effectiveSetting("NEXUS_MAX_TURN_MINUTES"), DEFAULT_CONTINUATION.maxTurnMinutes, MAX_CONTINUATION_MINUTES),
     stagnationSteps: Math.floor(positive(options.stagnationSteps, effectiveSetting("NEXUS_STAGNATION_STEPS"), DEFAULT_CONTINUATION.stagnationSteps)),
     verifierConvergenceAttempts: Math.floor(positive(undefined, effectiveSetting("NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS"), DEFAULT_CONVERGENCE_ATTEMPTS)),
   };
+}
+
+/** Objective-wide tool dispatch ceiling. It remains active when automatic continuation is disabled. */
+export function toolInvocationLimit(options: any): number {
+  const raw = options.maxToolInvocations ?? effectiveSetting("NEXUS_MAX_TOOL_INVOCATIONS");
+  if (raw === undefined || raw === null || raw === "") return DEFAULT_MAX_TOOL_INVOCATIONS;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1) throw new Error(`Invalid tool invocation budget '${String(raw)}': expected a positive integer.`);
+  if (value > MAX_TOOL_INVOCATIONS) throw new Error(`Invalid tool invocation budget '${String(raw)}': maximum is ${MAX_TOOL_INVOCATIONS}.`);
+  return value;
 }
 
 /** Repeated-call thresholds: the operator's values, which a project `.env` may only lower. */
