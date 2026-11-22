@@ -7,6 +7,26 @@ VERSION=${NEXUS_VERSION:-latest}
 PREFIX=${NEXUS_PREFIX:-"$HOME/.local"}
 
 fail() { printf 'nexus installer: %s\n' "$*" >&2; exit 1; }
+
+# Report interruption with the shell's conventional signal exit codes. The EXIT
+# trap still removes temporary files; re-arm these after any trap reset so a
+# later Ctrl-C or `kill -TERM` cannot leave a half-written installation.
+exit_on_int() { trap - INT; exit 130; }
+exit_on_term() { trap - TERM; exit 143; }
+arm_signal_exits() { trap exit_on_int INT; trap exit_on_term TERM; }
+arm_signal_exits
+
+# This installer writes only under $HOME. Under sudo, $HOME usually points at
+# root's home, so the launcher would not be visible to the invoking user.
+# Plain root (containers, CI) is left alone; an intentional root install can
+# opt in explicitly.
+if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ] && [ "${NEXUS_INSTALL_ALLOW_SUDO:-0}" != "1" ]; then
+  printf 'nexus installer: do not run this installer with sudo.\n' >&2
+  printf 'Nexus installs into your home directory and does not need root access.\n' >&2
+  printf 'Re-run without sudo. To install for root intentionally, set NEXUS_INSTALL_ALLOW_SUDO=1.\n' >&2
+  exit 1
+fi
+
 case "$(uname -s):$(uname -m)" in
   Linux:x86_64|Linux:amd64) ;;
   *) fail "unsupported system $(uname -s)/$(uname -m); supported: Linux x86-64 (glibc)." ;;
@@ -17,6 +37,30 @@ NODE_MAJOR=$(node -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null |
 command -v curl >/dev/null 2>&1 || fail "curl is required."
 command -v tar >/dev/null 2>&1 || fail "tar is required."
 command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required."
+
+# An in-flight `nexus upgrade` owns this journal and the launcher symlink. A
+# concurrent install would repoint the launcher underneath recovery and make
+# rollback target the wrong package. Inspect the journal read-only: an absent
+# or closed journal is fine, but a pending or unrecognised journal must be
+# resolved by the upgrade path before another install is allowed.
+UPGRADE_JOURNAL="$PREFIX/lib/nexus/.upgrade-journal.json"
+if [ -e "$UPGRADE_JOURNAL" ] || [ -L "$UPGRADE_JOURNAL" ]; then
+  JOURNAL_STATE=$(node - "$UPGRADE_JOURNAL" <<'NODE' || printf unrecognized
+const fs = require("node:fs");
+const path = require("node:path");
+const file = process.argv[2];
+try {
+  if (!fs.lstatSync(file).isFile() || fs.realpathSync(file) !== path.resolve(file)) process.exit(1);
+  const state = JSON.parse(fs.readFileSync(file, "utf8")).state;
+  process.stdout.write(["idle", "complete", "rolled_back"].includes(state) ? state : "unrecognized");
+} catch { process.exit(1); }
+NODE
+)
+  case "$JOURNAL_STATE" in
+    idle|complete|rolled_back) ;;
+    *) fail "pending upgrade journal at $UPGRADE_JOURNAL (state: $JOURNAL_STATE); run 'nexus upgrade --recover' before installing another version." ;;
+  esac
+fi
 
 VERIFY_ATTESTATION=${NEXUS_VERIFY_ATTESTATION-auto}
 case "$VERIFY_ATTESTATION" in
@@ -43,11 +87,29 @@ fi
 
 if [ "$VERSION" = "latest" ]; then
   API_BASE=${NEXUS_RELEASES_API:-"https://api.github.com/repos/$REPO/releases"}
+  API_AUTH=
+  # Only the real GitHub API receives a caller-supplied token; a custom
+  # NEXUS_RELEASES_API is often a local fixture and must not harvest it.
+  if [ -z "${NEXUS_RELEASES_API:-}" ] && [ -n "${GITHUB_TOKEN:-}" ]; then
+    case "$GITHUB_TOKEN" in
+      *[!A-Za-z0-9._~-]*)
+        printf 'nexus installer: ignoring GITHUB_TOKEN with unexpected characters; set NEXUS_VERSION instead if the rate limit persists.\n' >&2 ;;
+      *) API_AUTH="Bearer $GITHUB_TOKEN" ;;
+    esac
+  fi
+  api_get() {
+    if [ -n "$API_AUTH" ]; then
+      curl -sSL --show-error -H 'Accept: application/vnd.github+json' -H "Authorization: $API_AUTH" "$@"
+    else
+      curl -sSL --show-error -H 'Accept: application/vnd.github+json' "$@"
+    fi
+  }
   API_TMP=$(mktemp -d "${TMPDIR:-/tmp}/nexus-api.XXXXXX") || fail "could not create temporary directory."
   api_cleanup() { rm -rf "$API_TMP"; }
-  trap api_cleanup EXIT HUP INT TERM
+  trap api_cleanup EXIT HUP
+  arm_signal_exits
 
-  LATEST_CODE=$(curl -sSL --show-error -H 'Accept: application/vnd.github+json' -D "$API_TMP/headers" -o "$API_TMP/latest.json" -w "%{http_code}" "$API_BASE/latest" 2>"$API_TMP/curl.err" || echo "000")
+  LATEST_CODE=$(api_get -D "$API_TMP/headers" -o "$API_TMP/latest.json" -w "%{http_code}" "$API_BASE/latest" 2>"$API_TMP/curl.err" || echo "000")
 
   if [ "$LATEST_CODE" = "200" ]; then
     VERSION=$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$API_TMP/latest.json" | head -n 1)
@@ -55,11 +117,11 @@ if [ "$VERSION" = "latest" ]; then
     validate_tag "$VERSION"
   elif [ "$LATEST_CODE" = "403" ]; then
     if grep -qiE 'x-ratelimit-remaining:[[:space:]]*0' "$API_TMP/headers" 2>/dev/null; then
-      fail "GitHub API rate limit exceeded; set NEXUS_VERSION=vX to bypass the release lookup, or set GITHUB_TOKEN."
+      fail "GitHub API rate limit exceeded; set NEXUS_VERSION=vX to bypass the release lookup, or set GITHUB_TOKEN when using GitHub's API."
     fi
     fail "GitHub API returned HTTP 403; set NEXUS_VERSION=vX to bypass the release lookup."
   elif [ "$LATEST_CODE" = "404" ]; then
-    PREREL_CODE=$(curl -sSL --show-error -H 'Accept: application/vnd.github+json' -o "$API_TMP/releases.json" -w "%{http_code}" "$API_BASE?per_page=1" 2>/dev/null || echo "000")
+    PREREL_CODE=$(api_get -o "$API_TMP/releases.json" -w "%{http_code}" "$API_BASE?per_page=1" 2>/dev/null || echo "000")
     if [ "$PREREL_CODE" = "200" ]; then
       PREREL_TAG=$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$API_TMP/releases.json" | head -n 1)
       if [ -n "$PREREL_TAG" ]; then
@@ -72,6 +134,7 @@ if [ "$VERSION" = "latest" ]; then
   fi
   rm -rf "$API_TMP"
   trap - EXIT HUP INT TERM
+  arm_signal_exits
 fi
 
 ARCHIVE="nexus-linux-x86_64-$VERSION.tar.gz"
@@ -79,7 +142,8 @@ NORMALIZED_VERSION=${VERSION#v}
 URL="$BASE/download/$VERSION"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/nexus-install.XXXXXX") || fail "could not create temporary directory."
 cleanup() { rm -rf "$TMP"; }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT HUP
+arm_signal_exits
 curl -fsSL --show-error --retry 2 "$URL/$ARCHIVE" -o "$TMP/$ARCHIVE" || fail "download failed for $ARCHIVE."
 curl -fsSL --show-error --retry 2 "$URL/SHA256SUMS" -o "$TMP/SHA256SUMS" || fail "could not download release checksums."
 grep -F "  $ARCHIVE" "$TMP/SHA256SUMS" > "$TMP/expected.sha256" || fail "checksum entry for $ARCHIVE is missing."
