@@ -5,6 +5,10 @@ use serde_json::Value;
 use std::fmt;
 
 pub const PROTOCOL_VERSION: u64 = 1;
+/// The inclusive range of protocol versions this client can speak (exactly `PROTOCOL_VERSION` today). A version
+/// bump changes this pair; `hello_mismatch` compares it with the range the sidecar announces.
+pub const PROTOCOL_MIN: u64 = PROTOCOL_VERSION;
+pub const PROTOCOL_MAX: u64 = PROTOCOL_VERSION;
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct GitInfo {
@@ -167,6 +171,30 @@ pub enum Event {
         protocol: u64,
         #[serde(default)]
         commands: Vec<SlashSpec>,
+        /// The inclusive range of versions the sidecar can speak. Absent from a sidecar older than capability
+        /// negotiation, which speaks exactly `protocol`.
+        #[serde(default)]
+        protocol_min: Option<u64>,
+        #[serde(default)]
+        protocol_max: Option<u64>,
+        /// Stable features the sidecar supports (absent from older sidecars).
+        #[serde(default)]
+        capabilities: Vec<String>,
+        /// Experimental features the sidecar offers; off until `initialize` asks for them.
+        #[serde(default)]
+        experimental: Vec<String>,
+    },
+    /// Answer to `initialize`: the negotiated version and the features in force on this connection. This client
+    /// does not send `initialize` yet, so it never expects one; the variant keeps the event from being read as
+    /// an unknown type.
+    #[serde(rename = "initialized")]
+    Initialized {
+        id: String,
+        protocol: u64,
+        #[serde(default)]
+        capabilities: Vec<String>,
+        #[serde(default)]
+        experimental: Vec<String>,
     },
     #[serde(rename = "session.state")]
     SessionState {
@@ -405,10 +433,29 @@ pub enum Event {
     Unknown,
 }
 
+/// Who is connecting, as sent in `initialize`.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct ClientInfo {
+    pub name: String,
+    pub version: String,
+}
+
 /// UI → sidecar commands used by the live view.
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum Command {
+    /// Optional capability negotiation, answered with `initialized`. The live view does not send it in this
+    /// release (it accepts or refuses the sidecar from `hello` alone); the variant fixes the bytes a client sends,
+    /// checked against the shared golden corpus.
+    #[allow(dead_code)]
+    #[serde(rename = "initialize")]
+    Initialize {
+        id: String,
+        client: ClientInfo,
+        protocol_min: u64,
+        protocol_max: u64,
+        experimental: bool,
+    },
     #[serde(rename = "prompt.submit")]
     PromptSubmit { id: String, text: String },
     /// Guidance for the work in progress; the sidecar answers with `steer.ack`.
@@ -458,6 +505,28 @@ pub enum Command {
     ProviderDisconnect { id: String, provider: String },
     #[serde(rename = "shutdown")]
     Shutdown,
+}
+
+/// Why this client cannot work with the sidecar that sent `hello`, or `None` when it can. A sidecar that announces
+/// a version range is compatible when the range shares a version with this client's; an older sidecar (no range)
+/// must speak exactly `PROTOCOL_VERSION`, as before.
+pub fn hello_mismatch(
+    protocol: u64,
+    protocol_min: Option<u64>,
+    protocol_max: Option<u64>,
+) -> Option<String> {
+    match (protocol_min, protocol_max) {
+        (Some(min), Some(max)) => (min > PROTOCOL_MAX || max < PROTOCOL_MIN).then(|| {
+            format!(
+                "The agent sidecar speaks protocol {min} to {max}; this view needs protocol {PROTOCOL_MIN} to {PROTOCOL_MAX}."
+            )
+        }),
+        _ => (protocol != PROTOCOL_VERSION).then(|| {
+            format!(
+                "The agent sidecar speaks protocol {protocol}; this view needs protocol {PROTOCOL_VERSION}."
+            )
+        }),
+    }
 }
 
 pub fn parse_event(line: &str) -> Result<Event, String> {
@@ -528,7 +597,11 @@ mod tests {
             parse_event(r#"{"v":1,"type":"hello","protocol":1,"pid":42}"#),
             Ok(Event::Hello {
                 protocol: 1,
-                commands: Vec::new()
+                commands: Vec::new(),
+                protocol_min: None,
+                protocol_max: None,
+                capabilities: Vec::new(),
+                experimental: Vec::new()
             })
         );
         assert_eq!(
@@ -823,7 +896,11 @@ mod tests {
                     name: "diff".into(),
                     usage: "/diff".into(),
                     summary: "Uncommitted changes as a diff".into()
-                }]
+                }],
+                protocol_min: None,
+                protocol_max: None,
+                capabilities: Vec::new(),
+                experimental: Vec::new()
             })
         );
         assert_eq!(
@@ -1094,6 +1171,7 @@ mod tests {
             std::fs::read_to_string(path).expect("the shared protocol corpus must be checked in");
         let mut events = 0;
         let mut commands = 0;
+        let mut negotiation = Vec::new();
         for (index, line) in corpus.lines().enumerate() {
             if line.trim().is_empty() {
                 continue;
@@ -1120,15 +1198,69 @@ mod tests {
             );
             match record["direction"].as_str() {
                 Some("event") => {
+                    let event = parse_event(json);
                     assert!(
-                        parse_event(json).is_ok(),
+                        event.is_ok(),
                         "the Rust client must accept sidecar event {name}"
                     );
+                    match event {
+                        Ok(Event::Hello {
+                            protocol,
+                            protocol_min: Some(min),
+                            protocol_max: Some(max),
+                            capabilities,
+                            experimental,
+                            ..
+                        }) => {
+                            assert_eq!(Value::from(protocol), value["protocol"]);
+                            assert_eq!(Value::from(min), value["protocol_min"]);
+                            assert_eq!(Value::from(max), value["protocol_max"]);
+                            assert_eq!(Value::from(capabilities), value["capabilities"]);
+                            assert_eq!(Value::from(experimental), value["experimental"]);
+                            assert_eq!(hello_mismatch(protocol, Some(min), Some(max)), None);
+                            negotiation.push("hello");
+                        }
+                        Ok(Event::Initialized {
+                            id,
+                            protocol,
+                            capabilities,
+                            experimental,
+                        }) => {
+                            assert_eq!(Value::from(id), value["id"]);
+                            assert_eq!(Value::from(protocol), value["protocol"]);
+                            assert_eq!(Value::from(capabilities), value["capabilities"]);
+                            assert_eq!(Value::from(experimental), value["experimental"]);
+                            negotiation.push("initialized");
+                        }
+                        _ => assert_ne!(
+                            name, "initialized",
+                            "initialized must not parse as an unknown event"
+                        ),
+                    }
                     events += 1;
                 }
                 Some("command") => {
                     let id = value["id"].as_str().unwrap_or_default();
                     let command = match name {
+                        "initialize" => {
+                            negotiation.push("initialize");
+                            Command::Initialize {
+                                id: id.into(),
+                                client: ClientInfo {
+                                    name: value["client"]["name"]
+                                        .as_str()
+                                        .unwrap_or_default()
+                                        .into(),
+                                    version: value["client"]["version"]
+                                        .as_str()
+                                        .unwrap_or_default()
+                                        .into(),
+                                },
+                                protocol_min: value["protocol_min"].as_u64().unwrap_or_default(),
+                                protocol_max: value["protocol_max"].as_u64().unwrap_or_default(),
+                                experimental: value["experimental"].as_bool().unwrap_or_default(),
+                            }
+                        }
                         "prompt.submit" => Command::PromptSubmit {
                             id: id.into(),
                             text: value["text"].as_str().unwrap_or_default().into(),
@@ -1154,6 +1286,95 @@ mod tests {
         assert!(
             events >= 4 && commands >= 4,
             "the corpus must cover both wire directions"
+        );
+        negotiation.sort_unstable();
+        assert_eq!(
+            negotiation,
+            ["hello", "initialize", "initialized"],
+            "the corpus must cover capability negotiation: a hello with a version range, initialize and initialized"
+        );
+    }
+
+    #[test]
+    fn hello_parses_with_and_without_the_negotiation_fields() {
+        // An older sidecar: no range, no capabilities.
+        assert!(matches!(
+            parse_event(r#"{"v":1,"type":"hello","protocol":1,"pid":42}"#),
+            Ok(Event::Hello { protocol: 1, protocol_min: None, protocol_max: None, capabilities, experimental, .. })
+                if capabilities.is_empty() && experimental.is_empty()
+        ));
+        assert_eq!(
+            parse_event(
+                r#"{"v":1,"type":"hello","protocol":1,"pid":42,"commands":[],"protocol_min":1,"protocol_max":3,"capabilities":["receipt","steer"],"experimental":["x.test"],"added_later":true}"#
+            ),
+            Ok(Event::Hello {
+                protocol: 1,
+                commands: Vec::new(),
+                protocol_min: Some(1),
+                protocol_max: Some(3),
+                capabilities: vec!["receipt".into(), "steer".into()],
+                experimental: vec!["x.test".into()]
+            })
+        );
+    }
+
+    #[test]
+    fn initialized_parses_as_its_own_event() {
+        assert_eq!(
+            parse_event(
+                r#"{"v":1,"type":"initialized","id":"i1","protocol":1,"capabilities":["steer"],"experimental":[]}"#
+            ),
+            Ok(Event::Initialized {
+                id: "i1".into(),
+                protocol: 1,
+                capabilities: vec!["steer".into()],
+                experimental: Vec::new()
+            })
+        );
+    }
+
+    #[test]
+    fn compatibility_is_range_overlap_when_the_sidecar_announces_a_range() {
+        assert_eq!(
+            hello_mismatch(PROTOCOL_VERSION, Some(PROTOCOL_MIN), Some(PROTOCOL_MAX)),
+            None
+        );
+        // A newer sidecar that still speaks this client's version, whatever its default is.
+        assert_eq!(hello_mismatch(3, Some(1), Some(3)), None);
+        assert_eq!(
+            hello_mismatch(3, Some(2), Some(3)).as_deref(),
+            Some("The agent sidecar speaks protocol 2 to 3; this view needs protocol 1 to 1.")
+        );
+        assert!(hello_mismatch(0, Some(0), Some(0)).is_some());
+    }
+
+    #[test]
+    fn an_older_sidecar_must_match_the_version_exactly() {
+        assert_eq!(hello_mismatch(PROTOCOL_VERSION, None, None), None);
+        assert_eq!(
+            hello_mismatch(2, None, None).as_deref(),
+            Some("The agent sidecar speaks protocol 2; this view needs protocol 1.")
+        );
+        // Half a range is not a range: the exact rule applies.
+        assert!(hello_mismatch(2, Some(1), None).is_some());
+        assert_eq!(hello_mismatch(1, None, Some(9)), None);
+    }
+
+    #[test]
+    fn initialize_encodes_the_client_and_its_range() {
+        let line = encode_command(&Command::Initialize {
+            id: "i1".into(),
+            client: ClientInfo {
+                name: "nexus-tui".into(),
+                version: "1.3.0".into(),
+            },
+            protocol_min: PROTOCOL_MIN,
+            protocol_max: PROTOCOL_MAX,
+            experimental: false,
+        });
+        assert_eq!(
+            serde_json::from_str::<Value>(&line).unwrap(),
+            serde_json::json!({"v":1,"type":"initialize","id":"i1","client":{"name":"nexus-tui","version":"1.3.0"},"protocol_min":1,"protocol_max":1,"experimental":false})
         );
     }
 }

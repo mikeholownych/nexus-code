@@ -48,17 +48,25 @@ identity), so the API path returned `HTTP 200` and `stored: true` on 2026-11-21.
 
 - `cli/scripts/test_shards.mjs`: duration-aware best-fit sharding; `cli/scripts/test_durations.json` is the
   checked-in manifest, `NEXUS_TEST_DURATIONS` overrides it, and a missing/malformed manifest falls back to
-  source size. Pinned evaluator-mount tests still share shard 1.
+  source size. Pinned evaluator-mount tests still share shard 1. Shard byte accounting resolves paths
+  against the CLI root, so the script also works when invoked from the repository root.
 - `cli/scripts/run_tests_driver.mjs` → `cli/scripts/run_tests.mjs`: per-file wall time reported on fd 3 and
   written to `NEXUS_TEST_DURATIONS_OUT`. The throwaway `HOME` and 300 s per-file watchdog are unchanged.
+  Timing starts at the file's first top-level `node:test` event, so process startup and module loading
+  are not included in the measured duration.
 - `cli/scripts/test_tiers.mjs` + `npm run test:unit`: curated T0 unit tier (11 files, `--list` for reporting).
 - `cli/scripts/run_coverage.mjs` + `cli/scripts/diff_coverage.mjs`: Node's built-in lcov coverage and a
-  changed-lines gate; lines without a DA record are not coverable. `make lint` adds typecheck, clippy
-  (`-D warnings`) and a **changed-Rust-file-only** rustfmt check (the core has legacy whole-tree drift).
+  changed-lines gate; lines without a DA record are not coverable. Both resolve lcov paths against the
+  CLI/repository root, and a missing `--out`/`--lcov` value falls back instead of consuming the next
+  flag. `make lint` adds typecheck, clippy (`-D warnings`) and a **changed-Rust-file-only** rustfmt check
+  (the core has legacy whole-tree drift). That check now fails closed when no formatting base can be
+  resolved rather than silently falling back to `HEAD~1`.
 - `cli/test/fixtures/protocol_v1_golden.jsonl` with tests on both sides: TS checks its event encoder and
   command parser; Rust checks `parse_event` and `encode_command` against the same bytes.
 - `.github/workflows/ci.yml`: `make lint` in the two required test jobs; a new **advisory** `diff-coverage`
   job that uploads lcov and a JSON report. Required check names and the 45-minute CLI timeout are unchanged.
+  The jobs that run `make lint` fetch full history and pass the pull-request base SHA as
+  `NEXUS_FMT_BASE`, so the rustfmt gate cannot become a no-op in a shallow checkout.
 
 ## CI findings
 
@@ -70,6 +78,27 @@ using Node's special `stdout` destination (writes through `process.stdout`) in `
 The bundled core build and the diff-coverage step were not at fault; the latter passes locally against
 the generated lcov. The `Entire Gates` failure on the same run is not a merge requirement.
 
+Follow-up independent review found that the gate could still be a no-op on a shallow PR checkout:
+`origin/main` was absent, and `check_fmt.sh` fell back to `HEAD~1`, which has no changed Rust files.
+That fallback is gone, CI passes the PR base SHA and fetches full history, and two focused tests cover
+fail-closed and explicit-base behavior. The CI rerun for this slice is still pending.
+
+## Reference coding (follow-up)
+
+Queried the local XERJ node (`xerj v1.0.0-rc.104`) after indexing this project's sources under
+`nexusreviewproj` and shallow clones of Vitest, rustup and istanbuljs under `nxpeer-vitest`,
+`nxpeer-rustup` and `nxpeer-istanbul`.
+
+- **Took:** istanbuljs `packages/istanbul-lib-report/lib/file-writer.js:171` resolves report paths
+  from an explicit base directory. Both lcov scripts now resolve against the repository/CLI root.
+- **Took:** Vitest `docs/guide/improving-performance.md:226` validates and splits by whole test files;
+  Nexus keeps its 1-or-2 shard validation and makes byte accounting independent of the caller's cwd.
+- **Rejected:** Vitest's blob reporter and rustup's `indicatif` bars — unnecessary dependencies for a
+  small path-parsing/callback fix.
+- Lexical BM25 search worked with identifier-rich queries (`lcovonly`, `shardIndex`); natural-language
+  queries were weak. No code was copied verbatim. The field report was submitted (`HTTP 200`,
+  `stored: true`).
+
 ## Metrics ledger
 
 | ID | Metric | Baseline | Current (this slice) | Status |
@@ -77,13 +106,13 @@ the generated lcov. The `Entire Gates` failure on the same run is not a merge re
 | PC-1 | median PR CI duration | 27:12, range 23:02–55:20 (20 runs) | not remeasured; duration capture added but no CI report yet | open |
 | PC-2 | PR CI success rate | 12/20 (60%) | not remeasured | open |
 | PC-3 | intermittent tests | `vc9_subagent_needs_input` (1 of 20 runs) | weekly flake budget unchanged; no quarantine list yet. New local observation: `a denial is asked again next time, never silently allowed` (`cli/test/approval_policy.test.ts:127`) failed once in two T0 runs on 2026-11-21 and passed in isolation — below the quarantine threshold | open |
-| MQ-4 | gateway conformance | deep 198/200 (99.0%), lead-reasoning 155/200 (77.5%) vs 99.5% | no RC measurement; **unqualified** | open |
+| MQ-4 | gateway conformance | deep 198/200 (99.0%), lead-reasoning 155/200 (77.5%) vs 99.5% | scheduled run on published v1.2.1: deep 200/200 with 45 feedback retries, lead-reasoning 155/200 (77.5%), `edit_file` 5/50; not conformant; no v1.2.2 measurement; **unqualified** | open |
 | T0-1 | inner-loop unit tier | no tiered script | 11 files, 94 tests, ~5.25 s; first run 0 failures, second run 1 flaky failure (see PC-3) | measured locally |
-| T0-2 | static gates in inner loop | none | `make lint` = 0 (typecheck + clippy + changed-file rustfmt) | measured locally |
+| T0-2 | static gates in inner loop | none | `make lint` = 0 (typecheck + clippy + changed-file rustfmt, fail-closed base); 2 focused check_fmt tests pass | measured locally |
 | T0-3 | Rust suite | not recorded before this slice | `cargo test --locked`: 458 tests across six binaries, 0 failures (396 in `nexus-tui`, including the new golden corpus test); `tsc` build = 0 | measured locally |
-| T1-1 | duration-based sharding | file size only | measured duration preferred; 2 new sharder tests pass | measured locally |
-| T1-2 | protocol golden corpus | mirrored types, no shared bytes | 8 records; TS 3/3 and Rust 1/1 tests pass | measured locally |
-| T2-1 | diff coverage | none | advisory CI job added; threshold held at 0 until measured. First CI run failed on the reporter destination, not on coverage; fixed, rerun pending | wired, not calibrated |
+| T1-1 | duration-based sharding | file size only | measured duration preferred (startup excluded); 5 sharder tests pass, including root-cwd invocation | measured locally |
+| T1-2 | protocol golden corpus | mirrored types, no shared bytes | 8 records, typed `hello.commands`; TS 4/4 golden and 7/7 schema tests pass, Rust 1/1 | measured locally |
+| T2-1 | diff coverage | none | advisory CI job added; threshold held at 0 until measured. Reporter destination and lcov argument/path parsing fixed; CI rerun pending | wired, not calibrated |
 | T3-1 | real-capability release evidence | absent | unchanged; no stable-tag claim made | open |
 
 Scale reference (unchanged): nexus ~264k source LOC / 435 test files; opencode ~1.47M / 1,927;

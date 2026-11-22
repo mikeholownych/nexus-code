@@ -6,14 +6,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveCoverageOut } from "./script_args.mjs";
 import { listCliTestFiles } from "./test_shards.mjs";
 import { UNIT_FILES } from "./test_tiers.mjs";
 
 const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const realHome = os.homedir();
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-coverage-home-"));
-const outFlag = process.argv.indexOf("--out");
-const out = path.resolve(process.argv[outFlag + 1] || process.env.NEXUS_COVERAGE_OUT || path.join(cli, "coverage", "lcov.info"));
+const out = resolveCoverageOut(process.argv, process.env, cli);
 fs.mkdirSync(path.dirname(out), { recursive: true });
 
 const env = {
