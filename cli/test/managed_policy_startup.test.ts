@@ -59,7 +59,7 @@ describe("the real CLI under a managed policy", { concurrency: 4 }, () => {
   test("a valid strict system policy refuses --yes: exit 2, the source in the message, one read of the file", async () => {
     const result = await runUnderPolicy({ system: toml("[approval]", "strict = true"), home: home(), cwd: workspace(), args: [...RUN, "--yes"] });
     assert.equal(result.status, 2, result.stderr);
-    assert.match(result.stderr, new RegExp(`^Configuration error: --yes is refused: managed policy disables it\\. ${SYSTEM_TAG("approval.strict").replace(/[.[\]]/g, "\\$&")}$`, "m"));
+    assert.ok(result.stderr.includes(`Configuration error: --yes is refused: managed policy disables it. ${SYSTEM_TAG("approval.strict")}`));
     assert.equal(result.stdout, "");
     assert.equal(result.systemPolicyOpens, 1);
   });
@@ -119,7 +119,7 @@ describe("the real CLI under a managed policy", { concurrency: 4 }, () => {
     assert.deepEqual(seen.tiers, ["system", "user", "project"]);
     assert.deepEqual(seen.verification, { mode: "block" }, "the system's mode, and none of the project's exemptions");
     assert.equal(seen.makefile.allowed, false);
-    assert.match(seen.makefile.error, new RegExp(`${SYSTEM_TAG("verification.mode").replace(/[.[\]]/g, "\\$&")}$`));
+    assert.ok(seen.makefile.error.endsWith(SYSTEM_TAG("verification.mode")));
     assert.equal(seen.secrets.protected, true);
     assert.match(seen.secrets.reason, /\[policy: system \S+ paths\.protected\]$/);
     assert.equal(seen.notes, true, "the user tier adds to the system tier");

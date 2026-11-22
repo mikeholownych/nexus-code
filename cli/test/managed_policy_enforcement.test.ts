@@ -416,7 +416,7 @@ describe("the project file: its restrictions always apply, its relaxations only 
     assert.match((byDefault as { error: string }).error, / \[policy: default\]$/);
     const world = policyWorld({ user: toml("[verification]", 'mode = "block"') });
     const byUser = manager(world, workspace).security.authorizeVerificationEdit("write_file", { path: "Makefile", content: "x" }, { fullAccess: true, operator: true });
-    assert.match((byUser as { error: string }).error, new RegExp(` \\[policy: user ${FAKE_USER.replace(/[.]/g, "\\.")} verification\\.mode\\]$`));
+    assert.ok((byUser as { error: string }).error.endsWith(` [policy: user ${FAKE_USER} verification.mode]`));
   });
 
   test("the egress inspector runs at least at the managed floor, and says when it was raised", () => {
