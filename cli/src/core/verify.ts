@@ -113,6 +113,50 @@ const GIT_TIMEOUT_MS = 30_000;
 const GIT_LISTING_BUFFER = 64 * 1024 * 1024;
 /** Dependency directories of the caller's checkout linked into the scratch trees, so both sides run with the same installed packages. */
 const DEPENDENCY_DIRS: readonly string[] = ["node_modules", "vendor", ".venv", "venv"];
+
+function findStrace(): string | undefined {
+  if (process.platform !== "linux") return undefined;
+  // Never resolve this helper through PATH: it traces the sandbox's parent process and a workspace-provided binary
+  // would execute before confinement.
+  for (const candidate of ["/usr/bin/strace", "/bin/strace"]) {
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return fs.realpathSync(candidate);
+    } catch { /* try the next system location */ }
+  }
+  return undefined;
+}
+
+function traceCommand(strace: string, command: string, logPath: string): string {
+  return `${quoteForShell(strace)} -f -qq -yy -e trace=open,openat,openat2 -o ${quoteForShell(logPath)} -- bash -c ${quoteForShell(command)}`;
+}
+
+/** Count successful opens of files under the run tree, using strace's resolved fd path rather than argv text. */
+function openedWorkspaceFiles(logPath: string, workspace: string): Map<string, number> | undefined {
+  try {
+    const counts = new Map<string, number>();
+    for (const line of fs.readFileSync(logPath, "utf8").split("\n")) {
+      if (!/,\s*(?:O_RDONLY|O_RDWR)(?:[|,)])|flags=(?:O_RDONLY|O_RDWR)/.test(line)) continue;
+      const opened = /=\s*\d+<([^>]+)>/.exec(line)?.[1];
+      if (!opened || !path.isAbsolute(opened)) continue;
+      const relative = path.relative(workspace, opened);
+      if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) continue;
+      const key = relative.replace(/\\/g, "/");
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  } catch {
+    return undefined;
+  }
+}
+
+function extraTestFileOpens(
+  baseline: Map<string, number>,
+  candidate: Map<string, number>,
+  testFiles: ReadonlySet<string>,
+): string[] {
+  return [...testFiles].filter((file) => (candidate.get(file) ?? 0) > (baseline.get(file) ?? 0)).sort();
+}
 const MAX_DEPENDENCY_LINKS = 64;
 const MAX_DEPENDENCY_SCAN = 2000;
 const MAX_LISTED_CHANGES = 200;
@@ -696,12 +740,33 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
     const box: VerifySandboxBox | undefined = sandboxEngine
       ? { engine: sandboxEngine, network: sandboxRequest.network === true, scratch, readOnlyDirs: doc.linkedDependencyDirs.map((child) => path.join(worktree, child)) }
       : undefined;
-    const shell = (line: string, directory: string, timeoutMs: number) => {
+    const strace = sandboxEngine === "bwrap" ? findStrace() : undefined;
+    const fileAccessTraces = new Map<VerifyRunRecord["phase"], { available: boolean; detail: string; opened?: Map<string, number> }>();
+    const shell = (line: string, directory: string, timeoutMs: number, phase?: VerifyRunRecord["phase"]) => {
       if (!box) return runVerifierShell(line, directory, timeoutMs);
       const containerName = box.engine === "docker" ? `nexus-verify-${randomUUID()}` : undefined;
       const confined = sandboxedVerifierCommand(line, directory, box, { containerName });
       if ("unavailable" in confined) throw new Stop("SANDBOX_UNAVAILABLE", `the ${box.engine} sandbox could not be built for a run, so the run was not started: ${confined.unavailable}`);
-      const ran = runVerifierShell(confined.command, directory, timeoutMs);
+      let wrappedCommand = confined.command;
+      let tracePath: string | undefined;
+      if (phase) {
+        if (box.engine === "docker") {
+          fileAccessTraces.set(phase, { available: false, detail: "Docker does not expose container file opens to the host verifier" });
+        } else if (!strace) {
+          fileAccessTraces.set(phase, { available: false, detail: "strace is unavailable, so candidate access to test files could not be measured" });
+        } else {
+          tracePath = path.join(scratch!, `verify-file-access-${randomUUID()}.log`);
+          wrappedCommand = traceCommand(strace, confined.command, tracePath);
+        }
+      }
+      const ran = runVerifierShell(wrappedCommand, directory, timeoutMs);
+      if (phase && tracePath) {
+        const opened = openedWorkspaceFiles(tracePath, directory);
+        fs.rmSync(tracePath, { force: true });
+        fileAccessTraces.set(phase, opened
+          ? { available: true, detail: "candidate process file opens were traced", opened }
+          : { available: false, detail: "the runtime file-access trace could not be read" });
+      }
       // Killing the Docker client at the deadline leaves its container running: remove it by name.
       if (containerName && (ran.timedOut || ran.exitCode === null)) spawnSync("docker", ["rm", "--force", containerName], { stdio: "ignore", timeout: 30_000 });
       return ran;
@@ -710,9 +775,9 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
       await checkpoint();
       progress(`running ${command} (${phase === "base" ? "base" : phase === "head" ? "head" : "base tests against head code"}${box ? `, in the ${box.engine} sandbox` : ""})`);
       const begun = Date.now();
-      const ran = shell(command, directory, timeoutSecs * 1000);
+      const ran = shell(command, directory, timeoutSecs * 1000, phase);
       const executedTests = hasExecutedTests(ran.output);
-      doc.runs.push({
+      const record: VerifyRunRecord = {
         phase,
         sandboxed: Boolean(box),
         passed: ran.success,
@@ -723,7 +788,8 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
         outputTruncated: ran.truncated,
         durationMs: Date.now() - begun,
         ...(ran.success ? {} : { outputTail: safeTerminal(ran.output.slice(-2000)) }),
-      });
+      };
+      doc.runs.push(record);
       await checkpoint();
       return { ...ran, executedTests };
     };
@@ -781,6 +847,7 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
     const headPristine = path.join(scratch, "head-pristine");
     materialise(headTree, headPristine, "head", headIndex, true);
     linkDependencyDirs(worktree, [headPristine], doc.linkedDependencyDirs);
+    const oracleTestFiles = new Set(tests?.keys() ?? []);
 
     // ---- The type-checks (completion_oracle.ts runTypecheckOracleImpl): only after a passing verifier, as the agent does. ----
     const mode = typecheckMode(undefined, source === "configured");
@@ -844,11 +911,32 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
     const isDeliverableBound = headRun.executedTests && configuredTestsStable &&
       isVerifierDeliverableBound(headPristine, changed, command, headRun.output, new Set(deliverables), tests ?? undefined);
 
+    const candidateOracleAccess = (phase: VerifyRunRecord["phase"]): Independence => {
+      if (!sandboxEngine) return { independent: true, detail: "the operator explicitly selected --sandbox none for trusted changes" };
+      const before = fileAccessTraces.get("base");
+      const after = fileAccessTraces.get(phase);
+      if (!before?.available || !after?.available) {
+        return { independent: false, detail: `candidate access to test-oracle files could not be established: ${after?.detail ?? before?.detail ?? "a required runtime file-access trace is missing"}` };
+      }
+      if (!tests) {
+        return { independent: false, detail: "the baseline test file set could not be captured, so test-oracle access could not be evaluated" };
+      }
+      const reads = extraTestFileOpens(before.opened!, after.opened!, oracleTestFiles);
+      if (reads.length) {
+        const run = doc.runs.find((record) => record.phase === phase);
+        if (run) run.testFixtureReads = reads;
+        return { independent: false, detail: `${phase} execution opened test-oracle file(s) more often than the base execution: ${reads.join(", ")}` };
+      }
+      return { independent: true, detail: "the candidate run did not open baseline or candidate test-oracle files beyond the test runner's baseline access" };
+    };
+
     // completion_oracle.ts judgeIndependenceImpl, with the base run's usability checked first.
     const judgeIndependence = async (): Promise<Independence> => {
       if (baseline.failed && baseUnusable) {
         return { independent: false, detail: "the verifier did not fail on the base by itself with tests that ran (it was missing, was killed, timed out, or ran no test), so nothing shows the tests failed before the change" };
       }
+      const oracleAccess = candidateOracleAccess("head");
+      if (!oracleAccess.independent) return oracleAccess;
       const judged = judgeWithoutCopy(headPristine, command, baseline);
       if (judged !== "needs-copy") return judged;
       // The change edits test files: run the tests as they were on the base against the head's code.
@@ -856,6 +944,8 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
       if (!copy) return { independent: false, detail: "the head tree could not be copied to rerun the base's tests against it (it is too large, or holds a link that leaves the tree), so the change's own test edits cannot be set aside" };
       try {
         const rerun = await execute("base_tests_on_head", copy);
+        const rerunOracleAccess = candidateOracleAccess("base_tests_on_head");
+        if (!rerunOracleAccess.independent) return rerunOracleAccess;
         return rerun.success && rerun.executedTests
           ? { independent: true, detail: "tests that failed before the change pass after it, with the change's own test edits set aside" }
           : { independent: false, detail: "it passes only with tests the change added or edited; the tests as they were before the change still fail" };

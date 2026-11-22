@@ -13,5 +13,10 @@
     "schema_version": 2,
     "schemaSha256": "53c2e7c98c04eca6104a6ae540c2fce551e0638bcec4a1b8e168c40bff39a394",
     "note": "Bump schema_version because sandbox.requested now means the operator explicitly selected a sandbox; implicit default confinement is reflected by the effective engine and per-run sandboxed facts. This changes the field's meaning, so consumers must reject version 2 until they account for the distinction."
+  },
+  {
+    "schema_version": 2,
+    "schemaSha256": "04cd4b6ff75600795d7e3f78bbc856836da947a03584dd80cfec048359b937ff",
+    "note": "Add optional runs[].testFixtureReads for successful candidate-run opens of baseline test-oracle files beyond the base-run count. The producer writes it when runtime file tracing detects such access; consumers may ignore it, but independent-verification consumers should downgrade the result because the candidate consulted its test oracle."
   }
 ]

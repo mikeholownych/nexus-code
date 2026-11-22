@@ -219,9 +219,9 @@ test("the head adds a fake `node` at the top of the tree, a package.json bin ent
 
 // ---------------------------------------------------------------- tests and product code that cheat while they run
 
-// LIMIT (documented in the manual: "What VERIFIED claims"): VERIFIED says the base's tests fail before and pass after,
-// not that the change is right. Product code that reads the expected values out of the test file satisfies those tests.
-test("documented limit: product code that reads the expected value from the test file passes the base's tests and IS reported VERIFIED; the receipt records exactly which tests that claim rests on", { timeout: 120_000 }, async () => {
+// PREVENTED: the candidate opens a baseline test file while the head verifier is running. A passing test suite is no
+// longer independent evidence when the tested code can inspect the oracle it is being judged against.
+test("the default sandbox detects product code reading the expected value from a baseline test file and withholds VERIFIED", { timeout: 120_000 }, async () => {
   const cheating = [
     'import fs from "node:fs";',
     'const expected = Number(/add\\(2, 3\\), (\\d+)/.exec(fs.readFileSync(new URL("../test/math.test.mjs", import.meta.url), "utf8"))[1]);',
@@ -229,12 +229,37 @@ test("documented limit: product code that reads the expected value from the test
     "export const double = (a) => a * 2;",
     "",
   ].join("\n");
-  const result = await attempt(BASE_FILES, { "src/math.js": cheating });
-  assert.equal(result.verdict, "VERIFIED", summary(result));
-  // What the claim rests on is in the receipt: the base run failed, the head run passed, no test file changed.
+  const result = await attempt(BASE_FILES, { "src/math.js": cheating }, { approveDiscoveredVerifier: true, deliverables: ["src/math.js"] });
+  assert.notEqual(result.verdict, "VERIFIED", summary(result));
+  if (result.reason === "SANDBOX_UNAVAILABLE") return;
+  assert.equal(result.verdict, "REGRESSION_FREE", summary(result));
+  assert.equal(result.verification?.independent, false);
+  if (result.sandbox.engine === "bwrap") {
+    if (spawnSync("strace", ["--version"], { stdio: "ignore" }).status === 0) {
+      assert.match(result.verification?.independenceDetail ?? "", /opened.*test-oracle/i);
+      assert.deepEqual(result.runs.find((run) => run.phase === "head")?.testFixtureReads, ["test/math.test.mjs"]);
+    } else {
+      assert.match(result.verification?.independenceDetail ?? "", /strace is unavailable/i);
+    }
+  } else {
+    assert.equal(result.sandbox.engine, "docker");
+    assert.match(result.verification?.independenceDetail ?? "", /Docker does not expose/i);
+  }
+  // The test still passes, but reading its expected value makes that pass dependent on the oracle.
   assert.deepEqual(result.runs.map((ran) => [ran.phase, ran.passed, ran.executedTests]), [["base", false, true], ["head", true, true]]);
   assert.deepEqual(result.changedFiles, ["src/math.js"]);
   assert.equal(result.baseline?.testFiles, 1);
+});
+
+test("the default sandbox still verifies an ordinary fix that does not read its test oracle", { timeout: 120_000 }, async () => {
+  const result = await attempt(BASE_FILES, { "src/math.js": MATH_FIXED }, { approveDiscoveredVerifier: true, deliverables: ["src/math.js"] });
+  if (result.reason === "SANDBOX_UNAVAILABLE") return;
+  if (result.sandbox.engine === "bwrap" && spawnSync("strace", ["--version"], { stdio: "ignore" }).status === 0) {
+    assert.equal(result.verdict, "VERIFIED", summary(result));
+    assert.deepEqual(result.runs.find((run) => run.phase === "head")?.testFixtureReads, undefined);
+  } else {
+    assert.equal(result.verdict, "REGRESSION_FREE", summary(result), "without inspectable candidate accesses, the default cannot claim independence");
+  }
 });
 
 // PREVENTED (the pristine-copy rule): everything judged after the run is read from a copy no code ran in, and the

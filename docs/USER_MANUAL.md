@@ -111,6 +111,8 @@ To run it on pull requests, see [Using `nexus verify` in CI](VERIFY_IN_CI.md): t
 
 **Deliverables.** `--deliverable-file <path>` (repeatable) names a product file the change is meant to deliver. `VERIFIED` requires at least one, requires every changed file that is not a test to be one, and requires every one to be imported by a test file that already existed on the base. Without `--deliverable-file` the verdict is never `VERIFIED`.
 
+**Test-oracle access.** With the Bubblewrap sandbox on Linux, Nexus traces successful file opens by verifier processes and compares access to the baseline test files on the candidate with the base run. If the candidate opens one of those files more often, it has consulted its oracle, so the run can be `REGRESSION_FREE` but not `VERIFIED`; the receipt lists those paths in `runs[].testFixtureReads`. If Bubblewrap file tracing is unavailable (including Docker-only hosts or hosts without `strace`), Nexus fails closed to `REGRESSION_FREE`. This check covers direct read opens of captured baseline test files; it does not prove that the tests cover the full product specification.
+
 | Verdict | Meaning |
 |---|---|
 | `VERIFIED` | Evidence independent of the change shows it (see below). |

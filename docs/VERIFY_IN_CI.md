@@ -132,7 +132,7 @@ Each row is a test; "prevented" means no effect on the verdict, "lowered" means 
 | The head deletes the base's stricter policy | lowered: the base's policy still applies; the deletion is a finding | `verify_hostile`: "deletes the base's stricter policy" |
 | The head commits `node_modules/.bin/node` (a fake runner) | lowered: `VERIFIER_DEFINITION_CHANGED`; the shim never runs | `verify_hostile`: "node_modules/.bin/node" |
 | The head adds a fake `node` in the tree, a `bin` entry, a `preinstall` hook | prevented: none is consulted; the real tests run | `verify_hostile`: "fake `node` at the top of the tree" |
-| Product code reads the expected value from the test file | **limit**: `VERIFIED` claims what the tests check, no more | `verify_hostile`: "documented limit: product code that reads the expected value" |
+| Candidate product code opens a baseline test file while the verifier runs | lowered: an extra successful read open relative to the base run is recorded in `runs[].testFixtureReads`; the passing run is at most `REGRESSION_FREE`. If runtime tracing is unavailable, independence is unproven and the result is also at most `REGRESSION_FREE` | `verify_hostile`: "default sandbox detects product code reading the expected value" |
 | A test rewrites test files, the product or itself while it runs | prevented: judged on a copy no code ran in | `verify_command`: "restores itself while it runs"; `verify_hostile`: "rewrites the base's test file"; `verify_typecheck_guard`: "the pristine-copy rule" |
 | A test rewrites the scratch state beside its tree | prevented by the default sandbox; possible only with explicit `--sandbox none` | `verify_hostile`: default confinement, explicit opt-out |
 | A test writes the caller's checkout or its dependency directory | denied by the default sandbox; possible only with explicit `--sandbox none` | `verify_sandbox`: "a hostile test cannot write the caller's checkout" |
@@ -157,6 +157,7 @@ Each row is a test; "prevented" means no effect on the verdict, "lowered" means 
 ## Limits that remain
 
 - With explicit `--sandbox none`, a change written to attack the verification can raise its own verdict (above). The default fails closed; remaining trust is in the sandbox engine, in what you installed into dependency directories, and in your own `--verifier`.
+- Test-oracle access is measured on Linux when Bubblewrap and `strace` are available. It compares successful read opens of baseline test files against the base run. Docker-only hosts, other platforms, missing `strace`, or an unreadable trace cannot establish this independence condition, so discovered-verifier passes are at most `REGRESSION_FREE` there. This measurement does not prove that a finite test suite covers the full product specification.
 - `VERIFIED` is a statement about tests, not about correctness, safety or review.
 - An approved verification edit is your decision: read the file first. Approval never yields `VERIFIED`, but a runner configuration you approved (a `conftest.py`) can make failing tests report `REGRESSION_FREE`.
 - Content filters in your own Git configuration (Git LFS) run when the tree's attributes select them; ones defined in the repository's own configuration do not, so a file they would have converted is read and written as stored.
