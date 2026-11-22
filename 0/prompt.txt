@@ -1,0 +1,1108 @@
+continue
+
+---
+
+Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.
+
+---
+
+<task-notification>
+<task-id>bzift6omx</task-id>
+<tool-use-id>toolu_01CaXRGfJMBCx6Ta31menX5G</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/bzift6omx.output</output-file>
+<status>failed</status>
+<summary>Background command "until [ -f /tmp/claude-1000/live3_done ]; do sleep 60; done; rtk wc -l /home/mike/nexus-wt/invariants/eval/out/cc3-branch/results.jsonl /home/mike/nexus-wt/invariants-base/eval/out/cc3-base/results.jsonl" failed with exit code 1</summary>
+</task-notification>
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+<task-notification>
+<summary>Goal check-in: background work still running</summary>
+</task-notification>
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+<task-notification>
+<task-id>bp42qc0ug</task-id>
+<tool-use-id>toolu_01EtjVRVU1YbCnms1eHojTJ2</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/bp42qc0ug.output</output-file>
+<status>completed</status>
+<summary>Background command "umask 022; ONLY=cc-minimal-fix,cc-refactor-edge,cc-keep-rationale,cc-no-side-effect,cc-deliberate-abstraction; cd /home/mike/nexus-wt/invariants &amp;&amp; rm -rf eval/out/cc3-branch &amp;&amp; node eval/run.mjs --config eval/configs/pilot-nexus-deep.json --out eval/out/cc3-branch --only $ONLY --runs 5 &gt; /tmp/claude-1000/live3_branch.log 2&gt;&amp;1; cd /home/mike/nexus-wt/invariants-base &amp;&amp; rm -rf eval/out/cc3-base &amp;&amp; node eval/run.mjs --config eval/configs/pilot-nexus-deep.json --out eval/out/cc3-base --only $ONLY --runs 5 &gt; /tmp/claude-1000/live3_base.log 2&gt;&amp;1; wc -l /home/mike/nexus-wt/invariants/eval/out/cc3-branch/results.jsonl /home/mike/nexus-wt/invariants-base/eval/out/cc3-base/results.jsonl" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+<task-notification>
+<task-id>byltcghld</task-id>
+<tool-use-id>toolu_011pGVuCegcG1zS8PYagFdxp</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/byltcghld.output</output-file>
+<status>completed</status>
+<summary>Monitor "#664 linux-x86_64 completion" stream ended</summary>
+<event>linux-x86_64=pass
+test-matrix (22)=pass
+test-matrix (24)=pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b4a8n973p</task-id>
+<tool-use-id>toolu_018FigXWuJHfqmJ6AqxN2Frh</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/b4a8n973p.output</output-file>
+<status>completed</status>
+<summary>Monitor "#666 checks, main CI, CX-4 measurement completion" stream ended</summary>
+<event>CHECKS/MAIN RESOLVED: linux-x86_64=pass test-matrix (22)=pass test-matrix (24)=pass  main=completed/success runs=22 done=no</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+<task-notification>
+<summary>Goal check-in: background work still running</summary>
+</task-notification>
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+<task-notification>
+<task-id>bthi0tdyl</task-id>
+<summary>Monitor event: "CX-4 measurement completion"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<summary>Goal check-in: continuing after the last turn ended early</summary>
+</task-notification>
+
+---
+
+Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.
+
+---
+
+<task-notification>
+<task-id>bvbm0fdub</task-id>
+<summary>Monitor event: "#667 required checks and main CI resolved"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bwtpefz49</task-id>
+<tool-use-id>toolu_01RXNHYCKeXo9rNse44rs1TA</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/bwtpefz49.output</output-file>
+<status>completed</status>
+<summary>Monitor "PR #671 required checks resolved" stream ended</summary>
+<event>PR671 RESOLVED: linux-x86_64=fail test-matrix (22)=fail test-matrix (24)=fail</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bber47kqv</task-id>
+<summary>Monitor event: "PR #671 and #672 required checks resolved"</summary>
+<event>PR671 RESOLVED: linux-x86_64=fail test-matrix (22)=fail test-matrix (24)=fail</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bdzuz54up</task-id>
+<summary>Monitor event: "PR #671 (re-run) and #672 required checks resolved"</summary>
+<event>PR672 RESOLVED: linux-x86_64=pass test-matrix (22)=pass test-matrix (24)=pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bber47kqv</task-id>
+<tool-use-id>toolu_01TUaCnhF3GpaV74YtLLZzW3</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/bber47kqv.output</output-file>
+<status>completed</status>
+<summary>Monitor "PR #671 and #672 required checks resolved" stream ended</summary>
+<event>PR672 RESOLVED: linux-x86_64=pass test-matrix (22)=pass test-matrix (24)=pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bdzuz54up</task-id>
+<summary>Monitor event: "PR #671 (re-run) and #672 required checks resolved"</summary>
+<event>PR671 RESOLVED: linux-x86_64=fail test-matrix (22)=fail test-matrix (24)=fail</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bdzuz54up</task-id>
+<tool-use-id>toolu_017dteCyY7LYxjrWPAM6vGSH</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/bdzuz54up.output</output-file>
+<status>completed</status>
+<summary>Monitor "PR #671 (re-run) and #672 required checks resolved" stream ended</summary>
+</task-notification>
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+<task-notification>
+<task-id>b9mfykwav</task-id>
+<tool-use-id>toolu_01XyvoCSMSpX2EihkbLYRdL6</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/b9mfykwav.output</output-file>
+<status>completed</status>
+<summary>Monitor "PR #672 required checks completed at its exact head" stream ended</summary>
+<event>PR672 at 22c2debf1b091dfaea9d27f3e72cfa9106417f29: linux-x86_64=completed/success test-matrix (22)=completed/success test-matrix (24)=completed/failure main=completed/success/308635d0</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bqvy623p7</task-id>
+<tool-use-id>toolu_018LyYWJ3UGuyU61FUKV6ouP</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/bqvy623p7.output</output-file>
+<status>completed</status>
+<summary>Monitor "PR #672 required checks after re-run, exact head" stream ended</summary>
+<event>PR672 at 22c2debf1b091dfaea9d27f3e72cfa9106417f29: linux-x86_64=completed/success test-matrix (22)=completed/success test-matrix (24)=completed/success main=completed/success/308635d0</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+<task-notification>
+<task-id>bwt91ynlc</task-id>
+<summary>Monitor event: "PC-1 sample reaches 20 runs, or #671 and #672 both merge"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b96haehat</task-id>
+<tool-use-id>toolu_011h7FSYthWkFmw3cDybfbTi</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/b96haehat.output</output-file>
+<status>completed</status>
+<summary>Monitor "PC-1 sample reaches 20 completed runs" stream ended</summary>
+<event>PC1 SAMPLE READY: 20 runs; #671 OPEN 860596ec: linux-x86_64=fail test-matrix (22)=fail test-matrix (24)=fail</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+<task-notification>
+<task-id>bx5vgq6i0</task-id>
+<summary>Monitor event: "PR #675 (PC-1 evidence) required checks at exact head"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bt24cs3kf</task-id>
+<summary>Monitor event: "PR #671 required checks complete at its current head"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bzdvmuv03</task-id>
+<summary>Monitor event: "PR #671 merges, or its required checks complete at a new head"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+<task-notification>
+<task-id>b945lsxrf</task-id>
+<tool-use-id>toolu_01CFyiZkPCHso4egPVsK7C9W</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/b945lsxrf.output</output-file>
+<status>completed</status>
+<summary>Monitor "Probe PR #678 required checks complete (does the Docker worker start on the runner?)" stream ended</summary>
+<event>PROBE678 at 39c1febb: linux-x86_64=completed/success test-matrix (22)=completed/success test-matrix (24)=completed/success | #671 MERGED UNKNOWN b010bad0 | main  92b3d77a</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b2abms1li</task-id>
+<summary>Monitor event: "#679 checks complete and main CI settled"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<summary>Goal check-in: background work no longer running · idle check-ins paused until your next message</summary>
+</task-notification>
+
+---
+
+Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.
+
+---
+
+<task-notification>
+<task-id>bg8o4u75n</task-id>
+<summary>Monitor event: "Flooded-environment suite finishes"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bd20ma8oi</task-id>
+<summary>Monitor event: "PR #681 required checks complete at its exact head"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+from now on, nothing gets merged into main until the release is ready to be tagged. a master release branch is to be created and all development work lands on that release branch until it is ready to be merged to main.
+
+---
+
+I meant after v1.2.2 lands
+
+---
+
+my branching direction starts with v1.3.0 (after v1.2.2 lands)
+
+---
+
+release/vx.x.x should be the standard release branch naming
+
+---
+
+that should resolve any accidental application of future release work that's already being done from landing early.
+
+---
+
+no.. but going forward from v1.3.0 that should be avoidable.
+
+---
+
+as an aside, a new inference model has been added into enterprise/auto so there are now 3 different models (the original 2 on the B65 GPUS.. and a new on the new MS-S1 Max host)
+
+---
+
+yes, I meant engineering/auto
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+catalogue should now be complete
+
+---
+
+<task-notification>
+<task-id>b8ans3z8r</task-id>
+<summary>Monitor event: "Release-prep PR #683 checks complete at head c1fcafa6; runner-like suite finishes"</summary>
+<event>FLOOD2 DONE: exit=1</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+https://github.com/vercel-labs/skills/pull/2638 was submitted to include nexus code in vercel-labs npx skills client list. the merge is blocked becuase the commit is not signed.
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+<task-notification>
+<task-id>b8ans3z8r</task-id>
+<tool-use-id>toolu_017ooGda82iahPungWJFF81M</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/b8ans3z8r.output</output-file>
+<status>completed</status>
+<summary>Monitor "Release-prep PR #683 checks complete at head c1fcafa6; runner-like suite finishes" stream ended</summary>
+<event>PR683 at c1fcafa6: linux-x86_64=completed/success test-matrix (22)=completed/success test-matrix (24)=completed/success | main CodeQL:success/4f553c24,CI:success/4f553c24</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+<task-notification>
+<task-id>bw3ae7g1i</task-id>
+<summary>Monitor event: "main CI finishes on the v1.2.2-rc.1 release-prep merge commit 2d314098"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<summary>Goal check-in: background work still running</summary>
+</task-notification>
+
+---
+
+SSH to both hosts needs to be accessible from any private IP address.
+
+---
+
+<task-notification>
+<task-id>bv40m6aud</task-id>
+<tool-use-id>toolu_01Dz2UCUeJQaZR8rDnnpQfEd</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/bv40m6aud.output</output-file>
+<status>completed</status>
+<summary>Monitor "Release workflow for v1.2.2-rc.1 finishes or a job fails" stream ended</summary>
+<event>RELEASE RUN DONE: completed/success | package=comp/success | assets: prerelease=true compatibility.json,install.sh,nexus-linux-x86_64-v1.2.2-rc.1.tar.gz,sbom.cdx.json,sbom.cdx.json.sha256,sbom.json,sbom.json.sha256,SHA256SUMS,THIRD_PARTY_NOTICES.txt</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+scratch that last message. wrong window
+
+---
+
+CI has completed
+
+---
+
+<task-notification>
+<task-id>b87zzth8e</task-id>
+<summary>Monitor event: "G1.1-4 tool-call matrix on the v1.2.2-rc.1 archive finishes"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+<task-notification>
+<task-id>brasblu8r</task-id>
+<tool-use-id>toolu_017kSPoj8JrtvwzJ9yopB58n</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/brasblu8r.output</output-file>
+<status>completed</status>
+<summary>Monitor "G1.1-4 tool-call matrix on the v1.2.2-rc.1 archive finishes" stream ended</summary>
+<event>G1.1-4 RUN DONE: exit=0 start 2026-11-21T21:41:39Z end 2026-11-21T22:28:19Z  | out: {"candidate":{"archiveSha256":"57bdf05addf81726ecfd59c9f31352e1c2736288dd6b84de26a5326bcffec79b","sourceCommit":"2d314098d8a5b6d9863d22f791007b27f65d2956","sourceTree":"a9a3642781190607f8b522a796c14e9f722d696d"},"providers":[{"provider":"gateway","passed":true,"totals":{"attempts":200,"native_valid":200,"repaired":0,"schema_invalid":0,"invalid":0}},{"provider":"gateway","passed":true,"totals":{"attempts":200,"nat...(truncated)</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bi25j4awd</task-id>
+<summary>Monitor event: "Required checks complete on evidence PR #685 and stable PR #686"</summary>
+<event>PR686 at ce2c951e: linux-x86_64=completed/success test-matrix (22)=completed/success test-matrix (24)=completed/success</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<summary>Goal check-in: background work still running</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b19kdymat</task-id>
+<tool-use-id>toolu_01JVhbqrRfc5pKfGzU4eRhsq</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/b19kdymat.output</output-file>
+<status>completed</status>
+<summary>Monitor "main CI finishes on the stable v1.2.2 merge commit 8ffb83cb" stream ended</summary>
+<event>MAIN at 8ffb83cb: CI=completed/success CodeQL=completed/cancelled | main head now 06ef7fd2</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+once v1.3.0 work starts, priority follows:
+
+
+<pasted_content id="2d81">
+     1. PF-1: publish the client protocol — JSON Schema generated from cli/src/protocol.ts, checked-in schema, TS/Rust parity test, capability negotiation, wire fixtures.
+     2. PF-2: version nexus run --json and document exit codes.
+     3. GV-4: telemetry transparency and opt-out, settling PC-5.
+     4. GV-3: hash-chain the flight recorder and verification log.
+     5. VR-1: nexus verify as a CI gate.
+</pasted_content id="2d81">
+
+---
+
+<task-notification>
+<task-id>b90shti2d</task-id>
+<summary>Monitor event: "Release workflow for stable v1.2.2 finishes"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>br2ynrphg</task-id>
+<tool-use-id>toolu_01MAD4Ajzy7VuFTzggZquZuY</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/br2ynrphg.output</output-file>
+<status>completed</status>
+<summary>Monitor "Release workflow for stable v1.2.2 finishes" stream ended</summary>
+<event>STABLE RELEASE RUN DONE: completed/success | package=comp/success | draft=true prerelease=false assets=compatibility.json,install.sh,nexus-linux-x86_64-v1.2.2.tar.gz,sbom.cdx.json,sbom.cdx.json.sha256,sbom.json,sbom.json.sha256,SHA256SUMS,THIRD_PARTY_NOTICES.txt</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+also as part of v1.3.0, I think it's safe to sunset the cloudfare competition work. The contest is over, we didn't even make it past the first round judging.
+
+---
+
+<task-notification>
+<task-id>bkk6215tj</task-id>
+<tool-use-id>toolu_01EMJarb6BKHFC5266q92gHP</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/bkk6215tj.output</output-file>
+<status>completed</status>
+<summary>Monitor "Docs follow-up PR #693 checks complete (or it is merged/closed)" stream ended</summary>
+<event>PR693 state=OPEN at 1bb4e693: linux-x86_64=completed/success test-matrix (22)=completed/success test-matrix (24)=completed/success | main CodeQL:completed/success/e86a92ca,CI:in_progress//e86a92ca</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b8f0weakd</task-id>
+<tool-use-id>toolu_01CGwu7ysyMwtcdNHKwF4UJ2</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/b8f0weakd.output</output-file>
+<status>completed</status>
+<summary>Monitor "main CI finishes on e86a92ca before merging docs follow-up #693" stream ended</summary>
+<event>MAIN CI at e86a92ca: completed/success | main head now e86a92ca | open PRs to main: 693,691,689</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+/loop continue working iteratively until v1.2.2 lands as released
+
+---
+
+<task-notification>
+<task-id>bc359o319</task-id>
+<tool-use-id>toolu_01HT7YABh8sFsyxTGavArVCX</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/bc359o319.output</output-file>
+<status>completed</status>
+<summary>Monitor "Docs follow-up PR #693 checks complete at its current head (or it is merged/closed)" stream ended</summary>
+<event>PR693 state=OPEN head=5ddc7b69: linux-x86_64=completed/success test-matrix (22)=completed/success test-matrix (24)=completed/success | main head e86a92ca</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<summary>Goal check-in: background work still running</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b3whp08ko</task-id>
+<summary>Monitor event: "Release-branch setup PR #694 checks complete (or it is merged/closed)"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+/goal complete and land v1.3.0
+
+---
+
+<task-notification>
+<task-id>a5e747c80f14ebd82</task-id>
+<tool-use-id>toolu_01Lc3XtKBqe67mftTGsLgkbg</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/a5e747c80f14ebd82.output</output-file>
+<status>completed</status>
+<summary>Agent "PF-1 slice A schema generator" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Slice A is in place and uncommitted in `/home/mike/nexus-wt/pf1`: the schema is generated from the types by the TS 7 checker, checked in, and drift fails the new test. Two things need your decision: two golden records do not conform to the types, and the XERJ reference query was not done.
+
+## Files added (no tracked file changed)
+- `/home/mike/nexus-wt/pf1/cli/scripts/gen_protocol_schema.mjs`
+- `/home/mike/nexus-wt/pf1/cli/test/helpers/json_schema.ts`
+- `/home/mike/nexus-wt/pf1/cli/test/protocol_schema.test.ts`
+- `/home/mike/nexus-wt/pf1/docs/protocol/sidecar-v1.schema.json`
+- `/home/mike/nexus-wt/pf1/docs/protocol/VERSIONS.json`
+- `/home/mike/nexus-wt/pf1/docs/protocol/README.md`
+
+`cli/package.json` and the lockfile are untouched; `cli/node_modules` was copied from the main checkout (ignored by git).
+
+## Generator approach
+- **How it works:** it opens `cli/tsconfig.json` through `typescript/unstable/sync`, resolves `SidecarEvent`, `SidecarCommand` and `PROTOCOL_VERSION` in `src/protocol.ts`, and walks the checker's types. Nothing is hand-written or regex-parsed.
+- **Named types:** any alias or interface declared under `cli/src` is emitted once under `$defs` and referenced by `$ref` (36 shared definitions, including `TurnResult`, `ApprovalReview`, `ReceiptSection`, `CatalogProvider`, `CatalogModel`, `ModelRef`).
+- **Descriptions:** JSDoc on types and properties is carried into `description`.
+- **Determinism:** definitions, properties, `required`, enum values and variants are all sorted. Two consecutive runs gave the same sha256 (`b2747ba8…b66a`), and the file contains no absolute paths.
+- **Unsupported types:** a function, a TS enum, or a tuple with optional or rest elements stops the generator with an error naming the property.
+- **`--check`:** exits 1 naming the file when the schema is stale, and also when the ledger is stale.
+
+API calls it depends on:
+- `API({cwd})`, `updateSnapshot({openProjects})`, `Snapshot.getProjects`, `Project.checker`
+- `Checker`: `resolveName`, `getDeclaredTypeOfSymbol`, `getTypeOfSymbol`, `getPropertiesOfType`, `getPropertyOfType`, `getNonNullableType`, `isArrayType`, `isTupleType`, `getTypeArguments`, `getSignaturesOfType`, `getIndexInfosOfType`, `typeToString`
+- `Type`: `flags`, `value`, `getTypes`, `getAliasSymbol`, `getAliasTypeArguments`, `getSymbol`, `isClassOrInterface`, `getTypeParameters`, `getTarget().elementFlags`
+- `Symbol`: `name`, `id`, `flags`, `declarations[0].path`, `getDocumentationComment`
+- Enums: `TypeFlags`, `SymbolFlags`, `SignatureKind`, `ElementFlags`
+
+Fragility is moderate. The export is named "unstable" and it spawns the bundled tsgo binary, so a TypeScript minor bump could rename something. That would show up as a thrown error or a drift failure rather than a silently wrong schema, and the TypeScript calls are confined to this one file. A run takes about 1 s.
+
+## Test results
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | exit 0 |
+| `protocol_schema.test.ts` | 7 pass, 0 fail (also through `scripts/run_tests.mjs`) |
+| `protocol.test.ts` | 10 pass, 0 fail |
+| `protocol_golden.test.ts` | 3 pass, 0 fail |
+| `sidecar.test.ts` | fails: 60 pass / 3 fail of 63 on the second run, 53 / 10 on the first |
+| `node scripts/check_test_leaks.mjs` | exit 0 |
+| `scripts/check_doc_versions.mjs`, `scripts/check_invariants.mjs` | exit 0 |
+
+- **`sidecar.test.ts` failures:** the recurring error is "Core engine handshake failed: Rust core RPC daemon disconnected". This worktree has no built Rust core or `cli/dist`. I did not build the core or run a baseline to confirm, so I cannot say it passes; my change touches no tracked file and that test imports none of the new ones.
+- **Drift demonstration:** adding `drift_probe?: number` to `assistant.delta` made the drift test fail (6 pass, 1 fail) and `--check` exit 1 with the "out of date" message. After reverting, `git diff --stat cli/src/protocol.ts` is empty and the test is back to 7 pass.
+- **Node version:** everything ran on Node 24.11.1 only; Node 22 is not installed here.
+
+## Decisions for you
+1. **Two golden records do not match the types.** In `protocol_v1_golden.jsonl`, `hello` lacks the required `commands` and `tool.end` lacks the required `evidence`. I left the shared fixture alone and the schema strict. The test lists these two as known gaps that must fail for exactly that reason, so the list can only shrink; every other record validates. The alternatives are adding the two fields to the fixture (the Rust test would need a run) or making them optional in the type. Say which you want.
+2. **XERJ was not queried.** I read your "no network calls" as covering the localhost node, so the PR's "Reference coding" section still needs that query or an "XERJ unavailable" line.
+3. **`additionalProperties` is never `false`,** for commands as well as events, because `parseCommand` drops unknown fields. It appears only for an index signature. The README explains this.
+4. **`models.catalog` is flattened.** The `{type, id} &amp; Catalog` intersection becomes one object variant, so `Catalog` itself has no `$defs` entry, though its members do. `Pick&lt;SlashSpec, …&gt;` in `hello.commands` is inlined the same way. An `allOf` with a `$ref` to `Catalog` is possible if you prefer it.
+5. **Tuples needed an extra keyword set.** `ReceiptRow = [string, string]` is emitted as `prefixItems` with `minItems` and `maxItems` of 2, so the validator supports those three keywords beyond your list. The validator throws on any keyword outside its subset.
+6. **Top level is `anyOf`, not `oneOf`.** `tool.detail` and `receipt` exist in both directions, so an event of either type would also match the command schema.
+7. **The schema filename follows `PROTOCOL_VERSION`** (`sidecar-v&lt;N&gt;.schema.json`).
+8. **Not registered in the unit tier.** The shard runner discovers `test/*.test.ts` on its own, so nothing was required. I did not add the test to `UNIT_FILES` in `test_tiers.mjs` or to `test_durations.json`; it runs in about 2 s and spawns tsgo, so it would fit if you want it there.
+9. **No flow wiring.** There is no existing `check_*` step in the `cli/package.json` scripts or the Makefile that this obviously belongs to, so I added none and edited no workflow. The test is the CI gate; a standalone `node cli/scripts/gen_protocol_schema.mjs --check` step in `ci.yml` would be your edit.
+
+## Types the generator could not express exactly
+- `Record&lt;string, string&gt;` (`NeedsInputQuestion.subject`) becomes an object with `additionalProperties: {type: "string"}`.
+- No `any` or `unknown` appears in the current protocol; either would become the open schema `{}`.
+- JSDoc written before a union member (the per-variant comments in `SidecarEvent`) is not attached to any symbol, so variants carry a `title` but no `description`.
+
+## Schema size
+77,143 bytes, 22 event variants, 17 command variants. The ledger has one entry for protocol 1 with the hash above.</result>
+<usage><subagent_tokens>167187</subagent_tokens><tool_uses>34</tool_uses><duration_ms>591699</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a2a8004520c08c36d</task-id>
+<tool-use-id>toolu_01SgRwhSzbDRy85BvzBNvS6r</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/a2a8004520c08c36d.output</output-file>
+<status>completed</status>
+<summary>Agent "Sunset Cloudflare contest work" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The contest work is removed in `/home/mike/nexus-wt/cfsunset`: 150 files deleted and 7 modified, all staged, nothing committed or pushed. No requirement row cites a removed file, and no checker fails on a historical link.
+
+## Removed (`git rm -r`, 150 files)
+- `experiments/cloudflare-artifacts-vertical-slice/`: 84 files
+- `docs/cloudflare/`: 50 files
+- `demo/`: 14 files
+- `docs/CLOUDFLARE_CONTEST.md` and `docs/CLOUDFLARE_CONTEST_CRITICAL_PATH_ASSESSMENT.md`
+
+No empty directories or untracked leftovers remain, and there was no `experiments/README` to clean up. All 150 paths exist in tag `v1.2.2`.
+
+## `demo/` was removed
+It is the contest demo, with no general product demo in it:
+- `demo/package.json` names it `@nexus/contest-demo`, "Nexus + Git + Cloudflare Artifacts Agent-Native Collaboration Demo".
+- The `demo/nexus-demo.mjs` header reads "Cloudflare Git Competition 2026".
+- `demo/lib/substrate-adapter.mjs` uses `contest-demo/&lt;run&gt;/...` refs and a `contest-agent@nexus.cloud` git identity.
+- Nothing outside the removed paths and historical docs referenced `demo/`, except the CI lockfile line and the Dependabot entry below.
+
+## Edited (7 files)
+- **`.github/workflows/ci.yml`**: removed the `cloudflare-experiment` job and three lockfile lines from the "Reject deprecated packages" loop. The third is `demo/package-lock.json`, which you did not list; the loop would fail on the missing file. Jobs are now `test-matrix`, `linux-x86_64`, `diff-coverage`.
+- **`.github/dependabot.yml`**: removed the six experiment entries plus the `/demo` entry (seven in total). Remaining directories are `/`, `/cli`, `/core`.
+- **`cli/test/check_requirements.test.ts`**: the DH-6 test now slices from `test-matrix:` to the next job header by regex, the same approach as `release_workflow_parity.test.ts`. It also asserts the job exists; the `--enforce` assertion is unchanged.
+- **`docs/DEVELOPMENT.md`** (living): the pointer is replaced by one sentence saying the service and demo were removed in v1.3.0 and remain in git history, last tag `v1.2.2`.
+- **`docs/README.md`** (living index): the "Cloudflare Contest Entry" bullet is now unlinked, with the same sentence and `git show v1.2.2:docs/CLOUDFLARE_CONTEST.md`.
+- **`docs/HISTORICAL.md`**: the row is kept but unlinked, with "removed in v1.3.0" and the `git show v1.2.2:` path. Nothing pins or checks this file.
+- **`docs/REPOSITORY_QUALITY.md`** (living, not in your list): its Dependabot coverage sentence named the contest demo and experiment roots, so I corrected it.
+
+## Follow-up lines in files I did not touch
+- `README.md:14`: `&gt; The Cloudflare contest entry is historical: see [docs/CLOUDFLARE_CONTEST.md](docs/CLOUDFLARE_CONTEST.md).` This link is now dead.
+- `README.md:268`: `├── experiments/           # Experiment and measurement records, including the Cloudflare Artifacts vertical slice`
+- `quickstart.md:3`: `Nexus Code is a local coding client. It is separate from the Cloudflare Workers and Artifacts collaboration service in the contest entry.` No path, but stale wording.
+
+## Checkers
+| Command | Before | After |
+|---|---|---|
+| `node scripts/check_requirements.mjs --enforce` | pass, 123 rows; exit code not captured | exit 1 in the worktree, only "pre-RC enforcement requires a clean source worktree" |
+| same, on a scratch snapshot of the staged tree | not run | exit 0, 123 rows, same counts |
+| `node scripts/check_requirements.mjs` (report mode) | not run | exit 0 |
+| `node scripts/check_doc_versions.mjs` | exit 0 | exit 0 |
+| `node scripts/check_invariants.mjs` | exit 0, 18 rows | exit 0, 18 rows |
+| `node scripts/sync-version.mjs --check` | not run | exit 0 |
+| `npx tsc --noEmit` in `cli/` | not run | no errors |
+| `node scripts/check_test_leaks.mjs` in `cli/` | not run | exit 0 |
+| YAML load of `ci.yml` and `dependabot.yml` | not run | both load |
+
+The enforce-mode failure in the worktree is only the uncommitted changes; the true enforce result needs a commit or CI. `scripts/check_notices.mjs` exits 1 before the change ("Notices file not found: THIRD_PARTY_NOTICES.txt"), a generated file unrelated to this work, and I did not rerun it afterwards.
+
+## Tests (throwaway `HOME`, all exit 0)
+| Test file | Passed |
+|---|---|
+| `check_requirements` | 28/28, including the DH-6 test |
+| `providers_catalog` | 5/5 |
+| `provider_wire_matrix` | 90/90 |
+| `deletion_guard` | 1/1 |
+| `flake_report` | 8/8 |
+| `release_workflow_parity` | 1/1 |
+| `node_floor` (reads `ci.yml`) | 6/6 |
+
+I ran these on the local Node (v24) only, not Node 22, and did not run the full suite.
+
+## Investigation results
+- **Requirements registry:** `docs/v1.0.0/REQUIREMENTS.md` and `docs/INVARIANTS.md` cite none of the removed paths.
+- **Historical links:** no checker walks doc links, so nothing fails. Historical docs under `docs/v1.0.0/**`, `docs/v1.1.0/ROADMAP.md` and `docs/reviews/**` still mention the removed paths as plain text and are untouched.
+- **SBOM, notices, release:** no reference to the removed paths in `scripts/*`, the `Makefile`, `release.yml`, `repro.yml`, `codeql.yml`, the other workflows, `cli/package.json`, the root `package.json`, `about.toml` or `deny.toml`. No manifest or lockfile outside the removed directories changed.
+- **`experiments/thermal-soak-2026-10-03/`:** the hit is `policy-replay/SHA256SUMS` listing `output/example-*-demo/` files. It is unrelated to the contest and untouched.
+
+## Remaining hits from the final grep
+- `README.md:14`: follow-up, claimed by another agent.
+- `docs/HISTORICAL.md:11`: the updated entry with the `git show` path.
+- `docs/README.md:74`: the updated bullet with the `git show` path. This one is outside your expected list.
+
+## Decisions for you
+1. **`GOVERNANCE.md:17`** still says "Keep the Cloudflare contest track separate from the client release… preserve historical submission snapshots and evidence as historical records." It cites no removed path, but the wording is now stale. I left it because it is policy text; say if you want it reworded.
+2. **`.gitignore:54-55`** (`.cloudflare/`, `.wrangler/`) existed only for the contest build output. I left them as harmless.
+3. **The three edits beyond your list** (the `/demo` Dependabot entry, the `demo/package-lock.json` CI line, `docs/REPOSITORY_QUALITY.md`) follow from removing `demo/`; revert any you disagree with.</result>
+<usage><subagent_tokens>121617</subagent_tokens><tool_uses>16</tool_uses><duration_ms>170326</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a1152c01f70efc3a7</task-id>
+<tool-use-id>toolu_01PCLZJn3uAcuJKEdUqBPNDc</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/a1152c01f70efc3a7.output</output-file>
+<status>completed</status>
+<summary>Agent "PF-1 slice B capability negotiation" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Slice B is implemented and uncommitted in `/home/mike/nexus-wt/pf1b`. Everything in your verify list passes except the format gate, which fails on `live_state.rs` because that file already fails rustfmt at HEAD.
+
+## Files changed
+- `cli/src/protocol.ts`, `cli/src/sidecar.ts`
+- `core/src/bin/nexus_tui/protocol.rs`, `core/src/bin/nexus_tui/live_state.rs`
+- `docs/protocol/sidecar-v1.schema.json` (regenerated), `docs/protocol/VERSIONS.json` (entry appended; the earlier entry only gained its trailing comma)
+- `cli/test/fixtures/protocol_v1_golden.jsonl` (3 records appended, none altered)
+- Tests: `cli/test/protocol.test.ts`, `protocol_golden.test.ts`, `protocol_schema.test.ts`, `sidecar.test.ts`, `sidecar_projection.test.ts`, and new `cli/test/sidecar_initialize.test.ts`
+
+`git status --short` lists only those; the diff stat for `package.json`, the npm lockfile, `Cargo.toml` and `Cargo.lock` is empty.
+
+## Final shapes
+- **`hello`**: `{ type: "hello", protocol, pid, commands, protocol_min?, protocol_max?, capabilities?: string[], experimental?: string[] }`. The sidecar now always sends all four new fields (1, 1, the capability list, `[]`).
+- **`initialize`**: `{ type: "initialize", id, client: { name, version }, protocol_min?, protocol_max?, experimental?: boolean }`.
+  - `name` and `version` must be non-empty strings of at most 100 characters.
+  - Range bounds must be integers from 1 to 65535, given together, with min &lt;= max.
+  - `experimental` must be a boolean when present.
+- **`initialized`**: `{ type: "initialized", id, protocol, capabilities: string[], experimental: string[] }`.
+- **New error codes**: `UNSUPPORTED_PROTOCOL` ("No common protocol version: the client speaks 2 to 3, this sidecar speaks 1 to 1.") and `EXPERIMENTAL_DISABLED`.
+- **Constants**: `PROTOCOL_MIN` / `PROTOCOL_MAX` in both languages; `parseCommand` accepts any integer `v` in that range.
+- **Gate**: `SidecarServer.requireExperimental(name, id?)` returns a boolean and emits the refusal itself. The experimental list is injectable through `SidecarOptions.experimentalFeatures`, defaulting to `EXPERIMENTAL_FEATURES = []`.
+
+## Capability names
+`SIDECAR_CAPABILITIES`, sorted: `answer`, `checkpoint.choice`, `model.select`, `models.list`, `provider.connect`, `provider.disconnect`, `receipt`, `slash`, `steer`, `tool.detail`.
+
+Each name is exactly the `type` of a command beyond the minimal set (`prompt.submit`, `cancel`, `approve`, `deny`, `shutdown`). A client can check `capabilities.includes(type)` before sending, and a test asserts every name is a published command type. `provider.cancel` and `provider.local-cancel` are covered by `provider.connect`, as its JSDoc says.
+
+## Tests run
+TypeScript, each as `cd cli &amp;&amp; HOME=$(mktemp -d) node --import tsx --test test/&lt;name&gt;.test.ts` on Node 24.11.1:
+
+| File | Pass | Fail |
+|---|---|---|
+| `protocol` | 13 | 0 |
+| `protocol_golden` | 4 | 0 |
+| `protocol_schema` | 8 | 0 |
+| `sidecar` | 63 | 0 |
+| `sidecar_initialize` (new) | 9 | 0 |
+| `sidecar_compact_queue` | 3 | 0 |
+| `sidecar_diagnostic_redaction` | 6 | 0 |
+| `sidecar_projection` | 23 | 0 |
+| `sidecar_steering_diff` | 19 | 0 |
+| `sidecar_surface` | 4 | 0 |
+
+- `npx tsc --noEmit`: clean.
+- `node scripts/gen_protocol_schema.mjs --check`: current.
+- `node scripts/check_test_leaks.mjs`: exit 0.
+- `eval_t3` (not on your list, run as an extra): 11 pass, 2 fail with `ENOENT … cli/dist`. That is the unbuilt `cli/dist` in this worktree; I did not build it.
+
+Rust, with `CARGO_TARGET_DIR=/home/mike/nexus-wt/pf1b/core/target`:
+- `cargo build --release --locked --bin harness-core --bin nexus-tui`: succeeded.
+- `cargo test --locked --bin nexus-tui protocol`: 20 passed, 0 failed.
+- `cargo test --locked --bin nexus-tui live_state`: 125 passed, 0 failed.
+- `cargo test --locked --bin nexus-tui` (whole binary): 404 passed, 0 failed.
+- `cargo clippy --locked --bin nexus-tui`: no warnings.
+- `rustfmt --edition 2024 --check` on `protocol.rs`: clean.
+- `scripts/check_fmt.sh`: reports `FAILED: core/src/bin/nexus_tui/live_state.rs`. I did not reformat the file wholesale (about 200 unrelated hunks); my additions follow its existing wide-line style.
+
+## Reference coding (XERJ, opencode corpus, flagged "not verified complete", MIT)
+- **Saw**:
+  - `opencode/packages/client/src/mcp.ts:110`: the `initialize` responder echoes the client's `protocolVersion` if given, else its own, and returns `capabilities`.
+  - `opencode/packages/cli/test/acp/subprocess.ts:113` and `acp/session.test.ts:15`: ACP `initialize` sends a single `protocolVersion: 1`, `clientCapabilities` and `clientInfo: { name, version }`, and gets back `protocolVersion` plus nested `agentCapabilities` objects.
+- **Took**: the `initialize` request/response pair, `client { name, version }` identification, and the server answering with the chosen version plus its capabilities.
+- **Rejected**: the single-version echo (the plan asks for a range, so the answer is the highest common version), nested capability objects (flat sorted string names instead), and `_meta` feature flags (one explicit `experimental` boolean instead).
+- Nothing copied verbatim.
+
+## Decided differently from the brief
+- **Retry after a failed negotiation**: only a successful `initialize` uses up the connection's one negotiation. After `UNSUPPORTED_PROTOCOL` or a malformed `initialize`, the client may send another. A second `initialize` after `initialized` is `BAD_REQUEST`, as specified. Say so if you want any second `initialize` refused.
+- **Range bounds go together**: `protocol_min` without `protocol_max` (or the reverse) is `BAD_REQUEST`. With both omitted, `parseCommand` fills them with the message's `v`, so the parsed command always carries the range and `experimental` as a boolean.
+- **`Command::Initialize` in Rust**: the golden test builds a `Command` for every corpus command, so I added the variant and a `ClientInfo` struct, marked `#[allow(dead_code)]` with a comment that the TUI does not send it in this slice.
+- **Existing test edits**:
+  - `sidecar.test.ts`: the `hello` deep-equal now strips the four new fields before comparing; a full comparison is in the new file.
+  - `protocol_schema.test.ts`: the "known gap" exception for `hello` now applies only to records that actually lack `commands`, so the new complete `hello` record must validate cleanly.
+  - `sidecar_projection.test.ts`: `initialized` is classified as structured.
+- **Client name and version**: validated but neither stored nor echoed, since nothing uses them yet.
+
+## For your review
+- **Overlap without `initialize`**: the TUI accepts a sidecar by range overlap but still only parses `v: 1` and never sends `initialize`. A future sidecar announcing 1 to 2 with default 2 would pass the `hello` check and then fail on its first v2 line. That sidecar must keep emitting v1 until `initialized`, or the TUI must start sending `initialize`.
+- **Half a range in Rust**: a `hello` with only one of `protocol_min` / `protocol_max` falls back to the exact-version rule.
+- **Corpus placeholder**: the golden `hello` record lists `"x.test"` under `experimental` to exercise the field; the tests use the same placeholder through the injectable option.
+- **Ledger note**: it states that a newer client sending `initialize` to an older sidecar gets `BAD_REQUEST` (unknown message type) and carries on. That follows from the old parser's default case; I did not run it against an old sidecar binary.
+- **Scratch `git stash`**: I ran one `git stash` / `git stash pop` in the worktree to confirm the baseline fmt state; the working tree was restored and nothing was committed.</result>
+<usage><subagent_tokens>167753</subagent_tokens><tool_uses>27</tool_uses><duration_ms>899055</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bbbjr1750</task-id>
+<summary>Monitor event: "Required checks complete on v1.3.0 PRs #695, #696, #697"</summary>
+<event>PR695 at 2b41bb73: linux-x86_64=completed/success test-matrix (22)=completed/success test-matrix (24)=completed/success</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bbbjr1750</task-id>
+<summary>Monitor event: "Required checks complete on v1.3.0 PRs #695, #696, #697"</summary>
+<event>PR696 at 9c0b8ac7: linux-x86_64=completed/success test-matrix (22)=completed/success test-matrix (24)=completed/success</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bbbjr1750</task-id>
+<tool-use-id>toolu_01BRDz86VvdCTxGZwLx2mHUj</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/bbbjr1750.output</output-file>
+<status>completed</status>
+<summary>Monitor "Required checks complete on v1.3.0 PRs #695, #696, #697" stream ended</summary>
+<event>PR697 at f417148a: linux-x86_64=completed/success test-matrix (22)=completed/success test-matrix (24)=completed/success</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>br8daq8as</task-id>
+<summary>Monitor event: "Required checks complete on v1.3.0 PRs #698 and #700"</summary>
+<event>PR698 at e732be62: linux-x86_64=completed/success test-matrix (22)=completed/success test-matrix (24)=completed/success</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+nexus doctor is claiming it connot reach the gateway:
+
+
+<pasted_content id="2d81">
+mike@mike-dev:~/nexus-code (main) % nexus doctor --deep --fix
+Nexus doctor 1.2.2 — fresh CLI configuration (deep)
+mode: review · sandbox: off · workspace: trusted
+15 pass · 4 warn · 1 fail · 7 skipped · 156915 ms
+
+FAIL endpoint.reachable: The endpoint did not answer.
+       · https://10.0.8.5:8443/v1
+       · The operation was aborted due to timeout
+       → Start the local model server (LM Studio / vLLM) or point LOCAL_LLM_ENDPOINT / -e at a running one.
+WARN tui.check: The tui check did not finish within 5000 ms.
+WARN shell.check: The shell check did not finish within 5000 ms.
+WARN engine.check: The engine check did not finish within 5000 ms.
+WARN integrity.check: The integrity check did not finish within 30000 ms.
+PASS install.build: The CLI build is present and not older than its source.
+       · version 1.2.2
+       · built from ce2c951e249d
+       · install root /home/mike/.local/lib/nexus/v1.2.2
+PASS runtime.node: Node.js 24.11.1 (supported).
+       · /home/mike/.local/node-v24.11.1-linux-x64/bin/node
+PASS runtime.launcher: The `nexus` launcher on PATH is this packaged installation.
+       · The nexus launcher resolves to this packaged installation.
+PASS config.valid: The configuration builds with the same rules a session uses.
+       · provider (appliance / OpenAI-compatible endpoint)
+       · model engineering/auto
+PASS config.repeated_calls: Repeated identical tool calls: note at 3, stop at 5 (commands 10, polls 20).
+PASS endpoint.configured: An inference endpoint is configured.
+       · https://10.0.8.5:8443/v1
+       · locality LOCAL_APPLIANCE (private_ip)
+       · credential present (bound to its own origin; not shown)
+PASS workspace.access: The workspace is readable and writable and is a git repository (checkpoints and /undo available).
+       · /home/mike/nexus-code
+PASS state.sessions: The saved sessions directory is writable (a probe file was written and removed).
+       · /home/mike/.nexus/sessions
+       · mode 700
+PASS state.tasks: The durable task state directory is writable (a probe file was written and removed).
+       · /home/mike/.nexus/tasks
+       · mode 700
+PASS state.permissions: Nexus state directories and files are private (0700/0600).
+       · /home/mike/.nexus
+PASS credentials.store: Nexus's own credential store is not in use (credentials come from the environment or other clients).
+       · /home/mike/.config/nexus/credentials.json
+PASS config.env: The configuration file is private to this user.
+       · /home/mike/.config/nexus/config.env
+       · mode 600
+PASS config.custom_ca: The custom CA bundle (/home/mike/.config/nexus/t5820-gateway-ca.crt) exists and contains 1 valid X.509 certificate(s).
+       · /home/mike/.config/nexus/t5820-gateway-ca.crt
+PASS mcp.config: 3 MCP server(s) are configured with resolvable commands or valid URLs. Servers were inspected from configuration only; none was started.
+       · sysinfo: node -> /home/mike/.local/bin/node
+       · xerj: /home/mike/.local/bin/xerj -> /home/mike/.local/bin/xerj
+       · mcp-agent-mail: http://127.0.0.1:8765/mcp/
+PASS plugins.config: 1 plugin module(s) found. Plugin modules were listed, not loaded (loading runs their code).
+       · /home/mike/.nexus/plugins/sample-logger.js
+SKIP config.project_env_ignored: The workspace has no .env.
+       · /home/mike/nexus-code/.env
+SKIP config.providers_file: No operator providers are declared (~/.config/nexus/providers.json).
+SKIP config.reasoning_effort: No reasoning effort is configured.
+SKIP endpoint.authenticated: Skipped: the endpoint was not reachable.
+SKIP model.available: Skipped: the endpoint was not reachable.
+SKIP inference.verified: Skipped: the endpoint is not reachable and authenticated.
+SKIP sandbox.confinement: Effective containment: none. No --sandbox is configured; run_command runs on the host with the scrubbed environment only.
+       · bubblewrap (bwrap): available
+       · workspace: /home/mike/nexus-code
+       → Run with --sandbox bwrap to confine commands and the native worker (HOME masked, no network unless --sandbox-network).
+
+Effective configuration (value ← source):
+  NEXUS_PROVIDER               (not set)  ← default
+  LOCAL_LLM_ENDPOINT           https://10.0.8.5:8443/v1  ← ~/.config/nexus/config.env
+  LOCAL_LLM_MODEL              engineering/auto  ← ~/.config/nexus/config.env
+  LOCAL_LLM_API_KEY            set (not shown)  ← ~/.config/nexus/config.env
+  LOCAL_HARNESS_SHELL          bash  ← command-line flag
+  workspace                    /home/mike/nexus-code  ← current directory
+  max steps per segment        30 (checkpoint interval, not a limit)  ← derived
+  NEXUS_MAX_TOTAL_STEPS        500  ← derived
+  NEXUS_MAX_TURN_MINUTES       480  ← derived
+  NEXUS_STAGNATION_STEPS       12  ← default
+  NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS 3  ← default
+  NEXUS_REPEATED_CALL_SOFT     3  ← default
+  NEXUS_REPEATED_CALL_HARD     5  ← default
+  NEXUS_VERIFIER_TIMEOUT_SECS  300  ← default
+  NEXUS_VERIFIER_ENV_PASSTHROUGH (not set)  ← default
+  PLANNER_LLM_MODEL            (not set)  ← default
+  CODER_LLM_MODEL              (not set)  ← default
+
+Repairs: none needed.
+</pasted_content id="2d81">
+
+---
+
+<task-notification>
+<task-id>a1e077b4089d44020</task-id>
+<tool-use-id>toolu_012k1qGpZpbBPRCRe15gc6Q1</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/a1e077b4089d44020.output</output-file>
+<status>completed</status>
+<summary>Agent "PF-1 slices C and D conformance" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>PF-1 slice C is complete in `/home/mike/nexus-wt/pf1c`, uncommitted, with every requested gate green on Node 24.11.1 (Node 22 was not run). No production code, wire type, schema, ledger, manifest or lock file changed.
+
+## Files
+
+Added:
+- `docs/PROTOCOL.md`
+- `cli/scripts/gen_protocol_samples.mjs`
+- `cli/test/helpers/wire_fixture.ts`
+- `cli/test/protocol_parity.test.ts`, `cli/test/protocol_wire.test.ts`, `cli/test/protocol_doc.test.ts`
+- `cli/test/fixtures/protocol_v1_schema_samples.jsonl` (86 samples, generated)
+- `cli/test/fixtures/protocol_v1_rust_commands.jsonl` (18 lines, written by the Rust test)
+- `cli/test/fixtures/wire/{negotiation,negotiation_unsupported,turn,errors}.json`
+
+Changed:
+- `core/src/bin/nexus_tui/protocol.rs` (test module only; all hunks are after `mod tests`)
+- `cli/test/protocol_schema.test.ts`
+- `cli/test/fixtures/protocol_v1_golden.jsonl`
+- `docs/protocol/README.md`
+
+## Parity design
+
+- **Samples:** the generator reads the checked-in schema and writes a minimal and a full sample per message. It adds one extra full sample per alternative where a field is a union of shapes, so every `ApprovalReview` kind is covered. `--check` and a TypeScript test fail on drift, and every sample validates against the schema.
+- **Events, TS to Rust:** `schema_samples_parse_as_their_own_event_variants` parses every event sample with `parse_event` and rejects `Event::Unknown` and `Review::Unknown`.
+- **Event type sets:** the Rust event names must equal the schema's, with no allowlist needed. The Rust names are read from the `#[serde(rename)]` attributes via `include_str!`, because Rust cannot list enum variants; the test asserts every variant carries a rename.
+- **Event fields:** top-level field names are taken from the derived `{:#?}` output. Rust may read no field the schema lacks, and the schema fields Rust does not read must equal `EVENT_FIELDS_NOT_READ` exactly (11 events, mostly `turn_id`). This is what makes a new optional TS field fail on the Rust side. It checks top-level fields only; nested structs are covered by parsing, not by field accounting.
+- **Commands, Rust to TS:** I took the checked-in fixture route. `rust_commands_are_the_checked_in_fixture_and_published_commands` asserts the fixture is byte-for-byte what `encode_command` produces for one representative of every variant (`provider.connect` with and without its optional fields). `protocol_parity.test.ts` validates each line against the schema and requires `parseCommand(line)` to equal the line minus `v`, which also catches a renamed optional field.
+- **Command sets:** the representatives must equal the scanned `Command` variants, which must be a subset of the schema's commands; the remainder must equal `COMMANDS_NOT_SENT = ["answer"]`.
+- **Why this route:** no stdout plumbing between test runners, no new dependency, and each language's own test fails with a precise message. The cost is two test-only introspection tricks (source scan and Debug-format parsing). The alternative was `cfg_attr(test, derive(Serialize))` on production types, which is outside the allowed edit area.
+
+## Mismatches found
+
+No TS/Rust mismatch: every minimal and full sample parses, and no field or type differs. Two things worth knowing:
+- `parseCommand` refuses the schema-valid `answer` sample, because `question` must be 12 hex characters and the schema only says string. It is listed as an exact exception in the parity test and stated in the doc.
+- A command with `v: 2` is refused with `BAD_REQUEST`, not `UNSUPPORTED_PROTOCOL`. It is recorded in `errors.json` and documented as it behaves.
+
+## Golden corpus gaps
+
+The two records now carry `"older_sidecar": ["commands"]` and `"older_sidecar": ["evidence"]`. `protocol_schema.test.ts` requires such a record to be an event that is invalid only for the fields it names. The set must equal `OLDER_SIDECAR_GAPS` exactly, and every other record must validate cleanly. The Rust golden test asserts there are exactly two such records, that they parse, and that they lack the named fields.
+
+## Recordings
+
+- **Format:** `{description, gateway: Reply[], steps}`. Step 1 is connect; later steps carry `send` (or `raw`), an optional `malformed` reason, `expect`, and `closes` on the shutdown step.
+- **Harness:** the real `SidecarServer` and `ApplicationCore` with `startGateway`, `makeRepo` and `makeHome` from `helpers/fixtures.ts`, driven through `handleLine` then `idle()`. The git branch is forced to `main` so the host's git config does not leak in.
+- **Checks:** every emitted event validates against the schema; every unmarked line must be a valid command and every `malformed` line must not be; event counts, shutdown and the number of model requests must match.
+- **Matcher:**
+  - `"&lt;any:string&gt;"`, `"&lt;any:number&gt;"`, `"&lt;any:array&gt;"` match any value of that type.
+  - `"&lt;id:NAME&gt;"` captures a non-empty string and must repeat it.
+  - `&lt;workspace&gt;` and `&lt;workspace-name&gt;` substitute inside strings.
+  - Everything else is exact, including the key set.
+- **Regenerate:** `cd cli &amp;&amp; NEXUS_WIRE_RECORD=1 HOME=$(mktemp -d) node --import tsx --test test/protocol_wire.test.ts`. This rewrites `expect` and `closes` from real output, applying the `VARIES` table (pid, `hello.commands`, session id, `context_tokens`, `finishedAt`, token estimates, `duration_ms`). To add a recording, write its `send` steps with empty `expect` and run the same command. The checked-in files were produced this way.
+- **Churn to expect:** `turn.json` records `turn.result.turn` exactly, so any new `TurnResult` field or reworded heading needs a re-record.
+- **Negative test:** seven in-memory mutations of `negotiation.json`, each asserted on its message, e.g. `step 2 (send initialize), event 1 (initialized): $.protocol: expected 7, got 1`.
+
+## Test results
+
+All run with `HOME=$(mktemp -d) node --import tsx --test test/&lt;name&gt;.test.ts` from `cli/`:
+
+| File | Pass | Fail |
+|---|---|---|
+| `protocol_doc` | 6 | 0 |
+| `protocol_parity` | 5 | 0 |
+| `protocol_wire` | 6 | 0 |
+| `protocol` | 13 | 0 |
+| `protocol_golden` | 4 | 0 |
+| `protocol_schema` | 8 | 0 |
+| `sidecar` | 63 | 0 |
+| `sidecar_initialize` | 9 | 0 |
+| `sidecar_projection` | 23 | 0 |
+
+- The three new files passed three consecutive runs each.
+- `npx tsc --noEmit` is clean; both generators' `--check` pass; `check_test_leaks.mjs` exits 0.
+- `cargo test --locked --bin nexus-tui`: 406 passed, 0 failed.
+- `cargo clippy --locked --all-targets -- -D warnings` is clean; `check_fmt.sh` exits 0.
+- `check_doc_versions.mjs` and `check_requirements.mjs` (report mode) pass.
+
+## Mutation demonstrations
+
+Both were restored afterwards; `git diff --stat cli/src/protocol.ts` is empty and the Rust fixture is byte-identical to before.
+
+1. **Optional `severity?: string` added to `notice` in `protocol.ts`:**
+   - Before regenerating, `protocol_schema` fails on schema drift.
+   - After regenerating schema and samples, `protocol_schema` fails on the ledger rule, and Rust fails with `notice: the schema fields this client does not read must equal EVENT_FIELDS_NOT_READ; left: {"severity"}, right: {}`.
+   - I did not run the intermediate state (schema regenerated, samples not).
+2. **Rust `Steer.text` renamed to `message`:**
+   - The Rust fixture test fails first.
+   - After rewriting the fixture with `NEXUS_UPDATE_PROTOCOL_FIXTURES=1`, the TS parity test fails with `$: missing required text`.
+   - Renaming only the optional `provider.connect.endpoint` to `url` passes the schema but fails the `parseCommand` equality.
+
+## Reference coding
+
+XERJ node active; the opencode index is flagged "not verified complete". Queries: `xerj code opencode "acp wire fixture replay recorded session expect"` and a follow-up on `wire-fixture Wire received until`.
+- **Saw:** `opencode/packages/cli/test/acp/wire-fixture.ts:129` (`WireOptions`: hooks for prompt, interrupt and permission, and a fake fetch backend), `session.test.ts:232` (`untilCommands` over `acp.received`), and `error.test.ts`.
+- **Took:** drive the real protocol endpoint with only the backend faked, and keep an ordered log of what the wire delivered.
+- **Rejected:** per-test programmatic scripting with `until(predicate)` waits and hook callbacks, because the plan asks for a recorded session that replays, so the recordings are declarative files with exact comparison.
+- Nothing was copied. `xerj feedback` was not submitted.
+
+## Not verified in `docs/PROTOCOL.md`
+
+- "The gate decides first": I confirmed that `approval.request` is raised only through the confirm callback the sidecar passes to `runTurn`, but did not trace the policy ordering inside `agent.ts`. The doc says the request comes from the agent's approval policy and that the client "cannot widen what the policy allows"; that last clause is not traced.
+- That the field limits keep every event line under 1 MiB is supported only by the `MAX_PASTE` comment; `turn.result.turn` and `models.catalog` have no cap I found.
+- Meanings in the event and command tables for the provider and sign-in flows, `stream.stall`, `file.diff` and `history` come from the type comments, not from exercising those paths.
+
+## Decided differently
+
+- Four recordings instead of three: the non-overlapping `initialize` on a fresh connection is its own file.
+- I did not write `tasks/todo.md` or run `graphify update`, because both fall outside the allowed file list.</result>
+<usage><subagent_tokens>267282</subagent_tokens><tool_uses>55</tool_uses><duration_ms>1291491</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>br8daq8as</task-id>
+<summary>Monitor event: "Required checks complete on v1.3.0 PRs #698 and #700"</summary>
+<event>[Monitor expired after 30m with 1 event delivered. Re-arm it if you still need the watch.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>brs8sx64g</task-id>
+<summary>Monitor event: "Post-merge CI on release/v1.3.0 finishes (reports any failure immediately)"</summary>
+<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]</event>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bjbvgcmip</task-id>
+<summary>Monitor event: "Required checks complete on PRs #700 (PF-1 slice B) and #704 (doctor fix)"</summary>
+<event>PR700 at 40460c4e: linux-x86_64=completed/success test-matrix (22)=completed/success test-matrix (24)=completed/success</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bjbvgcmip</task-id>
+<tool-use-id>toolu_01CDh7p4PJSnDKytfqqK9wrL</tool-use-id>
+<output-file>/tmp/claude-1000/-home-mike-nexus-code/43bcbb67-2cff-4fa8-a05e-f8aa598df73b/tasks/bjbvgcmip.output</output-file>
+<status>completed</status>
+<summary>Monitor "Required checks complete on PRs #700 (PF-1 slice B) and #704 (doctor fix)" stream ended</summary>
+<event>PR704 at 568a0cb3: linux-x86_64=completed/failure test-matrix (22)=completed/failure test-matrix (24)=completed/failure</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
