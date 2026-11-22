@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M815RBAH0JM81ZF7PMZDSJXC",
+  "strategy": "manual-commit",
+  "branch": "v1/pa4-provider-neutral-workflows",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "cli/test/workflow_provider_neutral.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1293130,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 149878656,
+    "output_tokens": 352833,
+    "api_call_count": 1093,
+    "subagent_tokens_complete": true
+  },
+  "redaction": {
+    "replacements": 1392,
+    "layers": {
+      "betterleaks": 378,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 52,
+      "credentialed_uri": 54,
+      "entropy": 1085,
+      "key_context": 0,
+      "provider_token": 12,
+      "shell_stdin": 0
+    }
+  }
+}
