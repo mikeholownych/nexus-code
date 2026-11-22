@@ -1,25 +1,48 @@
 /**
  * CX-4: tool-output masking. In the messages a request carries, an old tool result above a token threshold is replaced by
  * a short marker with a content id; the full output stays in the conversation (and, after a compaction, the archive) and
- * resolves with `read_archive` ("tool-output:<id>").
+ * resolves with `read_tool_output` (the marker's 12-character id).
  *
  * Scope, deliberately narrow:
  *  - request-time only: callers pass the stored conversation in and send the result; nothing here is persisted;
  *  - only results the model has already acted on (a later assistant message exists);
  *  - tool results only: the pinned ledger, findings and durable records are system messages and are never touched;
- *  - retrieval results (read_archive, read_findings, read_objective) are never masked, so a retrieval is not undone;
+ *  - retrieval results (read_archive, read_tool_output, read_findings, read_objective) are never masked, so a retrieval is not undone;
  *  - the independent reviewer's evidence (core/independent_review.ts) is built from the diff and verifier receipts, not
  *    from the conversation, and does not import this module.
  * Opt-in: NEXUS_TOOL_OUTPUT_MASK_TOKENS=<n> (a positive integer). Unset, 0 or invalid leaves requests unchanged.
  */
 import { createHash } from "node:crypto";
 import type { ChatMessage } from "../types.js";
+import type { CanonicalCapability } from "./capabilities.js";
 import { countTokens } from "../tokens.js";
 
 export const MASK_MARKER_PREFIX = "[Tool output masked:";
-const NEVER_MASKED = new Set(["read_archive", "read_findings", "read_objective"]);
+const NEVER_MASKED = new Set(["read_archive", "read_tool_output", "read_findings", "read_objective"]);
 const PREVIEW_CHARS = 200;
 const ID_QUERY = /^tool-output:([0-9a-f]{12})$/;
+
+export const READ_TOOL_OUTPUT_CAPABILITY: CanonicalCapability = {
+  id: "orchestrate_read_tool_output",
+  modelToolName: "read_tool_output",
+  category: "orchestration",
+  mutating: false,
+  effect: "internal",
+  sideEffectContract: "Read a full tool result masked from this conversation's model context (no workspace change)",
+  backend: "ts_native",
+  toolDefinition: {
+    type: "function",
+    function: {
+      name: "read_tool_output",
+      description: "Retrieve a tool result that was masked from context. Pass the 12-character id shown in its mask marker.",
+      parameters: {
+        type: "object",
+        properties: { id: { type: "string", description: "The 12-character lowercase hexadecimal id in the tool-output marker" } },
+        required: ["id"],
+      },
+    },
+  },
+} as CanonicalCapability;
 
 const textOf = (message: ChatMessage): string | undefined => (typeof message.content === "string" ? message.content : undefined);
 
@@ -48,7 +71,7 @@ export function maskToolOutputs(messages: ChatMessage[], thresholdTokens: number
     if (tokens <= thresholdTokens) return message;
     changed = true;
     const preview = text.slice(0, PREVIEW_CHARS).replace(/\s+/g, " ").trim();
-    return { ...message, content: `${MASK_MARKER_PREFIX} ${message.name ?? "tool"} returned ~${tokens} tokens (${text.length} characters), which you have already acted on. Full output: read_archive with query "tool-output:${maskedOutputId(text)}". Begins: ${preview}…]` };
+    return { ...message, content: `${MASK_MARKER_PREFIX} ${message.name ?? "tool"} returned ~${tokens} tokens (${text.length} characters), which you have already acted on. Full output: call read_tool_output with id "${maskedOutputId(text)}" (tool-output:${maskedOutputId(text)}). Begins: ${preview}…]` };
   });
   return changed ? out : messages;
 }
@@ -64,4 +87,14 @@ export function resolveMaskedOutput(query: string, live: readonly ChatMessage[],
     }
   }
   return undefined;
+}
+
+/** Resolve an exact mask id without requiring the model to construct a read_archive search query. */
+export function readToolOutput(id: unknown, live: readonly ChatMessage[], archive: readonly ChatMessage[]): { ok: boolean; text: string } {
+  if (typeof id !== "string" || !/^[0-9a-f]{12}$/.test(id)) {
+    return { ok: false, text: "read_tool_output needs the 12-character lowercase hexadecimal id from a tool-output marker." };
+  }
+  const output = resolveMaskedOutput(`tool-output:${id}`, live, archive);
+  if (output === undefined) return { ok: false, text: `No tool output is available for id ${id} in this conversation.` };
+  return { ok: true, text: output };
 }
