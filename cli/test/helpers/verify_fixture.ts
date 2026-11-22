@@ -81,10 +81,12 @@ export function assertVerifyResult(doc: any): void {
   // The sandbox record is always written, and every run says the same as it: a run is never outside a sandbox that was used.
   assert.equal(typeof doc.sandbox?.requested, "boolean");
   assert.ok(["none", "bwrap", "docker"].includes(doc.sandbox.engine), `sandbox.engine ${doc.sandbox.engine}`);
-  if (!doc.sandbox.requested) assert.deepEqual(doc.sandbox, { requested: false, engine: "none", network: false });
   if (doc.sandbox.engine === "none") assert.equal(doc.sandbox.network, false);
   for (const ran of doc.runs) assert.equal(ran.sandboxed, doc.sandbox.engine !== "none", `the ${ran.phase} run's sandboxed flag agrees with sandbox.engine`);
-  if (doc.reason === "SANDBOX_UNAVAILABLE") assert.equal(doc.sandbox.requested, true);
+  if (doc.reason === "SANDBOX_UNAVAILABLE") {
+    assert.equal(doc.sandbox.engine, "none");
+    assert.deepEqual(doc.runs, [], "an unavailable default or selected sandbox starts no verifier process");
+  }
   // Nothing waits for a decision in a VERIFIED result, and no finding that needed approval is in one.
   if (doc.verdict === "VERIFIED") {
     assert.equal(doc.guard.status, "CLEAR");

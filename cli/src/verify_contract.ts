@@ -157,7 +157,7 @@ export type VerifySandboxEngine = "bwrap" | "docker";
  * that was requested.
  */
 export interface VerifySandbox {
-  /** Confinement was selected (including the default `auto`). */
+  /** The operator explicitly selected a sandbox; the effective engine and run records also show default confinement. */
   requested: boolean;
   /** The engine every process ran in. `none`: no sandbox (not requested, or requested and unavailable, in which case nothing ran). */
   engine: VerifySandboxEngine | "none";

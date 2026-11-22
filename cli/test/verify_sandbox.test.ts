@@ -213,6 +213,8 @@ test("CLI: sandbox defaults to auto, --sandbox takes auto, bwrap, docker or none
       const defaultBlocked = consumeResult(defaultRefused);
       assert.equal(defaultRefused.code, 3);
       assert.equal(defaultBlocked.reason, "SANDBOX_UNAVAILABLE", "the default must not run verifier code without a sandbox");
+      assert.deepEqual(defaultBlocked.sandbox, { requested: false, engine: "none", network: false }, "the result distinguishes implicit default confinement from an explicit flag");
+      assert.match(defaultBlocked.detail, /default --sandbox auto was requested/);
       assert.deepEqual(defaultBlocked.runs, []);
       const blocked = consumeResult(refused);
       assert.equal(refused.code, 3);

@@ -706,17 +706,19 @@ program
     if (options.approveVerifier !== undefined && !/^[0-9a-fA-F]{64}$/.test(String(options.approveVerifier).trim())) return fail("usage", "--approve-verifier needs the 64-character sha256 digest printed when approval is needed");
     if (options.verifier !== undefined && (options.yes || options.approveVerifier !== undefined)) return fail("usage", "--verifier is your own command and needs no approval: do not combine it with --yes or --approve-verifier");
     // Verification executes repository code, so confinement is the default. `none` is an explicit opt-out.
-    let sandbox: VerifySandboxRequest;
+    let sandbox: VerifySandboxRequest | undefined;
     if (options.sandbox === "none") {
       sandbox = { engine: "none" };
-    } else if (options.sandbox === undefined || options.sandbox === false || options.sandbox === true) {
+    } else if (options.sandbox === undefined || options.sandbox === false) {
+      if (options.sandboxNetwork) sandbox = { engine: "auto", network: true };
+    } else if (options.sandbox === true) {
       sandbox = { engine: "auto", network: Boolean(options.sandboxNetwork) };
     } else {
       const engine = options.sandbox === true ? "auto" : String(options.sandbox);
       if (engine !== "auto" && engine !== "bwrap" && engine !== "docker") return fail("usage", "--sandbox takes auto, bwrap, docker or none");
       sandbox = { engine, network: Boolean(options.sandboxNetwork) };
     }
-    if (options.sandboxNetwork && sandbox.engine === "none") return fail("usage", "--sandbox-network cannot be used with --sandbox none");
+    if (options.sandboxNetwork && sandbox?.engine === "none") return fail("usage", "--sandbox-network cannot be used with --sandbox none");
 
     // The first signal stops verification once the running verifier process ends; a second one exits at once.
     const abort = new AbortController();

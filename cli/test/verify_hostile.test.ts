@@ -301,7 +301,7 @@ test("explicit --sandbox none allows a hostile head test to rewrite the scratch 
 test("default verification confines the hostile scratch-index rewrite or blocks when no sandbox is available", { timeout: 120_000 }, async () => {
   const result = await attempt(BASE_FILES, scratchTamperingHead(), { approveDiscoveredVerifier: true, deliverables: ["src/math.js"] });
   notVerified(result);
-  assert.equal(result.sandbox?.requested, true, "default verification must request confinement");
+  assert.equal(result.sandbox?.requested, false, "the receipt distinguishes implicit default confinement from an explicit flag");
   if (result.sandbox?.engine === "none") {
     assert.equal(result.reason, "SANDBOX_UNAVAILABLE");
     assert.deepEqual(result.runs, [], "a missing sandbox must block before running repository code");

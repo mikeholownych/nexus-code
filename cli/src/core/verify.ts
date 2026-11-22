@@ -429,7 +429,7 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
     typecheck: { status: "NOT_RUN", detail: "verification ended before a type-check was due" },
     guard: { status: "NOT_RUN", findings: [], complete: false, detail: "verification ended before the change was read" },
     review: { status: "NOT_RUN", detail: "this version of nexus verify has no reviewer" },
-    sandbox: { requested: (operator.sandbox?.engine ?? "auto") !== "none", engine: "none", network: false } as VerifySandbox,
+    sandbox: { requested: operator.sandbox !== undefined && operator.sandbox.engine !== "none", engine: "none", network: false } as VerifySandbox,
     linkedDependencyDirs: [],
     limits: { timeoutSecs, maxTreeFiles: VERIFY_MAX_TREE_FILES, maxTreeBytes: VERIFY_MAX_TREE_BYTES },
     environment: VERIFY_RECORDED_ENVIRONMENT.filter((name) => Boolean(process.env[name])),
@@ -576,7 +576,7 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
       if (!sandboxEngine) {
         throw new Stop("SANDBOX_UNAVAILABLE", `the ${sandboxRequest.engine === "auto" ? "default --sandbox auto" : `--sandbox ${sandboxRequest.engine}`} was requested and ${sandboxRequest.engine === "auto" ? "neither Bubblewrap nor Docker" : sandboxRequest.engine === "bwrap" ? "Bubblewrap (bwrap)" : "Docker"} could confine a test command on this host, so nothing was run. Install an engine (see nexus doctor); only use --sandbox none for changes you trust`);
       }
-      doc.sandbox = { requested: true, engine: sandboxEngine, network: sandboxRequest.network === true };
+      doc.sandbox = { requested: operator.sandbox !== undefined, engine: sandboxEngine, network: sandboxRequest.network === true };
     } else {
       doc.sandbox = { requested: false, engine: "none", network: false };
     }
