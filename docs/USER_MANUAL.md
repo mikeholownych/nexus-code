@@ -368,9 +368,9 @@ The objective also has a durable tool-dispatch ceiling: 1,000 calls by default, 
 `--max-tool-invocations` or `NEXUS_MAX_TOOL_INVOCATIONS` up to 10,000. It applies even when automatic continuation is
 disabled. The first run saves its ceiling with the objective; later runs may lower it but cannot raise or renew it.
 Older objectives without a complete dispatch history retain an explicitly incomplete count, so the displayed total is
-a lower bound rather than an observed zero. This ceiling currently covers direct agent turns; delegated child loops
-are not yet charged to the same counter. Exhaustion stops the objective as `LIMIT_REACHED` and cannot establish
-successful completion.
+a lower bound rather than an observed zero. Direct agent turns and their in-turn delegated child loops share this
+counter; each child dispatch reserves its allowance before execution. Exhaustion stops the objective as
+`LIMIT_REACHED` and cannot establish successful completion.
 
 A second, independent brake watches the verifier itself: when `task_completed` fails the same verifier
 `NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS` times in a row (default 3; a check-only failure with no test names needs one
