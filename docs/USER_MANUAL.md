@@ -92,6 +92,56 @@ echo "Fix the failing test" | nexus run --json   # plain task text on stdin
 
 Exit code 2 has four meanings and exit code 1 has three, so the exit code alone cannot tell them apart. With `--json`, read the document: a result with `turn.outcome` `UNVERIFIED` or `REGRESSION_FREE` is the `unverified` row; an error document (no `turn`) is `task_not_found` or a thrown error; an empty stdout means the run never started (`usage`, `resume_unavailable`, `missing_prompt`, `option_parse`), and stderr has the message. For a result, `exitCode` in the document equals the process exit code.
 
+### `nexus verify`
+`nexus verify` gives a verdict on a change that Nexus did not necessarily make: a pull request, a patch, another tool's output, your own edits. It uses no model. It runs the project's verifier on the code before the change and on the code after it, and applies the rules `nexus run` applies to its own work.
+
+```bash
+nexus verify --deliverable-file src/parser.ts                         # the working tree against HEAD
+nexus verify --base origin/main --head my-branch --deliverable-file src/parser.ts   # one commit against another
+nexus verify --base origin/main --verifier "npm test" --json --receipt verify.json
+```
+
+**Two modes.** Without `--head`, the change is the working tree of `--worktree` (default: the current directory, which must be the top of the Git working tree): tracked and untracked files that are not ignored, compared with `--base` (default `HEAD`). With `--head <ref>`, the change is that commit compared with `--base`. In both modes each side is written to its own scratch directory and the verifier runs there; your checkout, its index and its `.git` are not written, and the scratch directories are removed when the command ends, on an error or an interrupt too.
+
+**Which verifier runs.** `--verifier <command>` is your own command (source `configured`) and needs no approval. Without it, one is discovered from the files of the **base** tree, never the head: the head is the change under test, so a head that rewrites `scripts.test` or adds a test script of its own does not get to choose the judge. A discovered verifier runs repository code, so it needs your approval: `nexus verify` stops with `BLOCKED` (exit code 3) and prints the command, the script it resolves to and a sha256 digest of both. Approve that exact verifier with `--approve-verifier <digest>`, or whatever is discovered with `--yes`. A base tree that defines no verifier gives `UNVERIFIED` (`NO_APPLICABLE_VERIFIER`). Each verifier run has a deadline (`--timeout-secs`, else `NEXUS_VERIFIER_TIMEOUT_SECS`, else 300 seconds).
+
+**Deliverables.** `--deliverable-file <path>` (repeatable) names a product file the change is meant to deliver. `VERIFIED` requires at least one, requires every changed file that is not a test to be one, and requires every one to be imported by a test file that already existed on the base. Without `--deliverable-file` the verdict is never `VERIFIED`.
+
+| Verdict | Meaning |
+|---|---|
+| `VERIFIED` | Evidence independent of the change shows it (see below). |
+| `REGRESSION_FREE` | The tests pass on the change, which shows only that nothing they cover broke. |
+| `UNVERIFIED` | Nothing was established. `outcome` and `reason` in the result say why: the verifier failed or timed out, ran no test, does not exist, or base and head are the same tree. |
+| `BLOCKED` | A person must decide before anything is run or concluded. |
+
+#### Exit codes of `nexus verify`
+| Code | Name | When |
+|---|---|---|
+| 0 | `verified` | `VERIFIED`: the change is shown by evidence independent of it. |
+| 1 | `failed` | `UNVERIFIED` with outcome `NOT_ESTABLISHED`: the verifier failed or timed out on the head, or the head changed the verifier's own definition so it was not run. |
+| 1 | `error` | `UNVERIFIED` with reason `INTERNAL_ERROR`: `nexus verify` itself could not finish, so nothing was established. |
+| 1 | `option_parse` | The command line could not be parsed: an unknown option or an option without its value (the option parser exits before the command runs; no JSON document). |
+| 2 | `unverified` | `REGRESSION_FREE` (the tests pass without showing the change), or `UNVERIFIED` because there is no verifier, no test executed, base and head are the same tree, or an enforced type-check applies that this version does not run. |
+| 2 | `usage` | A usage error: not a Git working tree, a base or head that does not name a commit, or an invalid option value or combination. |
+| 3 | `blocked` | `BLOCKED`: a person must decide. The discovered verifier is not approved, the checkout is not trusted, or a tree exceeds the limits or holds a submodule. |
+| 130 | `interrupted` | Interrupted (SIGINT or SIGTERM). The signal is acted on when the running verifier process ends; a second signal exits at once and may leave no JSON document. |
+
+Only `VERIFIED` exits 0. An empty change is not a success: you chose the base. Codes 1 and 2 each have several meanings; with `--json`, read `verdict`, `outcome` and `reason` in the document.
+
+**What `VERIFIED` claims.** Tests that existed on the base, run under the verifier definition the base had, failed on the base and pass on the change (when the change edits test files, the base's test files are run against the change's code and must pass), or your own `--verifier` command passed with the test files unchanged; and those pre-existing tests import every declared deliverable. It does not claim that the change is correct beyond what those tests check, that it type-checks, that it is free of security problems, or that a person or a model reviewed it.
+
+**The result.** The text output states the verdict, the reason, both sides (commit and tree), the verifier, each run and what was not run. `--json` prints exactly one JSON document on stdout (progress goes to stderr) and `--receipt <file>` writes the same document to a file. Its first member is `schema_version` (now `1`); `exitCode` equals the process exit code. A result has `verdict`, `outcome`, `reason`, `detail`, `base` and `head` (`ref`, `commit`, `tree`), `changedFiles`, `verifier` (`command`, `source`, `digest`, `approval`), `deliverables`, `runs` (one entry per verifier process, with a sha256 of its output), `baseline`, `verification`, `typecheck`, `guard`, `review`, `linkedDependencyDirs`, `limits` and `environment`: the names, never the values, of the variables that can affect a verdict and were set (`NEXUS_TRUST_WORKSPACE`, `NEXUS_TYPECHECK`, `NEXUS_VERIFIER_TIMEOUT_SECS`, `NEXUS_VERIFIER_ENV_PASSTHROUGH`). A usage error or an interrupt prints an error document instead (`schema_version`, `error`, `exitCode`); a command line that cannot be parsed prints no document. A published JSON schema for this document comes in a later release.
+
+**Limits.**
+- The verifier is repository code and runs with your privileges, outside any sandbox: on the base and on the head. Run `nexus verify` on changes you would be willing to run the tests of, or inside a container.
+- A verifier you supply with `--verifier` is trusted as yours. A command that prints a test runner's summary without running tests is not detected.
+- The tests run the change's own code in their process. A change written to deceive its tests from inside that process (product code that alters the test runner) is not detected. Files a run writes into its own scratch tree do not affect the verdict, which is judged on a second copy written after the run; code that deliberately attacks the other scratch directories or the `nexus` process itself is not defended against without a sandbox.
+- Dependency directories of your checkout that the trees do not hold themselves (`node_modules`, `vendor`, `.venv`, `venv`) are linked into both scratch trees so both sides run with the same installed packages; a verifier that writes into them writes into your checkout's copy. With a `node_modules` directory an `npm test` verifier cannot be bound to the base, so the verdict is at most `REGRESSION_FREE`. Build output directories are not linked.
+- This version runs no type-check, does not classify edits to verification files (test configuration, CI files, verifier scripts) and has no reviewer; the result reports each as `NOT_RUN`. Where the project has a type-check that `nexus run` would enforce, a passing result is reported as `UNVERIFIED` (`TYPECHECK_NOT_RUN`) instead of being reported unchecked.
+- A change to a file the base's tests import that is not a declared deliverable counts as a change to the verifier: the verifier is not run on the head and the result is `UNVERIFIED` (`VERIFIER_DEFINITION_CHANGED`).
+- A tree with more than 20000 files or 512 MiB, or one that holds a submodule, is `BLOCKED`: it is never verified in part.
+- An interrupt is acted on when the running verifier process ends (within its deadline).
+
 ### Viewing Tool Audit Logs
 To inspect recent tool executions, filter errors, or track latency:
 ```bash
