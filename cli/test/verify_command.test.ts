@@ -105,6 +105,9 @@ test("a fix that makes the base's failing test pass is VERIFIED (exit 0); the te
       assert.deepEqual(doc.typecheck, { status: "NOT_APPLICABLE", mode: "enforce", detail: "the head tree has no configured type-check project" });
       assert.deepEqual(doc.guard, { status: "CLEAR", mode: "approve", policySource: "default", findings: [], complete: true });
       assert.deepEqual(doc.approvedVerificationEdits, []);
+      assert.equal(doc.review.status, "COMPLETE");
+      assert.equal(doc.review.verdict, "ACCEPT");
+      assert.deepEqual(doc.review.suspectedDefects, []);
       // --receipt writes the same document.
       assert.equal(fs.readFileSync(receipt, "utf8"), json.stdout);
 
@@ -115,7 +118,7 @@ test("a fix that makes the base's failing test pass is VERIFIED (exit 0); the te
       assert.match(text.stdout, /^ {2}head run +passed; tests ran$/m);
       assert.match(text.stdout, /^ {2}type-check +NOT_APPLICABLE \(enforce\): the head tree has no configured type-check project$/m);
       assert.match(text.stdout, /^ {2}guard +CLEAR \(mode approve, default policy\): 0 changed verification file\(s\)$/m);
-      assert.match(text.stdout, /^ {2}not run +review$/m);
+      assert.match(text.stdout, /^ {2}review +ACCEPT: 0 suspected defect\(s\), 0 scope violation\(s\), 0 unproven criterion\/criteria$/m);
       assert.deepEqual(text.leftovers, []);
     } finally {
       fs.rmSync(receipt, { force: true });
@@ -147,6 +150,10 @@ test("the known-bad change (the failing test deleted, the bug left in) is NOT VE
     assert.match(doc.verification.independenceDetail, /passes only with tests the change added or edited/);
     assert.deepEqual(phases(doc), ["base", "head", "base_tests_on_head"]);
     assert.equal(doc.runs[2].passed, false, "the base's test files fail against the head's code");
+    assert.equal(doc.review.status, "COMPLETE");
+    assert.equal(doc.review.verdict, "REJECT", "the independent reviewer records the approved weakening as a defect");
+    assert.deepEqual(doc.review.suspectedDefects, [{ path: TEST_FILE, description: `the change weakens ${TEST_FILE}: fewer-assertions` }]);
+    assert.notEqual(doc.verdict, "VERIFIED", "a REJECT never promotes a pass");
   });
 });
 

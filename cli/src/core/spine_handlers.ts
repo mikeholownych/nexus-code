@@ -9,7 +9,7 @@ import { formatDiagnosticHints } from "../diagnostics.js";
 import { captureVerificationState, recordVerificationIfEligible } from "../worktrunk/verification.js";
 import { runTestSuiteWithExecutor, discoverVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand } from "../tester.js";
 import { TOOL_GROUPS } from "./tool_groups.js";
-import { snapshotVerifierDefinitionWithReason, requiresWorkspaceVerifierDefinitionBinding, trustedDeliverablesFromBaseline, testsChangedSince, verifierDefinitionChangedSince, verifierDefinitionMatchesSnapshot, tddRedTestsMatchSnapshot, type Independence } from "./independent_check.js";
+import { snapshotVerifierDefinitionWithReason, requiresWorkspaceVerifierDefinitionBinding, trustedDeliverablesFromBaseline, snapshotTests, testsChangedSince, verifierDefinitionChangedSince, verifierDefinitionMatchesSnapshot, tddRedTestsMatchSnapshot, type Independence } from "./independent_check.js";
 import { VerificationEvidence } from "./turn.js";
 import { createHash } from "node:crypto";
 import { unmetObligationsMessage } from "./regression_obligations.js";
@@ -27,6 +27,25 @@ import { isSpecialistRole, missingSpecialistInputs, specialistInputsProblem } fr
 
 function sha256Digest(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
+/**
+ * A digest of every test file as it stands at one moment. The verifier binding below compares the digest taken
+ * before the verifier with one taken after it, so a test that rewrites itself while it runs - even one restored
+ * to its base content before exit - cannot be judged on its post-run content. Null means "cannot be bound".
+ */
+function testSnapshotDigest(workspace: string): string | null {
+  try {
+    const tests = snapshotTests(workspace);
+    if (!tests) return null;
+    const hash = createHash("sha256");
+    for (const [file, content] of [...tests].sort(([a], [b]) => a.localeCompare(b))) {
+      hash.update(file).update("\0").update(content).update("\0");
+    }
+    return hash.digest("hex");
+  } catch {
+    return null;
+  }
 }
 
 export function setupSpineHandlersImpl(this: any): void {
@@ -212,12 +231,18 @@ export function setupSpineHandlersImpl(this: any): void {
           const deadlineSecs = this.config.verifierTimeoutSecs ?? DEFAULT_VERIFIER_TIMEOUT_SECS;
           this.activity("verifying", { tool: verifierCommand });
           verificationStateBefore = this.isRecordableWorktree() && !this.config.dryRun ? captureVerificationState(this.config.workspace) : undefined;
+          const testsBeforeVerifier = testSnapshotDigest(this.config.workspace);
           const verifierStartedAt = Date.now();
           const testRes = await runTestSuiteWithExecutor(
             this.config.workspace,
             (command) => this.bridge.executeTool("run_command", { command, timeout_secs: deadlineSecs }),
             verifierCommand
           );
+          const testsAfterVerifier = testSnapshotDigest(this.config.workspace);
+          const testsMutatedDuringVerifier = testsBeforeVerifier === null || testsAfterVerifier === null || testsBeforeVerifier !== testsAfterVerifier;
+          const inputMutationDetail = testsMutatedDuringVerifier
+            ? "test files changed while the verifier ran (including a test that restored itself before exit), so its pass cannot be bound to the tree that was committed"
+            : undefined;
           // Configured or discovered, a verifier is evidence about the change only when its run shows tests that
           // executed and cover the changed files.
           hasExecuted = hasExecutedTests(testRes.rawOutput || "");
@@ -227,7 +252,7 @@ export function setupSpineHandlersImpl(this: any): void {
           // candidate-controlled tests. Only a verifier definition and test snapshot captured
           // before the current task's edits can bind workspace changes.
           const configuredTestsStable = source !== "configured" || !baselineTestsChanged;
-          isDeliverableBound = (!this.verificationBaselineInvalidated && hasExecuted && configuredTestsStable && isVerifierDeliverableBound(
+          isDeliverableBound = (!this.verificationBaselineInvalidated && !testsMutatedDuringVerifier && hasExecuted && configuredTestsStable && isVerifierDeliverableBound(
             this.config.workspace,
             Array.from(this.modifiedFiles),
             verifierCommand,
@@ -252,8 +277,9 @@ export function setupSpineHandlersImpl(this: any): void {
           const testsAndTypesPass = testRes.success && !typecheckBlock;
           // A discovered verifier's pass makes the change VERIFIED only on independent evidence (fail-before /
           // pass-after on tests the change did not write); the operator's configured verifier is their own check.
-          const independence: Independence | undefined = unboundDetail
-            ? { independent: false, detail: unboundDetail }
+          const bindingDetail = unboundDetail ?? inputMutationDetail;
+          const independence: Independence | undefined = bindingDetail
+            ? { independent: false, detail: bindingDetail }
             : source === "discovered" && testsAndTypesPass && isDeliverableBound ? await this.judgeIndependence(verifierCommand, deadlineSecs, onConfirm) : undefined;
           const evidence: VerificationEvidence = {
             status: testsAndTypesPass ? "PASSED" : testRes.timedOut ? "TIMED_OUT" : "FAILED",
@@ -263,7 +289,7 @@ export function setupSpineHandlersImpl(this: any): void {
             hasExecutedTests: hasExecuted,
             ...(typecheck ? { typecheck } : {}),
             isDeliverableBound,
-            ...(unboundDetail ? { definitionBound: false } : {}),
+            ...(bindingDetail ? { definitionBound: false } : {}),
             ...(independence ? { independent: independence.independent, independenceDetail: independence.detail } : {}),
             ...(testRes.timedOut ? { deadlineSecs } : {}),
             outputSha256: createHash("sha256").update(testRes.rawOutput || "").digest("hex"),

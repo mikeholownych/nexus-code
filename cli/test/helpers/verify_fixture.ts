@@ -77,7 +77,12 @@ export function assertVerifyResult(doc: any): void {
   assert.equal(doc.exitCode, verifyExitCode(verifyExitNameFor(doc.reason)));
   assert.equal(doc.verdict === "VERIFIED", doc.exitCode === 0, "exit 0 if and only if VERIFIED");
   assert.equal(doc.verdict === "VERIFIED", doc.outcome === "VERIFIED");
-  assert.equal(doc.review.status, "NOT_RUN");
+  assert.ok(["NOT_RUN", "COMPLETE"].includes(doc.review.status), "the reviewer's status is one the contract declares");
+  if (doc.review.status === "COMPLETE") {
+    assert.ok(["ACCEPT", "REJECT"].includes(doc.review.verdict), "a completed review has a verdict");
+    for (const member of ["verifiedObservations", "suspectedDefects", "unprovenCriteria", "scopeViolations"]) assert.ok(Array.isArray(doc.review[member]), member);
+    if (doc.review.verdict === "REJECT") assert.notEqual(doc.verdict, "VERIFIED", "a rejected review never accompanies VERIFIED");
+  }
   // The sandbox record is always written, and every run says the same as it: a run is never outside a sandbox that was used.
   assert.equal(typeof doc.sandbox?.requested, "boolean");
   assert.ok(["none", "bwrap", "docker"].includes(doc.sandbox.engine), `sandbox.engine ${doc.sandbox.engine}`);

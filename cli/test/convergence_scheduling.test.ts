@@ -449,7 +449,17 @@ describe("replay safety and non-temporary conditions", () => {
     assert.equal(ctl2.record!.state, "YIELDED");
   });
 
-  test("26. auth and permanent failures are not temporary windows", async () => {
+  test("26. a cancelled unit is held for an operator decision instead of being resubmitted", async () => {
+    const h = harness([unit("x")], [res("a"), res("b", { rank: 1 })], () => ({ kind: "cancelled" }));
+    const out = await h.runner.run();
+    assert.equal(h.calls.length, 1, "an eligible alternate must not replay a cancelled unit on its own");
+    assert.equal(out.units[0].status, "BLOCKED");
+    assert.equal(out.units[0].blocked!.decision.cause, "EXECUTION_UNKNOWN");
+    assert.match(out.units[0].blocked!.decision.question, /was cancelled/);
+    assert.equal(out.status, "BLOCKED");
+  });
+
+  test("27. auth and permanent failures are not temporary windows", async () => {
     const { reg } = registry([res("a"), res("b", { model: "b" })]);
     const auth = reg.observeFailure(reg.get("a")!, f401())!;
     assert.equal(auth.temporary, false);

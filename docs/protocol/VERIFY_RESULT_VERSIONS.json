@@ -13,5 +13,10 @@
     "schema_version": 2,
     "schemaSha256": "53c2e7c98c04eca6104a6ae540c2fce551e0638bcec4a1b8e168c40bff39a394",
     "note": "Bump schema_version because sandbox.requested now means the operator explicitly selected a sandbox; implicit default confinement is reflected by the effective engine and per-run sandboxed facts. This changes the field's meaning, so consumers must reject version 2 until they account for the distinction."
+  },
+  {
+    "schema_version": 3,
+    "schemaSha256": "7b1373ee94d4ca95ffb8b54be510beae36d362b94248de277f3833ae55c81403",
+    "note": "Bump schema_version: the review member changes meaning from 'not run in this version' (a VerifyIngredient with status NOT_RUN only) to a structured IndependentReviewVerdict when the independent reviewer read the evidence (status COMPLETE, ACCEPT/REJECT, verifiedObservations, suspectedDefects, unprovenCriteria, scopeViolations and reviewerConfidenceNote), with NOT_RUN retained for early exits. New reason REVIEW_REJECTED (BLOCKED, exit 3) lets a REJECT withhold VERIFIED; it never raises a lower verdict. Consumers that treated review as always NOT_RUN must reject version 3 until they read the new shape."
   }
 ]

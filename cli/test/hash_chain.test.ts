@@ -8,9 +8,11 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { spawnSync } from "node:child_process";
 import { CHAIN_GENESIS, canonicalJson, describeChain, linkRecord, verifyChain, type ChainLink } from "../src/core/hash_chain.js";
 import { FlightPlayer, FlightRecorder } from "../src/flight.js";
 import { SecurityManager } from "../src/security.js";
+import { CLI_DIR } from "./helpers/audit_fixture.js";
 
 const tempDirs: string[] = [];
 after(() => {
@@ -165,6 +167,20 @@ describe("flight recorder", () => {
     const { integrity } = FlightPlayer.loadFlight(ws, "flight-edited");
     assert.deepEqual([integrity.chain.status, (integrity.chain as any).at, (integrity.chain as any).problem], ["broken", 3, "edited"]);
     assert.match(FlightPlayer.describeIntegrity(integrity), /CHAIN BROKEN at position 4 of 6/);
+  });
+
+  test("`replay` prints the chain verdict, so an edited log is named at the CLI (GV-3)", () => {
+    const { ws, file } = recordFlight("flight-replay-edited");
+    const rows = lines(file);
+    rows[3] = rows[3].replace('"success":true', '"success":false');
+    write(file, rows);
+    const out = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "src/index.ts", "replay", "flight-replay-edited", "-w", ws, "--delay", "0"],
+      { cwd: CLI_DIR, encoding: "utf8", timeout: 30_000, env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" } },
+    );
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(out.stdout, /Record integrity: CHAIN BROKEN at position 4 of 6/);
   });
 
   test("removing a record from the middle is detected where the gap is", () => {
