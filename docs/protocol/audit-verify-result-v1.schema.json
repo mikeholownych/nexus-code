@@ -4,6 +4,81 @@
   "description": "Generated from AuditVerifyOutput in cli/src/audit_contract.ts by cli/scripts/gen_audit_schema.mjs. Do not edit by hand. The one JSON document a verification of an audit bundle prints; `schema_version` is its first member. A result has `result`; an error document does not.",
   "$ref": "#/$defs/AuditVerifyOutput",
   "$defs": {
+    "AuditExportResult": {
+      "description": "Printed by `nexus audit export --json` when the bundle was written: it is complete and in place at `bundle_dir`. An\nexport that could not be carried out prints the error document (AuditVerifyError) instead.",
+      "type": "object",
+      "properties": {
+        "at_rest": {
+          "description": "False when the subject could still be changing while it was exported.",
+          "type": "boolean"
+        },
+        "bundle_dir": {
+          "description": "Absolute path of the bundle directory.",
+          "type": "string"
+        },
+        "bundle_id": {
+          "type": "string"
+        },
+        "exitCode": {
+          "description": "The process exit code (AUDIT_EXIT_CODES).",
+          "type": "number"
+        },
+        "file_bytes": {
+          "type": "number"
+        },
+        "file_count": {
+          "description": "Number of payload files written, and their sizes together in bytes.",
+          "type": "number"
+        },
+        "manifest_sha256": {
+          "description": "SHA-256 (hex) of the bytes of manifest.json: the value to record somewhere the bundle's holder cannot change it.",
+          "type": "string"
+        },
+        "omitted": {
+          "description": "Everything that was left out, each with the reason (the manifest's `omitted`).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AuditOmitted"
+          }
+        },
+        "redaction": {
+          "$ref": "#/$defs/AuditRedaction"
+        },
+        "result": {
+          "const": "exported"
+        },
+        "schema_version": {
+          "description": "Version of this document's schema. Always the first member.",
+          "const": 1
+        },
+        "signed": {
+          "description": "Whether the bundle carries a signature. An unsigned bundle shows that it is self-consistent, not who wrote it.",
+          "type": "boolean"
+        },
+        "warnings": {
+          "description": "Things the operator should know about this export; none of them is a failure.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "at_rest",
+        "bundle_dir",
+        "bundle_id",
+        "exitCode",
+        "file_bytes",
+        "file_count",
+        "manifest_sha256",
+        "omitted",
+        "redaction",
+        "result",
+        "schema_version",
+        "signed",
+        "warnings"
+      ]
+    },
     "AuditFinding": {
       "type": "object",
       "properties": {
@@ -59,6 +134,28 @@
         "unsupported_version"
       ]
     },
+    "AuditOmitted": {
+      "description": "An artefact that was left out, and why.",
+      "type": "object",
+      "properties": {
+        "artefact": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "artefact",
+        "reason"
+      ]
+    },
+    "AuditRedaction": {
+      "enum": [
+        "standard",
+        "strict"
+      ]
+    },
     "AuditSignatureStatus": {
       "description": "absent: no manifest.sig.json. unchecked: present, not checked. valid, invalid: checked against the caller's key. missing: a key was supplied and there is no signature.",
       "enum": [
@@ -108,7 +205,7 @@
       ]
     },
     "AuditVerifyError": {
-      "description": "Printed instead of a result when the verification could not be carried out (no such directory, an invalid option, an internal error). Nothing was established.",
+      "description": "Printed instead of a result when the verification, or the export, could not be carried out (no such directory or subject, an invalid option, an internal error). Nothing was established and no bundle was written.",
       "type": "object",
       "properties": {
         "error": {
@@ -129,8 +226,11 @@
       ]
     },
     "AuditVerifyOutput": {
-      "description": "The one JSON document a verification prints. A result has `result`; an error document does not.",
+      "description": "The one JSON document an `audit` command prints with `--json`. `audit verify`: a result (AuditVerifyResult) or the\nerror document. `audit export`: AuditExportResult (`result` is \"exported\") or the error document. An error document\nhas no `result`.",
       "anyOf": [
+        {
+          "$ref": "#/$defs/AuditExportResult"
+        },
         {
           "$ref": "#/$defs/AuditVerifyError"
         },

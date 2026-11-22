@@ -1,7 +1,8 @@
 /**
  * What the audit-bundle tests share (GV-2): a fixture with one artefact of every kind, the schema checks every manifest
  * and result document goes through, a helper that re-seals a manifest the way someone rewriting a bundle would, and a
- * spy that records every path handed to `node:fs`.
+ * spy that records every path handed to `node:fs`. For the collectors and the commands: a saved task or session with
+ * every artefact an export takes (no model involved), the export in this process, and the real CLI.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -13,6 +14,13 @@ import { auditBundleSchemaFile, auditVerifyResultSchemaFile } from "../../script
 import { AUDIT_BUNDLE_SCHEMA_VERSION, AUDIT_VERIFY_RESULT_SCHEMA_VERSION, auditExitCode, type AuditExitName, type AuditManifest, type AuditVerifyOutput, type AuditVerifyResult } from "../../src/audit_contract.js";
 import { renderAuditVerifyText, verifyAuditBundle, writeAuditBundle, type AuditBundleInput, type VerifyAuditBundleOptions, type WrittenAuditBundle } from "../../src/core/audit_bundle.js";
 import { canonicalJson, linkRecord, type ChainLink } from "../../src/core/hash_chain.js";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { DurableStateManager } from "../../src/core/state.js";
+import { WorkspacePath } from "../../src/core/workspace_path.js";
+import { FlightRecorder } from "../../src/flight.js";
+import { exportAuditBundle, type AuditExport, type AuditExportRequest } from "../../src/audit_export.js";
+import { makeHome } from "./fixtures.js";
 import { validate, type Schema } from "./json_schema.js";
 
 export const AUDIT_BUNDLE_SCHEMA_TEXT = fs.readFileSync(auditBundleSchemaFile(AUDIT_BUNDLE_SCHEMA_VERSION), "utf8");
@@ -227,4 +235,177 @@ export function snapshot(dir: string): { files: Record<string, string>; modes: R
   };
   walk("");
   return { files, modes };
+}
+
+// ---- A saved subject (the collectors and the commands) ----
+
+export const CLI_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+export interface SubjectFixture {
+  /** Holds everything below; removed by `cleanTemp`. */
+  root: string;
+  tasks: string;
+  sessions: string;
+  workspace: string;
+  id: string;
+  store: "tasks" | "sessions";
+  /** The directory of the store the subject is in. */
+  storeDir: string;
+  /** A bundle path that does not exist yet, in a directory that does. */
+  out(name?: string): string;
+  /** An export request for this subject with a fixed clock and id, not durable. */
+  request(extra?: Partial<AuditExportRequest>): AuditExportRequest;
+}
+
+/** Two verification-configuration attempts as SecurityManager.recordVerificationAttempt links them. */
+export function configAttempts(paths: string[] = ["package.json", "vitest.config.ts"]): object[] {
+  return chainedLines(paths.map((file, index) => ({ path: file, class: "test_config", tool: "write_file", decision: index === 0 ? "blocked" : "approved", role: null, timestamp: `2026-11-22T09:00:0${index}.000Z` }))).map((line) => JSON.parse(line));
+}
+
+/** Records a flight in `workspace` with the real recorder; `end` false leaves it without its session end. */
+export function recordFlight(workspace: string, id: string, end = true): string {
+  const flight = new FlightRecorder(workspace, id);
+  flight.startSession({ model: "m", endpoint: "http://127.0.0.1:1/v1", taskPrompt: "do the thing" });
+  flight.recordTurnStart(1, "do the thing");
+  flight.recordToolCall(1, "c1", "read_file", { path: "a.ts" });
+  flight.recordToolResult(1, "c1", "read_file", true, "contents", 3);
+  if (end) flight.recordSessionEnd("done", true);
+  return flight.getLogPath();
+}
+
+let bundles = 0;
+
+export interface SubjectOptions {
+  id?: string;
+  store?: "tasks" | "sessions";
+  status?: "pending" | "in_progress" | "completed" | "failed" | "interrupted";
+  /** Members laid over the saved state. */
+  state?: Record<string, unknown>;
+  /** Record one closed flight inside the subject's time window (default true). */
+  flight?: boolean;
+  /** Write one operation diff (default true). */
+  diff?: boolean;
+  /** Reuse the directories of another fixture (to put the same id in the other store). */
+  beside?: SubjectFixture;
+}
+
+/**
+ * A task or session saved through the real state manager, with an objective holding verifier attempts and evidence,
+ * validation receipts, a last turn, findings, two chained verification-configuration attempts, one operation diff and
+ * one recorded flight. Nothing here needs a model.
+ */
+export function savedSubject(options: SubjectOptions = {}): SubjectFixture {
+  const root = options.beside?.root ?? tempDir();
+  const tasks = path.join(root, "state", "tasks");
+  const sessions = path.join(root, "state", "sessions");
+  const workspace = path.join(root, "ws");
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.mkdirSync(path.join(root, "out"), { recursive: true });
+  const id = options.id ?? "task-audit-1";
+  const store = options.store ?? "tasks";
+  const storeDir = store === "tasks" ? tasks : sessions;
+  const createdAt = new Date(Date.now() - 1000).toISOString();
+  if (options.flight !== false && !options.beside) recordFlight(workspace, "flight-in-window");
+  const manager = new DurableStateManager({ baseDir: storeDir, workspacePaths: [WorkspacePath.fromSelectedWorkspace(workspace)] });
+  manager.saveTaskState({
+    schemaVersion: 2,
+    taskId: id,
+    sessionId: id,
+    id,
+    title: "audit fixture",
+    workspacePath: workspace,
+    workspace,
+    model: "fixture-model",
+    endpoint: "http://127.0.0.1:1/v1",
+    createdAt,
+    updatedAt: createdAt,
+    status: options.status ?? "completed",
+    activePlan: [],
+    milestones: [],
+    validationReceipts: [{ receiptId: "r1", candidateId: "c1", verifierCommand: "npm test", exitCode: 0, stdoutHash: "0".repeat(64), timestamp: createdAt, status: "PASSED", materialDependencies: [] }],
+    lastTurn: { execution: "COMPLETED", outcome: "VERIFIED", acceptance: "PENDING", modelStop: "stop", finalOutputComplete: true, verification: null, interruption: null, inferenceFailure: null, steps: { used: 3, max: 30, limitReached: false } },
+    messages: [
+      { role: "user", content: "do the thing" },
+      { role: "assistant", content: "done: the thing is in src/thing.ts" },
+    ],
+    objective: {
+      version: 1,
+      objective: "do the thing",
+      objectiveSha256: sha256("do the thing"),
+      startedAt: createdAt,
+      requirements: [{ id: "R1", text: "the thing is done", status: "verified", source: "model", evidence: ["npm test"], evidenceSources: { "npm test": "tool" } }],
+      scopeChanges: [],
+      steering: [],
+      verification: [{ n: 1, command: "npm test", inputs: "candidate-1", status: "PASSED", at: createdAt }],
+      continuation: { segments: 1, totalSteps: 3, lastProgressStep: 3 },
+      amendments: [],
+    },
+    findings: ["src/thing.ts exports thing()"],
+    verificationConfigAttempts: configAttempts(),
+    ...options.state,
+  } as any);
+  if (options.diff !== false) {
+    const diffs = path.join(storeDir, `${id}.diffs`);
+    fs.mkdirSync(diffs, { mode: 0o700 });
+    fs.writeFileSync(path.join(diffs, "op-1.diff"), "--- a/src/thing.ts\n+++ b/src/thing.ts\n@@ -1 +1 @@\n-a\n+b\n", { mode: 0o600 });
+  }
+  return {
+    root,
+    tasks,
+    sessions,
+    workspace,
+    id,
+    store,
+    storeDir,
+    out: (name = `bundle-${++bundles}`) => path.join(root, "out", name),
+    request(extra = {}) {
+      return { id, tasksDir: tasks, sessionsDir: sessions, out: this.out(), now: FIXED_NOW, bundleId: FIXED_ID, durable: false, nexus: { version: "1.3.0", commit: "0123abc", dirty: false }, ...extra };
+    },
+  };
+}
+
+/** Exports in this process; the manifest written and the result document go through the published schemas. */
+export function exportChecked(request: AuditExportRequest): AuditExport {
+  const exported = exportAuditBundle(request);
+  assertManifestValid(readManifest(exported.written.dir));
+  assert.deepEqual(validate(exported.document, AUDIT_VERIFY_SCHEMA, AUDIT_VERIFY_SCHEMA), [], "the export result does not validate against docs/protocol/audit-verify-result schema");
+  assert.equal(Object.keys(exported.document)[0], "schema_version");
+  assert.equal(exported.document.manifest_sha256, sha256(fs.readFileSync(manifestFile(exported.written.dir))));
+  return exported;
+}
+
+/** Every payload file of a bundle as `path -> text`. */
+export function bundleTexts(dir: string): Record<string, string> {
+  return Object.fromEntries(Object.entries(snapshot(dir).files).map(([file, hex]) => [file, Buffer.from(hex, "hex").toString("utf8")]));
+}
+
+export interface AuditCliRun { code: number | null; stdout: string; stderr: string; leftovers: string[] }
+
+/**
+ * Runs `nexus audit <args>` (the source entry) with a throwaway HOME, its own temp directory and no operator
+ * environment but `env`. `leftovers`: what the command left in that temp directory (the export's private copy would be one).
+ */
+export function runAudit(args: string[], env: Record<string, string> = {}): Promise<AuditCliRun> {
+  const base = { ...process.env };
+  for (const key of Object.keys(base)) if (/^(LOCAL_LLM_|LOCAL_HARNESS_|NEXUS_|GIT_)/.test(key) || key === "NODE_TEST_CONTEXT" || key === "FORCE_COLOR" || key === "NO_COLOR") delete base[key];
+  const home = env.HOME ?? makeHome();
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-audit-test-tmp-"));
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--import", "tsx", "src/index.ts", "audit", ...args], {
+      cwd: CLI_DIR,
+      env: { ...base, HOME: home, TMPDIR: tmp, NO_COLOR: "1", XDG_CONFIG_HOME: path.join(home, ".config"), XDG_DATA_HOME: path.join(home, ".local", "share"), XDG_STATE_HOME: path.join(home, ".local", "state"), XDG_CACHE_HOME: path.join(home, ".cache"), ...env },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout!.on("data", (chunk) => (stdout += chunk));
+    child.stderr!.on("data", (chunk) => (stderr += chunk));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      const leftovers = fs.readdirSync(tmp).filter((name) => name.startsWith("nexus-"));
+      fs.rmSync(tmp, { recursive: true, force: true });
+      if (env.HOME === undefined) fs.rmSync(home, { recursive: true, force: true });
+      resolve({ code, stdout, stderr, leftovers });
+    });
+  });
 }
