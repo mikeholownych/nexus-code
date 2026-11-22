@@ -22,11 +22,11 @@ export const lspHoverCapability: CanonicalCapability = {
           },
           "line": {
             "type": "number",
-            "description": "1-based line."
+            "description": "Positive integer, 1-based line."
           },
           "character": {
             "type": "number",
-            "description": "1-based character."
+            "description": "Positive integer, 1-based character."
           }
         },
         "required": [
@@ -61,11 +61,11 @@ export const lspDefinitionCapability: CanonicalCapability = {
           },
           "line": {
             "type": "number",
-            "description": "1-based line."
+            "description": "Positive integer, 1-based line."
           },
           "character": {
             "type": "number",
-            "description": "1-based character."
+            "description": "Positive integer, 1-based character."
           }
         },
         "required": [
