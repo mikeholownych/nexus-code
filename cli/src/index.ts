@@ -38,6 +38,7 @@ import { isolateEvalCommandHome, runVersionedEvalCommand } from "./eval_cli.js";
 import { redactDiagnosticForOutput } from "./core/persistence_protection.js";
 import { formatDiagnosticForOutput } from "./ui.js";
 import { streamEventSink, streamObserver } from "./stream_json.js";
+import { RUN_RESULT_SCHEMA_VERSION, resolveRunTask, runExitCode, runJsonResult } from "./run_contract.js";
 
 function collectAnswer(value: string, previous: string[] = []): string[] {
   return [...previous, value];
@@ -492,6 +493,7 @@ program
   .option("--coder-provider <id>", "Cloud provider for the coder model (requires --coder-model)")
   .option("-j, --json", "Output machine-readable JSON structured result (UI-002, UI-003)")
   .option("--output <format>", "Output format: text (default), json (same as --json) or stream-json (one JSON event per line, nothing else on stdout; see docs/STREAM_JSON.md)")
+  .option("--input-json <file|->", "Read the task from a JSON document { \"schema_version\": 1, \"task\": \"...\" } in a file, or on stdin with '-' (see the manual: nexus run --json)")
   .option("-r, --resume [id]", "Resume previous session or task state")
   .option("--fork-session <id>", "Start in a new copy of the named session (the original is never changed; prints the new id)")
   .option("--fork-at <n>", "With --fork-session: copy only the first n messages (default: all)")
@@ -509,20 +511,28 @@ program
         answers = parseOperatorAnswers(options.answer);
       } catch (err: any) {
         console.error(`error: ${err.message}`);
-        exitAfterFlush(2);
+        exitAfterFlush(runExitCode("usage"));
         return;
       }
     }
     const forkError = forkStartError(options);
     if (forkError) {
       console.error(`error: ${forkError}`);
-      exitAfterFlush(2);
+      exitAfterFlush(runExitCode("usage"));
       return;
     }
     const outputFormat = String(options.output ?? (options.json ? "json" : "text"));
     if (!["text", "json", "stream-json"].includes(outputFormat) || (options.json && outputFormat !== "json")) {
       console.error(options.json && ["text", "stream-json"].includes(outputFormat) ? "error: --json cannot be combined with --output " + outputFormat : "error: --output must be text, json or stream-json");
-      exitAfterFlush(2);
+      exitAfterFlush(runExitCode("usage"));
+      return;
+    }
+    // PF-2: the task may also come from --input-json, or from stdin when no argument is given (src/run_contract.ts).
+    try {
+      prompt = await resolveRunTask({ prompt, inputJson: options.inputJson, resuming: (options.resume !== undefined && options.resume !== false) || options.forkSession !== undefined, stdin: process.stdin });
+    } catch (err: any) {
+      console.error(`error: ${redactDiagnosticForOutput(String(err?.message ?? err))}`);
+      exitAfterFlush(runExitCode("usage"));
       return;
     }
     const isStream = outputFormat === "stream-json";
@@ -560,7 +570,7 @@ program
       } catch (err: any) {
         console.error(`error: ${redactDiagnosticForOutput(String(err?.message ?? err))}`);
         app.shutdown();
-        exitAfterFlush(2);
+        exitAfterFlush(runExitCode("resume_unavailable"));
         return;
       }
     }
@@ -569,7 +579,7 @@ program
     if ((options.resume === undefined || options.resume === false) && !prompt) {
       console.error("error: missing required argument 'prompt'");
       app.shutdown();
-      exitAfterFlush(1);
+      exitAfterFlush(runExitCode("missing_prompt"));
       return;
     }
 
@@ -582,7 +592,7 @@ program
         abort.abort(new Error("SIGINT"));
         if (!isJson) console.error(pc.yellow("\nInterrupt received: no further work will be started (Ctrl-C again to terminate immediately)."));
       } else {
-        process.exit(130);
+        process.exit(runExitCode("interrupted"));
       }
     };
     process.on("SIGINT", onSigint);
@@ -600,7 +610,7 @@ program
           if (tasks.length === 0) {
             console.error(`no task to resume in ${formatDiagnosticForOutput(targetWorkspace)}; see 'nexus status'`);
             app.shutdown();
-            exitAfterFlush(2);
+            exitAfterFlush(runExitCode("resume_unavailable"));
             return;
           }
           resumeTaskId = tasks[0].taskId;
@@ -622,9 +632,9 @@ program
 
       const cloud = UsageLedger.global().cloudTotals();
       if (emitEvent) {
-        emitEvent("result", { ...(cloud.requests ? { ...result, cloudUsage: cloud } : result) });
+        emitEvent("result", { ...runJsonResult(result, cloud) });
       } else if (isJson) {
-        console.log(JSON.stringify(cloud.requests ? { ...result, cloudUsage: cloud } : result, null, 2));
+        console.log(JSON.stringify(runJsonResult(result, cloud), null, 2));
       } else if (cloud.requests) {
         console.error(pc.dim(UsageLedger.global().summary()!));
       }
@@ -636,6 +646,7 @@ program
         emitEvent("error", { taskId: app.getTaskId(), message: redactDiagnosticForOutput(String(err?.message ?? err)) });
       } else if (isJson) {
         console.log(JSON.stringify({
+          schema_version: RUN_RESULT_SCHEMA_VERSION,
           taskId: app.getTaskId(),
           success: false,
           status: "failed",
@@ -651,7 +662,7 @@ program
       } else {
         console.error(pc.red(`\nTask failed: ${formatDiagnosticForOutput(err)}`));
       }
-      const exitCode = (err instanceof TaskStateNotFoundError || err?.name === "TaskStateNotFoundError") ? 2 : 1;
+      const exitCode = runExitCode((err instanceof TaskStateNotFoundError || err?.name === "TaskStateNotFoundError") ? "task_not_found" : "failed");
       app.shutdown();
       exitAfterFlush(exitCode);
     }
