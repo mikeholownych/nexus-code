@@ -29,7 +29,7 @@ test("with awaitProgress, the error that arrives after the first (empty) publish
     assert.equal(res.status === "ok" && res.diagnostics.length, 1, JSON.stringify(res));
     assert.match(res.status === "ok" ? res.diagnostics[0].message : "", /after analysis/);
   } finally {
-    mgr.shutdownAll();
+    await mgr.shutdownAll();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -41,7 +41,7 @@ test("without awaitProgress the first publish is what is returned (the contrast:
     assert.equal(res.status, "ok");
     assert.equal(res.status === "ok" && res.diagnostics.length, 0, "the server's empty first publish, not the later error");
   } finally {
-    mgr.shutdownAll();
+    await mgr.shutdownAll();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -55,7 +55,7 @@ test("a clean file is still a real empty report after the wait, and the wait sta
     assert.equal(res.status === "ok" && res.diagnostics.length, 0);
     assert.ok(Date.now() - started < 9_000, `waited ${Date.now() - started} ms`);
   } finally {
-    mgr.shutdownAll();
+    await mgr.shutdownAll();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -75,7 +75,7 @@ test("a server that never ends its progress cannot hold the call past its timeou
     assert.match(res.status === "unavailable" ? res.reason : "", /is still analysing after .*so far is not final/);
     assert.equal(res.status === "unavailable" && res.state?.state, "indexing");
   } finally {
-    mgr.shutdownAll();
+    await mgr.shutdownAll();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

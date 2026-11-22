@@ -4,10 +4,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { buildMcpEnvironment } from "./mcp.js";
-import { fenceUntrusted, sanitizeDiagnosticMessage } from "./diagnostics.js";
+import { MAX_DIAGNOSTIC_MESSAGE, MAX_DIAGNOSTIC_RECORDS, UNTRUSTED_FENCE_END, UNTRUSTED_FENCE_START, fenceUntrusted, sanitizeDiagnosticMessage } from "./diagnostics.js";
+import { MAX_SNAPSHOT_BYTES } from "./file_diff.js";
 import { redactPlain } from "./protocol.js";
 
-const LSP_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const LSP_TOOLCHAIN_VARS = ["RUSTUP_HOME", "CARGO_HOME", "RUSTUP_TOOLCHAIN", "GOPATH", "GOROOT", "GOCACHE", "GOMODCACHE"];
 /**
  * Documents one server keeps open; the least recently queried one beyond this is closed (`didClose`), which hands that
@@ -31,6 +31,69 @@ export const STAT_SETTLE_MS = 2_000;
  * after an edit usually finds most of it already spent.
  */
 export const PUBLISH_QUIET_MS = 1_000;
+
+// ----------------------------------------------------------------------------------------------------------- bounds
+// What the client reads, keeps and hands on, each with a named limit. Everything a server sends is untrusted in size too.
+
+/**
+ * A file larger than this is not given to a language server: it is refused before it is read, and closed if it grows
+ * past this while open. The number is the one Nexus already uses for "too large to show a change line by line"
+ * (file_diff.ts MAX_SNAPSHOT_BYTES, 2 MiB; the verification snapshot uses the same): a query here is about a line and a
+ * column, and a file the edit path no longer handles by line is outside that. The cost side: this client syncs full
+ * text, so every change to an open file sends the whole file again, and the client keeps one copy of each open file.
+ */
+export const LSP_MAX_FILE_BYTES = MAX_SNAPSHOT_BYTES;
+/**
+ * One message from a server (its Content-Length). A larger one is not buffered: the server is stopped and reported as
+ * failed with that cause. 16 MiB is the limit this client has had since it was written (pinned by lsp_trust.test.ts:
+ * a message just under it is accepted); answers to the three queries made here are kilobytes.
+ */
+export const LSP_MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
+/** The header block of one message; the protocol's two headers are under 100 bytes. Bytes that never form a header are not collected past this. */
+const LSP_MAX_HEADER_BYTES = 8 * 1024;
+/**
+ * Diagnostics kept per list: what the tool shows (diagnostics.ts MAX_DIAGNOSTIC_RECORDS), so the output never cuts a
+ * second time and the count of what was left out is the client's. When a list is longer the most severe are kept.
+ */
+export const LSP_MAX_DIAGNOSTICS = MAX_DIAGNOSTIC_RECORDS;
+/** Characters kept of one diagnostic's message (the tool shows MAX_DIAGNOSTIC_MESSAGE after cleaning, which can only shorten), and of its source and code. */
+const LSP_MAX_DIAGNOSTIC_TEXT = 2 * MAX_DIAGNOSTIC_MESSAGE;
+const LSP_MAX_LABEL = 200;
+/** A pull report's `resultId` longer than this is not kept: the next request then asks for a full report. */
+const LSP_MAX_RESULT_ID = 1024;
+/** Definition targets returned by one query; the rest are counted. One is usual, a handful for overloads and merged declarations. A judgement. */
+export const LSP_MAX_DEFINITION_TARGETS = 20;
+/** Characters of hover text returned (a quarter of the 32,000 a diagnostics block may take); the rest is cut with a note. A judgement. */
+export const LSP_MAX_HOVER_CHARS = 8_000;
+/** Progress tokens tracked at once, capabilities a server may have registered, and `window/showMessage` / `logMessage` lines kept for `status()`. */
+const LSP_MAX_PROGRESS_TOKENS = 256;
+const LSP_MAX_REGISTRATIONS = 256;
+const LSP_SERVER_MESSAGE_RING = 20;
+
+/** Limits a test may lower; the product runs with LSP_LIMITS. */
+export interface LspLimits {
+  fileBytes: number;
+  messageBytes: number;
+}
+export const LSP_LIMITS: Readonly<LspLimits> = Object.freeze({ fileBytes: LSP_MAX_FILE_BYTES, messageBytes: LSP_MAX_MESSAGE_BYTES });
+
+/*
+ * WORST-CASE MEMORY one client retains between queries (bytes; a JavaScript string costs up to 2 bytes per character):
+ *
+ *   MAX_OPEN_DOCUMENTS x ( 2 x fileBytes                                               text of one open document
+ *                        + 2 x LSP_MAX_DIAGNOSTICS x 2 x (LSP_MAX_DIAGNOSTIC_TEXT + 2 x LSP_MAX_LABEL)
+ *                                                                                      its pushed and its pulled list
+ *                        + 2 x LSP_MAX_RESULT_ID )
+ *   + messageBytes + LSP_MAX_HEADER_BYTES + one stdout chunk (64 KiB)                  the parse buffer
+ *   + STDERR_RING_BYTES
+ *   + LSP_MAX_PROGRESS_TOKENS x 2 x LSP_MAX_LABEL + LSP_MAX_REGISTRATIONS x 4 x LSP_MAX_LABEL
+ *   + LSP_SERVER_MESSAGE_RING x 2 x (MAX_DIAGNOSTIC_MESSAGE + 60)
+ *
+ * With the product's values: 32 x (4 MiB + 280 KB + 2 KB) + 16 MiB + ... = about 153 MiB, of which 128 MiB is the text
+ * of 32 files that are each at the size limit and not ASCII. Nothing is kept per query: a request and a waiter live
+ * as long as the call that made them. Closing a document (eviction, deletion, growth past the limit) drops all of the
+ * first term for it: `documents` and `opened` are the only references to an OpenDocument.
+ */
 
 // ---------------------------------------------------------------------------------------------------------- timings
 // One value per phase, each tied to what was measured (docs/LSP_REAL_SERVERS.md) or marked as a judgement. A server's
@@ -89,6 +152,19 @@ export const LSP_START_FAILURE_RECHECK_MS = 30_000;
 export const LSP_RESTART_BACKOFF_MS = 1_000;
 /** Restarts after a crash, per session and server; one more crash and it stays down until PATH changes or Nexus restarts. A judgement. */
 export const LSP_MAX_RESTARTS = 3;
+/**
+ * Stopping a server, in order: the `shutdown` request (wait for its reply), the `exit` notification (wait for the
+ * process to end), SIGTERM to its process group (wait), SIGKILL to the group (wait for the kernel to report the exit).
+ * No measurement of real servers exists for these (docs/LSP_REAL_SERVERS.md records none), so each is a judgement:
+ * an orderly server answers `shutdown` and exits within milliseconds; the first two together give a server that
+ * writes an index on the way out (jdtls, rust-analyzer) 3 s to do it; SIGTERM gets as long as the request did. A
+ * server that ignores everything is gone 5 s after the call, plus at most the last wait, which only bounds how long an
+ * unkillable process is waited for. A server that had not answered `initialize` holds nothing to save and is killed at once.
+ */
+export const LSP_SHUTDOWN_REPLY_MS = 2_000;
+export const LSP_EXIT_GRACE_MS = 1_000;
+export const LSP_TERM_GRACE_MS = 2_000;
+export const LSP_KILL_GRACE_MS = 1_000;
 
 export interface LspTimings {
   startMs: number;
@@ -100,6 +176,10 @@ export interface LspTimings {
   startRecheckMs: number;
   restartBackoffMs: number;
   maxRestarts: number;
+  shutdownReplyMs: number;
+  exitGraceMs: number;
+  termGraceMs: number;
+  killGraceMs: number;
 }
 
 export const LSP_TIMINGS: Readonly<LspTimings> = Object.freeze({
@@ -112,6 +192,10 @@ export const LSP_TIMINGS: Readonly<LspTimings> = Object.freeze({
   startRecheckMs: LSP_START_FAILURE_RECHECK_MS,
   restartBackoffMs: LSP_RESTART_BACKOFF_MS,
   maxRestarts: LSP_MAX_RESTARTS,
+  shutdownReplyMs: LSP_SHUTDOWN_REPLY_MS,
+  exitGraceMs: LSP_EXIT_GRACE_MS,
+  termGraceMs: LSP_TERM_GRACE_MS,
+  killGraceMs: LSP_KILL_GRACE_MS,
 });
 
 /** The last bytes of a server's stderr that are kept, and how much of them a failure report quotes. */
@@ -130,7 +214,7 @@ const STDERR_DRAIN_MS = 200;
 export type LspServerState = "not_started" | "starting" | "initializing" | "indexing" | "ready" | "failed" | "stopped";
 
 export interface LspFailure {
-  kind: "not_installed" | "spawn_failed" | "exited" | "initialize_timeout" | "crashed" | "crash_loop";
+  kind: "not_installed" | "spawn_failed" | "exited" | "initialize_timeout" | "crashed" | "crash_loop" | "message_too_large";
   /** One sentence, safe to show: it holds nothing the server wrote. */
   message: string;
   at: number;
@@ -149,6 +233,11 @@ export interface LspServerStatus {
   cause?: LspFailure;
   /** Crashes of this server in this session. */
   crashes?: number;
+  /**
+   * The server's latest `window/showMessage` and `window/logMessage` lines, oldest first: untrusted text, each cleaned as
+   * a diagnostic message is (one line, capped, redacted). For an operator's view; show it to a model only inside the fence.
+   */
+  serverMessages?: string[];
 }
 
 /** What a query returns in place of an answer when the server's state is the reason there is none. */
@@ -191,22 +280,98 @@ const timedOut = (err: unknown): boolean => (err as any)?.code === "LSP_TIMEOUT"
 const cancelled = (err: unknown): boolean => (err as any)?.code === "LSP_CANCELLED";
 /** LSP `ServerCancelled`: the server abandoned a pull request; its data says whether to ask again. */
 const SERVER_CANCELLED = -32802;
+/** JSON-RPC: the answer to a server request this client does not implement, and to one it cannot take. */
+const METHOD_NOT_FOUND = -32601;
+const INVALID_PARAMS = -32602;
+const APPLY_EDIT_REFUSAL = "This client does not let a language server edit files.";
 /** How often one diagnostics query asks again after such a cancellation (within its timeout). */
 const PULL_RETRIGGER_LIMIT = 3;
 /** Wakes a query waiting for evidence that the server has settled: any publish, the end of a progress cycle, a close. */
 const ANY_DOCUMENT = "";
 
-/** `state` and `detail` are present only when the server's state is why there is no answer. */
-export type DiagnosticsAnswer = { status: "ok"; diagnostics: LspDiagnostic[] } | { status: "unavailable"; reason: string; state?: LspServerStatus; detail?: string };
+/**
+ * `omitted`: how many more the server reported than `diagnostics` holds (LSP_MAX_DIAGNOSTICS; the most severe are kept).
+ * `state` and `detail` are present only when the server's state is why there is no answer.
+ */
+export type DiagnosticsAnswer = { status: "ok"; diagnostics: LspDiagnostic[]; omitted?: number } | { status: "unavailable"; reason: string; state?: LspServerStatus; detail?: string };
 
-const toDiagnostics = (items: any[]): LspDiagnostic[] =>
-  items.map((d: any) => ({
-    range: d.range,
-    severity: d.severity === 1 ? "error" : d.severity === 2 ? "warning" : "information",
-    message: d.message,
-    source: d.source,
-    ...(d.code !== undefined && d.code !== null ? { code: d.code } : {}),
+const SEVERITIES = ["error", "warning", "information", "hint"] as const;
+/**
+ * A diagnostic whose severity is missing (the protocol leaves that to the client) or is not 1 to 4 is reported as
+ * this, one fixed value. "error" because the reader is an agent deciding whether its edit broke something: a server
+ * that omits the severity of a real error must not have it read as a remark. (This client used to say "information".)
+ */
+export const LSP_DEFAULT_SEVERITY: LspDiagnostic["severity"] = "error";
+
+/** A protocol range with whole, non-negative numbers, or null when it is not one. */
+function toRange(range: any): LspRange | null {
+  const position = (p: any): LspPosition | null => (Number.isSafeInteger(p?.line) && p.line >= 0 && Number.isSafeInteger(p?.character) && p.character >= 0 ? { line: p.line, character: p.character } : null);
+  const start = position(range?.start);
+  const end = position(range?.end);
+  return start && end ? { start, end } : null;
+}
+
+const NO_RANGE: LspRange = { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } };
+
+/** One list as it is kept: at most LSP_MAX_DIAGNOSTICS entries, each field bounded, and the count of what was left out. */
+interface DiagnosticList {
+  list: LspDiagnostic[];
+  omitted: number;
+}
+
+function toDiagnostics(items: any[]): DiagnosticList {
+  const rank = (d: any): number => (d?.severity >= 1 && d?.severity <= 4 ? d.severity - 1 : SEVERITIES.indexOf(LSP_DEFAULT_SEVERITY));
+  // Over the bound, the most severe are the ones kept (in the server's order among equals): the first fifty hints must not hide the error after them.
+  const kept = items.length > LSP_MAX_DIAGNOSTICS ? [...items].sort((a, b) => rank(a) - rank(b)).slice(0, LSP_MAX_DIAGNOSTICS) : items;
+  const list = kept.map((d: any): LspDiagnostic => ({
+    range: toRange(d?.range) ?? NO_RANGE,
+    severity: SEVERITIES[d?.severity - 1] ?? LSP_DEFAULT_SEVERITY,
+    message: String(d?.message ?? "").slice(0, LSP_MAX_DIAGNOSTIC_TEXT),
+    source: typeof d?.source === "string" ? d.source.slice(0, LSP_MAX_LABEL) : undefined,
+    ...(typeof d?.code === "number" ? { code: d.code } : d?.code !== undefined && d?.code !== null ? { code: String(d.code).slice(0, LSP_MAX_LABEL) } : {}),
   }));
+  return { list, omitted: items.length - list.length };
+}
+
+const okAnswer = (d: DiagnosticList): DiagnosticsAnswer => ({ status: "ok", diagnostics: d.list, ...(d.omitted > 0 ? { omitted: d.omitted } : {}) });
+
+/** The text of a hover result in any of its forms (a string, a MarkedString, a list of those, MarkupContent); a code block keeps its language tag. */
+function hoverContents(contents: unknown): string {
+  const one = (c: any): string => {
+    if (typeof c === "string") return c;
+    if (typeof c?.value !== "string") return "";
+    return typeof c.language === "string" && c.language !== "" ? `\`\`\`${c.language}\n${c.value}\n\`\`\`` : c.value;
+  };
+  return Array.isArray(contents) ? contents.map(one).filter((t) => t !== "").join("\n\n") : one(contents);
+}
+
+/**
+ * Hover text as it may be shown: it is written by whoever wrote the code under the cursor (doc comments), so it is
+ * untrusted. Secrets redacted and terminal escapes removed (the helper the diagnostics path uses), control characters
+ * removed (line breaks and tabs stay: it is prose and code), fence markers defused as in a diagnostic message, capped
+ * with a note. The caller still puts it inside the untrusted-output fence.
+ */
+export function sanitizeHoverText(raw: string): string {
+  // Cleaning can only shorten, so nothing past four times the cap can end up inside it: the rest is not worked on.
+  const text = redactPlain(raw.slice(0, 4 * LSP_MAX_HOVER_CHARS))
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]+/g, " ")
+    .split(UNTRUSTED_FENCE_START).join("(untrusted-tool-output")
+    .split(UNTRUSTED_FENCE_END).join("(end-untrusted-tool-output)")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  if (text.length <= LSP_MAX_HOVER_CHARS && raw.length <= 4 * LSP_MAX_HOVER_CHARS) return text;
+  return `${text.slice(0, LSP_MAX_HOVER_CHARS)}\n…[truncated: the hover text is ${raw.length} characters, the first ${Math.min(text.length, LSP_MAX_HOVER_CHARS)} are shown]`;
+}
+
+/** A position argument as the tools take it: a whole number from 1 (a string of digits is read as that number), or null. */
+function positiveInteger(value: unknown): number | null {
+  const n = typeof value === "string" && /^[0-9]{1,10}$/.test(value) ? Number(value) : value;
+  return typeof n === "number" && Number.isSafeInteger(n) && n >= 1 && n <= 0x7fffffff ? n : null;
+}
+
+const POSITION_FORM = "line and character must be positive integers, counted from 1 (the first line is 1, the first character of a line is 1)";
+const PATH_FORM = "path must be a non-empty string naming a file inside the workspace";
 
 const SYSTEM_BIN_DIRS = ["/usr/bin", "/bin", "/usr/local/bin", "/sbin", "/usr/sbin"];
 
@@ -261,6 +426,18 @@ export function buildLspEnvironment(workspace: string, source: NodeJS.ProcessEnv
 
 /** Thrown by a query whose file cannot be given to the server; the message is the answer the caller reports. */
 const unreadable = (filePath: string): Error => new Error(`${filePath} is not a readable file inside the workspace.`);
+const tooLarge = (filePath: string, bytes: number, limit: number): Error =>
+  new Error(`${filePath} is ${bytes} bytes, over the ${limit}-byte limit for language-server queries: it was not read and not given to the language server. search_code and read_file still work on it.`);
+
+/** Signals a process group; false when there is none to signal (it has ended, or the leader moved to another group). */
+function killGroup(pid: number, signal: NodeJS.Signals): boolean {
+  try {
+    process.kill(-pid, signal);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** One spelling per path for comparisons: no trailing separator, no `.` or `..`, a lower-case drive letter. */
 const comparablePath = (p: string): string => path.resolve(p).replace(/^[A-Z]:/, (drive) => drive.toLowerCase());
@@ -284,15 +461,21 @@ function stampOf(st: fs.BigIntStats, readAtMs: number): Pick<FileState, "stamp" 
 /**
  * The regular file at `real` (a path already resolved through symlinks), or null. The descriptor refuses a symlink put in
  * the last component since the path was resolved, and does not block on a FIFO; the stamp is of the file actually read.
+ * A file over `maxBytes` is not read: its size comes back instead (also when it grew past the limit between the stat and
+ * the read, in which case what was read is dropped).
  */
-function readRegularFile(real: string): FileState | null {
+function readRegularFile(real: string, maxBytes: number): FileState | { tooLarge: number } | null {
   let fd: number | undefined;
   try {
     const readAtMs = Date.now();
     fd = fs.openSync(real, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
     const st = fs.fstatSync(fd, { bigint: true });
     if (!st.isFile()) return null;
-    return { text: fs.readFileSync(fd, "utf-8"), ...stampOf(st, readAtMs) };
+    if (st.size > BigInt(maxBytes)) return { tooLarge: Number(st.size) };
+    const text = fs.readFileSync(fd, "utf-8");
+    const bytes = text.length > maxBytes ? text.length : Buffer.byteLength(text, "utf-8");
+    if (bytes > maxBytes) return { tooLarge: bytes };
+    return { text, ...stampOf(st, readAtMs) };
   } catch {
     return null;
   } finally {
@@ -313,9 +496,9 @@ interface OpenDocument extends FileState {
   changedSeq: number;
   changedAt: number;
   /** The latest list published for this version, and the client sequence number when it arrived. */
-  diagnostics?: { list: LspDiagnostic[]; seq: number };
+  diagnostics?: DiagnosticList & { seq: number };
   /** The last full report pulled for it, kept so that an "unchanged" reply to its `resultId` has a list to stand for. */
-  pulled?: { list: LspDiagnostic[]; resultId?: string };
+  pulled?: DiagnosticList & { resultId?: string };
   /** Diagnostics queries waiting on this document; it is not evicted meanwhile. */
   waiting: number;
 }
@@ -330,9 +513,21 @@ export interface LspRange {
   end: LspPosition;
 }
 
-export interface LspLocation {
-  uri: string;
-  range: LspRange;
+/**
+ * Where a definition is, in the units the tools take as input, so an answer can be asked about as it stands: lines and
+ * columns count from 1 (`endLine`/`endColumn`: the position just past the name). One shape for every form a server
+ * answers in (Location, Location[], LocationLink, LocationLink[]; for a link, its `targetSelectionRange`).
+ */
+export interface LspTarget {
+  /** Relative to the workspace, "/"-separated, for a file inside it; the absolute path, with `external`, for one outside it (a dependency, the standard library). */
+  file?: string;
+  external?: true;
+  /** In place of `file` when the target is not a file (`jdt://`, `deno:`): the URI as the server gave it, cleaned. */
+  uri?: string;
+  line: number;
+  column: number;
+  endLine: number;
+  endColumn: number;
 }
 
 export interface LspServerSpec {
@@ -408,6 +603,18 @@ export class LspClient {
   private stderrRing: Buffer = Buffer.alloc(0);
   /** Resolves when the process has exited and its stderr has been collected. */
   private gone: Promise<void> = Promise.resolve();
+  /** Resolves the moment the process has exited. */
+  private exited: Promise<void> = Promise.resolve();
+  /** The stop in progress or done; a second `shutdown` gets the same one. */
+  private stopping?: Promise<void>;
+  /** The server leads its own process group (POSIX), so signals reach what it started as well. */
+  private ownGroup = false;
+  /** Set once the server broke the message limit: nothing more it writes is read. */
+  private deaf = false;
+  /** Capabilities the server registered dynamically (`client/registerCapability`), id to method. Recorded; nothing acts on them yet. */
+  private registered: Map<string, string> = new Map();
+  /** The server's latest `window/showMessage` / `window/logMessage` lines, cleaned. */
+  private serverMessages: string[] = [];
   /** When `initialize` was answered, and when the analysis now in flight began (the start, or the first progress after a quiet spell). */
   private initializedAt = 0;
   private busySince = 0;
@@ -429,6 +636,7 @@ export class LspClient {
     private awaitProgress: boolean = false,
     private t: LspTimings = LSP_TIMINGS,
     private installHint?: string,
+    private limits: LspLimits = LSP_LIMITS,
   ) {
     this.serverCmd = serverCmd;
     this.serverArgs = serverArgs;
@@ -474,11 +682,50 @@ export class LspClient {
 
   /** The server's state now. For `nexus doctor`, telemetry, and every result that is not an answer. */
   public status(now: number = Date.now()): LspServerStatus {
+    const said = this.serverMessages.length > 0 ? { serverMessages: [...this.serverMessages] } : {};
     if (this.lifecycle !== "running") {
-      return { server: this.serverCmd, state: this.lifecycle, forMs: now - (this.failure?.at ?? this.lifecycleSince), ...(this.failure ? { detail: this.failure.message, cause: this.failure } : {}) };
+      return { server: this.serverCmd, state: this.lifecycle, forMs: now - (this.failure?.at ?? this.lifecycleSince), ...(this.failure ? { detail: this.failure.message, cause: this.failure } : {}), ...said };
     }
     const r = this.readiness(now);
-    return { server: this.serverCmd, state: r.ready ? "ready" : "indexing", forMs: now - (r.ready ? Math.max(r.at ?? 0, this.initializedAt) : this.busySince), detail: r.detail };
+    return { server: this.serverCmd, state: r.ready ? "ready" : "indexing", forMs: now - (r.ready ? Math.max(r.at ?? 0, this.initializedAt) : this.busySince), detail: r.detail, ...said };
+  }
+
+  /** What the server registered dynamically and has not unregistered. */
+  public registrations(): Array<{ id: string; method: string }> {
+    return [...this.registered].map(([id, method]) => ({ id, method }));
+  }
+
+  private notRunning(): Error {
+    return new Error(this.lifecycle === "stopped" ? `Language server '${this.serverCmd}' was stopped.` : (this.failure?.message ?? `LSP server '${this.serverCmd}' is not running`));
+  }
+
+  /**
+   * Signals the server: its process group where it has one, so that what it started gets the signal too, else the
+   * process itself (Windows has no groups; a server that moved to another group is still our child). SIGKILL goes to
+   * both. Nothing is signalled once the process has exited: its group was swept then, and its pid may be reused.
+   */
+  private signal(signal: NodeJS.Signals): void {
+    const child = this.child;
+    if (!child || child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
+    if (this.ownGroup && killGroup(child.pid, signal) && signal !== "SIGKILL") return;
+    try {
+      child.kill(signal);
+    } catch {}
+  }
+
+  /** The synchronous last resort (process exit, where nothing can be waited for): SIGKILL to the group. */
+  public kill(): void {
+    this.signal("SIGKILL");
+  }
+
+  private exitedWithin(ms: number): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), ms);
+      void this.exited.then(() => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
   }
 
   /**
@@ -505,7 +752,10 @@ export class LspClient {
     if (findCommand(this.serverCmd, env.PATH ?? "", this.rootPath) === null) throw this.fail("not_installed", notInstalled);
     let child: ChildProcess;
     try {
-      child = spawn(this.serverCmd, this.serverArgs, { cwd: this.rootPath, env, stdio: ["pipe", "pipe", "pipe"] });
+      // Its own process group (POSIX: a session of its own), so that stopping it stops what it started. Not unref'd:
+      // the process is this client's to end.
+      this.ownGroup = process.platform !== "win32";
+      child = spawn(this.serverCmd, this.serverArgs, { cwd: this.rootPath, env, stdio: ["pipe", "pipe", "pipe"], detached: this.ownGroup });
     } catch (err: any) {
       throw this.fail("spawn_failed", `Language server '${this.serverCmd}' failed to start: it could not be executed (${err.code ?? err.message}).`);
     }
@@ -529,8 +779,18 @@ export class LspClient {
         if (this.lifecycle === "starting") this.setLifecycle("initializing");
       });
 
+      let exited!: () => void;
+      this.exited = new Promise<void>((resolve) => (exited = resolve));
+      // No process, no exit: a spawn that failed (the `error` above) leaves nothing to wait for.
+      child.once("error", () => {
+        if (child.pid === undefined) exited();
+      });
       this.gone = new Promise<void>((resolve) => {
         child.on("exit", (code, signal) => {
+          // Whatever the server started and left in its group goes with it, however it ended. Done at once: the group's
+          // id is the pid just reaped.
+          if (this.ownGroup && child.pid !== undefined) killGroup(child.pid, "SIGKILL");
+          exited();
           const how = signal ? `killed by ${signal}` : `exit code ${code}`;
           const message = this.lifecycle === "running" ? `Language server '${this.serverCmd}' crashed (${how}).` : `Language server '${this.serverCmd}' failed to start: ${how}.`;
           this.fail(this.lifecycle === "running" ? "crashed" : "exited", message, { exitCode: code, signal });
@@ -541,8 +801,10 @@ export class LspClient {
             if (done) return;
             done = true;
             clearTimeout(timer);
+            // A process that outlived the server (outside its group) may hold the pipes open: they are not waited for.
+            for (const stream of [child.stdin, child.stdout, child.stderr]) stream?.destroy();
             if (this.failure) this.failure.stderrTail = this.stderrTail();
-            this.failInFlight(new Error(this.failure?.message ?? `LSP server '${this.serverCmd}' exited`));
+            this.failInFlight(this.notRunning());
             resolve();
           };
           const timer = setTimeout(finish, STDERR_DRAIN_MS);
@@ -580,6 +842,7 @@ export class LspClient {
         },
       }, this.t.startMs);
 
+      if ((this.lifecycle as string) === "stopped") throw this.notRunning(); // stopped while the answer was on its way
       if (!initRes) throw new Error("it answered initialize with no result");
       const sync = initRes.capabilities?.textDocumentSync;
       if (typeof sync === "object" && sync?.save) {
@@ -603,9 +866,7 @@ export class LspClient {
         ? this.fail("initialize_timeout", `Language server '${this.serverCmd}' did not answer initialize within ${seconds(this.t.startMs)}; it was killed.`)
         : this.fail("spawn_failed", `Language server '${this.serverCmd}' failed to start: ${err.message}.`);
       this.initialized = false;
-      try {
-        child.kill("SIGKILL");
-      } catch {}
+      this.signal("SIGKILL");
       if (timedOut(err)) {
         // What a server that hung wrote to stderr belongs in the report: wait for the kill to land.
         let timer: NodeJS.Timeout | undefined;
@@ -625,21 +886,25 @@ export class LspClient {
     for (const w of waiters) w();
   }
 
-  /** A server that sends more than the cap in one message, or buffers past it, is dropped rather than trusted with memory. */
-  private dropOversized(): void {
+  /**
+   * A server that announces a message over the limit, or writes bytes that never form a header, is not trusted with
+   * memory: what it sent is dropped, nothing more is read from it, and it is stopped and reported as failed with this cause.
+   */
+  private dropOversized(what: string): void {
     this.buffer = Buffer.alloc(0);
-    this.failInFlight(this.fail("crashed", `Language server '${this.serverCmd}' exceeded the ${LSP_MAX_BUFFER_BYTES}-byte message limit; it was killed.`));
+    this.deaf = true;
+    this.failInFlight(this.fail("message_too_large", `Language server '${this.serverCmd}' sent ${what}; it was not read and the server was killed.`));
     this.initialized = false;
-    try {
-      this.child?.kill("SIGKILL");
-    } catch {}
+    this.signal("SIGKILL");
   }
 
   private handleData(chunk: Buffer): void {
+    if (this.deaf) return;
     this.buffer = Buffer.concat([this.buffer, chunk]);
 
     while (true) {
       const headerEnd = this.buffer.indexOf("\r\n\r\n");
+      if (headerEnd === -1 ? this.buffer.length > LSP_MAX_HEADER_BYTES : headerEnd > LSP_MAX_HEADER_BYTES) return this.dropOversized(`more than ${LSP_MAX_HEADER_BYTES} bytes that are not a message header`);
       if (headerEnd === -1) break;
 
       const header = this.buffer.subarray(0, headerEnd).toString("latin1");
@@ -650,7 +915,8 @@ export class LspClient {
       }
 
       const contentLength = parseInt(match[1], 10);
-      if (contentLength > LSP_MAX_BUFFER_BYTES) return this.dropOversized();
+      // Refused on its announced size: the body is never collected.
+      if (contentLength > this.limits.messageBytes) return this.dropOversized(`a message of ${contentLength} bytes, over the ${this.limits.messageBytes}-byte limit`);
       const bodyStart = headerEnd + 4;
 
       if (this.buffer.length < bodyStart + contentLength) {
@@ -670,18 +936,23 @@ export class LspClient {
           continue;
         }
         if (msg.method === "$/progress" && msg.params) {
-          const token = String(msg.params.token);
+          const token = String(msg.params.token).slice(0, LSP_MAX_LABEL);
           const kind = msg.params.value?.kind;
           if (kind === "begin") {
             // Work that begins after a quiet spell is a new analysis; phases that follow one another are one.
             if (this.progressActive.size === 0 && this.progressEnded > 0 && Date.now() - this.lastProgressAt >= this.t.quietMs) this.busySince = Date.now();
-            this.progressActive.set(token, this.seq);
+            // Beyond the bound a new token is not tracked; the ones that are keep the server "in progress".
+            if (this.progressActive.size < LSP_MAX_PROGRESS_TOKENS || this.progressActive.has(token)) this.progressActive.set(token, this.seq);
           } else if (kind === "end") {
             this.progressSettledSeq = Math.max(this.progressSettledSeq, this.progressActive.get(token) ?? 0);
             if (this.progressActive.delete(token)) this.progressEnded++;
           }
           this.lastProgressAt = Date.now();
           this.wake(ANY_DOCUMENT);
+          continue;
+        }
+        if ((msg.method === "window/showMessage" || msg.method === "window/logMessage") && msg.id === undefined) {
+          this.note(msg.params);
           continue;
         }
         if (msg.id !== undefined && this.pending.has(msg.id)) {
@@ -709,14 +980,21 @@ export class LspClient {
               // about a document as this client sent it (a "cleared" list after a close, arriving after the reopen).
               continue;
             }
-            current.diagnostics = { list: toDiagnostics(params.diagnostics), seq: this.seq };
+            current.diagnostics = { ...toDiagnostics(params.diagnostics), seq: this.seq };
             if (!this.awaitProgress) this.answered = true;
             this.wake(current.key);
           }
         }
       } catch {}
     }
-    if (this.buffer.length > LSP_MAX_BUFFER_BYTES + 1024) this.dropOversized();
+  }
+
+  /** Keeps one `window/showMessage` / `window/logMessage` line for `status()`: cleaned as a diagnostic message is, in a ring. */
+  private note(params: any): void {
+    const line = sanitizeDiagnosticMessage(String(params?.message ?? "").slice(0, LSP_MAX_DIAGNOSTIC_TEXT));
+    if (line === "") return;
+    this.serverMessages.push(`${["error", "warning", "info", "log", "debug"][params?.type - 1] ?? "message"}: ${line}`);
+    if (this.serverMessages.length > LSP_SERVER_MESSAGE_RING) this.serverMessages.shift();
   }
 
   /**
@@ -724,8 +1002,8 @@ export class LspClient {
    * given up on (timeout, cancellation) is withdrawn with `$/cancelRequest`, so the server stops working on it.
    */
   public async sendRequest(method: string, params: any, timeoutMs: number = 8000, signal?: AbortSignal): Promise<any> {
-    if (!this.child || !this.child.stdin || this.child.killed || this.child.exitCode !== null) {
-      throw new Error(`LSP server '${this.serverCmd}' is not running`);
+    if (!this.child || !this.child.stdin || this.child.killed || this.child.exitCode !== null || (this.lifecycle === "stopped" && method !== "shutdown")) {
+      throw this.notRunning();
     }
     const cancelledError = () => Object.assign(new Error(`LSP request '${method}' was cancelled`), { code: "LSP_CANCELLED" });
     if (signal?.aborted) throw cancelledError();
@@ -770,13 +1048,51 @@ export class LspClient {
     });
   }
 
+  /**
+   * The answer to each request a server may send. A request this client does not implement is answered with the
+   * protocol's MethodNotFound, never with a success the server could build on.
+   */
+  private serverRequest(method: string, params: any): { result: unknown } | { error: { code: number; message: string } } {
+    const list = (value: unknown): any[] => (Array.isArray(value) ? value : []);
+    switch (method) {
+      case "workspace/applyEdit":
+        // A language server never writes files here; an edit it wants is proposed through Nexus's own edit path.
+        return { result: { applied: false, failureReason: APPLY_EDIT_REFUSAL } };
+      case "workspace/configuration":
+        // Nothing is configured on the server's behalf: one null per item asked for.
+        if (list(params?.items).length > LSP_MAX_REGISTRATIONS) return { error: { code: INVALID_PARAMS, message: `More than ${LSP_MAX_REGISTRATIONS} configuration items in one request` } };
+        return { result: list(params?.items).map(() => null) };
+      case "client/registerCapability":
+        for (const r of list(params?.registrations)) {
+          if (typeof r?.id !== "string" || typeof r?.method !== "string") continue;
+          const id = r.id.slice(0, LSP_MAX_LABEL);
+          this.registered.delete(id);
+          if (this.registered.size >= LSP_MAX_REGISTRATIONS) this.registered.delete(this.registered.keys().next().value!); // the oldest makes room
+          this.registered.set(id, r.method.slice(0, LSP_MAX_LABEL));
+        }
+        return { result: null };
+      case "client/unregisterCapability":
+        // `unregisterations`: the protocol's own spelling.
+        for (const r of list(params?.unregisterations ?? params?.unregistrations)) if (typeof r?.id === "string") this.registered.delete(r.id.slice(0, LSP_MAX_LABEL));
+        return { result: null };
+      case "window/workDoneProgress/create":
+        return { result: null };
+      case "window/showMessageRequest":
+        return { result: null }; // no action is chosen
+      case "workspace/workspaceFolders":
+        return { result: [{ uri: pathToFileURL(this.rootPath).href, name: path.basename(this.rootPath) }] };
+      case "workspace/diagnostic/refresh":
+        // The server's results changed for a reason the client did not cause: no kept report may stand in for a new one.
+        for (const doc of this.documents.values()) doc.pulled = undefined;
+        return { result: null };
+      default:
+        return { error: { code: METHOD_NOT_FOUND, message: `Method not found: ${method.slice(0, LSP_MAX_LABEL)}` } };
+    }
+  }
+
   private answerServerRequest(msg: { id: number | string; method: string; params?: any }): void {
     if (!this.child || !this.child.stdin || this.child.killed || this.child.exitCode !== null) return;
-    // The server's results changed for a reason the client did not cause: no kept report may stand in for a new one.
-    if (msg.method === "workspace/diagnostic/refresh") for (const doc of this.documents.values()) doc.pulled = undefined;
-    // Nothing is configured or registered on the server's behalf: an empty answer is a valid one for the requests servers send.
-    const result = msg.method === "workspace/configuration" && Array.isArray(msg.params?.items) ? msg.params.items.map(() => null) : null;
-    const payload = JSON.stringify({ jsonrpc: "2.0", id: msg.id, result });
+    const payload = JSON.stringify({ jsonrpc: "2.0", id: msg.id, ...this.serverRequest(msg.method, msg.params) });
     this.child.stdin.write(`Content-Length: ${Buffer.byteLength(payload, "utf-8")}\r\n\r\n${payload}`);
   }
 
@@ -850,7 +1166,7 @@ export class LspClient {
   /**
    * Makes every open document match the disk: a file whose content moved gets a full-text didChange (and didSave where
    * the server asked for it); one that is gone, is no longer a regular file, or no longer resolves to itself inside the
-   * workspace (renamed, or replaced by a symlink) is closed without being read.
+   * workspace (renamed, or replaced by a symlink), or has grown past the size limit is closed without being read.
    * Per document: one realpath and one stat; the content is read only when the stamp moved or cannot be trusted yet.
    */
   private resync(realRoot: string | null): void {
@@ -860,7 +1176,11 @@ export class LspClient {
         try {
           const st = fs.statSync(doc.key, { bigint: true });
           if (doc.settled && stampOf(st, 0).stamp === doc.stamp) continue;
-          if (st.isFile()) state = readRegularFile(doc.key);
+          if (st.isFile()) {
+            // Grown past the size limit: closed like a file that is gone (the server reads the disk from here on), without a read.
+            const read = readRegularFile(doc.key, this.limits.fileBytes);
+            state = read && !("tooLarge" in read) ? read : null;
+          }
         } catch {}
       }
       if (!state) this.close(doc, true);
@@ -872,7 +1192,7 @@ export class LspClient {
   /**
    * The one way a query reaches a file: brings every open document up to date with the disk, then opens `filePath` if
    * the server does not hold it yet and closes the least recently queried documents beyond the bound.
-   * Throws when the file cannot be read or lies outside the workspace.
+   * Throws when the file cannot be read, lies outside the workspace, or is over the size limit (it is then not read).
    */
   private open(filePath: string, languageId: string): OpenDocument {
     // Resolve symlinks before the containment check: a link inside the workspace must not read a file outside it.
@@ -884,8 +1204,9 @@ export class LspClient {
     if (doc) {
       this.documents.delete(key);
     } else {
-      const state = readRegularFile(key);
+      const state = readRegularFile(key, this.limits.fileBytes);
       if (!state) throw unreadable(filePath);
+      if ("tooLarge" in state) throw tooLarge(filePath, state.tooLarge, this.limits.fileBytes);
       // Named as the workspace was given to the server (its rootUri), so a server that relates documents to the root by
       // prefix finds them inside it; below the root the real path, so one file has one name.
       const sent = path.join(this.rootPath, path.relative(realRoot, key));
@@ -954,14 +1275,14 @@ export class LspClient {
     const key = doc.key;
     const since = this.lastChangeSeq;
     const held = () => this.documents.get(key)?.diagnostics;
-    const current = (): LspDiagnostic[] | null => {
+    const current = (): DiagnosticList | null => {
       const d = held();
-      return d && d.seq >= since ? d.list : null;
+      return d && d.seq >= since ? d : null;
     };
-    const stands = (now: number): LspDiagnostic[] | null => {
+    const stands = (now: number): DiagnosticList | null => {
       const d = held();
       const at = d ? this.settledAt(d.seq) : null;
-      return d && at !== null && now >= at ? d.list : null;
+      return d && at !== null && now >= at ? d : null;
     };
     /** A current list from a staged server is the answer only once the server has finished. */
     const final = (now: number): boolean => {
@@ -998,10 +1319,10 @@ export class LspClient {
       const unavailable = (reason: string): DiagnosticsAnswer => ({ status: "unavailable", reason, ...(status.state === "ready" ? {} : noAnswer(reason, status)) });
       if (signal?.aborted) return { status: "unavailable", reason: `The diagnostics query for ${filePath} was cancelled.` };
       const list = current();
-      if (list && final(now)) return { status: "ok", diagnostics: list };
+      if (list && final(now)) return okAnswer(list);
       const stood = list ? null : stands(now);
-      if (stood) return { status: "ok", diagnostics: stood };
-      if (this.lifecycle !== "running") return unavailable(`${this.failure?.message ?? `Language server '${this.serverCmd}' was stopped.`} No diagnostics for ${filePath}.`);
+      if (stood) return okAnswer(stood);
+      if (this.lifecycle !== "running") return unavailable(`${this.notRunning().message} No diagnostics for ${filePath}.`);
       const busy = `after ${seconds(status.forMs)} (${status.detail})`;
       if (list) return unavailable(`Language server '${this.serverCmd}' is still analysing ${busy}; what it has published for ${filePath} so far is not final. Ask again shortly.`);
       const what = held() ? `for ${filePath} after another open file changed,` : `for ${filePath}`;
@@ -1020,6 +1341,7 @@ export class LspClient {
   private async pullDiagnostics(doc: OpenDocument, filePath: string, timeoutMs: number, identifier?: string, signal?: AbortSignal): Promise<DiagnosticsAnswer> {
     const deadline = Date.now() + timeoutMs;
     const unavailable = (why: string): DiagnosticsAnswer => ({ status: "unavailable", reason: `Language server '${this.serverCmd}' gave no diagnostics for ${filePath}: ${why}` });
+    const keepable = (resultId: unknown): resultId is string => typeof resultId === "string" && resultId.length <= LSP_MAX_RESULT_ID;
     for (let attempt = 0; ; attempt++) {
       const previousResultId = doc.pulled?.resultId;
       let report: any;
@@ -1035,14 +1357,15 @@ export class LspClient {
         return unavailable(`${err.message}.`);
       }
       if (report?.kind === "full" && Array.isArray(report.items)) {
-        doc.pulled = { list: toDiagnostics(report.items), ...(typeof report.resultId === "string" ? { resultId: report.resultId } : {}) };
+        doc.pulled = { ...toDiagnostics(report.items), ...(keepable(report.resultId) ? { resultId: report.resultId } : {}) };
         this.answered = true;
-        return { status: "ok", diagnostics: doc.pulled.list };
+        return okAnswer(doc.pulled);
       }
       if (report?.kind === "unchanged" && previousResultId !== undefined) {
         if (doc.pulled) {
-          if (typeof report.resultId === "string") doc.pulled.resultId = report.resultId;
-          return { status: "ok", diagnostics: doc.pulled.list };
+          if (keepable(report.resultId)) doc.pulled.resultId = report.resultId;
+          else if (report.resultId !== undefined) delete doc.pulled.resultId; // a new id too long to keep: the next request asks for a full report
+          return okAnswer(doc.pulled);
         }
         // The kept list was dropped while the request was out (workspace/diagnostic/refresh): ask for a full report.
         if (attempt < PULL_RETRIGGER_LIMIT && Date.now() < deadline) continue;
@@ -1118,47 +1441,96 @@ export class LspClient {
     }
   }
 
-  /** `text` null with `notReady` null: the server answered and has nothing at this position. */
+  /** `text` null with `notReady` null: the server answered and has nothing at this position. The text is cleaned and capped (`sanitizeHoverText`), not fenced. */
   public async getHover(filePath: string, languageId: string, line: number, character: number, signal?: AbortSignal): Promise<{ text: string | null; notReady: LspServerStatus | null }> {
-    const text = (res: any): string | null => {
-      if (!res || !res.contents) return null;
-      if (typeof res.contents === "string") return res.contents;
-      if (res.contents.value) return res.contents.value;
-      if (Array.isArray(res.contents)) {
-        return res.contents.map((c: any) => (typeof c === "string" ? c : c.value || "")).join("\n\n");
-      }
-      return JSON.stringify(res.contents);
-    };
-    const { result, notReady } = await this.ask("textDocument/hover", filePath, languageId, line, character, (res) => !text(res), signal);
-    return { text: text(result) || null, notReady };
+    const { result, notReady } = await this.ask("textDocument/hover", filePath, languageId, line, character, (res) => hoverContents(res?.contents).trim() === "", signal);
+    return { text: sanitizeHoverText(hoverContents(result?.contents)) || null, notReady };
   }
 
-  /** `locations` null with `notReady` null: the server answered and has nothing to go to from this position. */
-  public async getDefinition(filePath: string, languageId: string, line: number, character: number, signal?: AbortSignal): Promise<{ locations: LspLocation[] | null; notReady: LspServerStatus | null }> {
-    const locations = (res: any): LspLocation[] | null => {
-      if (!res) return null;
-      if (Array.isArray(res)) return res;
-      if (res.uri && res.range) return [res];
-      // A single LocationLink is an answer too: reading it as empty would report "nothing here" for a real definition.
-      if (res.targetUri && res.targetRange) return [res];
-      return null;
-    };
-    const { result, notReady } = await this.ask("textDocument/definition", filePath, languageId, line, character, (res) => !locations(res)?.length, signal);
-    return { locations: locations(result), notReady };
+  /** Where the server's `uri` is, as a query's input would name it. */
+  private place(uri: string, realRoot: string | null): Pick<LspTarget, "file" | "external" | "uri"> {
+    let named: string;
+    try {
+      named = fileURLToPath(uri);
+    } catch {
+      return { uri: sanitizeDiagnosticMessage(uri) }; // not a file
+    }
+    // Compared by canonical path, as published diagnostics are: a server may name the file through a symlink or by its real path.
+    const real = realOrNull(named) ?? comparablePath(named);
+    for (const root of [realRoot, this.rootPath]) {
+      if (root !== null && real !== root && isInside(root, real)) return { file: sanitizeDiagnosticMessage(path.relative(root, real).split(path.sep).join("/")) };
+    }
+    return { file: sanitizeDiagnosticMessage(real), external: true };
   }
 
-  public shutdown(): void {
+  /**
+   * A definition answer in any of its forms as one list: distinct targets, at most LSP_MAX_DEFINITION_TARGETS of them
+   * (only those are looked up on disk), and the number left out. Entries that are not a location are skipped.
+   */
+  private targets(result: unknown): { list: LspTarget[]; omitted: number } {
+    const distinct = new Map<string, { uri: string; range: LspRange }>();
+    for (const item of Array.isArray(result) ? result : result ? [result] : []) {
+      // A LocationLink names its target by `targetUri`; the position of the name itself is `targetSelectionRange`.
+      const link = typeof item?.targetUri === "string";
+      const uri = link ? item.targetUri : item?.uri;
+      const range = toRange(link ? (item.targetSelectionRange ?? item.targetRange) : item?.range);
+      if (typeof uri === "string" && range) distinct.set(JSON.stringify([uri, range]), { uri, range });
+    }
+    const realRoot = realOrNull(this.rootPath);
+    const list = new Map<string, LspTarget>();
+    for (const { uri, range } of [...distinct.values()].slice(0, LSP_MAX_DEFINITION_TARGETS)) {
+      const target: LspTarget = { ...this.place(uri, realRoot), line: range.start.line + 1, column: range.start.character + 1, endLine: range.end.line + 1, endColumn: range.end.character + 1 };
+      list.set(JSON.stringify(target), target); // two spellings of one file are one target
+    }
+    return { list: [...list.values()], omitted: Math.max(0, distinct.size - LSP_MAX_DEFINITION_TARGETS) };
+  }
+
+  /** An empty list with `notReady` null: the server answered and has nothing to go to from this position. */
+  public async getDefinition(filePath: string, languageId: string, line: number, character: number, signal?: AbortSignal): Promise<{ targets: LspTarget[]; omitted: number; notReady: LspServerStatus | null }> {
+    // A single Location or LocationLink is an answer too: reading it as empty would report "nothing here" for a real definition.
+    const { result, notReady } = await this.ask("textDocument/definition", filePath, languageId, line, character, (res) => (Array.isArray(res) ? res.length === 0 : !res), signal);
+    const { list, omitted } = this.targets(result);
+    return { targets: list, omitted, notReady };
+  }
+
+  /**
+   * Stops the server and resolves when its process is gone: the `shutdown` request, `exit`, SIGTERM to its process
+   * group, SIGKILL to the group, each after the wait named in LspTimings (see LSP_SHUTDOWN_REPLY_MS). A server that
+   * had not finished starting, or has failed, is killed at once. Every query in flight ends now, as "stopped".
+   * Never rejects, and a second call returns the same stop. Safe to call without awaiting: `kill` is the synchronous
+   * backstop the manager uses at process exit.
+   * Limits: a process the server started that left its group (its own session) is out of reach and is not waited for;
+   * on Windows there are no groups, so only the server itself is ended; a process that survives SIGKILL (it cannot,
+   * short of a kernel fault) is given up on after the last wait.
+   */
+  public shutdown(): Promise<void> {
+    return (this.stopping ??= this.stop().catch(() => {}));
+  }
+
+  private async stop(): Promise<void> {
+    const orderly = this.lifecycle === "running";
     // A deliberate stop: the exit that follows is not a crash.
     if (this.lifecycle !== "failed") this.setLifecycle("stopped");
-    if (this.child) {
-      try {
-        this.sendRequest("shutdown", {}).catch(() => {});
-        this.sendNotification("exit", {});
-        this.child.kill("SIGTERM");
-      } catch {}
-      this.child = null;
-    }
     this.initialized = false;
+    this.failInFlight(this.notRunning());
+    const child = this.child;
+    if (!child || child.pid === undefined) return;
+    if (orderly) {
+      await Promise.race([this.sendRequest("shutdown", {}, this.t.shutdownReplyMs).catch(() => {}), this.exited]);
+      this.sendNotification("exit", {});
+      if (!(await this.exitedWithin(this.t.exitGraceMs))) {
+        this.signal("SIGTERM");
+        await this.exitedWithin(this.t.termGraceMs);
+      }
+    }
+    this.signal("SIGKILL"); // nothing, when it has exited
+    if (await this.exitedWithin(this.t.killGraceMs)) {
+      await this.gone; // its stderr is collected and its pipes are closed: no timer or handle of this client is left
+    } else {
+      for (const stream of [child.stdin, child.stdout, child.stderr]) stream?.destroy();
+      child.unref();
+    }
+    this.child = null;
   }
 }
 
@@ -1174,7 +1546,10 @@ export interface LspHoverResult {
   found: boolean;
   /** True when the server answered and has nothing at the position: a real answer, with `hoverText` saying so. */
   answered?: boolean;
+  /** With `found`: the server's text, cleaned and capped. It is untrusted: a model reads `fenced`, never this. */
   hoverText?: string;
+  /** With `found`: `hoverText` inside the untrusted-output fence, as diagnostics and a server's stderr are shown. */
+  fenced?: string;
   error?: string;
   state?: LspServerStatus;
   detail?: string;
@@ -1184,7 +1559,9 @@ export interface LspDefinitionResult {
   found: boolean;
   /** True when the server answered and has nothing to go to: a real answer, with `message` saying so. */
   answered?: boolean;
-  locations?: LspLocation[];
+  locations?: LspTarget[];
+  /** Targets beyond LSP_MAX_DEFINITION_TARGETS that `locations` leaves out. */
+  omitted?: number;
   message?: string;
   error?: string;
   state?: LspServerStatus;
@@ -1206,38 +1583,77 @@ export class LspBridgeManager {
   private failures: Map<string, KnownFailure> = new Map();
   /** Crashes per server in this session. */
   private crashes: Map<string, number> = new Map();
+  /** Clients being stopped, each with its stop: the manager stays in `live` until they are gone. */
+  private stopping: Map<LspClient, Promise<void>> = new Map();
   private closed = false;
   private servers: Record<string, LspServerSpec>;
   private gate?: () => string | null;
   private timingOverrides: Partial<LspTimings>;
+  private limits: LspLimits;
 
   /**
    * `gate` returns the reason a server must not start right now (untrusted workspace, sandbox), or null to allow it.
-   * `timings` overrides the product's timings (LSP_TIMINGS and each server's own) for every server: for tests.
+   * `timings` and `limits` override the product's (LSP_TIMINGS and each server's own; LSP_LIMITS) for every server: for tests.
    */
-  constructor(workspace: string, opts: { servers?: Record<string, LspServerSpec>; gate?: () => string | null; timings?: Partial<LspTimings> } = {}) {
+  constructor(workspace: string, opts: { servers?: Record<string, LspServerSpec>; gate?: () => string | null; timings?: Partial<LspTimings>; limits?: Partial<LspLimits> } = {}) {
     this.workspace = path.resolve(workspace);
     this.gate = opts.gate;
     this.servers = opts.servers ?? {};
     this.timingOverrides = opts.timings ?? {};
+    this.limits = { ...LSP_LIMITS, ...opts.limits };
     LspBridgeManager.live.add(this);
     if (!LspBridgeManager.exitHookInstalled) {
       LspBridgeManager.exitHookInstalled = true;
-      // Backstop: a language server must never outlive the process, even if no owner called shutdownAll.
+      // Backstop: a language server must never outlive the process, even if no owner called shutdownAll or waited for
+      // it. Nothing can be waited for here, so every server still alive (running, starting, or being stopped) and its
+      // process group is killed outright.
       process.on("exit", () => {
-        for (const m of LspBridgeManager.live) m.shutdownAll();
+        for (const m of LspBridgeManager.live) m.killAll();
       });
     }
   }
 
-  /** The gate's refusal, if any. A refusal also stops servers that started while the workspace was still allowed. */
+  private killAll(): void {
+    for (const client of [...this.clients.values(), ...this.launching.values(), ...this.stopping.keys()]) client.kill();
+  }
+
+  /** Stops one client; the same stop for a client already being stopped. Never rejects. */
+  private stop(client: LspClient): Promise<void> {
+    let stop = this.stopping.get(client);
+    if (!stop) {
+      stop = client.shutdown().then(() => {
+        this.stopping.delete(client);
+        this.release();
+      });
+      this.stopping.set(client, stop);
+    }
+    return stop;
+  }
+
+  /** A closed manager with no process left has nothing for the exit backstop to do. */
+  private release(): void {
+    if (this.closed && this.clients.size === 0 && this.launching.size === 0 && this.stopping.size === 0) LspBridgeManager.live.delete(this);
+  }
+
+  /** The gate's refusal, if any. A refusal also stops servers that started, or are starting, while the workspace was still allowed. */
   private refusal(): string | null {
     const reason = this.gate?.() ?? null;
     if (reason) {
-      for (const client of this.clients.values()) client.shutdown();
+      for (const client of [...this.clients.values(), ...this.launching.values()]) void this.stop(client);
       this.clients.clear();
     }
     return reason;
+  }
+
+  /** Whether `filePath` names a regular file that resolves, through symlinks, to a place inside the workspace. */
+  private askable(filePath: string): boolean {
+    const realRoot = realOrNull(this.workspace);
+    const real = realRoot === null ? null : realOrNull(path.resolve(this.workspace, filePath));
+    try {
+      return realRoot !== null && real !== null && !outsideRoot(realRoot, real) && fs.statSync(real).isFile();
+    } catch {
+      return false;
+    }
   }
 
   public getServerForFile(filePath: string): LspServerSpec | null {
@@ -1280,6 +1696,7 @@ export class LspBridgeManager {
    * after a pause that doubles, up to LSP_MAX_RESTARTS times.
    */
   private async acquire(filePath: string): Promise<{ client: LspClient; info: LspServerSpec } | NoAnswer> {
+    if (typeof filePath !== "string" || filePath.trim() === "" || filePath.includes("\0")) return { reason: `${PATH_FORM}.` };
     const info = this.getServerForFile(filePath);
     if (!info) return { reason: `No LSP server configured for ${filePath}.` };
     const refused = this.refusal();
@@ -1311,16 +1728,17 @@ export class LspBridgeManager {
       // It ran and is gone.
       this.clients.delete(key);
       const cause = existing.failure;
-      if (cause?.kind === "crashed") {
+      if (cause?.kind === "crashed" || cause?.kind === "message_too_large") {
         const count = (this.crashes.get(key) ?? 0) + 1;
         this.crashes.set(key, count);
-        const how = cause.signal ? `killed by ${cause.signal}` : typeof cause.exitCode === "number" ? `exit code ${cause.exitCode}` : "it stopped working";
+        const how = cause.kind === "message_too_large" ? "a message over the size limit" : cause.signal ? `killed by ${cause.signal}` : typeof cause.exitCode === "number" ? `exit code ${cause.exitCode}` : "it stopped working";
         let failure: KnownFailure | undefined;
         if (count > t.maxRestarts) {
           failure = { cause: { ...cause, kind: "crash_loop", message: `Language server '${info.cmd}' crashed ${count} times (last: ${how}); not restarting until PATH changes or Nexus is restarted.` }, path: pathNow, recheckAt: Infinity };
         } else {
           const restartAt = cause.at + t.restartBackoffMs * 2 ** (count - 1);
-          if (Date.now() < restartAt) failure = { cause: { ...cause, message: `Language server '${info.cmd}' crashed (${how}); it is restarted by the next query after ${seconds(restartAt - cause.at)}.` }, path: pathNow, recheckAt: restartAt };
+          const what = cause.kind === "message_too_large" ? "was stopped for sending a message over the size limit" : `crashed (${how})`;
+          if (Date.now() < restartAt) failure = { cause: { ...cause, message: `Language server '${info.cmd}' ${what}; it is restarted by the next query after ${seconds(restartAt - cause.at)}.` }, path: pathNow, recheckAt: restartAt };
         }
         if (failure) {
           this.failures.set(key, failure);
@@ -1329,21 +1747,24 @@ export class LspBridgeManager {
       }
     }
 
-    const client = new LspClient(info.cmd, this.workspace, info.args ?? [], info.env, info.awaitProgress === true, t, info.installHint);
+    // No server is started for a file it could not be asked about (the client checks again, for every query).
+    if (!this.askable(filePath)) return { reason: unreadable(filePath).message };
+
+    const client = new LspClient(info.cmd, this.workspace, info.args ?? [], info.env, info.awaitProgress === true, t, info.installHint, this.limits);
     this.launching.set(key, client);
     const startup = client
       .start()
       .then(
         () => {
           if (this.closed) {
-            client.shutdown();
+            void this.stop(client);
             return null;
           }
           this.clients.set(key, client);
           return client;
         },
         () => {
-          client.shutdown();
+          void this.stop(client);
           if (client.failure) this.failures.set(key, { cause: client.failure, path: pathNow, recheckAt: Date.now() + t.startRecheckMs });
           return null;
         },
@@ -1351,6 +1772,7 @@ export class LspBridgeManager {
       .finally(() => {
         this.starting.delete(key);
         this.launching.delete(key);
+        this.release();
       });
     this.starting.set(key, startup);
     const started = await startup;
@@ -1417,17 +1839,28 @@ export class LspBridgeManager {
     return noAnswer(`Language server '${state.server}' is still indexing after ${seconds(state.forMs)} (${state.detail}) and has ${what} yet; this does not mean there is none. Ask again shortly.`, state);
   }
 
+  /** Why a position cannot be asked about, or the position. Checked before anything is started or asked. */
+  private static position(line: unknown, character: unknown): { line: number; character: number } | string {
+    const l = positiveInteger(line);
+    const c = positiveInteger(character);
+    if (l !== null && c !== null) return { line: l, character: c };
+    const got = (v: unknown): string => (v === undefined ? "nothing" : (JSON.stringify(v) ?? String(v)).slice(0, 40));
+    return `${POSITION_FORM}; got line ${got(line)}, character ${got(character)}.`;
+  }
+
   public async hover(filePath: string, line: number, character: number, signal?: AbortSignal): Promise<LspHoverResult> {
+    const at = LspBridgeManager.position(line, character);
+    if (typeof at === "string") return { found: false, error: at };
     const got = await this.acquire(filePath);
     if (!("client" in got)) {
       const { reason, ...rest } = got;
       return { found: false, error: reason, ...rest };
     }
     try {
-      const { text, notReady } = await got.client.getHover(filePath, got.info.languageId, line, character, signal);
-      if (text) return { found: true, hoverText: text };
-      if (!notReady) return { found: false, answered: true, hoverText: `No hover information at ${filePath}:${line}:${character}: the language server answered and has nothing for this position.` };
-      const { reason, ...rest } = LspBridgeManager.notReady(`no hover information for ${filePath}:${line}:${character}`, notReady);
+      const { text, notReady } = await got.client.getHover(filePath, got.info.languageId, at.line, at.character, signal);
+      if (text) return { found: true, hoverText: text, fenced: fenceUntrusted(`lsp hover for ${filePath}:${at.line}:${at.character}`, text) };
+      if (!notReady) return { found: false, answered: true, hoverText: `No hover information at ${filePath}:${at.line}:${at.character}: the language server answered and has nothing for this position.` };
+      const { reason, ...rest } = LspBridgeManager.notReady(`no hover information for ${filePath}:${at.line}:${at.character}`, notReady);
       return { found: false, error: reason, ...rest };
     } catch (err: any) {
       return { found: false, error: err.message };
@@ -1435,28 +1868,34 @@ export class LspBridgeManager {
   }
 
   public async definition(filePath: string, line: number, character: number, signal?: AbortSignal): Promise<LspDefinitionResult> {
+    const at = LspBridgeManager.position(line, character);
+    if (typeof at === "string") return { found: false, error: at };
     const got = await this.acquire(filePath);
     if (!("client" in got)) {
       const { reason, ...rest } = got;
       return { found: false, error: reason, ...rest };
     }
     try {
-      const { locations, notReady } = await got.client.getDefinition(filePath, got.info.languageId, line, character, signal);
-      if (locations && locations.length > 0) return { found: true, locations };
-      if (!notReady) return { found: false, answered: true, locations: [], message: `No definition found for ${filePath}:${line}:${character}: the language server answered and has nothing to go to from this position.` };
-      const { reason, ...rest } = LspBridgeManager.notReady(`no definition for ${filePath}:${line}:${character}`, notReady);
+      const { targets, omitted, notReady } = await got.client.getDefinition(filePath, got.info.languageId, at.line, at.character, signal);
+      if (targets.length > 0) return { found: true, locations: targets, ...(omitted > 0 ? { omitted } : {}) };
+      if (!notReady) return { found: false, answered: true, locations: [], message: `No definition found for ${filePath}:${at.line}:${at.character}: the language server answered and has nothing to go to from this position.` };
+      const { reason, ...rest } = LspBridgeManager.notReady(`no definition for ${filePath}:${at.line}:${at.character}`, notReady);
       return { found: false, error: reason, ...rest };
     } catch (err: any) {
       return { found: false, error: err.message };
     }
   }
 
-  public shutdownAll(): void {
+  /**
+   * Stops every server, running or still starting, and resolves when their processes are gone (`LspClient.shutdown`:
+   * bounded, never rejects). A second call waits for the same stops. A caller that cannot wait may drop the promise:
+   * the stops go on, and the exit backstop kills whatever is left when the process ends first.
+   */
+  public shutdownAll(): Promise<void> {
     this.closed = true;
-    for (const client of this.clients.values()) {
-      client.shutdown();
-    }
+    for (const client of [...this.clients.values(), ...this.launching.values()]) void this.stop(client);
     this.clients.clear();
-    LspBridgeManager.live.delete(this);
+    this.release();
+    return Promise.all(this.stopping.values()).then(() => {});
   }
 }

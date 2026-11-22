@@ -12,21 +12,21 @@ export const lspHoverCapability: CanonicalCapability = {
     "type": "function",
     "function": {
       "name": "lsp_hover",
-      "description": "Query Language Server Protocol (LSP) hover documentation and type signatures for a symbol at a given line and character.",
+      "description": "Type signature and documentation of the symbol at a position, from the language server (LSP). The text comes back fenced as untrusted tool output. \"Nothing at this position\" is an answer; \"still indexing\" is not: ask again.",
       "parameters": {
         "type": "object",
         "properties": {
           "path": {
             "type": "string",
-            "description": "The source file path to inspect."
+            "description": "Source file inside the workspace."
           },
           "line": {
             "type": "number",
-            "description": "The 1-indexed line number."
+            "description": "Line, a positive integer (the first line is 1)."
           },
           "character": {
             "type": "number",
-            "description": "The 1-indexed character offset on the line."
+            "description": "Character on the line, a positive integer (the first is 1)."
           }
         },
         "required": [
@@ -51,21 +51,21 @@ export const lspDefinitionCapability: CanonicalCapability = {
     "type": "function",
     "function": {
       "name": "lsp_definition",
-      "description": "Query Language Server Protocol (LSP) definition location for a symbol at a given line and character.",
+      "description": "Where the symbol at a position is defined, from the language server (LSP). Returns a JSON list of {file, line, column, endLine, endColumn}, 1-based like the inputs; file is workspace-relative, or absolute with external: true outside the workspace (uri replaces file for a non-file target). \"Nothing to go to\" is an answer; \"still indexing\" is not: ask again.",
       "parameters": {
         "type": "object",
         "properties": {
           "path": {
             "type": "string",
-            "description": "The source file path containing the symbol reference."
+            "description": "Source file inside the workspace."
           },
           "line": {
             "type": "number",
-            "description": "The 1-indexed line number."
+            "description": "Line, a positive integer (the first line is 1)."
           },
           "character": {
             "type": "number",
-            "description": "The 1-indexed character offset on the line."
+            "description": "Character on the line, a positive integer (the first is 1)."
           }
         },
         "required": [
@@ -90,13 +90,13 @@ export const lspDiagnosticsCapability: CanonicalCapability = {
     "type": "function",
     "function": {
       "name": "lsp_diagnostics",
-      "description": "Retrieve active Language Server Protocol (LSP) semantic compiler diagnostics for a source file.",
+      "description": "Language server (LSP) diagnostics for a source file's current content: JSON records fenced as untrusted tool output. An empty list means no findings; \"unavailable\" means no answer, not a clean file.",
       "parameters": {
         "type": "object",
         "properties": {
           "path": {
             "type": "string",
-            "description": "The source file path to query diagnostics for."
+            "description": "Source file inside the workspace."
           }
         },
         "required": [

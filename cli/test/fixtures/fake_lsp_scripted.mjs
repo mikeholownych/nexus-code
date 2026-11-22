@@ -15,9 +15,12 @@
 //                    A `text` longer than 2000 characters is logged as {elidedChars: n}.
 //   stderrOnStart    text written to stderr at start
 //   exitOnStart      exit code: exit at once (after stderrOnStart), before reading anything
-//   spawnGrandchild  true: start a child process that idles (it ends by itself after 60 s) and log its pid
+//   spawnGrandchild  true: start a child process that idles (it ends by itself after 60 s) and log its pid;
+//                    "escaped": the same in a session of its own (outside this server's process group), holding this
+//                    server's stdout and stderr open, logged as {event:"escaped", pid}
 //   ignoreSigterm    true: catch SIGTERM and keep running
 //   ignoreShutdown   true: never answer `shutdown`, ignore `exit`
+//   ignoreStdinEnd   true: keep running when stdin ends (it then ends by itself after 60 s)
 //   initialize       "never" (no answer), or the result object (default {capabilities: {}})
 //   hover            "fromText": answer from the held text with contents = JSON {word, docs} where `word` is the
 //                    identifier at the position (character read as a UTF-16 offset) and `docs` maps basename -> held text;
@@ -35,11 +38,12 @@
 //                    "<method>#<basename>" for one file ("textDocument/didOpen#a.ts"). Actions run before the reply.
 //   action           {after?: ms, request?: true, method, params}: send a notification, or with `request` a server
 //                    request whose reply is logged. Without `after` it is sent synchronously, in order.
+//                    {raw: "<bytes>", times?: n}: write the string to stdout as it is, n times (a broken or oversized frame).
 // In action params and scripted results a string is replaced when it is exactly "$uri" (the triggering document's URI),
 // "$realuri" (the same file with symlinks resolved), "$uri:lowerhex" (the same URI with lower-case percent escapes),
 // "$uri:unicode" (the same URI with its non-ASCII characters not percent-encoded), "$version" (its version, as a number),
 // "$text" (the text this server holds for it; "" once closed), or starts with "$root/" (the client's rootUri; also in object keys).
-// The server exits when its stdin ends, so it cannot outlive a test process that died.
+// The server exits when its stdin ends, so it cannot outlive a test process that died (`ignoreStdinEnd`: not by more than 60 s).
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -58,9 +62,10 @@ let buf = Buffer.alloc(0);
 log({ event: "start", pid: process.pid });
 if (S.stderrOnStart) fs.writeSync(2, S.stderrOnStart);
 if (S.spawnGrandchild) {
-  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" });
+  const escaped = S.spawnGrandchild === "escaped";
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], escaped ? { stdio: ["ignore", "inherit", "inherit"], detached: true } : { stdio: "ignore" });
   child.unref();
-  log({ event: "grandchild", pid: child.pid });
+  log({ event: escaped ? "escaped" : "grandchild", pid: child.pid });
 }
 if (S.ignoreSigterm) process.on("SIGTERM", () => log({ event: "signal", signal: "SIGTERM" }));
 if (typeof S.exitOnStart === "number") process.exit(S.exitOnStart);
@@ -86,6 +91,7 @@ function fill(value, ctx) {
 }
 
 function act(action, ctx) {
+  if (typeof action.raw === "string") return void process.stdout.write(action.raw.repeat(action.times ?? 1));
   const msg = { method: action.method, params: fill(action.params, ctx) };
   if (action.request) {
     msg.id = `s${nextId++}`;
@@ -187,7 +193,8 @@ function handle(m) {
   else send({ id: m.id, result: null });
 }
 
-process.stdin.on("end", () => process.exit(0));
+if (S.ignoreStdinEnd) setTimeout(() => process.exit(0), 60000);
+else process.stdin.on("end", () => process.exit(0));
 process.stdin.on("data", (chunk) => {
   buf = Buffer.concat([buf, chunk]);
   for (;;) {

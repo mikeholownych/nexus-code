@@ -269,7 +269,7 @@ test("PRODUCT DEFAULT (5 s warm timeout, real): lsp_diagnostics on a staged serv
 });
 
 test("PRODUCT DEFAULT (the constants, and that the tool handler uses them): lsp_diagnostics passes no timeout of its own, and the bridge's manager runs with the product's timings", async () => {
-  assert.deepEqual(LSP_TIMINGS, { startMs: 10_000, queryMs: 5_000, coldStartMs: 5_000, quietMs: 1_500, editSettleMs: 8_000, retryMs: 250, startRecheckMs: 30_000, restartBackoffMs: 1_000, maxRestarts: 3 });
+  assert.deepEqual(LSP_TIMINGS, { startMs: 10_000, queryMs: 5_000, coldStartMs: 5_000, quietMs: 1_500, editSettleMs: 8_000, retryMs: 250, startRecheckMs: 30_000, restartBackoffMs: 1_000, maxRestarts: 3, shutdownReplyMs: 2_000, exitGraceMs: 1_000, termGraceMs: 2_000, killGraceMs: 1_000 });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-lsp-defaults-"));
   const bridge = new RustCoreBridge(dir);
   try {
@@ -291,7 +291,7 @@ test("PRODUCT DEFAULT (the constants, and that the tool handler uses them): lsp_
     // No timeout (the manager's timings decide), and the turn's abort signal.
     assert.deepEqual(calls, [["diagnostics", "a.ts", undefined, signal], ["hover", "a.ts", 2, 3, signal], ["definition", "a.ts", 2, 3, signal]]);
   } finally {
-    bridge.shutdown();
+    await bridge.shutdown();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -398,6 +398,7 @@ test("not installed: each built-in server is reported at once with the command a
         ["a.go", "gopls", "go install golang.org/x/tools/gopls@latest"],
       ]) {
         const reason = `Language server not installed: ${cmd} was not found on PATH. Install it with: ${hint}`;
+        fs.writeFileSync(path.join(ws, file), ""); // since slice S4 a file that is not there is refused before any server is looked for
         const [res, elapsed] = await timed(() => mgr.diagnostics(file));
         assert.equal(messages(res), reason);
         assert.ok(elapsed < 500, `${cmd}: ${Math.round(elapsed)} ms`);
@@ -409,7 +410,7 @@ test("not installed: each built-in server is reported at once with the command a
     });
     assert.deepEqual(mgr.serverPids(), []);
   } finally {
-    mgr.shutdownAll();
+    await mgr.shutdownAll();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

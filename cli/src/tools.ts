@@ -1020,12 +1020,18 @@ export class RustCoreBridge {
     return this.lsp;
   }
 
-  public shutdown(): void {
-    this.lsp?.shutdownAll();
+  /**
+   * Everything here is done when it returns, except the language servers: their stop is started (it cannot fail, and the
+   * process-exit backstop in lsp.ts kills what is left if the process ends first) and the returned promise resolves once
+   * their processes are gone, for a caller that can wait.
+   */
+  public shutdown(): Promise<void> {
+    const lspStopped = this.lsp?.shutdownAll() ?? Promise.resolve();
     this.lsp = undefined;
     this.cleanupRpc();
     this.resetHandshake();
     RustCoreBridge.activeBridges.delete(this);
+    return lspStopped;
   }
 
   /**
@@ -1610,11 +1616,13 @@ export class RustCoreBridge {
     if (toolName === "lsp_hover") {
       try {
         const lsp = await this.lspManager();
-        const res = await lsp.hover(args.path, Number(args.line), Number(args.character), this.turnSignal);
+        // Arguments go as the model gave them: the manager refuses a path or position that is not in the documented form.
+        const res = await lsp.hover(args.path, args.line, args.character, this.turnSignal);
         return {
           // "The server answered and has nothing here" is an answer: it reaches the model as its plain statement.
           success: res.found || res.answered === true,
-          output: res.hoverText || "No hover info",
+          // What the server says about a symbol is written by whoever wrote the code: fenced, like diagnostics.
+          output: res.fenced || res.hoverText || "No hover info",
           error: res.error && res.detail ? `${res.error}\n${res.detail}` : res.error,
         };
       } catch (err: any) {
@@ -1625,10 +1633,10 @@ export class RustCoreBridge {
     if (toolName === "lsp_definition") {
       try {
         const lsp = await this.lspManager();
-        const res = await lsp.definition(args.path, Number(args.line), Number(args.character), this.turnSignal);
+        const res = await lsp.definition(args.path, args.line, args.character, this.turnSignal);
         return {
           success: res.found || res.answered === true,
-          output: res.answered ? res.message! : JSON.stringify(res.locations || [], null, 2),
+          output: res.answered ? res.message! : JSON.stringify(res.locations || [], null, 2) + (res.omitted ? `\n+${res.omitted} more` : ""),
           error: res.error && res.detail ? `${res.error}\n${res.detail}` : res.error,
         };
       } catch (err: any) {
@@ -1640,14 +1648,15 @@ export class RustCoreBridge {
       try {
         const lsp = await this.lspManager();
         // No timeout of its own: the manager applies the server's timings (cold start, warm query, post-edit settle).
-        const res = await lsp.diagnostics(String(args.path || ""), undefined, this.turnSignal);
+        const res = await lsp.diagnostics(args.path, undefined, this.turnSignal);
         if (res.status === "unavailable") {
           return { success: false, output: "", error: `lsp_diagnostics unavailable: ${res.reason} This is not evidence the file is free of errors.${res.detail ? `\n${res.detail}` : ""}` };
         }
-        const file = String(args.path || "");
+        const file = String(args.path);
         return {
           success: true,
-          output: fenceDiagnostics(`lsp diagnostics for ${file}`, lspDiagnosticRecords(this.workspace, file, res.diagnostics)),
+          // The client keeps as many as the fence shows, the most severe first, and counts the rest: the fence never cuts again.
+          output: fenceDiagnostics(`lsp diagnostics for ${file}`, lspDiagnosticRecords(this.workspace, file, res.diagnostics)) + (res.omitted ? `\n+${res.omitted} more, less severe or later in the server's list` : ""),
         };
       } catch (err: any) {
         return { success: false, output: "", error: `LSP error: ${err.message}` };
