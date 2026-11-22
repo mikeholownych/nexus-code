@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M81M3H435Z7W4NPVJ8YNV8M3",
+  "strategy": "manual-commit",
+  "branch": "v1/ls1-lsp-characterization",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cli/test/lsp_characterization.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 18957,
+    "cache_read_tokens": 8284054,
+    "output_tokens": 8910,
+    "api_call_count": 9,
+    "subagent_tokens": {
+      "input_tokens": 44,
+      "cache_creation_tokens": 266122,
+      "cache_read_tokens": 4030312,
+      "output_tokens": 93023,
+      "api_call_count": 22
+    }
+  },
+  "redaction": {
+    "replacements": 759,
+    "layers": {
+      "betterleaks": 2,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 43,
+      "credentialed_uri": 3,
+      "entropy": 711,
+      "key_context": 0,
+      "provider_token": 2,
+      "shell_stdin": 0
+    }
+  }
+}
