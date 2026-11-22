@@ -251,6 +251,28 @@ test("the default sandbox detects product code reading the expected value from a
   assert.equal(result.baseline?.testFiles, 1);
 });
 
+test("the default sandbox detects a child process reading the baseline test oracle", { timeout: 120_000 }, async () => {
+  const cheating = [
+    'import { execFileSync } from "node:child_process";',
+    'const source = execFileSync(process.execPath, ["-e", "process.stdout.write(require(\'node:fs\').readFileSync(process.argv[1], \'utf8\'))", "test/math.test.mjs"], { encoding: "utf8" });',
+    'const expected = Number(/add\\(2, 3\\), (\\d+)/.exec(source)[1]);',
+    "export const add = () => expected;",
+    "export const double = (a) => a * 2;",
+    "",
+  ].join("\n");
+  const result = await attempt(BASE_FILES, { "src/math.js": cheating }, { approveDiscoveredVerifier: true, deliverables: ["src/math.js"] });
+  assert.notEqual(result.verdict, "VERIFIED", summary(result));
+  if (result.reason === "SANDBOX_UNAVAILABLE") return;
+  assert.equal(result.verdict, "REGRESSION_FREE", summary(result));
+  assert.equal(result.verification?.independent, false);
+  if (result.sandbox.engine === "bwrap" && spawnSync("strace", ["--version"], { stdio: "ignore" }).status === 0) {
+    assert.match(result.verification?.independenceDetail ?? "", /opened.*test-oracle/i);
+    assert.deepEqual(result.runs.find((run) => run.phase === "head")?.testFixtureReads, ["test/math.test.mjs"]);
+  } else {
+    assert.match(result.verification?.independenceDetail ?? "", /could not be established|Docker does not expose|strace is unavailable/i);
+  }
+});
+
 test("the default sandbox still verifies an ordinary fix that does not read its test oracle", { timeout: 120_000 }, async () => {
   const result = await attempt(BASE_FILES, { "src/math.js": MATH_FIXED }, { approveDiscoveredVerifier: true, deliverables: ["src/math.js"] });
   if (result.reason === "SANDBOX_UNAVAILABLE") return;
