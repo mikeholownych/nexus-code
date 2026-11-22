@@ -3,5 +3,10 @@
     "protocol": 1,
     "schemaSha256": "b2747ba8d5d56e8450df9c161b1c773b7beefd5c79ccd75fa07dfccda169b66a",
     "note": "First published schema of protocol v1, generated from cli/src/protocol.ts as it stood on release/v1.3.0. No wire change."
+  },
+  {
+    "protocol": 1,
+    "schemaSha256": "9cf30b58fb0f720ef8ecbf5f1a3d8ad5015ca0f842fee9131b9f7b4d017bb4bc",
+    "note": "Add objective tool invocation budget exhaustion and accounting fields to turn results; additive protocol v1 change."
   }
 ]
