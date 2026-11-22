@@ -10,6 +10,7 @@
 //                                                                text this server holds per URI AFTER applying the message
 //                                                                (didOpen / didChange full text / didClose)
 //                      {event:"reply", to, id, result?, error?}  the client's answer to a server request (`to` = its method)
+//                      {event:"answer", to, result?, error?}     this server's answer to `textDocument/diagnostic`
 //                      {event:"signal", signal}                  a signal caught because of `ignoreSigterm`
 //                    A `text` longer than 2000 characters is logged as {elidedChars: n}.
 //   stderrOnStart    text written to stderr at start
@@ -23,13 +24,20 @@
 //                    or {"<basename>" | "*": <result>}: a scripted result per file (null = no hover)
 //   definition       "fromText": the Location of the first `def <word>` in any held document, else null;
 //                    or {"<basename>" | "*": <result>}
+//   diagnostic       how `textDocument/diagnostic` is answered (announce `diagnosticProvider` through `initialize`):
+//                    "fromText": a full report with one item whose message names the file and the text held for every
+//                    document (so a file's report depends on the others), with that message as resultId; or
+//                    {kind: "unchanged"} when the request's previousResultId equals it;
+//                    or a list of answers used in order, the last one repeating: {result}, {error} or "never"
 //   on               {"<trigger>": [action, ...]} where trigger is a received method ("initialized", "test/release"), or
 //                    "<method>#<basename>" for one file ("textDocument/didOpen#a.ts"). Actions run before the reply.
 //   action           {after?: ms, request?: true, method, params}: send a notification, or with `request` a server
 //                    request whose reply is logged. Without `after` it is sent synchronously, in order.
 // In action params and scripted results a string is replaced when it is exactly "$uri" (the triggering document's URI),
-// "$realuri" (the same file with symlinks resolved), "$version" (its version, as a number), or starts with "$root/"
-// (the client's rootUri). The server exits when its stdin ends, so it cannot outlive a test process that died.
+// "$realuri" (the same file with symlinks resolved), "$uri:lowerhex" (the same URI with lower-case percent escapes),
+// "$uri:unicode" (the same URI with its non-ASCII characters not percent-encoded), "$version" (its version, as a number),
+// "$text" (the text this server holds for it; "" once closed), or starts with "$root/" (the client's rootUri; also in object keys).
+// The server exits when its stdin ends, so it cannot outlive a test process that died.
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -63,11 +71,14 @@ function fill(value, ctx) {
   if (typeof value === "string") {
     if (value === "$uri") return ctx.uri;
     if (value === "$realuri") return pathToFileURL(fs.realpathSync(fileURLToPath(ctx.uri))).href;
+    if (value === "$uri:lowerhex") return ctx.uri.replace(/%[0-9A-F]{2}/g, (escape) => escape.toLowerCase());
+    if (value === "$uri:unicode") return ctx.uri.replace(/(?:%[89A-F][0-9A-F])+/g, (escapes) => decodeURIComponent(escapes));
     if (value === "$version") return ctx.version;
+    if (value === "$text") return docs.get(ctx.uri) ?? "";
     return value.startsWith("$root/") ? rootUri + value.slice(5) : value;
   }
   if (Array.isArray(value)) return value.map((v) => fill(v, ctx));
-  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, fill(v, ctx)]));
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k.startsWith("$root/") ? rootUri + k.slice(5) : k, fill(v, ctx)]));
   return value;
 }
 
@@ -122,6 +133,16 @@ function definitionFromText(_uri, word) {
   return null;
 }
 
+let pulls = 0;
+function diagnosticAnswer(m) {
+  const uri = m.params.textDocument.uri;
+  if (S.diagnostic !== "fromText") return S.diagnostic?.[Math.min(pulls++, S.diagnostic.length - 1)] ?? { result: null };
+  const message = `${base(uri)} with ${[...docs].map(([u, text]) => `${base(u)}=${text}`).sort().join(" ")}`;
+  if (m.params.previousResultId === message) return { result: { kind: "unchanged", resultId: message } };
+  const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } };
+  return { result: { kind: "full", resultId: message, items: [{ range, severity: 1, message, source: "fake" }] } };
+}
+
 function handle(m) {
   if (m.method === undefined) {
     log({ event: "reply", to: sent.get(m.id), id: m.id, ...("result" in m ? { result: m.result } : {}), ...(m.error ? { error: m.error } : {}) });
@@ -149,6 +170,13 @@ function handle(m) {
     if (!S.ignoreShutdown) send({ id: m.id, result: null });
   } else if (m.method === "textDocument/hover") send({ id: m.id, result: answer(S.hover, m, hoverFromText) });
   else if (m.method === "textDocument/definition") send({ id: m.id, result: answer(S.definition, m, definitionFromText) });
+  else if (m.method === "textDocument/diagnostic") {
+    const scripted = diagnosticAnswer(m);
+    if (scripted === "never") return;
+    const reply = scripted.error ? { error: scripted.error } : { result: fill(scripted.result, ctx) };
+    log({ event: "answer", to: m.method, ...reply });
+    send({ id: m.id, ...reply });
+  }
   else send({ id: m.id, result: null });
 }
 

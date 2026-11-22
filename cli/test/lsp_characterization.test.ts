@@ -4,6 +4,8 @@
  * test pins today's behaviour exactly, and the `test.todo` after it states the target the hardening slices implement
  * (defect numbers: the LSP plan's list, 1 to 21; 22 and up were found while writing these tests).
  * When a slice fixes a defect, its CURRENT test fails: replace it with the todo's assertion.
+ * Fixed so far (each `FIXED (defect N)` test asserts the former todo's target): slice S2, freshness: 1, 2, 6 and the
+ * open-document bound of 12. More freshness cases are in lsp_freshness.test.ts.
  *
  * The tools are driven through the real handler (RustCoreBridge.executeTool) with a manager whose server table points at
  * the fake, as cg3_diagnostics_evidence.test.ts does. Some cases wait for a fixed product timer (5000 ms initialize and
@@ -16,12 +18,10 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { LspBridgeManager, type LspClient } from "../src/lsp.js";
-import { RustCoreBridge } from "../src/tools.js";
+import { pathToFileURL } from "node:url";
+import { MAX_OPEN_DOCUMENTS } from "../src/lsp.js";
 import { scanForInjection } from "../src/core/injection_scanner.js";
-
-const FAKE = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "fake_lsp_scripted.mjs");
+import { alive, diag, eventually, open, progress, publish, records, sleep } from "./helpers/lsp_scripted.js";
 
 /** The product's fixed timers (cli/src/lsp.ts): the initialize request, the manager's default diagnostics timeout, the no-progress grace period. */
 const INITIALIZE_TIMEOUT_MS = 5000;
@@ -37,186 +37,105 @@ function assertEndedByTimer(elapsedMs: number, ms: number, what: string): void {
   assert.ok(elapsedMs >= ms - 50 && elapsedMs < ms + 2500, `${what}: took ${Math.round(elapsedMs)} ms, expected the ${ms} ms timer`);
 }
 
-type Entry = { event: string; method?: string; id?: unknown; params?: any; docs?: Record<string, any>; to?: string; result?: unknown; error?: unknown; pid?: number; signal?: string };
-
-const diag = (severity: number | undefined, message: string) => ({
-  range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
-  ...(severity === undefined ? {} : { severity }),
-  message,
-  source: "fake",
-});
-const publish = (diagnostics: unknown[], uri = "$uri", extra: Record<string, unknown> = {}) => ({ method: "textDocument/publishDiagnostics", params: { uri, diagnostics, ...extra } });
-const progress = (kind: "begin" | "end") => ({ method: "$/progress", params: { token: "analysis", value: { kind } } });
-
-const alive = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-};
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-/** Waits (bounded) for something that is expected to happen; false if it did not. */
-async function eventually(check: () => boolean, withinMs = 10_000): Promise<boolean> {
-  for (const end = performance.now() + withinMs; performance.now() < end; await sleep(20)) if (check()) return true;
-  return check();
-}
-
-interface Opened {
-  ws: string;
-  mgr: LspBridgeManager;
-  uri: (name: string) => string;
-  tool: (name: string, args: Record<string, unknown>) => Promise<{ success: boolean; output: string; error?: string }>;
-  client: () => Promise<LspClient>;
-  /** One request round trip: when it returns, the fake has logged everything the client wrote before it. */
-  sync: () => Promise<void>;
-  log: () => Entry[];
-  received: (method: string) => Entry[];
-  /** Shuts everything down, asserts every process the fake logged (server, grandchild) is gone, removes the temp tree. */
-  close: () => Promise<void>;
-}
-
-function open(scenario: Record<string, unknown>, files: Record<string, string>, opts: { awaitProgress?: boolean; cmd?: string; viaSymlink?: boolean } = {}): Opened {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "nexus-lsp-char-")));
-  const real = path.join(root, "ws");
-  fs.mkdirSync(real);
-  for (const [name, text] of Object.entries(files)) fs.writeFileSync(path.join(real, name), text);
-  let ws = real;
-  if (opts.viaSymlink) {
-    ws = path.join(root, "link");
-    fs.symlinkSync(real, ws);
-  }
-  const logFile = path.join(root, "fake.log.jsonl");
-  const scenarioFile = path.join(root, "scenario.json");
-  fs.writeFileSync(scenarioFile, JSON.stringify({ ...scenario, log: logFile }));
-  const mgr = new LspBridgeManager(ws, {
-    servers: { ".ts": { cmd: opts.cmd ?? process.execPath, args: opts.cmd ? [] : [FAKE, scenarioFile], languageId: "typescript", awaitProgress: opts.awaitProgress === true } },
-  });
-  const bridge = new RustCoreBridge(ws);
-  (bridge as any).lsp = mgr;
-  const log = (): Entry[] => (fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
-  const client = async () => {
-    const c = await mgr.getClientForFile("a.ts");
-    assert.ok(c, "the fake server started");
-    return c;
-  };
-  return {
-    ws,
-    mgr,
-    uri: (name) => pathToFileURL(path.join(ws, name)).href,
-    tool: (name, args) => bridge.executeTool(name, args),
-    client,
-    sync: async () => void (await (await client()).sendRequest("test/sync", {})),
-    log,
-    received: (method) => log().filter((e) => e.event === "recv" && e.method === method),
-    close: async () => {
-      bridge.shutdown();
-      mgr.shutdownAll();
-      const pids = log().filter((e) => e.event === "start" || e.event === "grandchild").map((e) => e.pid!);
-      const gone = await eventually(() => pids.every((pid) => !alive(pid)));
-      fs.rmSync(root, { recursive: true, force: true });
-      assert.ok(gone, `a process started for this test is still running: ${pids.filter(alive).join(", ")}`);
-    },
-  };
-}
-
-/** The records inside a fenced lsp_diagnostics result. */
-function records(output: string): Array<Record<string, unknown>> {
-  const lines = output.split("\n");
-  assert.match(lines[0], /^\(untrusted tool output: lsp diagnostics for /);
-  assert.equal(lines.at(-1), "(end untrusted tool output)");
-  return JSON.parse(lines.slice(1, -1).join("\n"));
-}
-
 const unavailable = (reason: string) => `lsp_diagnostics unavailable: ${reason} This is not evidence the file is free of errors.`;
 const notStarted = (cmd: string) => `Language server '${cmd}' is not installed or failed to start.`;
 
 // ---------------------------------------------------------------------------------------------- 1. stale second file
 
-test("CURRENT (defect 1): a second open file changed on disk stays stale in the server, and answers for the first file computed from it are reported ok", async () => {
-  const oldB = "def helper\n";
-  const s = open({ hover: "fromText", definition: "fromText" }, { "a.ts": "helper\n", "b.ts": oldB });
+test("FIXED (defect 1): before a query every open document that changed on disk is re-synced, so answers for the first file are computed from the second file's current text", async () => {
+  const newB = "// the definition moved down\n\n\ndef helper\n";
+  const s = open({ hover: "fromText", definition: "fromText" }, { "a.ts": "helper\n", "b.ts": "def helper\n" });
   try {
     assert.equal((await s.tool("lsp_hover", { path: "b.ts", line: 1, character: 5 })).success, true);
     assert.equal((await s.tool("lsp_hover", { path: "a.ts", line: 1, character: 1 })).success, true);
-    fs.writeFileSync(path.join(s.ws, "b.ts"), "// the definition moved down\n\n\ndef helper\n");
+    fs.writeFileSync(path.join(s.ws, "b.ts"), newB);
 
     const hover = await s.tool("lsp_hover", { path: "a.ts", line: 1, character: 1 });
     const definition = await s.tool("lsp_definition", { path: "a.ts", line: 1, character: 1 });
 
-    // What the SERVER holds for b.ts when it answers the queries about a.ts: the text from before the edit.
-    assert.equal(s.received("textDocument/hover").at(-1)!.docs![s.uri("b.ts")], oldB);
-    assert.equal(s.received("textDocument/definition").at(-1)!.docs![s.uri("b.ts")], oldB);
-    assert.deepEqual(s.received("textDocument/didChange"), [], "no document was ever re-synced");
-    // Both answers come from that stale text and are reported as successes.
+    // What the SERVER holds for b.ts when it answers the queries about a.ts: the text on disk.
+    assert.equal((await s.received("textDocument/hover")).at(-1)!.docs![s.uri("b.ts")], newB);
+    assert.equal((await s.received("textDocument/definition")).at(-1)!.docs![s.uri("b.ts")], newB);
+    // One didChange, for b.ts only, with a version above both opens (b.ts 1, a.ts 2); the second query had nothing to send.
+    assert.deepEqual((await s.received("textDocument/didChange")).map((e) => e.params), [{ textDocument: { uri: s.uri("b.ts"), version: 3 }, contentChanges: [{ text: newB }] }]);
     assert.equal(hover.success, true);
-    assert.equal(hover.error, undefined);
-    assert.deepEqual(JSON.parse(hover.output), { word: "helper", docs: { "b.ts": oldB, "a.ts": "helper\n" } });
+    assert.deepEqual(JSON.parse(hover.output), { word: "helper", docs: { "b.ts": newB, "a.ts": "helper\n" } });
     assert.equal(definition.success, true);
-    assert.deepEqual(JSON.parse(definition.output), [{ uri: s.uri("b.ts"), range: { start: { line: 0, character: 4 }, end: { line: 0, character: 10 } } }], "line 0: where the definition was before the edit (it is on line 3 now)");
+    assert.deepEqual(JSON.parse(definition.output), [{ uri: s.uri("b.ts"), range: { start: { line: 3, character: 4 }, end: { line: 3, character: 10 } } }], "line 3: where the definition is now");
   } finally {
     await s.close();
   }
 });
-test.todo("TARGET (defect 1): before every query, each open document whose disk content changed is re-synced (or closed), so the server holds b.ts's current text and the definition answer for a.ts points at line 3");
 
 // ---------------------------------------------------------------------------------------------- 2. list cached before open
 
-test("CURRENT (defect 2): diagnostics published for a file before its first open are returned as the answer to its first query", async () => {
+test("FIXED (defect 2): a list published for a file before its first open is never its answer: the first query waits for a publish made after the open", async () => {
   const s = open(
     {
       on: {
-        initialized: [publish([diag(1, "published before open, no version")], "$root/b.ts"), publish([diag(1, "published before open, version 99")], "$root/c.ts", { version: 99 })],
-        // What the server says about the content it is actually given: clean, a little later.
+        initialized: [
+          publish([diag(1, "published before open, no version")], "$root/b.ts"),
+          publish([diag(1, "published before open, version 99")], "$root/c.ts", { version: 99 }),
+          publish([diag(1, "published before open, the server says nothing after it")], "$root/d.ts"),
+        ],
+        // What the server says about the content it is actually given: clean, a little later. (This server attaches
+        // versions; one that never does is in lsp_freshness.test.ts.)
         "textDocument/didOpen#b.ts": [{ after: 200, ...publish([], "$uri", { version: "$version" }) }],
         "textDocument/didOpen#c.ts": [{ after: 200, ...publish([], "$uri", { version: "$version" }) }],
       },
     },
-    { "a.ts": "x\n", "b.ts": "clean\n", "c.ts": "clean\n" },
+    { "a.ts": "x\n", "b.ts": "clean\n", "c.ts": "clean\n", "d.ts": "clean\n" },
   );
   try {
-    // Starts the server. The two early lists precede the hover reply in the stream, so the client has them when this returns.
+    // Starts the server. The early lists precede the hover reply in the stream, so the client has seen them when this returns.
     await s.tool("lsp_hover", { path: "a.ts", line: 1, character: 1 });
-    assert.deepEqual(s.received("textDocument/didOpen").map((e) => e.params.textDocument.uri), [s.uri("a.ts")], "b.ts and c.ts are not open yet");
+    assert.deepEqual((await s.received("textDocument/didOpen")).map((e) => e.params.textDocument.uri), [s.uri("a.ts")], "b.ts, c.ts and d.ts are not open yet");
 
     const b = await s.tool("lsp_diagnostics", { path: "b.ts" });
     const c = await s.tool("lsp_diagnostics", { path: "c.ts" });
-
     assert.equal(b.success, true);
-    assert.deepEqual(records(b.output), [{ tool: "lsp:fake", severity: "error", file: "b.ts", line: 1, column: 1, message: "published before open, no version" }]);
+    assert.deepEqual(records(b.output), [], "the list published after the open");
     assert.equal(c.success, true);
-    assert.deepEqual(records(c.output), [{ tool: "lsp:fake", severity: "error", file: "c.ts", line: 1, column: 1, message: "published before open, version 99" }], "a version that is not the opened document's (1) is accepted too");
-    assert.deepEqual(s.received("textDocument/didOpen").map((e) => [e.params.textDocument.uri, e.params.textDocument.version]), [[s.uri("a.ts"), 1], [s.uri("b.ts"), 1], [s.uri("c.ts"), 1]]);
+    assert.deepEqual(records(c.output), [], "not the early list, whose version (99) was not this document's (3)");
+    // With nothing published after the open there is no answer: the early list is not one. (300 ms: this call's own timeout.)
+    assert.deepEqual(await s.mgr.diagnostics("d.ts", 300), { status: "unavailable", reason: `Language server '${process.execPath}' published no diagnostics for d.ts within 300ms.` });
+    assert.deepEqual((await s.received("textDocument/didOpen")).map((e) => [e.params.textDocument.uri, e.params.textDocument.version]), [[s.uri("a.ts"), 1], [s.uri("b.ts"), 2], [s.uri("c.ts"), 3], [s.uri("d.ts"), 4]]);
   } finally {
     await s.close();
   }
 });
-test.todo("TARGET (defect 2): a list cached before a file's first open is dropped at didOpen; the first query waits for a publish made after the open (here: the empty list, ok)");
 
 // ---------------------------------------------------------------------------------------------- 3. symlinked workspace
 
-test("CURRENT (defect 6): in a workspace reached through a symlink, a server that publishes under the canonical URI is never heard: unavailable after the full 5000 ms", async () => {
-  const s = open({ on: { "textDocument/didOpen#a.ts": [publish([diag(1, "real error")], "$realuri")] } }, { "a.ts": "BAD\n" }, { viaSymlink: true });
-  try {
-    const started = performance.now();
-    const res = await s.tool("lsp_diagnostics", { path: "a.ts" });
-    const elapsed = performance.now() - started;
+for (const [kind, publishedAs] of [["publishes under the canonical URI", "$realuri"], ["echoes the URI it was sent", "$uri"]] as const) {
+  test(`FIXED (defect 6): in a workspace reached through a symlink, a server that ${kind} is heard at once, also after an edit`, async () => {
+    const answer = [publish([diag(1, "$text")], publishedAs)];
+    const s = open({ hover: "fromText", on: { "textDocument/didOpen#a.ts": answer, "textDocument/didChange#a.ts": answer } }, { "a.ts": "first" }, { viaSymlink: true });
+    try {
+      const started = performance.now();
+      const res = await s.tool("lsp_diagnostics", { path: "a.ts" });
+      const elapsed = performance.now() - started;
 
-    const sentUri = s.received("textDocument/didOpen")[0].params.textDocument.uri;
-    const canonicalUri = pathToFileURL(fs.realpathSync(path.join(s.ws, "a.ts"))).href;
-    assert.equal(sentUri, s.uri("a.ts"), "the client names the file by the symlinked path");
-    assert.notEqual(sentUri, canonicalUri);
-    assert.deepEqual(res, { success: false, output: "", error: unavailable(`Language server '${process.execPath}' published no diagnostics for a.ts within 5000ms.`) });
-    assertEndedByTimer(elapsed, DIAGNOSTICS_TIMEOUT_MS, "symlinked workspace");
-    // The error did arrive; it is filed under a key no query looks at.
-    const held = (await s.client() as any).diagnosticsMap as Map<string, unknown[]>;
-    assert.deepEqual([...held.keys()], [canonicalUri]);
-  } finally {
-    await s.close();
-  }
-});
-test.todo("TARGET (defect 6): documents are keyed by canonical path, so a publish under the canonical URI answers the query at once with the error (ok, 1 record)");
+      const sentUri = (await s.received("textDocument/didOpen"))[0].params.textDocument.uri;
+      const canonicalUri = pathToFileURL(fs.realpathSync(path.join(s.ws, "a.ts"))).href;
+      assert.equal(sentUri, s.uri("a.ts"), "the client names the file as the workspace was given: below the rootUri it sent");
+      assert.equal((await s.received("initialize"))[0].params.rootUri, pathToFileURL(s.ws).href);
+      assert.notEqual(sentUri, canonicalUri);
+      assert.equal(res.success, true);
+      assert.deepEqual(records(res.output), [{ tool: "lsp:fake", severity: "error", file: "a.ts", line: 1, column: 1, message: "first" }]);
+      assert.ok(elapsed < DIAGNOSTICS_TIMEOUT_MS - 1000, `answered by the publish, not by the ${DIAGNOSTICS_TIMEOUT_MS} ms timer (${Math.round(elapsed)} ms)`);
+
+      fs.writeFileSync(path.join(s.ws, "a.ts"), "second");
+      assert.deepEqual(records((await s.tool("lsp_diagnostics", { path: "a.ts" })).output).map((r) => r.message), ["second"]);
+      const hover = await s.tool("lsp_hover", { path: "a.ts", line: 1, character: 1 });
+      assert.deepEqual(JSON.parse(hover.output), { word: "second", docs: { "a.ts": "second" } });
+      // One document under one name for the whole exchange.
+      assert.deepEqual([...new Set((await s.log()).filter((e) => e.params?.textDocument).map((e) => e.params.textDocument.uri))], [sentUri]);
+    } finally {
+      await s.close();
+    }
+  });
+}
 
 // ---------------------------------------------------------------------------------------------- 4. missing binary, early exit
 
@@ -247,7 +166,7 @@ test("CURRENT (defect 10): a server that exits at once with a reason on stderr y
     const elapsed = performance.now() - started;
     assert.deepEqual(res, { success: false, output: "", error: unavailable(notStarted(process.execPath)) });
     assert.ok(elapsed < INITIALIZE_TIMEOUT_MS - 50, `the exit, not the initialize timer, ended the wait (${Math.round(elapsed)} ms)`);
-    assert.equal(s.log().filter((e) => e.event === "start").length, 1, "the fake did start (and wrote its reason to stderr)");
+    assert.equal(s.rawLog().filter((e) => e.event === "start").length, 1, "the fake did start (and wrote its reason to stderr)");
   } finally {
     await s.close();
   }
@@ -263,8 +182,9 @@ test("CURRENT (defect 10): an initialize that never answers fails after 5000 ms 
     const res = await s.tool("lsp_diagnostics", { path: "a.ts" });
     assertEndedByTimer(performance.now() - started, INITIALIZE_TIMEOUT_MS, "initialize");
     assert.deepEqual(res, { success: false, output: "", error: unavailable(notStarted(process.execPath)) });
-    assert.deepEqual(s.log().filter((e) => e.event === "recv").map((e) => e.method), ["initialize"]);
-    const pid = s.log().find((e) => e.event === "start")!.pid!;
+    // Raw reads: this server never answers, so there is no barrier to wait on; it logged `initialize` before the 5000 ms began.
+    assert.deepEqual(s.rawLog().filter((e) => e.event === "recv").map((e) => e.method), ["initialize"]);
+    const pid = s.rawLog().find((e) => e.event === "start")!.pid!;
     assert.ok(await eventually(() => !alive(pid)), "SIGTERM ended the unresponsive (but signal-obeying) server");
   } finally {
     await s.close();
@@ -288,7 +208,8 @@ test("CURRENT (defect 11): a server that ignores shutdown, exit and SIGTERM is s
     assert.deepEqual(s.mgr.serverPids(), [], "the manager no longer knows the pid");
     assert.equal(alive(pid!), true);
     // The server received all three requests to stop, and ignored them.
-    assert.ok(await eventually(() => s.received("shutdown").length === 1 && s.received("exit").length === 1 && s.log().some((e) => e.event === "signal" && e.signal === "SIGTERM")), JSON.stringify(s.log().map((e) => e.method ?? e.event)));
+    const got = (method: string) => s.rawLog().filter((e) => e.event === "recv" && e.method === method).length; // raw: the manager has let go of this server
+    assert.ok(await eventually(() => got("shutdown") === 1 && got("exit") === 1 && s.rawLog().some((e) => e.event === "signal" && e.signal === "SIGTERM")), JSON.stringify(s.rawLog().map((e) => e.method ?? e.event)));
     // Nothing in the client kills it later: one second on it is still there (lsp.ts has no further step; this fake ends only when its stdin closes, or when the finally block below kills it).
     await sleep(1000);
     assert.equal(alive(pid!), true);
@@ -306,7 +227,7 @@ test("CURRENT (defect 11): a process the server started survives shutdownAll (no
   try {
     await s.mgr.hover("a.ts", 1, 1);
     const [server] = s.mgr.serverPids();
-    grandchild = s.log().find((e) => e.event === "grandchild")!.pid!;
+    grandchild = (await s.log()).find((e) => e.event === "grandchild")!.pid!;
     assert.equal(alive(grandchild), true);
 
     s.mgr.shutdownAll();
@@ -341,7 +262,7 @@ test("CURRENT (defect 8): every server request is answered with a success: apply
     await s.mgr.hover("a.ts", 1, 1); // the five requests precede this reply, so the client has answered them
     await s.sync(); // and the fake has logged the answers
     assert.deepEqual(
-      s.log().filter((e) => e.event === "reply").map(({ to, result, error }) => ({ to, result, error })),
+      (await s.log()).filter((e) => e.event === "reply").map(({ to, result, error }) => ({ to, result, error })),
       [
         { to: "workspace/configuration", result: [null, null], error: undefined },
         { to: "client/registerCapability", result: null, error: undefined },
@@ -424,7 +345,7 @@ test("CURRENT (defect 9): 'the server has nothing here' is a failure without an 
   try {
     assert.deepEqual(await s.tool("lsp_hover", { path: "a.ts", line: 1, character: 1 }), { success: false, output: "No hover documentation available.", error: undefined });
     assert.deepEqual(await s.tool("lsp_definition", { path: "a.ts", line: 1, character: 1 }), { success: false, output: "[]", error: undefined });
-    assert.equal(s.received("textDocument/hover").length, 1, "asked once: no readiness wait, no retry");
+    assert.equal((await s.received("textDocument/hover")).length, 1, "asked once: no readiness wait, no retry");
   } finally {
     await s.close();
   }
@@ -437,7 +358,7 @@ test("CURRENT (defects 4, 15): initialize offers no positionEncodings, no worksp
   const s = open({}, { "a.ts": "x\n" });
   try {
     await s.mgr.hover("a.ts", 1, 1);
-    assert.deepEqual(s.received("initialize")[0].params, {
+    assert.deepEqual((await s.received("initialize"))[0].params, {
       processId: process.pid,
       rootUri: pathToFileURL(s.ws).href,
       capabilities: {
@@ -446,7 +367,10 @@ test("CURRENT (defects 4, 15): initialize offers no positionEncodings, no worksp
           definition: { dynamicRegistration: true },
           publishDiagnostics: { relatedInformation: true, versionSupport: true },
           synchronization: { didSave: true },
+          // Since slice S2 (pull diagnostics, for servers that are not staged); not one of the defects this test pins.
+          diagnostic: { dynamicRegistration: false, relatedDocumentSupport: false },
         },
+        workspace: { diagnostics: { refreshSupport: true } },
         window: { workDoneProgress: true },
       },
     });
@@ -468,7 +392,7 @@ test("CURRENT (defect 4): line and character are passed through minus one, whate
     const ask = async (character: number) => JSON.parse((await s.tool("lsp_hover", { path: "a.ts", line: 2, character })).output).word;
     // `ab` starts at 1-based column 18 in code points, 19 in UTF-16 units, 24 in UTF-8 bytes.
     const words = [await ask(codePoints + 1), await ask(utf16 + 1), await ask(utf8 + 1)];
-    assert.deepEqual(s.received("textDocument/hover").map((e) => e.params.position), [{ line: 1, character: 17 }, { line: 1, character: 18 }, { line: 1, character: 23 }]);
+    assert.deepEqual((await s.received("textDocument/hover")).map((e) => e.params.position), [{ line: 1, character: 17 }, { line: 1, character: 18 }, { line: 1, character: 23 }]);
     // The fake reads `character` as UTF-16 (the protocol default): only the UTF-16 column finds `ab`. The code-point
     // column lands on the space before it, the byte column on a different symbol.
     assert.deepEqual(words, ["", "ab", "other"]);
@@ -483,7 +407,7 @@ test("CURRENT (defect 23, new): a missing or fractional line/character is sent t
   try {
     await s.tool("lsp_hover", { path: "a.ts" });
     await s.tool("lsp_hover", { path: "a.ts", line: "2.5", character: 0 });
-    assert.deepEqual(s.received("textDocument/hover").map((e) => e.params.position), [{ line: null, character: null }, { line: 1.5, character: 0 }]);
+    assert.deepEqual((await s.received("textDocument/hover")).map((e) => e.params.position), [{ line: null, character: null }, { line: 1.5, character: 0 }]);
   } finally {
     await s.close();
   }
@@ -541,30 +465,46 @@ test.todo("TARGET (defect 3): the post-edit wait and the tool's timeout are cons
 
 // ---------------------------------------------------------------------------------------------- 13. growth
 
-test("CURRENT (defect 12): every file ever queried stays open with its full text; didClose is never sent", async () => {
-  const names = Array.from({ length: 20 }, (_, i) => `f${i}.ts`);
-  const s = open({ on: { "textDocument/didOpen": [publish([])] } }, { "a.ts": "x\n", ...Object.fromEntries(names.map((n) => [n, `// ${n}\n`])) });
+test("FIXED (defect 12, the bound): at most MAX_OPEN_DOCUMENTS documents stay open; one more closes the least recently queried with didClose, and a closed file is opened again with a fresh answer", async () => {
+  const names = Array.from({ length: MAX_OPEN_DOCUMENTS + 1 }, (_, i) => `f${i}.ts`);
+  const answer = [publish([diag(1, "$text")])];
+  const s = open({ on: { "textDocument/didOpen": answer, "textDocument/didChange": answer } }, { "a.ts": "x", ...Object.fromEntries(names.map((n) => [n, `first ${n}`])) });
+  const message = async (name: string) => records((await s.tool("lsp_diagnostics", { path: name })).output).map((r) => r.message);
+  const closed = async () => (await s.received("textDocument/didClose")).map((e) => e.params.textDocument.uri);
   try {
-    for (const name of names) await s.tool("lsp_hover", { path: name, line: 1, character: 1 });
-    await s.sync();
+    for (const name of names.slice(0, MAX_OPEN_DOCUMENTS)) assert.deepEqual(await message(name), [`first ${name}`]);
+    assert.deepEqual(await message("f0.ts"), ["first f0.ts"]); // queried again: f1.ts is now the least recently queried
+    assert.deepEqual(await closed(), [], "at the bound nothing is closed");
+    assert.equal(Object.keys((await s.log()).at(-1)!.docs!).length, MAX_OPEN_DOCUMENTS);
+
+    assert.deepEqual(await message(names[MAX_OPEN_DOCUMENTS]), [`first ${names[MAX_OPEN_DOCUMENTS]}`]);
+    assert.deepEqual(await closed(), [s.uri("f1.ts")]);
     const client = (await s.client()) as any;
-    assert.equal(client.opened.size, 20);
-    assert.equal(client.diagnosticsMap.size, 20);
-    assert.equal(s.received("textDocument/didOpen").length, 20);
-    assert.equal(s.received("textDocument/didClose").length, 0);
-    assert.equal(Object.keys(s.log().at(-1)!.docs!).length, 20, "the server holds all 20 too");
+    assert.equal(client.documents.size, MAX_OPEN_DOCUMENTS);
+    assert.equal(client.opened.size, MAX_OPEN_DOCUMENTS);
+    assert.equal(client.opened.has(s.uri("f1.ts")), false, "its text and its diagnostics went with it");
+    const held = Object.keys((await s.log()).at(-1)!.docs!);
+    assert.equal(held.length, MAX_OPEN_DOCUMENTS, "the server holds no more than the client");
+    assert.equal(held.includes(s.uri("f1.ts")), false);
+
+    // The closed file changes on disk, then is asked about again: opened anew, answered from its new text, and the next
+    // least recently queried document (f2.ts) makes room for it.
+    fs.writeFileSync(path.join(s.ws, "f1.ts"), "second f1.ts");
+    assert.deepEqual(await message("f1.ts"), ["second f1.ts"]);
+    assert.deepEqual((await s.received("textDocument/didOpen")).filter((e) => e.params.textDocument.uri === s.uri("f1.ts")).map((e) => e.params.textDocument.text), ["first f1.ts", "second f1.ts"]);
+    assert.deepEqual(await closed(), [s.uri("f1.ts"), s.uri("f2.ts")]);
+    assert.equal(client.documents.size, MAX_OPEN_DOCUMENTS);
   } finally {
     await s.close();
   }
 });
-test.todo("TARGET (defect 12): the open-document set is bounded: the least recently used documents are closed with didClose and their cached diagnostics dropped");
 
 test("CURRENT (defect 12): a 4 MiB file is read whole, sent whole and kept whole: there is no size cap", async () => {
   const size = 4 * 1024 * 1024;
   const s = open({}, { "a.ts": "x\n", "big.ts": "a".repeat(size) });
   try {
     await s.tool("lsp_hover", { path: "big.ts", line: 1, character: 1 });
-    assert.deepEqual(s.received("textDocument/didOpen")[0].params.textDocument.text, { elidedChars: size });
+    assert.deepEqual((await s.received("textDocument/didOpen"))[0].params.textDocument.text, { elidedChars: size });
     assert.equal(((await s.client()) as any).opened.get(s.uri("big.ts")).text.length, size);
   } finally {
     await s.close();
@@ -583,7 +523,6 @@ test("CURRENT (defect 14): an edit to another file, synced by a concurrent query
   try {
     await s.mgr.hover("b.ts", 1, 1); // b.ts is open
     const client = await s.client();
-    fs.writeFileSync(path.join(s.ws, "b.ts"), "two\n");
 
     let done = false;
     const started = performance.now();
@@ -591,6 +530,9 @@ test("CURRENT (defect 14): an edit to another file, synced by a concurrent query
     await s.sync(); // a.ts is open: its empty list and the begin of progress have arrived
     await client.sendRequest("test/release", {}); // progress ended and the client knows: left alone, the query returns 1500 ms from here
     assert.equal((client as any).progressSeen, true);
+    // Since slice S2 every query syncs every open document, so the edit has to happen while the first query is waiting
+    // (before S2 it was made before that query began, which did not look at b.ts).
+    fs.writeFileSync(path.join(s.ws, "b.ts"), "two\n");
     await s.mgr.hover("b.ts", 1, 1); // the concurrent query: syncs the edit to b.ts
     assert.equal((client as any).progressSeen, false, "the end of progress the first query was counting from is forgotten");
     assert.equal(done, false, "precondition: the first query was still waiting when the other file was synced");
