@@ -5,6 +5,7 @@ import { egressPolicyFromEnv, workspaceRelaxesEgress, type EgressPolicy } from "
 import { isTestPath } from "./tester.js";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
 import { FILE_EDIT_TOOLS } from "./file_diff.js";
+import { linkRecord, verifyChain, type ChainLink, type ChainVerdict } from "./core/hash_chain.js";
 
 export type VerificationMode = "off" | "record" | "approve" | "block";
 export type VerificationClass = "ci" | "build" | "test_config" | "verifier_script" | "test_file" | "package_scripts" | "policy";
@@ -29,6 +30,8 @@ export interface VerificationConfigAttempt {
   decision: VerificationDecisionLabel;
   role: string | null;
   timestamp: string;
+  /** Link to the attempt before this one (GV-3). Absent in sessions saved before v1.3.0. */
+  chain?: ChainLink;
 }
 
 /** Who is editing and what has been decided for this one call; nothing is kept between calls. Absent means headless and unapproved. */
@@ -180,7 +183,7 @@ const HEAVY_DIRECTORIES = new Set(["node_modules", ".git", "target", "dist", "bu
 const NON_TEST_DIRECTORIES = new Set(["fixtures", "__fixtures__", "__snapshots__", "testdata"]);
 /** Constructs that switch a test off or end its run early; a heuristic over appended text, not a proof. */
 const NEUTERING_TEXT = /\.(?:skip|only|todo)\b|(?:^|[;{}])\s*(?:fit|fdescribe|xit|xtest|xdescribe)\s*\(|process\.exit|\bsys\.exit|\bos\._exit|\bos\.Exit|System\.exit|process::exit|\bexit\s*\(|SystemExit|pytest\.exit|\bTestMain\b|\bt\.Skip|pytest\.(?:skip|mark\.(?:skip|xfail))|unittest\.skip|@Disabled|#\[ignore\]|^\s*return\s*;?\s*$|if\s*\(\s*(?:false|0)\s*\)|if\s*\(\s*true\s*\)\s*return|^throw\b/m;
-const neutersTests = (text: string): boolean => NEUTERING_TEXT.test(text) || (text.match(/\/\*/g)?.length ?? 0) > (text.match(/\*\//g)?.length ?? 0);
+export const neutersTests = (text: string): boolean => NEUTERING_TEXT.test(text) || (text.match(/\/\*/g)?.length ?? 0) > (text.match(/\*\//g)?.length ?? 0);
 
 function globToRegExp(glob: string): RegExp {
   let out = "";
@@ -203,7 +206,7 @@ function globToRegExp(glob: string): RegExp {
 }
 
 const CONDITIONAL_CONFIG_FILES = new Set(["package.json", "pyproject.toml", "setup.cfg"]);
-const isConditionalConfig = (rel: string): boolean => CONDITIONAL_CONFIG_FILES.has(path.posix.basename(rel).toLowerCase());
+export const isConditionalConfig = (rel: string): boolean => CONDITIONAL_CONFIG_FILES.has(path.posix.basename(rel).toLowerCase());
 const VERIFICATION_SECTION = /^(?:tool\.(?:pytest|coverage|tox|poe|taskipy|pdm\.scripts|poetry\.scripts|hatch\.envs)(?:\..*)?|tool:pytest|pytest|coverage:.*|tox:.*|testenv.*)$/i;
 
 /** The body of each section of a TOML or INI file that decides how tests run, by section name. */
@@ -217,6 +220,19 @@ function verificationSections(text: string): Record<string, string[]> {
     } else if (current && line.trim()) current.push(line.trim());
   }
   return found;
+}
+
+/**
+ * Whether new text for package.json, pyproject.toml or setup.cfg changes what tests run (the keys or sections that
+ * decide it). `before` is null when the file did not exist. Throws when a package.json is not JSON.
+ */
+export function conditionalConfigChanged(file: string, before: string | null, after: string): boolean {
+  if (path.basename(file).toLowerCase() === "package.json") {
+    const was = before === null ? {} : JSON.parse(before);
+    const now = JSON.parse(after);
+    return PACKAGE_VERIFICATION_KEYS.some((k) => JSON.stringify(was[k]) !== JSON.stringify(now[k]));
+  }
+  return JSON.stringify(verificationSections(before ?? "")) !== JSON.stringify(verificationSections(after));
 }
 
 /**
@@ -653,17 +669,40 @@ export class SecurityManager {
   }
 
   private verificationAttempts: VerificationConfigAttempt[] = [];
+  /** Link of the last attempt; undefined before the first, and when the restored log cannot be continued. */
+  private lastAttemptLink: ChainLink | undefined;
+  /** False once a restored log was unchained or broken: later attempts are appended without links, so its state stays visible. */
+  private attemptsChained = true;
 
   public getVerificationAttempts(): VerificationConfigAttempt[] {
     return this.verificationAttempts.map((a) => ({ ...a }));
   }
 
+  /**
+   * Take over the attempts of a saved session. They are kept exactly as read, including a log that no longer
+   * verifies: this class reports the damage (verificationAttemptsIntegrity) and never repairs or drops records.
+   */
   public restoreVerificationAttempts(attempts: VerificationConfigAttempt[] | undefined): void {
     this.verificationAttempts = Array.isArray(attempts) ? attempts.map((a) => ({ ...a })) : [];
+    const verdict = verifyChain(this.verificationAttempts);
+    this.attemptsChained = verdict.status === "intact";
+    this.lastAttemptLink = verdict.status === "intact" ? verdict.head : undefined;
+  }
+
+  /** Whether the verification-configuration attempt log reads as it was written (core/hash_chain.ts). */
+  public verificationAttemptsIntegrity(): ChainVerdict {
+    return verifyChain(this.verificationAttempts);
   }
 
   public recordVerificationAttempt(rel: string, cls: VerificationClass, tool: string, decision: VerificationDecisionLabel, role?: string): void {
-    this.verificationAttempts.push({ path: rel, class: cls, tool, decision, role: role ?? null, timestamp: new Date().toISOString() });
+    const attempt: VerificationConfigAttempt = { path: rel, class: cls, tool, decision, role: role ?? null, timestamp: new Date().toISOString() };
+    if (!this.attemptsChained) {
+      this.verificationAttempts.push(attempt);
+      return;
+    }
+    const linked = linkRecord(attempt, this.lastAttemptLink);
+    this.lastAttemptLink = linked.chain;
+    this.verificationAttempts.push(linked);
   }
 
   /** The verification-config rule `rel` (workspace-relative) falls under: the default list, operator `extra`, or a runnable test file. `allow` exempts. */
@@ -757,12 +796,7 @@ export class SecurityManager {
         const to = String(args.new_content ?? "");
         afterText = args.replace_all ? beforeText.split(from).join(to) : beforeText.replace(from, () => to);
       } else return true;
-      if (path.basename(abs).toLowerCase() === "package.json") {
-        const before = exists ? JSON.parse(beforeText) : {};
-        const after = JSON.parse(afterText);
-        return PACKAGE_VERIFICATION_KEYS.some((k) => JSON.stringify(before[k]) !== JSON.stringify(after[k]));
-      }
-      return JSON.stringify(verificationSections(beforeText)) !== JSON.stringify(verificationSections(afterText));
+      return conditionalConfigChanged(abs, exists ? beforeText : null, afterText);
     } catch {
       return true;
     }

@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import * as assert from "node:assert/strict";
+import path from "node:path";
 import { parseAddedLines, parseLcov } from "../scripts/diff_coverage.mjs";
+import { optionValue, resolveCoverageOut } from "../scripts/script_args.mjs";
 
 test("diff coverage reads only added lines from zero-context hunks", () => {
   const diff = [
@@ -18,6 +20,28 @@ test("diff coverage reads only added lines from zero-context hunks", () => {
     "-deleted only",
   ].join("\n");
   assert.deepEqual(parseAddedLines(diff), [10, 40, 41, 42]);
+});
+
+test("diff coverage keeps added source lines that themselves begin with ++", () => {
+  const diff = [
+    "diff --git a/cli/src/a.ts b/cli/src/a.ts",
+    "--- a/cli/src/a.ts",
+    "+++ b/cli/src/a.ts",
+    "@@ -1 +1 @@",
+    "-old",
+    "+++typed line",
+  ].join("\n");
+  assert.deepEqual(parseAddedLines(diff), [1]);
+});
+
+test("script options reject a missing value instead of consuming the next flag", () => {
+  assert.equal(optionValue(["node", "run.mjs", "--out", "report.info"], "out", "fallback"), "report.info");
+  assert.equal(optionValue(["node", "run.mjs", "--out", "--tier=unit"], "out", "fallback"), "fallback");
+  assert.equal(optionValue(["node", "run.mjs", "--out=report.info"], "out", "fallback"), "report.info");
+  assert.equal(optionValue(["node", "run.mjs"], "out", "fallback"), "fallback");
+  assert.equal(resolveCoverageOut(["node", "run.mjs"], {}, "/repo/cli"), path.join("/repo/cli", "coverage", "lcov.info"));
+  assert.equal(resolveCoverageOut(["node", "run.mjs"], { NEXUS_COVERAGE_OUT: "custom.info" }, "/repo/cli"), path.join("/repo/cli", "custom.info"));
+  assert.equal(resolveCoverageOut(["node", "run.mjs", "--out", "flag.info"], { NEXUS_COVERAGE_OUT: "env.info" }, "/repo/cli"), path.join("/repo/cli", "flag.info"));
 });
 
 test("diff coverage ignores non-instrumented lines and normalises lcov paths", () => {

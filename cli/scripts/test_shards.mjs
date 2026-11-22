@@ -121,7 +121,7 @@ export async function runShards(files, { count = 2, durations = loadTestDuration
   process.on("SIGTERM", onSignal);
   try {
     const results = await Promise.all(shards.map((shard, index) => {
-      const bytes = shard.reduce((total, file) => total + fs.statSync(file).size, 0);
+      const bytes = shard.reduce((total, file) => total + fs.statSync(path.resolve(cli, file)).size, 0);
       const measured = shard.filter((file) => durations[durationKey(file)] > 0).length;
       const basis = measured === shard.length ? "duration" : measured > 0 ? "mixed" : "size";
       console.error(`[test-shard ${index + 1}/${shards.length}] files=${shard.length} source_bytes=${bytes} measured=${measured}/${shard.length} basis=${basis}`);

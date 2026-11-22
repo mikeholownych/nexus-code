@@ -6,7 +6,12 @@
   },
   {
     "protocol": 1,
-    "schemaSha256": "ce28a2f81e914a2ec675872b4fb96ef14bc19afb827126208abaaa6d83633fc9",
+    "schemaSha256": "9cf30b58fb0f720ef8ecbf5f1a3d8ad5015ca0f842fee9131b9f7b4d017bb4bc",
+    "note": "Add objective tool invocation budget exhaustion and accounting fields to turn results; additive protocol v1 change."
+  },
+  {
+    "protocol": 1,
+    "schemaSha256": "ec987e1083659ed595b68edea6f1707746fce82f6136ab7cc197d9dfa4d51037",
     "note": "Capability negotiation, additive, so the version stays 1. hello gains the optional fields protocol_min, protocol_max, capabilities and experimental; the new command initialize is answered by the new event initialized; error codes UNSUPPORTED_PROTOCOL and EXPERIMENTAL_DISABLED are added. An older client ignores the new hello fields and never sends initialize, so it sees what it saw before; a newer client that finds no range in hello falls back to the exact-version check, and one that sends initialize to an older sidecar gets BAD_REQUEST (unknown message type) and carries on without negotiation. No existing field or message changed meaning."
   }
 ]

@@ -25,7 +25,7 @@ export const sha256 = (text) => crypto.createHash("sha256").update(text).digest(
 
 const byText = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
-class SchemaBuilder {
+export class SchemaBuilder {
   constructor(checker) {
     this.checker = checker;
     this.defs = {};
@@ -169,7 +169,7 @@ class SchemaBuilder {
   }
 }
 
-function sortKeys(object) {
+export function sortKeys(object) {
   return Object.fromEntries(Object.keys(object).sort(byText).map((key) => [key, object[key]]));
 }
 

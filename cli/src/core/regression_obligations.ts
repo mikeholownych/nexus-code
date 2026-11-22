@@ -196,14 +196,26 @@ const SKIP_MARKER = /\.skip\b|\bxit\b|\bxtest\b|\bxdescribe\b|\.todo\b|@(?:pytes
 const ASSERTION = /\b(?:assert\w*|expect|require\.\w+|t\.(?:Error|Fatal)\w*)\s*[.(]|\.should\b|\bself\.assert\w*/g;
 const count = (text: string, re: RegExp) => text.match(re)?.length ?? 0;
 
+/**
+ * Every way an edit weakens a test file, the strongest first: the test is gone, a skip marker was added, assertions were
+ * removed. With `testName`, "gone" means that name no longer appears; without one, that nothing is left of the file
+ * (`after` is "" when it was deleted). Heuristics over text, not proof: an empty result does not show the edit is harmless.
+ */
+export function classifyTestEdit(before: string, after: string, testName?: string): Array<{ kind: Exclude<WeakeningKind, "unverifiable-change">; detail: string }> {
+  const found: Array<{ kind: Exclude<WeakeningKind, "unverifiable-change">; detail: string }> = [];
+  if (testName !== undefined) {
+    if (!after.includes(testName)) found.push({ kind: "removed", detail: "the test no longer appears in the file" });
+  } else if (before.trim() && !after.trim()) found.push({ kind: "removed", detail: "nothing is left of the test file" });
+  if (count(after, SKIP_MARKER) > count(before, SKIP_MARKER)) found.push({ kind: "skipped", detail: "a skip marker was added" });
+  if (count(after, ASSERTION) < count(before, ASSERTION)) found.push({ kind: "fewer-assertions", detail: `assertions ${count(before, ASSERTION)} -> ${count(after, ASSERTION)}` });
+  return found;
+}
+
 /** Record a weakening of any active obligation's test in an edited file. `after` is "" when the file was deleted. */
 export function recordTestEdit(ledger: ObjectiveLedger, edit: { path: string; before: string; after: string; at?: string }): void {
   for (const ob of active(ledger)) {
     if (!edit.before.includes(ob.testName)) continue;
-    let weakening: { kind: WeakeningKind; detail: string } | undefined;
-    if (!edit.after.includes(ob.testName)) weakening = { kind: "removed", detail: "the test no longer appears in the file" };
-    else if (count(edit.after, SKIP_MARKER) > count(edit.before, SKIP_MARKER)) weakening = { kind: "skipped", detail: "a skip marker was added" };
-    else if (count(edit.after, ASSERTION) < count(edit.before, ASSERTION)) weakening = { kind: "fewer-assertions", detail: `assertions ${count(edit.before, ASSERTION)} -> ${count(edit.after, ASSERTION)}` };
+    const weakening = classifyTestEdit(edit.before, edit.after, ob.testName)[0];
     if (weakening) ob.weakenings.push({ at: edit.at ?? now(), path: edit.path, ...weakening });
   }
 }
