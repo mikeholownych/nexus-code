@@ -1,4 +1,4 @@
-{"direction":"event","name":"hello","json":"{\"v\":1,\"type\":\"hello\",\"protocol\":1,\"pid\":42}"}
+{"direction":"event","name":"hello","json":"{\"v\":1,\"type\":\"hello\",\"protocol\":1,\"pid\":42,\"commands\":[{\"name\":\"help\",\"usage\":\"/help\",\"summary\":\"Show help\"}]}"}
 {"direction":"event","name":"assistant.delta","json":"{\"v\":1,\"type\":\"assistant.delta\",\"turn_id\":\"t1\",\"text\":\"hi\"}"}
 {"direction":"event","name":"tool.end","json":"{\"v\":1,\"type\":\"tool.end\",\"turn_id\":\"t1\",\"call_id\":\"c1\",\"tool\":\"run_command\",\"success\":true,\"summary\":\"ok\",\"lines\":1}"}
 {"direction":"event","name":"session.state","json":"{\"v\":1,\"type\":\"session.state\",\"workspace\":\"/w/app\",\"workspace_name\":\"app\",\"model\":\"m\",\"mode\":\"auto\",\"git\":{\"branch\":\"main\",\"dirty\":2},\"busy\":false}"}
