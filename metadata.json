@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M80JH6JKWT138GP9PHWN27ZC",
+  "strategy": "manual-commit",
+  "branch": "v1/gv3-hash-chain",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "cli/src/core/hash_chain.ts",
+    "cli/test/hash_chain.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 9214,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 2509824,
+    "output_tokens": 2497,
+    "api_call_count": 18
+  },
+  "redaction": {
+    "replacements": 1263,
+    "layers": {
+      "betterleaks": 308,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 43,
+      "credentialed_uri": 44,
+      "entropy": 1018,
+      "key_context": 0,
+      "provider_token": 4,
+      "shell_stdin": 0
+    }
+  }
+}
