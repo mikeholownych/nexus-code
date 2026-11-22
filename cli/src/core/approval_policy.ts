@@ -3,6 +3,8 @@
  * Nexus SPEC-01 §5.1, §5.2 — Safe Execution Defaults (DEC-01, as amended)
  */
 import { EffectClass } from "./capabilities.js";
+import type { EffectivePolicy } from "./managed_policy.js";
+import { clampApprovalSettings, humanRequirementForEffect, managedPolicy } from "./policy_runtime.js";
 
 export type ApprovalMode = "auto" | "review" | "read-only";
 
@@ -15,9 +17,17 @@ export interface PolicyContext {
   egressOrigin?: string;
   isUntrustedSource?: boolean;
   fullAccess?: boolean;
+  /**
+   * GV-1: managed policy requires a human decision for this call (a managed `prompt` command rule, or its effect is in
+   * `approval.require_human`). It holds in every mode, full access included; the caller names the policy source.
+   */
+  policyRequiresHuman?: boolean;
 }
 
 export class ApprovalPolicy {
+  /** `policy` gives the effective managed policy every decision is clamped under; the process's own when omitted. */
+  constructor(private readonly policy: () => EffectivePolicy = managedPolicy) {}
+
   /**
    * Decides whether an operator decision is required before executing a capability with effect class `effect`.
    * Permission mode controls tool approvals independently of workspace trust:
@@ -25,9 +35,14 @@ export class ApprovalPolicy {
    * - Auto mode allows writes and commands; egress asks once per origin per session.
    * - Untrusted context sources remain distinguishable from workspace trust.
    * - --yes / fullAccess forces auto for write and exec.
+   * - `policyRequiresHuman` (managed policy) asks in every mode, before any of the above.
    */
   public requiresDecision(effect: EffectClass, context: PolicyContext): boolean {
-    const { mode, approvedEgressOrigins, egressOrigin, isUntrustedSource, fullAccess } = context;
+    // GV-1: managed policy is applied here, in the one gate every caller asks, so no caller's context outranks it.
+    // A required human outranks every mode: full access and an already-approved egress origin do not answer for it.
+    const managed = this.policy();
+    if (context.policyRequiresHuman || humanRequirementForEffect(managed, effect)) return true;
+    const { mode, approvedEgressOrigins, egressOrigin, isUntrustedSource, fullAccess } = clampApprovalSettings(managed, context);
 
     // Full access (--yes / operator force auto) bypasses confirmation prompts for write and exec
     if (fullAccess) {
