@@ -64,20 +64,23 @@ test("invalid input to any of the three tools is refused with the expected form,
   }
 });
 
-test("the tool descriptions state the input form, the definition shape, that hover and diagnostics are fenced, and 'nothing here' against 'not ready'", () => {
+test("the tool descriptions state the units, the definition shape and what is not an answer, inside the size they had before", () => {
+  const all = [lspHoverCapability, lspDefinitionCapability, lspDiagnosticsCapability];
   const text = (c: typeof lspHoverCapability) => JSON.stringify(c.toolDefinition);
   for (const c of [lspHoverCapability, lspDefinitionCapability]) {
     const p = (c.toolDefinition as any).function.parameters.properties;
-    assert.match(p.line.description, /positive integer/);
-    assert.match(p.character.description, /positive integer/);
-    assert.match(p.path.description, /inside the workspace/);
-    assert.match(text(c), /still indexing/);
+    assert.match(p.line.description, /1-based/);
+    assert.match(p.character.description, /1-based/);
   }
   assert.match(text(lspDefinitionCapability), /\{file, line, column, endLine, endColumn\}/);
   assert.match(text(lspDefinitionCapability), /external/);
-  assert.match(text(lspHoverCapability), /untrusted/);
-  assert.match(text(lspDiagnosticsCapability), /untrusted/);
+  assert.match(text(lspHoverCapability), /still indexing/i);
   assert.match(text(lspDiagnosticsCapability), /unavailable/);
+  // These three definitions are sent to the model on every turn. A first version of this slice added 516 characters
+  // and a turn with a 17,000-token context then lost a re-read file to truncation (context_convergence.test.ts).
+  // 584 is what the descriptions measured before LS-1; they may say more only by saying it in fewer characters.
+  const described = all.flatMap((c) => [...text(c).matchAll(/"description":"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1].length)).reduce((a, b) => a + b, 0);
+  assert.ok(described <= 584, `LSP tool descriptions total ${described} characters`);
 });
 
 // -------------------------------------------------------------------------------------------------------- definition
