@@ -1,0 +1,163 @@
+name: Nexus Code verify
+description: Give a verdict on a change (a pull request) with `nexus verify`. No model, no provider, no secret. The step fails unless the verdict is VERIFIED.
+author: mikeholownych
+
+inputs:
+  version:
+    description: Nexus release to install (a tag such as v1.3.0; `nexus verify` exists from v1.3.0). Pin one for reproducible runs; "latest" is the newest stable release.
+    default: latest
+  worktree:
+    description: Top of the Git working tree, relative to the repository root.
+    default: "."
+  base:
+    description: Commit the change starts from. Default - the pull request's base commit, from the event.
+    default: ""
+  head:
+    description: Commit that holds the change. Default - the checked-out commit (HEAD).
+    default: ""
+  verifier:
+    description: Your own verifier command (for example "npm test"). It is a shell command and runs as given - set it in the workflow file, never from an event field. Empty - one is discovered in the BASE commit and must be approved with approve-verifier.
+    default: ""
+  deliverable-files:
+    description: Tree-relative product files the change is meant to deliver, one per line. VERIFIED needs at least one.
+    default: ""
+  approve-verifier:
+    description: The sha256 digest of the discovered verifier you approve (printed when approval is needed). A digest of a verifier you have read; there is deliberately no input that approves whatever is discovered.
+    default: ""
+  approve-verification-edits:
+    description: Tree-relative verification files (a weakened test, CI, build or test configuration) whose edit you have read and approve, one per line. Approval lifts BLOCKED and never makes the change VERIFIED.
+    default: ""
+  sandbox:
+    description: Confine every process started on the repository's code - auto, bwrap or docker. Empty uses auto (Bubblewrap, then Docker); set none only for changes you trust. BLOCKED when the default or selected engine is not usable on the runner.
+    default: ""
+  sandbox-network:
+    description: '"true" lets the confined processes use the network. The sandbox is enabled by default.'
+    default: "false"
+  timeout-secs:
+    description: Deadline of each verifier run, and of each side's type-checks, in seconds. Empty - 300.
+    default: ""
+  receipt-path:
+    description: Where to write the result document (the receipt). Empty - a file in the runner's temp directory.
+    default: ""
+  fail-on-blocked:
+    description: '"false" makes BLOCKED (exit code 3 - a person must decide) end the step successfully with the output blocked=true, so the workflow can handle it apart from a failure (request a review, label the pull request). Every other verdict but VERIFIED still fails the step.'
+    default: "true"
+
+outputs:
+  verdict:
+    description: VERIFIED, REGRESSION_FREE, UNVERIFIED or BLOCKED. Empty when no verdict was reached (a usage error).
+    value: ${{ steps.verify.outputs.verdict }}
+  reason:
+    description: Why the verdict is not VERIFIED (for example VERIFIER_FAILED, VERIFICATION_EDIT_BLOCKED, SANDBOX_UNAVAILABLE). Empty for VERIFIED.
+    value: ${{ steps.verify.outputs.reason }}
+  blocked:
+    description: '"true" when the verdict is BLOCKED.'
+    value: ${{ steps.verify.outputs.blocked }}
+  exit-code:
+    description: The exit code of `nexus verify` (0 verified, 1 failed, 2 unverified or usage, 3 blocked).
+    value: ${{ steps.verify.outputs.exit-code }}
+  receipt-path:
+    description: Path of the result document (the receipt). Empty when none was written.
+    value: ${{ steps.verify.outputs.receipt-path }}
+
+# No credential, provider or model: `nexus verify` uses none. Scripts below contain no `${{ }}` expressions: every input
+# and event field reaches them as an environment variable and is passed to `nexus` as one quoted argument, so a value
+# cannot be interpreted as shell. The one input that IS a shell command by design is `verifier` (the operator's own).
+runs:
+  using: composite
+  steps:
+    - name: Install Nexus
+      shell: bash
+      env:
+        NEXUS_VERSION: ${{ inputs.version }}
+        NEXUS_PREFIX: ${{ runner.temp }}/nexus
+        NEXUS_ACTION_TEMP: ${{ runner.temp }}
+      run: |
+        set -euo pipefail
+        sh "$GITHUB_ACTION_PATH/../../install.sh"
+        echo "$NEXUS_PREFIX/bin" >> "$GITHUB_PATH"
+
+    - name: Verify the change
+      id: verify
+      shell: bash
+      env:
+        NEXUS_VERIFY_WORKTREE: ${{ inputs.worktree }}
+        NEXUS_VERIFY_BASE: ${{ inputs.base }}
+        NEXUS_VERIFY_EVENT_BASE: ${{ github.event.pull_request.base.sha }}
+        NEXUS_VERIFY_HEAD: ${{ inputs.head }}
+        NEXUS_VERIFY_VERIFIER: ${{ inputs.verifier }}
+        NEXUS_VERIFY_DELIVERABLES: ${{ inputs.deliverable-files }}
+        NEXUS_VERIFY_APPROVE_VERIFIER: ${{ inputs.approve-verifier }}
+        NEXUS_VERIFY_APPROVE_EDITS: ${{ inputs.approve-verification-edits }}
+        NEXUS_VERIFY_SANDBOX: ${{ inputs.sandbox }}
+        NEXUS_VERIFY_SANDBOX_NETWORK: ${{ inputs.sandbox-network }}
+        NEXUS_VERIFY_TIMEOUT_SECS: ${{ inputs.timeout-secs }}
+        NEXUS_VERIFY_RECEIPT: ${{ inputs.receipt-path }}
+        NEXUS_VERIFY_FAIL_ON_BLOCKED: ${{ inputs.fail-on-blocked }}
+        NEXUS_VERIFY_TEMP: ${{ runner.temp }}
+      run: |
+        set -uo pipefail
+        temp="${NEXUS_VERIFY_TEMP:-${RUNNER_TEMP:-/tmp}}"
+        document="$temp/nexus-verify-result.json"
+        receipt="${NEXUS_VERIFY_RECEIPT:-}"
+        [ -n "$receipt" ] || receipt="$temp/nexus-verify-receipt.json"
+        case "$receipt" in
+          *$'\n'*|*$'\r'*)
+            echo "::error::receipt-path must not contain a line break."
+            echo "exit-code=2" >> "${GITHUB_OUTPUT:-/dev/null}"
+            exit 2 ;;
+        esac
+        rm -f -- "$document" "$receipt"
+        base="${NEXUS_VERIFY_BASE:-}"
+        if [ -z "$base" ]; then
+          # The event's base commit: a full object name and nothing else.
+          base="${NEXUS_VERIFY_EVENT_BASE:-}"
+          case "$base" in
+            ""|*[!0-9a-f]*)
+              echo "::error::nexus verify needs a base commit: this is not a pull_request event, so set the 'base' input."
+              echo "exit-code=2" >> "${GITHUB_OUTPUT:-/dev/null}"
+              exit 2 ;;
+          esac
+        fi
+        # Every value is one argument in the `--option=value` form, so a value that starts with "-" is still a value.
+        args=(verify "--worktree=${NEXUS_VERIFY_WORKTREE:-.}" "--base=$base" "--head=${NEXUS_VERIFY_HEAD:-HEAD}" --json "--receipt=$receipt")
+        [ -n "${NEXUS_VERIFY_VERIFIER:-}" ] && args+=("--verifier=$NEXUS_VERIFY_VERIFIER")
+        while IFS= read -r file; do
+          [ -n "$file" ] && args+=("--deliverable-file=$file")
+        done <<< "${NEXUS_VERIFY_DELIVERABLES:-}"
+        [ -n "${NEXUS_VERIFY_APPROVE_VERIFIER:-}" ] && args+=("--approve-verifier=$NEXUS_VERIFY_APPROVE_VERIFIER")
+        while IFS= read -r file; do
+          [ -n "$file" ] && args+=("--approve-verification-edit=$file")
+        done <<< "${NEXUS_VERIFY_APPROVE_EDITS:-}"
+        [ -n "${NEXUS_VERIFY_SANDBOX:-}" ] && args+=("--sandbox=$NEXUS_VERIFY_SANDBOX")
+        [ "${NEXUS_VERIFY_SANDBOX_NETWORK:-false}" = "true" ] && args+=(--sandbox-network)
+        [ -n "${NEXUS_VERIFY_TIMEOUT_SECS:-}" ] && args+=("--timeout-secs=$NEXUS_VERIFY_TIMEOUT_SECS")
+        "${NEXUS:-nexus}" "${args[@]}" > "$document"
+        code=$?
+        # Only the verdict and the reason are copied out, and only when they are the plain names they should be: the
+        # document also holds text that came from the repository, which never goes into an output or the summary.
+        field() { node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const v=JSON.parse(d)[process.argv[1]];process.stdout.write(typeof v==="string"&&/^[A-Z_]{1,64}$/.test(v)?v:"")}catch{}})' "$1" < "$document"; }
+        verdict="$(field verdict)"
+        reason="$(field reason)"
+        blocked=false
+        [ "$verdict" = "BLOCKED" ] && blocked=true
+        [ -f "$receipt" ] || receipt=""
+        {
+          echo "verdict=$verdict"
+          echo "reason=$reason"
+          echo "blocked=$blocked"
+          echo "exit-code=$code"
+          echo "receipt-path=$receipt"
+        } >> "${GITHUB_OUTPUT:-/dev/null}"
+        {
+          echo "### nexus verify: ${verdict:-no verdict}${reason:+ ($reason)} (exit $code)"
+          echo
+          echo "VERIFIED means: tests that existed on the base failed there and pass on the change (or your own verifier passed with the tests unchanged), and they import every declared deliverable. It does not mean the change was reviewed."
+        } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+        # The exit code is the gate: 0 only for VERIFIED. BLOCKED (3) means a person must decide; a workflow that handles
+        # that itself sets fail-on-blocked to "false" and reads the `blocked` output.
+        if [ "$code" -eq 3 ] && [ "$blocked" = "true" ] && [ "${NEXUS_VERIFY_FAIL_ON_BLOCKED:-true}" = "false" ]; then
+          echo "::warning::nexus verify: BLOCKED${reason:+ ($reason)}: a person must decide; the step does not fail because fail-on-blocked is false."
+          exit 0
+        fi
+        exit "$code"

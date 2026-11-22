@@ -495,6 +495,10 @@
             "$ref": "#/$defs/VerifyRunRecord"
           }
         },
+        "sandbox": {
+          "description": "Always written; absent only in a document from before `--sandbox` existed (nothing was sandboxed).",
+          "$ref": "#/$defs/VerifySandbox"
+        },
         "schema_version": {
           "description": "Version of this document's schema. Always the first member.",
           "const": 1
@@ -567,6 +571,7 @@
         "NO_APPLICABLE_VERIFIER",
         "NO_TESTS_EXECUTED",
         "REGRESSION_FREE",
+        "SANDBOX_UNAVAILABLE",
         "TREE_LIMIT_EXCEEDED",
         "TYPECHECK_FAILED",
         "TYPECHECK_NOT_RUN",
@@ -625,6 +630,10 @@
             "head"
           ]
         },
+        "sandboxed": {
+          "description": "The process ran inside the sandbox named in `sandbox.engine`. Always written; absent only in a document from before `--sandbox` existed (the run was not sandboxed).",
+          "type": "boolean"
+        },
         "timedOut": {
           "type": "boolean"
         }
@@ -638,6 +647,33 @@
         "passed",
         "phase",
         "timedOut"
+      ]
+    },
+    "VerifySandbox": {
+      "description": "How the processes `nexus verify` started on repository content were confined: the verifier on each side, the base's\ntests against the head, and the type-checks. One answer for all of them: a run is never started outside a sandbox\nthat was requested.",
+      "type": "object",
+      "properties": {
+        "engine": {
+          "description": "The engine every process ran in. `none`: no sandbox (not requested, or requested and unavailable, in which case nothing ran).",
+          "enum": [
+            "bwrap",
+            "docker",
+            "none"
+          ]
+        },
+        "network": {
+          "description": "The confined processes could use the network (`--sandbox-network`). Always false when `engine` is `none`: an unconfined process has the caller's network, which this member does not describe.",
+          "type": "boolean"
+        },
+        "requested": {
+          "description": "`--sandbox` was given.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "engine",
+        "network",
+        "requested"
       ]
     },
     "VerifyTreeRef": {

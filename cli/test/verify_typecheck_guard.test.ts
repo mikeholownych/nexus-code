@@ -14,12 +14,12 @@ import {
   commit, consumeResult, head, runCli, toolPath, verifyInProcess, withRepos,
 } from "./helpers/verify_fixture.js";
 
-const OPERATOR: VerifyOperatorContext = { approveDiscoveredVerifier: true, deliverables: ["src/math.js"] };
+const OPERATOR: VerifyOperatorContext = { approveDiscoveredVerifier: true, deliverables: ["src/math.js"], sandbox: { engine: "none" } };
 /**
  * The operator's own verifier: the same tests without `npm` in front (a third of the time). Used where the case does
  * not turn on how the verifier was chosen: what the guard finds and whether it blocks is the same for both.
  */
-const OWN_VERIFIER: VerifyOperatorContext = { verifierCommand: "node --test", deliverables: ["src/math.js"] };
+const OWN_VERIFIER: VerifyOperatorContext = { verifierCommand: "node --test", deliverables: ["src/math.js"], sandbox: { engine: "none" } };
 const phases = (result: VerifyJsonResult): string[] => result.runs.map((ran) => ran.phase);
 const summary = (result: VerifyJsonResult) => [result.verdict, result.outcome, result.reason, result.exitCode];
 
@@ -166,7 +166,7 @@ test("a Cargo type-check's build directory is removed with the scratch trees", {
     fs.writeFileSync(path.join(tools.dir, "cargo"), fakeCargo, { mode: 0o755 });
     try {
       // The verifier is the operator's, so the base tree's Cargo project does not choose it.
-      const run = await verifyInProcess({ worktree: repo, base, head: changed }, { verifierCommand: "node --test", deliverables: ["src/math.js"] }, { env: { PATH: tools.PATH } });
+      const run = await verifyInProcess({ worktree: repo, base, head: changed }, { verifierCommand: "node --test", deliverables: ["src/math.js"], sandbox: { engine: "none" } }, { env: { PATH: tools.PATH } });
       assert.equal(run.result.typecheck.status, "PASSED", run.result.detail);
       assert.equal(projects(run.result)[0].tool, "cargo");
       assert.match(projects(run.result)[0].command ?? "", /^CARGO_TARGET_DIR='[^']+nexus-typecheck-[0-9a-f]{16}' cargo check --offline --locked$/);
@@ -348,10 +348,10 @@ test("CLI: the text verdicts for a type error and a weakened test, --approve-ver
       const typedHead = commit(typed, { "src/math.js": TYPE_ERROR_IN_CHANGED });
       const plainBase = head(plain);
       const plainHead = commit(plain, BAD);
-      const weakened = ["-w", plain, "--base", plainBase, "--head", plainHead, ...DELIVERABLE, "-y"];
+      const weakened = ["-w", plain, "--base", plainBase, "--head", plainHead, ...DELIVERABLE, "-y", "--sandbox", "none"];
       const [typeText, typeJson, weakText, approvedJson, usage] = await Promise.all([
-        runCli(["-w", typed, "--base", typedBase, "--head", typedHead, ...DELIVERABLE, "-y"], { PATH: tools.PATH }),
-        runCli(["-w", typed, "--base", typedBase, "--head", typedHead, ...DELIVERABLE, "-y", "--json"], { PATH: tools.PATH }),
+        runCli(["-w", typed, "--base", typedBase, "--head", typedHead, ...DELIVERABLE, "-y", "--sandbox", "none"], { PATH: tools.PATH }),
+        runCli(["-w", typed, "--base", typedBase, "--head", typedHead, ...DELIVERABLE, "-y", "--sandbox", "none", "--json"], { PATH: tools.PATH }),
         runCli(weakened),
         runCli([...weakened, "--json", "--approve-verification-edit", `./${TEST_FILE}`, "--approve-verification-edit", "package.json"]),
         runCli([...weakened, "--approve-verification-edit", "../outside.js"]),

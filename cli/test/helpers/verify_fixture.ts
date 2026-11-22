@@ -70,7 +70,7 @@ export async function withRepos<T>(files: Array<Record<string, string>>, check: 
 
 /** A result document is what the published schema says, and its verdict, reason and exit code agree with the contract's tables. */
 export function assertVerifyResult(doc: any): void {
-  assert.deepEqual(validate(doc, VERIFY_SCHEMA, VERIFY_SCHEMA), [], "the document validates against docs/protocol/verify-result-v1.schema.json");
+  assert.deepEqual(validate(doc, VERIFY_SCHEMA, VERIFY_SCHEMA), [], `the document validates against docs/protocol/verify-result-v${VERIFY_RESULT_SCHEMA_VERSION}.schema.json`);
   assert.equal(Object.keys(doc)[0], "schema_version");
   assert.equal(doc.schema_version, VERIFY_RESULT_SCHEMA_VERSION);
   assert.equal(doc.verdict, verifyVerdictFor(doc.reason), `${doc.verdict}/${doc.reason}: ${doc.detail}`);
@@ -78,6 +78,15 @@ export function assertVerifyResult(doc: any): void {
   assert.equal(doc.verdict === "VERIFIED", doc.exitCode === 0, "exit 0 if and only if VERIFIED");
   assert.equal(doc.verdict === "VERIFIED", doc.outcome === "VERIFIED");
   assert.equal(doc.review.status, "NOT_RUN");
+  // The sandbox record is always written, and every run says the same as it: a run is never outside a sandbox that was used.
+  assert.equal(typeof doc.sandbox?.requested, "boolean");
+  assert.ok(["none", "bwrap", "docker"].includes(doc.sandbox.engine), `sandbox.engine ${doc.sandbox.engine}`);
+  if (doc.sandbox.engine === "none") assert.equal(doc.sandbox.network, false);
+  for (const ran of doc.runs) assert.equal(ran.sandboxed, doc.sandbox.engine !== "none", `the ${ran.phase} run's sandboxed flag agrees with sandbox.engine`);
+  if (doc.reason === "SANDBOX_UNAVAILABLE") {
+    assert.equal(doc.sandbox.engine, "none");
+    assert.deepEqual(doc.runs, [], "an unavailable default or selected sandbox starts no verifier process");
+  }
   // Nothing waits for a decision in a VERIFIED result, and no finding that needed approval is in one.
   if (doc.verdict === "VERIFIED") {
     assert.equal(doc.guard.status, "CLEAR");
@@ -184,4 +193,25 @@ export async function verifyInProcess(
     Object.assign(process.env, saved);
     for (const dir of [tmp, home, tools.dir]) fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/**
+ * A directory to put first on PATH, holding stand-ins for the sandbox engines. `refuses`: the program exits 1 whatever it
+ * is asked, which is how an engine that is not installed looks to the availability probe, on any host. `records`: it
+ * answers `--version` and otherwise writes its arguments, NUL-separated, to `<dir>/<name>.argv` and exits 0 without
+ * running anything (enough for the wrapper to build a command line; the probe still finds it unusable).
+ */
+export function fakeEngines(engines: Record<string, "refuses" | "records">): { dir: string; PATH: string; argvOf: (name: string) => string[] } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-verify-engines-"));
+  for (const [name, how] of Object.entries(engines)) {
+    const record = path.join(dir, `${name}.argv`);
+    fs.writeFileSync(path.join(dir, name), how === "refuses"
+      ? "#!/bin/sh\nexit 1\n"
+      : `#!/bin/sh\n[ "$1" = "--version" ] && { echo "${name} 0.0.0"; exit 0; }\nprintf '%s\\0' "$@" > '${record}'\nexit 0\n`, { mode: 0o755 });
+  }
+  return {
+    dir,
+    PATH: [dir, ...(process.env.PATH ?? "").split(path.delimiter)].join(path.delimiter),
+    argvOf: (name) => fs.readFileSync(path.join(dir, `${name}.argv`), "utf8").split("\0").slice(0, -1),
+  };
 }
