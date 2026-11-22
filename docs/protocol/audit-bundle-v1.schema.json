@@ -376,6 +376,7 @@
           ]
         },
         "workspace_path": {
+          "description": "The workspace as the task or session record names it: the string stored there, not resolved again at export.",
           "anyOf": [
             {
               "type": "string"
@@ -386,7 +387,7 @@
           ]
         },
         "workspace_sha256": {
-          "description": "SHA-256 (hex) of the workspace path, so bundles of one workspace can be matched when the path is withheld.",
+          "description": "SHA-256 (lowercase hex) of the UTF-8 bytes of the workspace path exactly as the task or session record holds it:\nno `realpath`, no normalisation, no trailing separator added or removed, no newline. Bundles of one workspace can\nso be matched when the path is withheld. When `workspace_path` is present this is the hash of that very string\n(a bundle where the two disagree does not verify); null exactly when the record names no workspace.",
           "anyOf": [
             {
               "type": "string"

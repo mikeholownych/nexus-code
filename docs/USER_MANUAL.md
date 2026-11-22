@@ -178,6 +178,42 @@ nexus audit --errors
 nexus audit --tool run_command
 ```
 
+### `nexus audit export` / `nexus audit verify`
+`nexus audit export <id>` writes the evidence of one saved task or session as an **audit bundle**: a directory holding the session export, the validation receipts, the last turn, the verifier attempts, the verification-configuration attempts, the requirement evidence, the operation diffs and the flight logs, with a `manifest.json` that records the SHA-256 of every file. `nexus audit verify <bundle-dir>` checks such a directory against its manifest. Neither uses a model, and `verify` checks integrity only: it re-runs nothing. The full description is [`docs/AUDIT.md`](AUDIT.md).
+
+```bash
+nexus audit export task-20261122-1 --out ./audit/task-1       # prints the manifest hash: record it somewhere else
+nexus audit export session_20261122_101500_ab12cd34 --store sessions --flight flight-2026-11-22T10-15-00-000Z-1a2b3c --receipt-file verify.json
+nexus audit export task-20261122-1 --sign-key ./operator-ed25519-private.pem --out ./audit/signed-task
+nexus audit verify ./audit/task-1
+nexus audit verify ./audit/signed-task --public-key ./operator-ed25519-public.pem
+nexus audit verify ./audit/task-1 --expect-manifest-sha256 <the hash recorded at export> --json
+```
+
+- **The id is exact.** A prefix is not accepted, and an id that is both a task and a session needs `--store tasks` or `--store sessions`. Exporting never changes the task or session it reads.
+- **`--out` must not exist** (default `./nexus-audit-<id>-<UTC time>`); a bundle is never written over anything, and the command reports success only when the bundle is complete and in place.
+- **A bundle is secret-redacted, not confidential.** `--redact standard` (the only redaction in this version) removes what Nexus classifies as a credential. Prompts, model replies, tool output, source code in diffs, absolute paths, the model name and the endpoint remain. Whatever was left out is listed in the output and in the manifest, with the reason.
+- **Signing is optional.** `--sign-key` reads an operator-held Ed25519 private key for this export; Nexus never copies the key into the bundle. Verify with the matching `--public-key`. A signed bundle without a public key is `signature_unchecked` (exit 2). Unsigned bundles say: “This bundle is NOT SIGNED: anyone able to write it could have replaced its files and the manifest together.” Record the manifest hash separately when signatures are not used.
+- **Flight logs** carry no task id. Name them with `--flight <id>` (repeatable); otherwise the flights of the workspace that started between the subject's creation and its last update are taken, which is a heuristic and can pick up another task's flight. `-w` names the workspace to look in.
+- With `--json` each command prints exactly one document on stdout (`docs/protocol/audit-verify-result-v1.schema.json`); its `exitCode` is the process exit code.
+- `nexus audit` without a subcommand still prints the tool audit log (above); any other word after it is a usage error.
+
+#### Exit codes of `nexus audit export` and `nexus audit verify`
+
+| Code | Name | When |
+|---|---|---|
+| 0 | `exported` | `audit export`: the bundle was written. |
+| 0 | `intact_signed` | `audit verify`: every file matches the manifest, and the manifest is signed by the key given with `--public-key`. |
+| 0 | `intact_unsigned` | `audit verify`: every file matches the manifest and the bundle is not signed. The result rests on the manifest alone, and the output says so every time. |
+| 1 | `tampered` | `audit verify`: a file is altered, missing, extra or unsafe (a symbolic link, not a regular file); the manifest is malformed or inconsistent; a chained log does not match its recorded head; a limit was exceeded; the signature is invalid; or a key was given and the bundle has no signature. |
+| 1 | `error` | The command itself failed (the bundle directory cannot be read, an export could not be written), so nothing was established. |
+| 1 | `option_parse` | The command line could not be parsed: an unknown option or an option without its value (the option parser exits before the command runs; no JSON document). |
+| 2 | `signature_unchecked` | `audit verify`: every file matches the manifest, and the bundle carries a signature that was not checked because no `--public-key` was given. |
+| 2 | `unsupported_version` | `audit verify`: the bundle declares a schema version this Nexus does not read. Nothing was checked. |
+| 2 | `usage` | A usage error: an invalid option value or combination, an id that is not a valid name or is in both stores without `--store`, an `--out` that already exists, an `audit verify` path that is not an existing directory, or an unknown `audit` subcommand. |
+| 2 | `subject_not_found` | `audit export`: no task or session has the given id. |
+| 130 | `interrupted` | Interrupted (SIGINT). |
+
 ### Exposing Nexus Tools via Model Context Protocol (MCP)
 To expose Nexus Code's native Rust tools to external LLM clients (Claude Desktop, Cursor, Zed):
 ```bash

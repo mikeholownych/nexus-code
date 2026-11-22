@@ -136,8 +136,14 @@ export interface AuditSubject {
   session_id: string | null;
   /** The store the subject was read from. */
   store: "tasks" | "sessions";
+  /** The workspace as the task or session record names it: the string stored there, not resolved again at export. */
   workspace_path: string | null;
-  /** SHA-256 (hex) of the workspace path, so bundles of one workspace can be matched when the path is withheld. */
+  /**
+   * SHA-256 (lowercase hex) of the UTF-8 bytes of the workspace path exactly as the task or session record holds it:
+   * no `realpath`, no normalisation, no trailing separator added or removed, no newline. Bundles of one workspace can
+   * so be matched when the path is withheld. When `workspace_path` is present this is the hash of that very string
+   * (a bundle where the two disagree does not verify); null exactly when the record names no workspace.
+   */
   workspace_sha256: string | null;
   status: string | null;
   updated_at: string | null;
@@ -294,7 +300,7 @@ export interface AuditVerifyResult {
   notes: string[];
 }
 
-/** Printed instead of a result when the verification could not be carried out (no such directory, an invalid option, an internal error). Nothing was established. */
+/** Printed instead of a result when the verification, or the export, could not be carried out (no such directory or subject, an invalid option, an internal error). Nothing was established and no bundle was written. */
 export interface AuditVerifyError {
   /** Version of this document's schema. Always the first member. */
   schema_version: typeof AUDIT_VERIFY_RESULT_SCHEMA_VERSION;
@@ -302,8 +308,45 @@ export interface AuditVerifyError {
   exitCode: number;
 }
 
-/** The one JSON document a verification prints. A result has `result`; an error document does not. */
-export type AuditVerifyOutput = AuditVerifyResult | AuditVerifyError;
+/**
+ * Printed by `nexus audit export --json` when the bundle was written: it is complete and in place at `bundle_dir`. An
+ * export that could not be carried out prints the error document (AuditVerifyError) instead.
+ */
+export interface AuditExportResult {
+  /** Version of this document's schema. Always the first member. */
+  schema_version: typeof AUDIT_VERIFY_RESULT_SCHEMA_VERSION;
+  result: "exported";
+  /** The process exit code (AUDIT_EXIT_CODES). */
+  exitCode: number;
+  /** Absolute path of the bundle directory. */
+  bundle_dir: string;
+  bundle_id: string;
+  /** SHA-256 (hex) of the bytes of manifest.json: the value to record somewhere the bundle's holder cannot change it. */
+  manifest_sha256: string;
+  /** Whether the bundle carries a signature. An unsigned bundle shows that it is self-consistent, not who wrote it. */
+  signed: boolean;
+  redaction: AuditRedaction;
+  /** False when the subject could still be changing while it was exported. */
+  at_rest: boolean;
+  /** Number of payload files written, and their sizes together in bytes. */
+  file_count: number;
+  file_bytes: number;
+  /** Everything that was left out, each with the reason (the manifest's `omitted`). */
+  omitted: AuditOmitted[];
+  /** Things the operator should know about this export; none of them is a failure. */
+  warnings: string[];
+}
+
+/**
+ * The one JSON document an `audit` command prints with `--json`. `audit verify`: a result (AuditVerifyResult) or the
+ * error document. `audit export`: AuditExportResult (`result` is "exported") or the error document. An error document
+ * has no `result`.
+ */
+export type AuditVerifyOutput = AuditVerifyResult | AuditVerifyError | AuditExportResult;
+/** What `audit verify` prints. */
+export type AuditVerifyDocument = AuditVerifyResult | AuditVerifyError;
+/** What `audit export` prints. */
+export type AuditExportDocument = AuditExportResult | AuditVerifyError;
 
 export interface AuditExitCode {
   code: number;
@@ -325,7 +368,7 @@ export const AUDIT_EXIT_CODES = [
   { code: 1, name: "option_parse", when: "The command line could not be parsed: an unknown option or an option without its value (the option parser exits before the command runs; no JSON document)." },
   { code: 2, name: "signature_unchecked", when: "`audit verify`: every file matches the manifest, and the bundle carries a signature that was not checked because no `--public-key` was given." },
   { code: 2, name: "unsupported_version", when: "`audit verify`: the bundle declares a schema version this Nexus does not read. Nothing was checked." },
-  { code: 2, name: "usage", when: "A usage error: an invalid option value or combination, or an unknown `audit` subcommand." },
+  { code: 2, name: "usage", when: "A usage error: an invalid option value or combination, an id that is not a valid name or is in both stores without `--store`, an `--out` that already exists, an `audit verify` path that is not an existing directory, or an unknown `audit` subcommand." },
   { code: 2, name: "subject_not_found", when: "`audit export`: no task or session has the given id." },
   { code: 130, name: "interrupted", when: "Interrupted (SIGINT)." },
 ] as const satisfies readonly AuditExitCode[];

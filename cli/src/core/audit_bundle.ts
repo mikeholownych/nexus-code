@@ -16,9 +16,8 @@
  * could not reach (`expectManifestSha256`), or a signature checked against a key the verifier already holds. Neither
  * shows that the content was true when it was exported, only that it has not changed since.
  *
- * Signing arrives in slice 3 (core/audit_sign.ts). Until then nothing here signs or checks a signature: a bundle that
- * carries `manifest.sig.json` is reported as `signature_unchecked` (its files are still checked), never as signed, and
- * no public-key option is accepted.
+ * Optional signing uses a detached Ed25519 signature over the exact canonical manifest bytes and a domain separator.
+ * The public key is never embedded; only the verifier's supplied operator-held key can establish signed integrity.
  *
  * Writing is durable by default (`durable`, default true): every file, the manifest and every directory of the bundle
  * are fsynced before the rename into place, and the destination's parent after it; `durable: false` skips the fsyncs.
@@ -32,7 +31,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createPublicKey, randomBytes, sign as cryptoSign, verify as cryptoVerify, type KeyObject } from "node:crypto";
 import {
   AUDIT_BUNDLE_FORMAT,
   AUDIT_BUNDLE_SCHEMA_VERSION,
@@ -41,6 +40,7 @@ import {
   AUDIT_LIMITS,
   AUDIT_MANIFEST_FILE,
   AUDIT_SIGNATURE_FILE,
+  AUDIT_SIGNATURE_DOMAIN,
   AUDIT_VERIFY_RESULT_SCHEMA_VERSION,
   auditExitCode,
   type AuditBuildIdentity,
@@ -53,12 +53,13 @@ import {
   type AuditFinding,
   type AuditFindingKind,
   type AuditManifest,
+  type AuditSignatureEnvelope,
   type AuditOmitted,
   type AuditRedaction,
   type AuditSignatureStatus,
   type AuditSubject,
   type AuditVerifiedLog,
-  type AuditVerifyOutput,
+  type AuditVerifyDocument,
   type AuditVerifyResult,
   type AuditVerifyResultName,
 } from "../audit_contract.js";
@@ -208,6 +209,22 @@ class ChainedLogReader {
   }
 }
 
+/**
+ * The records of a chained log held in memory, read exactly as the verifier reads the bundled file. `limit` names the
+ * limit that stopped the reading; the records are then incomplete and must not be judged.
+ */
+export function readChainedLogRecords(bytes: Uint8Array, limits: AuditLimits = AUDIT_LIMITS): { records: unknown[]; limit?: string } {
+  const reader = new ChainedLogReader(limits);
+  reader.push(bytes);
+  reader.end();
+  return { records: reader.records, limit: reader.limit };
+}
+
+/** `subject.workspace_sha256` for a workspace path: SHA-256 of the string's UTF-8 bytes, as given (see AuditSubject). */
+export function auditWorkspaceSha256(workspacePath: string): string {
+  return sha256Hex(workspacePath);
+}
+
 const headOf = (verdict: ChainVerdict): { seq: number; hash: string } | undefined =>
   verdict.status === "intact" && verdict.head ? { seq: verdict.head.seq, hash: verdict.head.hash } : undefined;
 
@@ -243,6 +260,7 @@ function manifestProblems(m: Record<string, unknown>, limits: AuditLimits): Prob
     !(s.workspace_sha256 === null || isHex64(s.workspace_sha256)) ||
     typeof s.at_rest !== "boolean"
   ) bad("subject is missing a member or has one of the wrong type");
+  else if (typeof s.workspace_path === "string" && s.workspace_sha256 !== sha256Hex(s.workspace_path)) bad("subject.workspace_sha256 is not the SHA-256 of subject.workspace_path");
   if (m.redaction !== "standard" && m.redaction !== "strict") bad('redaction is not "standard" or "strict"');
   if (!isHex64(m.root_sha256)) bad("root_sha256 is not a SHA-256 in lowercase hex");
   if (!(m.files_head === null || isHead(m.files_head))) bad("files_head is not null or { seq, hash }");
@@ -356,6 +374,8 @@ export interface WriteAuditBundleOptions extends AuditManifestOptions {
   out: string;
   /** Fsync every file and directory written, and the destination's parent after the rename, so the bundle survives a power loss once the call returns. Default true. */
   durable?: boolean;
+  /** Optional operator-owned Ed25519 private key. It is used in memory and never copied into the bundle. */
+  signingKey?: KeyObject;
 }
 
 export interface WrittenAuditBundle {
@@ -368,6 +388,24 @@ export interface WrittenAuditBundle {
 /** The exact bytes of manifest.json for a manifest. */
 export function auditManifestBytes(manifest: AuditManifest): Buffer {
   return Buffer.from(`${canonicalJson(manifest)}\n`, "utf8");
+}
+
+/** Detached Ed25519 signature over a domain separator and the exact canonical manifest bytes. */
+function auditSignatureBytes(manifestBytes: Buffer, supplied: KeyObject): Buffer {
+  if (supplied.type !== "private") throw new AuditBundleError("the signing key must be an Ed25519 private key");
+  const privateKey = supplied;
+  if (privateKey.asymmetricKeyType !== "ed25519") throw new AuditBundleError("the signing key must be Ed25519");
+  const publicKey = createPublicKey(privateKey);
+  const publicDer = publicKey.export({ type: "spki", format: "der" });
+  const envelope: AuditSignatureEnvelope = {
+    schema_version: AUDIT_BUNDLE_SCHEMA_VERSION,
+    algorithm: "ed25519",
+    signed_file: AUDIT_MANIFEST_FILE,
+    manifest_sha256: sha256Hex(manifestBytes),
+    public_key_sha256: sha256Hex(publicDer),
+    signature: cryptoSign(null, Buffer.concat([Buffer.from(AUDIT_SIGNATURE_DOMAIN), manifestBytes]), privateKey).toString("base64"),
+  };
+  return Buffer.from(`${canonicalJson(envelope)}\n`, "utf8");
 }
 
 /** The manifest for `input`. Throws AuditBundleError for anything the verifier would refuse. Nothing is read or written. */
@@ -393,9 +431,7 @@ export function buildAuditManifest(input: AuditBundleInput, options: AuditManife
   for (const log of [...(input.chainedLogs ?? [])].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))) {
     const artefact = artefacts.find((candidate) => candidate.path === log.path);
     if (!artefact) throw new AuditBundleError(`chained log ${JSON.stringify(shown(String(log.path)))} is not one of the artefacts`);
-    const reader = new ChainedLogReader(limits);
-    reader.push(artefact.bytes);
-    reader.end();
+    const reader = readChainedLogRecords(artefact.bytes, limits);
     if (reader.limit) throw new AuditBundleError(`chained log ${log.path}: ${reader.limit}`);
     const verdict = verifyChain(reader.records);
     chained_logs.push({ path: log.path, kind: log.kind, records: verdict.records, status: verdict.status, head: headOf(verdict), closed: log.closed, source: log.source, selection: log.selection });
@@ -455,6 +491,7 @@ export function writeAuditBundle(input: AuditBundleInput, options: WriteAuditBun
   const out = path.resolve(options.out);
   const manifest = buildAuditManifest(input, options);
   const manifestBytes = auditManifestBytes(manifest);
+  const signatureBytes = options.signingKey ? auditSignatureBytes(manifestBytes, options.signingKey) : undefined;
   if (fs.lstatSync(out, { throwIfNoEntry: false })) throw new AuditBundleError(`${out} already exists; an audit bundle is never written over anything`);
   const partial = `${out}.partial-${randomBytes(8).toString("hex")}`;
   const durable = options.durable !== false;
@@ -475,6 +512,7 @@ export function writeAuditBundle(input: AuditBundleInput, options: WriteAuditBun
       writePrivateFile(path.join(partial, ...segments), artefact.bytes, durable);
     }
     writePrivateFile(path.join(partial, AUDIT_MANIFEST_FILE), manifestBytes, durable);
+    if (signatureBytes) writePrivateFile(path.join(partial, AUDIT_SIGNATURE_FILE), signatureBytes, durable);
     if (durable) {
       for (const dir of made) fsyncDirectoryDurably(path.join(partial, ...dir.split("/")));
       fsyncDirectoryDurably(partial);
@@ -507,11 +545,13 @@ export interface VerifyAuditBundleOptions {
   expectManifestSha256?: string;
   /** Tighter limits than AUDIT_LIMITS (a value above the default is ignored). */
   limits?: Partial<AuditLimits>;
+  /** Optional operator-held Ed25519 public key. */
+  publicKey?: KeyObject;
 }
 
 export interface AuditVerification {
   /** The result document (what `--json` prints). */
-  document: AuditVerifyOutput;
+  document: AuditVerifyDocument;
   /** The row of AUDIT_EXIT_CODES; `document.exitCode` is its code. */
   exit: AuditExitName;
 }
@@ -597,7 +637,7 @@ function verify(bundleDir: string, options: VerifyAuditBundleOptions): AuditVeri
   // A caller that passes an option this version does not have (a public key, before signing exists) must not be told
   // "intact" as if the option had been honoured.
   for (const key of Object.keys(options)) {
-    if (key !== "expectManifestSha256" && key !== "limits") return verifyError("usage", `unsupported verification option: ${shown(key)}`);
+      if (key !== "expectManifestSha256" && key !== "limits" && key !== "publicKey") return verifyError("usage", `unsupported verification option: ${shown(key)}`);
   }
   let expected: string | null = null;
   if (options.expectManifestSha256 !== undefined) {
@@ -620,18 +660,42 @@ function verify(bundleDir: string, options: VerifyAuditBundleOptions): AuditVeri
   const logs: AuditVerifiedLog[] = [];
   let signature: AuditSignatureStatus = "absent";
   let manifestSha256: string | null = null;
+  let publicKeySha256: string | null = null;
   let bundleId: string | null = null;
   let listed = 0;
   let matched = 0;
   let unsupported = false;
+  let signaturePresent = false;
+  let signatureEnvelope: AuditSignatureEnvelope | undefined;
+  let manifestBytes: Buffer | undefined;
 
-  // Signing arrives in slice 3. Here a signature file is only noticed, so that a signed bundle is never reported as
-  // plainly intact by a verifier that did not check the signature.
+  // The detached signature is outside the manifest's payload tree. Read it independently and never follow links.
   try {
     const stat = fs.lstatSync(path.join(root, AUDIT_SIGNATURE_FILE), { throwIfNoEntry: false });
     if (stat) {
+      signaturePresent = true;
       signature = "unchecked";
       if (!stat.isFile()) findings.add("unsafe_entry", stat.isSymbolicLink() ? "a symbolic link; it was not followed or read" : "not a regular file; it was not read", AUDIT_SIGNATURE_FILE);
+      else {
+        const opened = openRegular(path.join(root, AUDIT_SIGNATURE_FILE));
+        if (!("fd" in opened)) findings.add(opened.kind, opened.message, AUDIT_SIGNATURE_FILE);
+        else {
+          const chunks: Buffer[] = [];
+          try {
+            const size = opened.size > limits.manifestBytes ? undefined : readStream(opened.fd, limits.manifestBytes, (chunk) => chunks.push(Buffer.from(chunk)));
+            if (size === undefined) findings.add("limit_exceeded", `signature envelope is larger than ${limits.manifestBytes} bytes; it was not read`, AUDIT_SIGNATURE_FILE);
+            else {
+              const raw = Buffer.concat(chunks).toString("utf8");
+              const parsed: unknown = JSON.parse(raw);
+              if (!isObject(parsed) || parsed.schema_version !== AUDIT_BUNDLE_SCHEMA_VERSION || parsed.algorithm !== "ed25519" || parsed.signed_file !== AUDIT_MANIFEST_FILE || !isHex64(parsed.manifest_sha256) || !isHex64(parsed.public_key_sha256) || typeof parsed.signature !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/.test(parsed.signature) || `${canonicalJson(parsed)}\n` !== raw) {
+                findings.add("signature_invalid", "the signature envelope is malformed or non-canonical", AUDIT_SIGNATURE_FILE);
+              } else signatureEnvelope = parsed as unknown as AuditSignatureEnvelope;
+            }
+          } catch {
+            findings.add("signature_invalid", "the signature envelope is not valid canonical JSON", AUDIT_SIGNATURE_FILE);
+          } finally { fs.closeSync(opened.fd); }
+        }
+      }
     }
   } catch (err) {
     signature = "unchecked";
@@ -639,9 +703,36 @@ function verify(bundleDir: string, options: VerifyAuditBundleOptions): AuditVeri
   }
 
   const manifest = readManifest();
+  if (options.publicKey) {
+    if (!signaturePresent) {
+      signature = "missing";
+      findings.add("signature_missing", "a public key was supplied but the bundle has no signature", AUDIT_SIGNATURE_FILE);
+    } else if (signatureEnvelope && manifestBytes) {
+      try {
+        const publicKey = options.publicKey.type === "public" ? options.publicKey : createPublicKey(options.publicKey);
+        if (publicKey.asymmetricKeyType !== "ed25519") throw new Error("not ed25519");
+        const der = publicKey.export({ type: "spki", format: "der" });
+        const keyHash = sha256Hex(der);
+        publicKeySha256 = keyHash;
+        if (signatureEnvelope.manifest_sha256 !== sha256Hex(manifestBytes)) {
+          signature = "invalid";
+          findings.add("signature_invalid", "the signature names a different manifest hash", AUDIT_SIGNATURE_FILE);
+        } else if (signatureEnvelope.public_key_sha256 !== keyHash) {
+          signature = "invalid";
+          findings.add("signature_key_mismatch", "the signature was made by a different public key", AUDIT_SIGNATURE_FILE);
+        } else if (!cryptoVerify(null, Buffer.concat([Buffer.from(AUDIT_SIGNATURE_DOMAIN), manifestBytes]), publicKey, Buffer.from(signatureEnvelope.signature, "base64"))) {
+          signature = "invalid";
+          findings.add("signature_invalid", "the Ed25519 signature does not verify", AUDIT_SIGNATURE_FILE);
+        } else signature = "valid";
+      } catch {
+        signature = "invalid";
+        findings.add("signature_invalid", "the public key or signature could not be checked", AUDIT_SIGNATURE_FILE);
+      }
+    }
+  }
   if (manifest && !unsupported) checkTree(manifest);
 
-  const result: AuditVerifyResultName = unsupported ? "unsupported_version" : findings.total > 0 ? "tampered" : signature === "unchecked" ? "signature_unchecked" : "intact_unsigned";
+  const result: AuditVerifyResultName = unsupported ? "unsupported_version" : findings.total > 0 ? "tampered" : signature === "valid" ? "intact_signed" : signature === "unchecked" ? "signature_unchecked" : "intact_unsigned";
   if (result !== "tampered" && result !== "unsupported_version" && (!manifest || matched !== listed || logs.some((log) => !log.matches_manifest))) {
     throw new Error("internal inconsistency: no finding, but not every file and log was checked");
   }
@@ -653,7 +744,7 @@ function verify(bundleDir: string, options: VerifyAuditBundleOptions): AuditVeri
     manifest_sha256: manifestSha256,
     expected_manifest_sha256: expected,
     signature,
-    public_key_sha256: null,
+    public_key_sha256: publicKeySha256,
     files: { listed, matched },
     chained_logs: logs,
     findings: findings.listed,
@@ -700,6 +791,7 @@ function verify(bundleDir: string, options: VerifyAuditBundleOptions): AuditVeri
       return undefined;
     }
     const bytes = Buffer.concat(chunks);
+    manifestBytes = bytes;
     manifestSha256 = sha256Hex(bytes);
     if (expected !== null && expected !== manifestSha256) {
       findings.add("manifest_sha256_mismatch", `the manifest's SHA-256 is ${manifestSha256}; you expected ${expected}. This is not the manifest that hash was taken from.`, AUDIT_MANIFEST_FILE);
@@ -932,7 +1024,7 @@ function verify(bundleDir: string, options: VerifyAuditBundleOptions): AuditVeri
 export const AUDIT_UNSIGNED_CAVEAT = "This bundle is NOT SIGNED: anyone able to write it could have replaced its files and the manifest together.";
 
 /** The result as text for a person. The classes of wording are fixed; a consumer reads the JSON document instead. */
-export function renderAuditVerifyText(document: AuditVerifyOutput): string {
+export function renderAuditVerifyText(document: AuditVerifyDocument): string {
   if (!("result" in document)) return `ERROR, NOTHING WAS CHECKED: ${document.error}\n`;
   const n = document.files.listed;
   const match = n === 0 ? "the manifest lists no files" : n === 1 ? "the 1 file matches the manifest" : `all ${n} files match the manifest`;
