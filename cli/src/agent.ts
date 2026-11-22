@@ -336,8 +336,12 @@ export class AutonomousAgent {
   private turnPersistenceFailures: string[] = [];
   /** A shared objective-budget checkpoint failed; no delegated execution may continue on unpersisted allowance. */
   public objectiveBudgetPersistenceFailure?: string;
+  /** Current turn's tool allowance; delegated helpers reserve from this same tracker before each dispatch. */
+  public activeToolInvocationBudget?: { tracker: ExecutionTracker; maximum: number; persist: () => boolean };
   /** Parent-owned durable budget shared with this ephemeral helper for the duration of one delegation. */
   private sharedObjectiveBudget?: { ledger: ObjectiveLedger; persist: () => boolean };
+  /** Parent-owned tool admission state shared with every in-turn delegated helper. */
+  private sharedToolInvocationBudget?: { tracker: ExecutionTracker; maximum: number; persist: () => boolean };
   /** A mid-turn progress save failed and no save has succeeded since (the notice is given once). */
   private progressSaveFailing = false;
   private sessionSaveFailing = false;
@@ -1680,11 +1684,13 @@ export class AutonomousAgent {
 
   /** Share the parent's ledger and durable checkpoint with an ephemeral delegated agent. */
   public inheritObjectiveBudget(parent: AutonomousAgent): void {
-    if (!parent.durable || !parent.objective) return;
-    this.sharedObjectiveBudget = {
-      ledger: parent.objective,
-      persist: () => parent.persistObjectiveBudget(),
-    };
+    if (parent.activeToolInvocationBudget) this.sharedToolInvocationBudget = parent.activeToolInvocationBudget;
+    if (parent.durable && parent.objective) {
+      this.sharedObjectiveBudget = {
+        ledger: parent.objective,
+        persist: () => parent.persistObjectiveBudget(),
+      };
+    }
   }
 
   /**
@@ -4748,6 +4754,20 @@ ${NEXUS_RUNTIME_IDENTITY}`;
         if (signal?.aborted) {
           this.messages.push({ role: "tool", tool_call_id: call.id, name: toolName, content: "Cancelled by operator before execution. No action was taken." });
           continue;
+        }
+        const toolBudget = this.sharedToolInvocationBudget;
+        if (toolBudget) {
+          const admitted = toolBudget.tracker.admitToolInvocations(1, toolBudget.maximum);
+          if (admitted !== 1) {
+            return {
+              completed: false,
+              summary: finalSummary,
+              reason: `TOOL_INVOCATION_BUDGET_EXHAUSTED: objective tool dispatch budget exhausted (${toolBudget.tracker.data.toolInvocations}/${toolBudget.maximum}); ${toolName} was not executed`,
+            };
+          }
+          if (!toolBudget.persist()) {
+            return { completed: false, summary: finalSummary, reason: "PERSISTENCE_FAILED: tool invocation budget could not be saved before delegated tool execution" };
+          }
         }
         const { receipt, shouldExit } = await this.dispatchToolCall(call, currentStep, "subagent", onConfirm);
         // VC-9: a decision only the operator can make. The subagent neither waits for it nor takes it: it stops here and the parent surfaces the question.

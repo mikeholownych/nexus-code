@@ -12,7 +12,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AutonomousAgent } from "../src/agent.js";
-import { DEFAULT_CONTINUATION, HarnessConfig, MAX_CONTINUATION_MINUTES, MAX_CONTINUATION_STEPS } from "../src/types.js";
+import { DEFAULT_CONTINUATION, DEFAULT_MAX_TOOL_INVOCATIONS, HarnessConfig, MAX_CONTINUATION_MINUTES, MAX_CONTINUATION_STEPS, MAX_TOOL_INVOCATIONS } from "../src/types.js";
+import { continuationBudget, toolInvocationLimit } from "../src/config.js";
 import { startGateway, makeRepo, Reply } from "./helpers/fixtures.js";
 import { createLedger, seedRequirements, applyRequirementUpdates, isNewObjective, failedCheckFrom, renderPinnedLedger, acceptDescoping, requirementDone, readObjective, invalidateVerified, queueSteering, amendObjective, trackingOf } from "../src/core/objective.js";
 import { stableToolCallId, redactTaskStateForPersistence } from "../src/core/persistence_protection.js";
@@ -53,8 +54,67 @@ describe("continuation beyond the per-segment step limit", () => {
   test("automatic continuation has finite default step and invocation time ceilings", () => {
     assert.equal(DEFAULT_CONTINUATION.maxTotalSteps, 500);
     assert.equal(DEFAULT_CONTINUATION.maxTurnMinutes, 480);
+    assert.equal(DEFAULT_CONTINUATION.maxToolInvocations, DEFAULT_MAX_TOOL_INVOCATIONS);
     assert.ok(Number.isFinite(DEFAULT_CONTINUATION.maxTotalSteps));
     assert.ok(Number.isFinite(DEFAULT_CONTINUATION.maxTurnMinutes));
+  });
+
+  test("tool invocation ceilings have finite defaults, accept operator overrides, and stay hard bounded", () => {
+    const saved = process.env.NEXUS_MAX_TOOL_INVOCATIONS;
+    delete process.env.NEXUS_MAX_TOOL_INVOCATIONS;
+    try {
+      assert.equal(toolInvocationLimit({}), DEFAULT_MAX_TOOL_INVOCATIONS);
+      assert.equal(toolInvocationLimit({ maxToolInvocations: "12" }), 12);
+      assert.equal(continuationBudget({ maxToolInvocations: "8" })!.maxToolInvocations, 8);
+      assert.throws(() => toolInvocationLimit({ maxToolInvocations: String(MAX_TOOL_INVOCATIONS + 1) }), /maximum is 10000/);
+      assert.throws(() => toolInvocationLimit({ maxToolInvocations: "1.5" }), /positive integer/);
+    } finally {
+      if (saved !== undefined) process.env.NEXUS_MAX_TOOL_INVOCATIONS = saved;
+    }
+  });
+
+  test("a burst of distinct writes stops at the objective tool budget and resume cannot raise it", { timeout: 60_000 }, async () => {
+    let request = 0;
+    const gw = await startGateway(() => {
+      request++;
+      if (request === 1) {
+        return {
+          kind: "tools",
+          calls: Array.from({ length: 5 }, (_, i) => ({
+            name: "write_file",
+            args: { path: `budget-${i + 1}.txt`, content: `write ${i + 1}` },
+          })),
+        };
+      }
+      return write("budget-after-resume.txt");
+    });
+    const repo = makeRepo();
+    const agent = quiet(new AutonomousAgent(cfg(gw.url, repo, {
+      continuation: undefined,
+      maxToolInvocations: 2,
+    })));
+    try {
+      const first = await agent.runTurn("Write several distinct files.");
+      assert.equal(first.execution, "LIMIT_REACHED");
+      assert.equal(first.reason, "TOOL_INVOCATION_BUDGET_EXHAUSTED");
+      assert.match(first.detail ?? "", /2\/2 dispatcher admissions/);
+      assert.deepEqual(fs.readdirSync(repo).filter((name) => name.startsWith("budget-")).sort(), ["budget-1.txt", "budget-2.txt"]);
+      assert.equal(agent.getObjective()!.execution!.toolInvocations, 2);
+      assert.equal(agent.getObjective()!.continuation.maxToolInvocations, 2);
+
+      (agent as any).config.maxToolInvocations = 5;
+      const resumed = await agent.runTurn("", undefined, { resume: true });
+      assert.equal(resumed.execution, "LIMIT_REACHED");
+      assert.equal(resumed.reason, "TOOL_INVOCATION_BUDGET_EXHAUSTED");
+      assert.equal(gw.requests.length, 2, "resume may inspect state but cannot dispatch beyond the persisted ceiling");
+      assert.deepEqual(fs.readdirSync(repo).filter((name) => name.startsWith("budget-")).sort(), ["budget-1.txt", "budget-2.txt"]);
+      assert.equal(agent.getObjective()!.execution!.toolInvocations, 2);
+      assert.equal(agent.getObjective()!.continuation.maxToolInvocations, 2, "a later flag cannot renew an exhausted objective");
+    } finally {
+      agent.shutdown();
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
   });
 
   test("legacy objective continuation counts are not reset when the execution tracker is missing or stale", () => {
@@ -62,6 +122,7 @@ describe("continuation beyond the per-segment step limit", () => {
     ledger.continuation.totalSteps = 17;
     delete ledger.execution;
     assert.equal(trackingOf(ledger).data.cumulativeSteps, 17);
+    assert.equal(trackingOf(ledger).data.toolInvocationHistoryComplete, false);
 
     ledger.execution!.cumulativeSteps = 9;
     assert.equal(trackingOf(ledger).data.cumulativeSteps, 17);

@@ -197,6 +197,8 @@ export interface ContinuationState {
   segments: number;
   /** Steps run against this objective across turns. */
   totalSteps: number;
+  /** Fixed objective-wide tool dispatch ceiling; lowering on resume takes effect, raising does not renew it. */
+  maxToolInvocations?: number;
   /** Step (within the current turn) of the last observed progress. */
   lastProgressStep: number;
   stopReason?: string;
