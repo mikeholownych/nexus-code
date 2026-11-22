@@ -168,6 +168,13 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
     maxToolInvocations = storedLimit === undefined ? configuredToolLimit : Math.min(storedLimit, configuredToolLimit);
     this.objective.continuation.maxToolInvocations = maxToolInvocations;
   }
+  // In-turn delegated helpers use the same synchronous admission counter as their parent. Persisting the reservation
+  // before dispatch makes it durable before any delegated side effect can start.
+  this.activeToolInvocationBudget = {
+    tracker,
+    maximum: maxToolInvocations,
+    persist: () => this.persistProgress({ messages: true }),
+  };
 
   try {
     if (this.flightRecorder) {

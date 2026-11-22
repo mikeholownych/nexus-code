@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import {
   ExecutionTracker,
   REPEAT_THRESHOLD,
+  actionKind,
   actionIdentity,
   backoffMs,
   classifyOutcome,
@@ -274,6 +275,10 @@ describe("the ledger carries tracking", () => {
     assert.equal(restored.toolInvocationHistoryComplete, false);
     assert.equal(new ExecutionTracker(restored).admitToolInvocations(1, 1), 1);
     assert.equal(restored.toolInvocationHistoryComplete, false, "new counts remain a lower bound after a legacy upgrade");
+  });
+
+  test("exact tool-output retrieval is classified as a workspace observation", () => {
+    assert.equal(actionKind("read_tool_output"), "observe_workspace");
   });
 
   test("an unfinished single-request objective continued with 'continue' keeps its ledger; new work starts a new one", () => {

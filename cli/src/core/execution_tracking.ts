@@ -375,7 +375,7 @@ export function outcomeIdentity(success: boolean, text: string): string {
 
 const WORKSPACE_OBSERVERS = new Set([
   "read_file", "batch_read", "list_dir", "file_tree", "find_files", "search_code", "outline_file", "file_info",
-  "read_findings", "read_objective", "read_archive", "git_status", "git_diff", "git_log", "semantic_search",
+  "read_findings", "read_objective", "read_archive", "read_tool_output", "git_status", "git_diff", "git_log", "semantic_search",
   "hybrid_search", "symbol_search", "lsp_definition", "lsp_references", "lsp_hover", "lsp_diagnostics",
   // A completion attempt's verdict is determined by the workspace: resubmitting on an unchanged one cannot change it.
   "task_completed",
