@@ -76,9 +76,9 @@ test("the bundle schema is the manifest or the signature envelope, with the cont
   assert.ok(validate({ schema_version: 1, format: "nexus-audit-bundle/1" }, bundleSchema, bundleSchema).length > 0, "a manifest without its required members");
 });
 
-test("the verify-result schema is a result or an error document; it rejects what a consumer relies on being there", () => {
-  assert.deepEqual(verifySchema.$defs.AuditVerifyOutput.anyOf, [{ $ref: "#/$defs/AuditVerifyError" }, { $ref: "#/$defs/AuditVerifyResult" }]);
-  for (const name of ["AuditVerifyResult", "AuditVerifyError"]) {
+test("the audit JSON schema is an export result, verification result, or error document; required fields stay explicit", () => {
+  assert.deepEqual(verifySchema.$defs.AuditVerifyOutput.anyOf, [{ $ref: "#/$defs/AuditExportResult" }, { $ref: "#/$defs/AuditVerifyError" }, { $ref: "#/$defs/AuditVerifyResult" }]);
+  for (const name of ["AuditExportResult", "AuditVerifyResult", "AuditVerifyError"]) {
     const branch = verifySchema.$defs[name];
     assert.equal(branch.properties.schema_version.const, AUDIT_VERIFY_RESULT_SCHEMA_VERSION);
     assert.ok(branch.required.includes("schema_version") && branch.required.includes("exitCode"));
