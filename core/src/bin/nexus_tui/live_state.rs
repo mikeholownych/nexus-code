@@ -9,7 +9,9 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crate::models::{AuthInfo, Connect, ConnectIntent, Fetch, Picker, PickerIntent, Step};
-use crate::protocol::{Catalog, Command, Event, ReceiptSection, Review, Secret, SlashSpec, hello_mismatch};
+use crate::protocol::{
+    Catalog, Command, Event, ReceiptSection, Review, Secret, SlashSpec, hello_mismatch,
+};
 use crate::review::{ReviewLine, review_lines};
 use crate::slash::{self, Invocation};
 
@@ -60,7 +62,10 @@ pub enum Entry {
     },
     Notice(String),
     /// A live status the sidecar keeps updating (a provider wait): later notices with the same key replace its text.
-    Status { key: String, text: String },
+    Status {
+        key: String,
+        text: String,
+    },
     /// A slash or `!` command as the operator typed it.
     Command(String),
     /// The full text of a submitted prompt that held paste buffers (the prompt line shows their labels).
@@ -68,9 +73,15 @@ pub enum Entry {
     /// A prompt the sidecar refused outright (no provider): it was put back in the composer, so the transcript marks it as not sent. Empty for the paste block that went with it.
     Unsent(String),
     /// A message of a resumed conversation, shown under the resume divider.
-    Earlier { role: String, text: String },
+    Earlier {
+        role: String,
+        text: String,
+    },
     /// A tool the agent called in a resumed conversation: name and subject (its result stays in the session record).
-    EarlierTool { tool: String, subject: String },
+    EarlierTool {
+        tool: String,
+        subject: String,
+    },
     /// What a command reported. `diff` asks for unified-diff colouring.
     Output {
         success: bool,
@@ -95,21 +106,35 @@ pub enum Entry {
     },
     /// The change one file-edit call made, when no tool row for the call is in the transcript (it is otherwise
     /// shown on that row). A bounded preview; the call's detail record holds the whole diff.
-    Diff { call_id: String, card: Box<DiffCard> },
+    Diff {
+        call_id: String,
+        card: Box<DiffCard>,
+    },
 }
 
 impl Entry {
     /// The edit card this entry shows, if any.
     pub fn card(&self) -> Option<&DiffCard> {
         match self {
-            Entry::Tool { diff: Some(card), .. } | Entry::Diff { card, .. } => Some(card),
+            Entry::Tool {
+                diff: Some(card), ..
+            }
+            | Entry::Diff { card, .. } => Some(card),
             _ => None,
         }
     }
 
     /// Entries the diff review opens: edit cards and successful workspace diffs.
     pub fn reviewable(&self) -> bool {
-        self.card().is_some() || matches!(self, Entry::Output { diff: true, success: true, .. })
+        self.card().is_some()
+            || matches!(
+                self,
+                Entry::Output {
+                    diff: true,
+                    success: true,
+                    ..
+                }
+            )
     }
 }
 
@@ -184,7 +209,10 @@ impl SteerState {
 
     /// Still owed an outcome by the sidecar.
     pub fn open(self) -> bool {
-        matches!(self, SteerState::Sending | SteerState::Queued | SteerState::Deferred)
+        matches!(
+            self,
+            SteerState::Sending | SteerState::Queued | SteerState::Deferred
+        )
     }
 }
 
@@ -294,7 +322,11 @@ pub struct Approval {
 }
 
 /// The decisions in the order the panel draws them (←/→ and Tab move through them).
-pub const APPROVAL_OPTIONS: [Verdict; 3] = [Verdict::Approved, Verdict::ApprovedForSession, Verdict::Denied];
+pub const APPROVAL_OPTIONS: [Verdict; 3] = [
+    Verdict::Approved,
+    Verdict::ApprovedForSession,
+    Verdict::Denied,
+];
 
 /// A panel's content: requested from the sidecar, then filled by its answer.
 #[derive(Clone, Debug, PartialEq)]
@@ -360,14 +392,23 @@ impl ReviewContent {
 
     /// One operation's diff: the panel heading already names its file, so the per-file heading row is left out.
     pub fn operation(patch: Patch, limit: Option<String>) -> Self {
-        let rows = diff_view::panel_rows(&patch).into_iter().filter(|row| !matches!(row, diff_view::Row::File(_) | diff_view::Row::Blank)).collect();
+        let rows = diff_view::panel_rows(&patch)
+            .into_iter()
+            .filter(|row| !matches!(row, diff_view::Row::File(_) | diff_view::Row::Blank))
+            .collect();
         Self::with_rows(patch, rows, limit)
     }
 
     fn with_rows(patch: Patch, rows: Vec<diff_view::Row>, limit: Option<String>) -> Self {
         let num_width = diff_view::patch_num_width(&patch);
         let max_width = diff_view::patch_max_width(&patch);
-        ReviewContent { patch, rows, num_width, max_width, limit }
+        ReviewContent {
+            patch,
+            rows,
+            num_width,
+            max_width,
+            limit,
+        }
     }
 }
 
@@ -411,14 +452,22 @@ impl Approval {
 
     /// Decision keys stay inert until `APPROVAL_REPEAT_QUIET` after `now` (never shortening a longer guard).
     fn rearm_guard(&mut self, now: Instant) {
-        self.guard_until = Some(self.guard_until.map_or(now + APPROVAL_REPEAT_QUIET, |until| until.max(now + APPROVAL_REPEAT_QUIET)));
+        self.guard_until = Some(
+            self.guard_until
+                .map_or(now + APPROVAL_REPEAT_QUIET, |until| {
+                    until.max(now + APPROVAL_REPEAT_QUIET)
+                }),
+        );
     }
 }
-const APPROVAL_CONFIRM_JUST_OPENED: &str = "ignored: confirm question just opened — press again to approve all later actions";
+const APPROVAL_CONFIRM_JUST_OPENED: &str =
+    "ignored: confirm question just opened — press again to approve all later actions";
 const APPROVAL_UNSEEN: &str = "not approved: read every row first — scroll down (↓) until the whole change has been on screen";
 /// What the panel says when it ignores a key typed before the operator could see it.
-const APPROVAL_TYPING: &str = "ignored: you were typing — letters went to your draft; pause, then press the key to answer";
-const APPROVAL_IGNORED: &str = "ignored: panel just opened — that key was typed before you could see it; press it again";
+const APPROVAL_TYPING: &str =
+    "ignored: you were typing — letters went to your draft; pause, then press the key to answer";
+const APPROVAL_IGNORED: &str =
+    "ignored: panel just opened — that key was typed before you could see it; press it again";
 /// Typing is in flight when the panel appears if the last key (typed, or answering the previous approval) came this
 /// soon before it.
 pub const APPROVAL_IN_FLIGHT: Duration = Duration::from_secs(1);
@@ -427,8 +476,14 @@ pub const APPROVAL_IN_FLIGHT: Duration = Duration::from_secs(1);
 #[derive(Clone, Debug, PartialEq)]
 pub enum Overlay {
     Approval(Approval),
-    CheckpointChoice { id: String, message: String, selected: Option<usize> },
-    Help { scroll: usize },
+    CheckpointChoice {
+        id: String,
+        message: String,
+        selected: Option<usize>,
+    },
+    Help {
+        scroll: usize,
+    },
     Detail(Detail),
     Receipt(ReceiptPanel),
     /// `/model`: choose a model from any connected provider.
@@ -436,7 +491,10 @@ pub enum Overlay {
     /// ctrl+p in the picker (or `/connect`): connect a provider.
     Connect(Connect),
     /// ctrl+o in the composer: a paste buffer's full content.
-    Paste { number: u32, scroll: usize },
+    Paste {
+        number: u32,
+        scroll: usize,
+    },
     /// ctrl+d, or enter on an edit card or workspace diff: the complete diff.
     Review(DiffReview),
 }
@@ -654,7 +712,10 @@ impl LiveState {
         if text.is_empty() {
             // An empty OSC 52 payload clears the clipboard on xterm-family terminals.
         } else if !self.osc52 {
-            self.transcript.push(Entry::Notice("The terminal clipboard request was not sent: NEXUS_OSC52=off is set for the TUI.".into()));
+            self.transcript.push(Entry::Notice(
+                "The terminal clipboard request was not sent: NEXUS_OSC52=off is set for the TUI."
+                    .into(),
+            ));
         } else if text.len() > crate::live::OSC52_MAX_BYTES {
             self.transcript.push(Entry::Notice(format!(
                 "The terminal clipboard request was not sent: {} bytes is over the {} an OSC 52 request carries.",
@@ -701,7 +762,9 @@ impl LiveState {
         };
         // A list still being fetched is cancelled with the picker.
         let listing = match &self.overlay {
-            Some(Overlay::Models(picker)) if matches!(picker.catalog, Fetch::Waiting) => Some(picker.request.clone()),
+            Some(Overlay::Models(picker)) if matches!(picker.catalog, Fetch::Waiting) => {
+                Some(picker.request.clone())
+            }
             _ => None,
         };
         let Some(Overlay::Models(picker)) = &mut self.overlay else {
@@ -721,8 +784,13 @@ impl LiveState {
             PickerIntent::Select { provider, model } => {
                 self.overlay = None;
                 let id = self.next_id('x');
-                self.transcript.push(Entry::Command(format!("/model {provider} {model}")));
-                Some(Action::Send(Command::ModelSelect { id, provider, model }))
+                self.transcript
+                    .push(Entry::Command(format!("/model {provider} {model}")));
+                Some(Action::Send(Command::ModelSelect {
+                    id,
+                    provider,
+                    model,
+                }))
             }
             PickerIntent::Connect(at) => {
                 let (flow, intent) = Connect::new(providers, at.as_deref());
@@ -735,7 +803,11 @@ impl LiveState {
     fn connect_intent(&mut self, intent: ConnectIntent) -> Option<Action> {
         match intent {
             ConnectIntent::Back => self.open_models(false, None),
-            ConnectIntent::Connect { provider, method, key } => {
+            ConnectIntent::Connect {
+                provider,
+                method,
+                key,
+            } => {
                 let id = self.next_id('c');
                 if let Some(Overlay::Connect(flow)) = &mut self.overlay {
                     flow.step = Step::Waiting {
@@ -771,7 +843,9 @@ impl LiveState {
                     endpoint: Some(endpoint),
                 }))
             }
-            ConnectIntent::Cancel { request } => Some(Action::Send(Command::ProviderCancel { id: request })),
+            ConnectIntent::Cancel { request } => {
+                Some(Action::Send(Command::ProviderCancel { id: request }))
+            }
             ConnectIntent::Disconnect { provider } => {
                 let id = self.next_id('c');
                 Some(Action::Send(Command::ProviderDisconnect { id, provider }))
@@ -834,7 +908,8 @@ impl LiveState {
             if let Some(Overlay::Connect(flow)) = &mut self.overlay {
                 flow.refresh = Some(refresh.clone());
             }
-            self.outbox.push(Action::Send(Command::ModelsList { id: refresh }));
+            self.outbox
+                .push(Action::Send(Command::ModelsList { id: refresh }));
             return;
         }
         self.transcript.push(Entry::Output {
@@ -854,7 +929,12 @@ impl LiveState {
 
     pub fn running_tool(&self) -> Option<&str> {
         for entry in self.transcript.iter().rev() {
-            if let Entry::Tool { tool, status: ToolStatus::Running, .. } = entry {
+            if let Entry::Tool {
+                tool,
+                status: ToolStatus::Running,
+                ..
+            } = entry
+            {
                 return Some(tool.as_str());
             }
         }
@@ -907,7 +987,8 @@ impl LiveState {
         if let Some(Entry::User(text)) = self.transcript.get(sent.entry) {
             let text = text.clone();
             self.transcript[sent.entry] = Entry::Unsent(text);
-            if sent.pasted && matches!(self.transcript.get(sent.entry + 1), Some(Entry::Pasted(_))) {
+            if sent.pasted && matches!(self.transcript.get(sent.entry + 1), Some(Entry::Pasted(_)))
+            {
                 self.transcript[sent.entry + 1] = Entry::Unsent(String::new());
             }
         }
@@ -918,11 +999,20 @@ impl LiveState {
         // No turn id is compared on purpose: `activity` carries none, and a submit is only possible when no turn is
         // pending (the previous `turn.result` cleared it), so the sidecar has nothing else to report until it has
         // accepted or refused this prompt; a stray event could only come from a sidecar that is not the one we sent to.
-        if matches!(event, Event::Activity { .. } | Event::AssistantDelta { .. } | Event::ToolStart { .. } | Event::TurnResult { .. }) {
+        if matches!(
+            event,
+            Event::Activity { .. }
+                | Event::AssistantDelta { .. }
+                | Event::ToolStart { .. }
+                | Event::TurnResult { .. }
+        ) {
             self.sent_prompt = None;
         }
         // Provider output or a tool starting means the stream is not silent any more.
-        if matches!(event, Event::AssistantDelta { .. } | Event::ToolStart { .. }) {
+        if matches!(
+            event,
+            Event::AssistantDelta { .. } | Event::ToolStart { .. }
+        ) {
             self.stall = None;
         }
         if matches!(self.link, Link::Crashed { .. }) {
@@ -931,18 +1021,34 @@ impl LiveState {
         match event {
             // Compatible by range overlap when the sidecar announces a range, by exact version when it is older.
             // This view does not send `initialize`: a sidecar that leaves it out keeps protocol 1 as first published.
-            Event::Hello { protocol, commands, protocol_min, protocol_max, .. } => {
-                match hello_mismatch(protocol, protocol_min, protocol_max) {
-                    None => {
-                        self.commands = commands;
-                        self.link = Link::Ready;
-                    }
-                    Some(reason) => self.fail(reason, None, Vec::new()),
+            Event::Hello {
+                protocol,
+                commands,
+                protocol_min,
+                protocol_max,
+                ..
+            } => match hello_mismatch(protocol, protocol_min, protocol_max) {
+                None => {
+                    self.commands = commands;
+                    self.link = Link::Ready;
                 }
-            }
+                Some(reason) => self.fail(reason, None, Vec::new()),
+            },
             // Never requested (see above); a stray one changes nothing.
             Event::Initialized { .. } => {}
-            Event::SessionState { workspace_name, model, mode, git, busy, session, posture, read_only, context_tokens, context_limit, endpoint_kind } => {
+            Event::SessionState {
+                workspace_name,
+                model,
+                mode,
+                git,
+                busy,
+                session,
+                posture,
+                read_only,
+                context_tokens,
+                context_limit,
+                endpoint_kind,
+            } => {
                 self.session = Session {
                     session_id: session,
                     workspace_name,
@@ -971,16 +1077,42 @@ impl LiveState {
                     self.stall = None;
                 }
             }
-            Event::StreamStall { stalled, silent_secs } => {
+            Event::StreamStall {
+                stalled,
+                silent_secs,
+            } => {
                 self.stall = stalled.then(|| (Instant::now(), silent_secs));
             }
-            Event::Activity { phase, step, segment, tool, subject, max_steps, max_minutes } => {
+            Event::Activity {
+                phase,
+                step,
+                segment,
+                tool,
+                subject,
+                max_steps,
+                max_minutes,
+            } => {
                 self.stall = None;
-                if self.activity.as_ref().is_none_or(|previous| previous.step != step) {
+                if self
+                    .activity
+                    .as_ref()
+                    .is_none_or(|previous| previous.step != step)
+                {
                     self.assistant_break = true;
                 }
-                let text_streaming = self.activity.as_ref().is_some_and(|previous| previous.phase == phase && previous.step == step && previous.text_streaming);
-                self.activity = Some(Activity { phase, step, segment, tool, subject, max_steps, max_minutes, text_streaming });
+                let text_streaming = self.activity.as_ref().is_some_and(|previous| {
+                    previous.phase == phase && previous.step == step && previous.text_streaming
+                });
+                self.activity = Some(Activity {
+                    phase,
+                    step,
+                    segment,
+                    tool,
+                    subject,
+                    max_steps,
+                    max_minutes,
+                    text_streaming,
+                });
             }
             Event::FileDiff {
                 call_id,
@@ -1013,9 +1145,18 @@ impl LiveState {
                 });
                 self.attach_diff(call_id, card);
             }
-            Event::SteerAck { id, status, message, text } => {
+            Event::SteerAck {
+                id,
+                status,
+                message,
+                text,
+            } => {
                 let state = SteerState::from_ack(&status);
-                if let Some(Entry::Steer { state: slot, message: note, .. }) = self
+                if let Some(Entry::Steer {
+                    state: slot,
+                    message: note,
+                    ..
+                }) = self
                     .transcript
                     .iter_mut()
                     .rev()
@@ -1038,14 +1179,22 @@ impl LiveState {
                     activity.text_streaming = true;
                 }
                 match self.transcript.last_mut() {
-                    Some(Entry::Assistant { turn_id: last, text: body }) if *last == turn_id && !self.assistant_break => body.push_str(&text),
+                    Some(Entry::Assistant {
+                        turn_id: last,
+                        text: body,
+                    }) if *last == turn_id && !self.assistant_break => body.push_str(&text),
                     _ => {
                         self.assistant_break = false;
                         self.transcript.push(Entry::Assistant { turn_id, text });
                     }
                 }
             }
-            Event::ToolStart { call_id, tool, subject, evidence } => {
+            Event::ToolStart {
+                call_id,
+                tool,
+                subject,
+                evidence,
+            } => {
                 if !HIDDEN_TOOLS.contains(&tool.as_str()) {
                     self.transcript.push(Entry::Tool {
                         call_id,
@@ -1055,17 +1204,42 @@ impl LiveState {
                         summary: String::new(),
                         evidence,
                         diff: None,
-                        run: Box::new(ToolRun { started: Some(self.now.max(Instant::now())), ..ToolRun::default() }),
+                        run: Box::new(ToolRun {
+                            started: Some(self.now.max(Instant::now())),
+                            ..ToolRun::default()
+                        }),
                     });
                 }
             }
-            Event::ToolEnd { call_id, tool, success, summary, lines, preview, exit_code, duration_ms, timed_out, denied } => {
+            Event::ToolEnd {
+                call_id,
+                tool,
+                success,
+                summary,
+                lines,
+                preview,
+                exit_code,
+                duration_ms,
+                timed_out,
+                denied,
+            } => {
                 let open = self.transcript.iter_mut().rev().find(|entry| {
                     matches!(entry, Entry::Tool { call_id: id, tool: name, status: ToolStatus::Running, .. }
                         if *id == call_id && *name == tool)
                 });
-                if let Some(Entry::Tool { status, summary: slot, diff, run, .. }) = open {
-                    *status = if success { ToolStatus::Succeeded } else { ToolStatus::Failed };
+                if let Some(Entry::Tool {
+                    status,
+                    summary: slot,
+                    diff,
+                    run,
+                    ..
+                }) = open
+                {
+                    *status = if success {
+                        ToolStatus::Succeeded
+                    } else {
+                        ToolStatus::Failed
+                    };
                     if denied {
                         // The operator's own decision, in a sentence. The call never ran, so the time it waited for the
                         // decision is not a run time: none is shown.
@@ -1074,10 +1248,18 @@ impl LiveState {
                         run.duration_ms = None;
                     } else {
                         *slot = summary;
-                        run.duration_ms = duration_ms.or_else(|| run.started.map(|t| u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX)));
+                        run.duration_ms = duration_ms.or_else(|| {
+                            run.started
+                                .map(|t| u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX))
+                        });
                     }
                     if let Some(preview) = preview {
-                        run.output = Some(ToolOutput { preview, lines, exit_code, timed_out });
+                        run.output = Some(ToolOutput {
+                            preview,
+                            lines,
+                            exit_code,
+                            timed_out,
+                        });
                     }
                     // A failed call never shows a change as if it had succeeded.
                     if !success {
@@ -1092,19 +1274,30 @@ impl LiveState {
                 review,
             } => {
                 let lines = review_lines(review.as_ref().unwrap_or(&Review::Unknown));
-                let text: String = lines.iter().map(|line| line.text.as_str()).collect::<Vec<_>>().join("\n");
+                let text: String = lines
+                    .iter()
+                    .map(|line| line.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 // The diff view draws only what the parser took in; a patch whose hunk counts do not match its rows (the
                 // applier ignores the counts) or that names several files is drawn as plain rows instead, so nothing the
                 // review lists is left off the panel.
                 let hunk_rows = lines
                     .iter()
                     .skip_while(|line| !line.text.starts_with("@@"))
-                    .filter(|line| !line.text.starts_with("@@") && !line.text.starts_with("… preview truncated"))
+                    .filter(|line| {
+                        !line.text.starts_with("@@")
+                            && !line.text.starts_with("… preview truncated")
+                    })
                     .count();
-                let mut patch = Some(diff_view::parse(&text))
-                    .filter(|patch| patch.files.len() == 1 && patch.files.iter().any(|file| !file.hunks.is_empty()) && patch.line_count() == hunk_rows);
+                let mut patch = Some(diff_view::parse(&text)).filter(|patch| {
+                    patch.files.len() == 1
+                        && patch.files.iter().any(|file| !file.hunks.is_empty())
+                        && patch.line_count() == hunk_rows
+                });
                 // The review says whether the file is new; its diff headers do not (no /dev/null side).
-                if let (Some(patch), Some(Review::Change { created: true, .. })) = (patch.as_mut(), review.as_ref())
+                if let (Some(patch), Some(Review::Change { created: true, .. })) =
+                    (patch.as_mut(), review.as_ref())
                     && let Some(file) = patch.files.first_mut()
                 {
                     file.status = diff_view::Status::Added;
@@ -1137,9 +1330,19 @@ impl LiveState {
                 }
             }
             Event::CheckpointChoiceRequest { id, message } => {
-                self.overlay = Some(Overlay::CheckpointChoice { id, message, selected: None });
+                self.overlay = Some(Overlay::CheckpointChoice {
+                    id,
+                    message,
+                    selected: None,
+                });
             }
-            Event::TurnResult { heading, line, turn, model_summary, saved } => {
+            Event::TurnResult {
+                heading,
+                line,
+                turn,
+                model_summary,
+                saved,
+            } => {
                 self.pending = None;
                 self.cancel_requested = false;
                 self.cancel_started = None;
@@ -1148,14 +1351,16 @@ impl LiveState {
                 self.session_saved |= saved;
                 self.interrupt_running_tools();
                 self.close_approval();
-                let (summary, notes) = model_summary
-                    .map_or((None, None), |model| (Some(model.summary), model.notes));
+                let (summary, notes) =
+                    model_summary.map_or((None, None), |model| (Some(model.summary), model.notes));
                 self.transcript.push(Entry::Banner {
                     heading,
                     line,
                     outcome: Box::new(outcome_for(&turn)),
                     tone: tone_for(&turn),
-                    failure: turn["inferenceFailure"]["message"].as_str().map(str::to_string),
+                    failure: turn["inferenceFailure"]["message"]
+                        .as_str()
+                        .map(str::to_string),
                     summary,
                     notes,
                 });
@@ -1169,7 +1374,9 @@ impl LiveState {
                 let message = format!("{code}: {message}");
                 match &mut self.overlay {
                     // A connect or model-select answer with no panel waiting for it still reaches the operator.
-                    _ if !waiting && id.starts_with(['c', 'x']) => self.transcript.push(Entry::Notice(message)),
+                    _ if !waiting && id.starts_with(['c', 'x']) => {
+                        self.transcript.push(Entry::Notice(message))
+                    }
                     _ if !waiting => {}
                     Some(Overlay::Detail(detail)) => detail.record = Loaded::Failed(message),
                     Some(Overlay::Review(review)) => review.content = Loaded::Failed(message),
@@ -1204,7 +1411,8 @@ impl LiveState {
                     }
                     self.transcript.push(Entry::Notice(message));
                 } else {
-                    self.transcript.push(Entry::Notice(format!("{code}: {message}")));
+                    self.transcript
+                        .push(Entry::Notice(format!("{code}: {message}")));
                 }
             }
             Event::SlashResult {
@@ -1262,11 +1470,18 @@ impl LiveState {
                     None => self.transcript.push(Entry::Info(text)),
                 }
             }
-            Event::History { session, total, messages } => {
+            Event::History {
+                session,
+                total,
+                messages,
+            } => {
                 if total > 0 || !messages.is_empty() {
                     self.session_saved = true;
                 }
-                let shown = messages.iter().filter(|m| m.role != "tool" && m.role != "outcome").count();
+                let shown = messages
+                    .iter()
+                    .filter(|m| m.role != "tool" && m.role != "outcome")
+                    .count();
                 self.transcript.push(Entry::Info(if shown as u64 == total {
                     format!("Earlier conversation of session {session} ({total} messages)")
                 } else {
@@ -1284,12 +1499,17 @@ impl LiveState {
                             line: message.text,
                             outcome: Box::new(outcome_for(&turn)),
                             tone: tone_for(&turn),
-                            failure: turn["inferenceFailure"]["message"].as_str().map(str::to_string),
+                            failure: turn["inferenceFailure"]["message"]
+                                .as_str()
+                                .map(str::to_string),
                             summary: None,
                             notes: None,
                         }),
                         ("outcome", None) => {}
-                        _ => self.transcript.push(Entry::Earlier { role: message.role, text: message.text }),
+                        _ => self.transcript.push(Entry::Earlier {
+                            role: message.role,
+                            text: message.text,
+                        }),
                     }
                 }
             }
@@ -1343,21 +1563,52 @@ impl LiveState {
                     panel.sections = Loaded::Ready(sections);
                 }
             }
-            Event::ModelsCatalog { id, providers, models, current, recent } => {
-                self.on_catalog(id, Catalog { providers, models, current, recent });
+            Event::ModelsCatalog {
+                id,
+                providers,
+                models,
+                current,
+                recent,
+            } => {
+                self.on_catalog(
+                    id,
+                    Catalog {
+                        providers,
+                        models,
+                        current,
+                        recent,
+                    },
+                );
             }
-            Event::ProviderAuth { id, url, user_code, instructions, .. } => {
+            Event::ProviderAuth {
+                id,
+                url,
+                user_code,
+                instructions,
+                ..
+            } => {
                 if let Some(Overlay::Connect(flow)) = &mut self.overlay
                     && let Step::Waiting { request, auth, .. } = &mut flow.step
                     && *request == id
                 {
-                    *auth = Some(AuthInfo { url, user_code, instructions });
+                    *auth = Some(AuthInfo {
+                        url,
+                        user_code,
+                        instructions,
+                    });
                 }
             }
-            Event::ProviderResult { id, provider, success, message } => {
+            Event::ProviderResult {
+                id,
+                provider,
+                success,
+                message,
+            } => {
                 self.on_provider_result(id, provider, success, message);
             }
-            Event::ModelResult { success, message, .. } => {
+            Event::ModelResult {
+                success, message, ..
+            } => {
                 self.transcript.push(Entry::Output {
                     success,
                     text: message,
@@ -1383,11 +1634,15 @@ impl LiveState {
         // Steering the sidecar never acknowledged as applied goes back to the operator instead of vanishing.
         let mut returned = Vec::new();
         for entry in &mut self.transcript {
-            if let Entry::Steer { id, state, message, .. } = entry
+            if let Entry::Steer {
+                id, state, message, ..
+            } = entry
                 && state.open()
             {
                 *state = SteerState::Lost;
-                *message = "The agent stopped before applying it; the text is back in the composer.".into();
+                *message =
+                    "The agent stopped before applying it; the text is back in the composer."
+                        .into();
                 if let Some(text) = self.steer_texts.remove(id) {
                     returned.push(text);
                 }
@@ -1407,7 +1662,13 @@ impl LiveState {
         self.close_approval();
         if matches!(
             self.overlay,
-            Some(Overlay::Detail(_) | Overlay::Receipt(_) | Overlay::Models(_) | Overlay::Connect(_) | Overlay::Review(_))
+            Some(
+                Overlay::Detail(_)
+                    | Overlay::Receipt(_)
+                    | Overlay::Models(_)
+                    | Overlay::Connect(_)
+                    | Overlay::Review(_)
+            )
         ) {
             self.overlay = None;
         }
@@ -1456,7 +1717,8 @@ impl LiveState {
             }
             // A paste never answers an approval: its text goes to the draft, as typing does, and the panel says so.
             Some(Overlay::Approval(approval)) => {
-                approval.notice = Some("text went to your draft — pasted or typed too fast to be an answer");
+                approval.notice =
+                    Some("text went to your draft — pasted or typed too fast to be an answer");
                 approval.confirming = false;
                 approval.bulk_input_at(now);
                 if !text.is_empty() {
@@ -1494,7 +1756,9 @@ impl LiveState {
     /// The approval panel is on screen now: its guard (when typing was in flight) counts from here, not from when the
     /// request arrived.
     pub fn note_approval_shown(&mut self, now: Instant) {
-        let in_flight = self.last_key.is_some_and(|at| now.saturating_duration_since(at) < APPROVAL_IN_FLIGHT);
+        let in_flight = self
+            .last_key
+            .is_some_and(|at| now.saturating_duration_since(at) < APPROVAL_IN_FLIGHT);
         if let Some(Overlay::Approval(approval)) = &mut self.overlay
             && !approval.shown
         {
@@ -1524,7 +1788,11 @@ impl LiveState {
             self.scroll_back = back;
         }
         self.scroll_back = self.scroll_back.min(layout.scroll_limit);
-        self.anchor = if self.scroll_back > 0 { layout.top } else { None };
+        self.anchor = if self.scroll_back > 0 {
+            layout.top
+        } else {
+            None
+        };
         if self.scroll_back == 0 {
             self.unseen = false;
         }
@@ -1551,7 +1819,8 @@ impl LiveState {
             if layout.approval_drawn && layout.approval_top <= approval.seen_through {
                 approval.seen_through = approval.seen_through.max(layout.approval_seen_to);
             }
-            approval.read_all = layout.approval_drawn && approval.seen_through >= layout.approval_total;
+            approval.read_all =
+                layout.approval_drawn && approval.seen_through >= layout.approval_total;
             // The refusal told the operator to scroll to the end: once they have, it no longer applies.
             if approval.read_all && approval.notice == Some(APPROVAL_UNSEEN) {
                 approval.notice = None;
@@ -1589,7 +1858,12 @@ impl LiveState {
         if keys.len() > 1
             && let Some(Overlay::Approval(approval)) = &mut self.overlay
         {
-            if keys.iter().any(|key| matches!(key.code, KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Enter | KeyCode::Tab)) {
+            if keys.iter().any(|key| {
+                matches!(
+                    key.code,
+                    KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Enter | KeyCode::Tab
+                )
+            }) {
                 approval.last_text = Some(now);
             }
             approval.rearm_guard(now);
@@ -1634,7 +1908,16 @@ impl LiveState {
     /// goes to the draft (steering), so nothing typed is lost and the letters keep answering the panel.
     fn on_approval_key(&mut self, key: KeyEvent, now: Instant) -> Option<Action> {
         // Scrolling the change keeps the focus (and a pending confirmation).
-        if matches!(key.code, KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown | KeyCode::Home | KeyCode::End) && key.modifiers.is_empty() {
+        if matches!(
+            key.code,
+            KeyCode::Up
+                | KeyCode::Down
+                | KeyCode::PageUp
+                | KeyCode::PageDown
+                | KeyCode::Home
+                | KeyCode::End
+        ) && key.modifiers.is_empty()
+        {
             self.scroll_overlay(key.code);
             return None;
         }
@@ -1650,7 +1933,10 @@ impl LiveState {
         // commands, never answers.
         let bare = key.modifiers.is_empty();
         let letter = (key.modifiers - KeyModifiers::SHIFT).is_empty();
-        let at = APPROVAL_OPTIONS.iter().position(|option| *option == approval.focus).unwrap_or(0);
+        let at = APPROVAL_OPTIONS
+            .iter()
+            .position(|option| *option == approval.focus)
+            .unwrap_or(0);
         let last = APPROVAL_OPTIONS.len() - 1;
         let moved = match key.code {
             KeyCode::Left if bare => Some(at.saturating_sub(1)),
@@ -1687,7 +1973,10 @@ impl LiveState {
         };
         // In a run of typing a `y`, `n` or `a` is a letter of the text (kept in the draft) and Enter is ignored: only
         // a key after a pause answers.
-        if approval.last_text.is_some_and(|at| now.saturating_duration_since(at) < APPROVAL_TYPING_RUN) {
+        if approval
+            .last_text
+            .is_some_and(|at| now.saturating_duration_since(at) < APPROVAL_TYPING_RUN)
+        {
             approval.confirming = false;
             // An ignored key re-arms the run, and the wait for a full repeat window: a held key (auto-repeat arrives
             // as presses) stays inert until released.
@@ -1736,7 +2025,10 @@ impl LiveState {
                 approval.confirm_asked_at = Some(now);
                 return None;
             }
-            if approval.confirm_asked_at.is_some_and(|at| now.saturating_duration_since(at) < APPROVAL_CONFIRM_DELAY) {
+            if approval
+                .confirm_asked_at
+                .is_some_and(|at| now.saturating_duration_since(at) < APPROVAL_CONFIRM_DELAY)
+            {
                 approval.notice = Some(APPROVAL_CONFIRM_JUST_OPENED);
                 approval.confirm_asked_at = Some(now);
                 return None;
@@ -1751,7 +2043,11 @@ impl LiveState {
             return None;
         };
         let insert_idx = self.transcript.iter().rposition(|e| match e {
-            Entry::Tool { tool, status: ToolStatus::Running, .. } => *tool == approval.tool,
+            Entry::Tool {
+                tool,
+                status: ToolStatus::Running,
+                ..
+            } => *tool == approval.tool,
             _ => false,
         });
         let decision_entry = Entry::Decision {
@@ -1865,11 +2161,21 @@ impl LiveState {
             None => {}
             Some(Overlay::Review(review)) => {
                 if let Some(up) = wheel_up {
-                    review.top = if up { review.top.saturating_sub(WHEEL_ROWS) } else { review.top.saturating_add(WHEEL_ROWS) };
+                    review.top = if up {
+                        review.top.saturating_sub(WHEEL_ROWS)
+                    } else {
+                        review.top.saturating_add(WHEEL_ROWS)
+                    };
                 }
                 return None;
             }
-            Some(Overlay::Approval(_) | Overlay::Help { .. } | Overlay::Paste { .. } | Overlay::Detail(_) | Overlay::Receipt(_)) => {
+            Some(
+                Overlay::Approval(_)
+                | Overlay::Help { .. }
+                | Overlay::Paste { .. }
+                | Overlay::Detail(_)
+                | Overlay::Receipt(_),
+            ) => {
                 if let Some(up) = wheel_up {
                     for _ in 0..WHEEL_ROWS {
                         self.scroll_overlay(if up { KeyCode::Up } else { KeyCode::Down });
@@ -1881,7 +2187,11 @@ impl LiveState {
             Some(_) => return None,
         }
         if let Some(up) = wheel_up {
-            self.scroll_back = if up { self.scroll_back.saturating_add(WHEEL_ROWS) } else { self.scroll_back.saturating_sub(WHEEL_ROWS) };
+            self.scroll_back = if up {
+                self.scroll_back.saturating_add(WHEEL_ROWS)
+            } else {
+                self.scroll_back.saturating_sub(WHEEL_ROWS)
+            };
             return None;
         }
         if event.kind == MouseEventKind::Down(MouseButton::Left) {
@@ -1923,7 +2233,10 @@ impl LiveState {
         let action = self.handle_key(key, now);
         // Typing keys (characters, Enter, Tab, Backspace, Delete), including the Enter that sent a prompt and the key that
         // answered an approval: an approval panel that appears right after them starts with its guard on.
-        if matches!(key.code, KeyCode::Char(_) | KeyCode::Enter | KeyCode::Tab | KeyCode::Backspace | KeyCode::Delete) {
+        if matches!(
+            key.code,
+            KeyCode::Char(_) | KeyCode::Enter | KeyCode::Tab | KeyCode::Backspace | KeyCode::Delete
+        ) {
             self.last_key = Some(now);
         }
         self.promote_pending_approval();
@@ -1973,8 +2286,16 @@ impl LiveState {
             Some(Overlay::Review(_)) => return self.on_review_key(key),
             Some(Overlay::Models(_)) => return self.on_models_key(key),
             Some(Overlay::Connect(_)) => return self.on_connect_key(key),
-            Some(Overlay::Help { .. } | Overlay::Detail(_) | Overlay::Receipt(_) | Overlay::Paste { .. }) => {
-                if matches!(self.overlay, Some(Overlay::Paste { .. })) && key.code == KeyCode::Char('x') && ctrl {
+            Some(
+                Overlay::Help { .. }
+                | Overlay::Detail(_)
+                | Overlay::Receipt(_)
+                | Overlay::Paste { .. },
+            ) => {
+                if matches!(self.overlay, Some(Overlay::Paste { .. }))
+                    && key.code == KeyCode::Char('x')
+                    && ctrl
+                {
                     self.overlay = None;
                     self.composer.expand_paste_at_cursor();
                     return None;
@@ -2040,16 +2361,44 @@ impl LiveState {
     }
 
     fn on_checkpoint_choice_key(&mut self, key: KeyEvent) -> Option<Action> {
-        let Some(Overlay::CheckpointChoice { id, message, selected }) = &mut self.overlay else { return None; };
+        let Some(Overlay::CheckpointChoice {
+            id,
+            message,
+            selected,
+        }) = &mut self.overlay
+        else {
+            return None;
+        };
         let is_checkpoint_failure = message.starts_with("Checkpoint failed: ");
         let choice = match key.code {
-            KeyCode::Char('1') => { *selected = Some(0); return None; }
-            KeyCode::Char('2') => { *selected = Some(1); return None; }
-            KeyCode::Char('3') => { *selected = Some(2); return None; }
-            KeyCode::Char('4') => { *selected = Some(3); return None; }
-            KeyCode::Char('5') => { *selected = Some(4); return None; }
-            KeyCode::Up | KeyCode::Left => { *selected = Some(selected.unwrap_or(0).saturating_sub(1)); return None; }
-            KeyCode::Down | KeyCode::Right => { *selected = Some(selected.unwrap_or(0).saturating_add(1).min(4)); return None; }
+            KeyCode::Char('1') => {
+                *selected = Some(0);
+                return None;
+            }
+            KeyCode::Char('2') => {
+                *selected = Some(1);
+                return None;
+            }
+            KeyCode::Char('3') => {
+                *selected = Some(2);
+                return None;
+            }
+            KeyCode::Char('4') => {
+                *selected = Some(3);
+                return None;
+            }
+            KeyCode::Char('5') => {
+                *selected = Some(4);
+                return None;
+            }
+            KeyCode::Up | KeyCode::Left => {
+                *selected = Some(selected.unwrap_or(0).saturating_sub(1));
+                return None;
+            }
+            KeyCode::Down | KeyCode::Right => {
+                *selected = Some(selected.unwrap_or(0).saturating_add(1).min(4));
+                return None;
+            }
             KeyCode::Enter => match *selected {
                 Some(0) => Some("read_only"),
                 Some(1) => Some("without_checkpoint"),
@@ -2065,23 +2414,41 @@ impl LiveState {
         let choice = choice?;
         let id = id.clone();
         self.overlay = None;
-        Some(Action::Send(Command::CheckpointChoice { id, choice: choice.into() }))
+        Some(Action::Send(Command::CheckpointChoice {
+            id,
+            choice: choice.into(),
+        }))
     }
 
     fn on_ctrl_c(&mut self) -> Option<Action> {
         match &self.overlay {
-            Some(Overlay::Connect(Connect { step: Step::Waiting { request, method, auth, .. }, .. }))
-                if auth.is_some() || method == "local-endpoint" => {
+            Some(Overlay::Connect(Connect {
+                step:
+                    Step::Waiting {
+                        request,
+                        method,
+                        auth,
+                        ..
+                    },
+                ..
+            })) if auth.is_some() || method == "local-endpoint" => {
                 let id = request.clone();
                 self.overlay = None;
                 return Some(Action::Send(Command::ProviderCancel { id }));
             }
-            Some(Overlay::Models(Picker { local_endpoint_setup_id: Some(id), .. })) => {
+            Some(Overlay::Models(Picker {
+                local_endpoint_setup_id: Some(id),
+                ..
+            })) => {
                 let id = id.clone();
                 self.overlay = None;
                 return Some(Action::Send(Command::ProviderLocalCancel { id }));
             }
-            Some(Overlay::Models(Picker { catalog: Fetch::Waiting, request, .. })) => {
+            Some(Overlay::Models(Picker {
+                catalog: Fetch::Waiting,
+                request,
+                ..
+            })) => {
                 let id = request.clone();
                 self.overlay = None;
                 return Some(Action::Send(Command::ProviderCancel { id }));
@@ -2101,7 +2468,10 @@ impl LiveState {
             Some(Overlay::CheckpointChoice { id, .. }) => {
                 let id = id.clone();
                 self.overlay = None;
-                return Some(Action::Send(Command::CheckpointChoice { id, choice: "cancel".into() }));
+                return Some(Action::Send(Command::CheckpointChoice {
+                    id,
+                    choice: "cancel".into(),
+                }));
             }
             // Cancelling the turn settles the pending approval on the sidecar; the turn result reports it.
             Some(Overlay::Approval(_)) => self.overlay = None,
@@ -2156,7 +2526,10 @@ impl LiveState {
             KeyCode::Char('l') if ctrl => composer.clear(),
             KeyCode::Char('o') if ctrl => {
                 if let Some(paste) = composer.paste_at_cursor() {
-                    self.overlay = Some(Overlay::Paste { number: paste.number, scroll: 0 });
+                    self.overlay = Some(Overlay::Paste {
+                        number: paste.number,
+                        scroll: 0,
+                    });
                 }
             }
             KeyCode::Char('x') if ctrl => {
@@ -2215,13 +2588,22 @@ impl LiveState {
         self.activity = None;
         let id = format!("t{}", self.turn_seq);
         self.pending = Some(id.clone());
-        self.sent_prompt = Some(SentPrompt { id: id.clone(), draft: sent, entry, pasted });
+        self.sent_prompt = Some(SentPrompt {
+            id: id.clone(),
+            draft: sent,
+            entry,
+            pasted,
+        });
         Some(Action::Send(Command::PromptSubmit { id, text }))
     }
 
     /// Enter while the agent works: text becomes steering; read-only commands that are safe during a turn run;
     /// anything else stays in the draft with an explanation.
-    fn submit_while_busy(&mut self, display: String, invocation: Option<Invocation>) -> Option<Action> {
+    fn submit_while_busy(
+        &mut self,
+        display: String,
+        invocation: Option<Invocation>,
+    ) -> Option<Action> {
         match invocation {
             None => {}
             Some(Invocation::Help) => {
@@ -2239,7 +2621,9 @@ impl LiveState {
                 return None;
             }
             Some(Invocation::Quit) => return Some(Action::Quit),
-            Some(Invocation::Remote { command, args }) if command == "doctor" && !args.split_whitespace().any(|a| a == "--fix") => {
+            Some(Invocation::Remote { command, args })
+                if command == "doctor" && !args.split_whitespace().any(|a| a == "--fix") =>
+            {
                 self.composer.take();
                 self.slash_seq += 1;
                 let id = format!("s{}", self.slash_seq);
@@ -2285,8 +2669,15 @@ impl LiveState {
     }
 
     fn show_details(&mut self) {
-        let text = self.provider_cause.clone().unwrap_or_else(|| "No provider error recorded in this session.".into());
-        self.transcript.push(Entry::Output { success: true, text, diff: false });
+        let text = self
+            .provider_cause
+            .clone()
+            .unwrap_or_else(|| "No provider error recorded in this session.".into());
+        self.transcript.push(Entry::Output {
+            success: true,
+            text,
+            diff: false,
+        });
     }
 
     fn invoke(&mut self, typed: String, invocation: Invocation) -> Option<Action> {
@@ -2395,8 +2786,17 @@ impl LiveState {
     /// The tool, subject and evidence id of the call at transcript `index`.
     fn call_record(&self, index: usize) -> Option<(String, String, String)> {
         match self.transcript.get(index) {
-            Some(Entry::Tool { tool, subject, evidence, .. }) => Some((tool.clone(), subject.clone(), evidence.clone())),
-            Some(Entry::Diff { card, .. }) => Some(("edit_file".to_string(), card.path.clone(), card.evidence.clone())),
+            Some(Entry::Tool {
+                tool,
+                subject,
+                evidence,
+                ..
+            }) => Some((tool.clone(), subject.clone(), evidence.clone())),
+            Some(Entry::Diff { card, .. }) => Some((
+                "edit_file".to_string(),
+                card.path.clone(),
+                card.evidence.clone(),
+            )),
             _ => None,
         }
     }
@@ -2405,14 +2805,19 @@ impl LiveState {
     /// The same call reported again replaces its earlier card rather than adding another.
     fn attach_diff(&mut self, call_id: String, card: Box<DiffCard>) {
         let found = self.transcript.iter().rposition(|entry| match entry {
-            Entry::Tool { call_id: id, status, .. } => *id == call_id && *status != ToolStatus::Failed,
+            Entry::Tool {
+                call_id: id,
+                status,
+                ..
+            } => *id == call_id && *status != ToolStatus::Failed,
             Entry::Diff { call_id: id, .. } => *id == call_id,
             _ => false,
         });
         match found.map(|index| (index, &mut self.transcript[index])) {
             Some((index, Entry::Tool { diff, .. })) => {
                 *diff = Some(card);
-                self.last_reviewable = Some(self.last_reviewable.map_or(index, |last| last.max(index)));
+                self.last_reviewable =
+                    Some(self.last_reviewable.map_or(index, |last| last.max(index)));
             }
             Some((_, Entry::Diff { card: slot, .. })) => *slot = card,
             _ => {
@@ -2424,8 +2829,14 @@ impl LiveState {
 
     /// Opens the diff review at transcript `index`; without one, at the selected reviewable entry, else the newest.
     fn open_review(&mut self, index: Option<usize>) -> Option<Action> {
-        let selected = self.selected.filter(|&i| self.focus == Focus::Transcript && self.transcript.get(i).is_some_and(Entry::reviewable));
-        let Some(index) = index.or(selected).or(self.last_reviewable).filter(|&i| self.transcript.get(i).is_some_and(Entry::reviewable)) else {
+        let selected = self.selected.filter(|&i| {
+            self.focus == Focus::Transcript && self.transcript.get(i).is_some_and(Entry::reviewable)
+        });
+        let Some(index) = index
+            .or(selected)
+            .or(self.last_reviewable)
+            .filter(|&i| self.transcript.get(i).is_some_and(Entry::reviewable))
+        else {
             self.transcript.push(Entry::Info("No file changes to review yet. Diffs appear here as edits succeed; /diff shows the whole workspace.".into()));
             return None;
         };
@@ -2467,7 +2878,10 @@ impl LiveState {
                     left: 0,
                     wrap,
                 }));
-                (!unavailable).then_some(Action::Send(Command::ToolDetail { id: request, evidence }))
+                (!unavailable).then_some(Action::Send(Command::ToolDetail {
+                    id: request,
+                    evidence,
+                }))
             }
         }
     }
@@ -2483,7 +2897,11 @@ impl LiveState {
             _ => &[],
         };
         let starts = |pick: fn(&diff_view::Row) -> bool| -> Vec<usize> {
-            rows.iter().enumerate().filter(|(_, row)| pick(row)).map(|(i, _)| i).collect()
+            rows.iter()
+                .enumerate()
+                .filter(|(_, row)| pick(row))
+                .map(|(i, _)| i)
+                .collect()
         };
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => self.overlay = None,
@@ -2494,8 +2912,12 @@ impl LiveState {
             KeyCode::PageDown | KeyCode::Char(' ') => review.top = review.top.saturating_add(page),
             KeyCode::Home | KeyCode::Char('g') => review.top = 0,
             KeyCode::End | KeyCode::Char('G') => review.top = usize::MAX,
-            KeyCode::Left | KeyCode::Char('h') if !review.wrap => review.left = review.left.saturating_sub(8),
-            KeyCode::Right | KeyCode::Char('l') if !review.wrap => review.left = review.left.saturating_add(8),
+            KeyCode::Left | KeyCode::Char('h') if !review.wrap => {
+                review.left = review.left.saturating_sub(8)
+            }
+            KeyCode::Right | KeyCode::Char('l') if !review.wrap => {
+                review.left = review.left.saturating_add(8)
+            }
             KeyCode::Char('0') => review.left = 0,
             KeyCode::Char('w') => {
                 review.wrap = !review.wrap;
@@ -2527,9 +2949,12 @@ impl LiveState {
                 ReviewScope::Operation { entry, .. } => {
                     let wrap = review.wrap;
                     let next = if c == ']' {
-                        (entry + 1..self.transcript.len()).find(|&i| self.transcript[i].card().is_some())
+                        (entry + 1..self.transcript.len())
+                            .find(|&i| self.transcript[i].card().is_some())
                     } else {
-                        (0..entry).rev().find(|&i| self.transcript[i].card().is_some())
+                        (0..entry)
+                            .rev()
+                            .find(|&i| self.transcript[i].card().is_some())
                     };
                     if let Some(next) = next {
                         return self.review_entry(next, wrap);
@@ -2543,8 +2968,17 @@ impl LiveState {
                 {
                     self.panel_seq += 1;
                     let request = format!("d{}", self.panel_seq);
-                    self.overlay = Some(Overlay::Detail(Detail { request: request.clone(), tool, subject, record: Loaded::Waiting, scroll: 0 }));
-                    return Some(Action::Send(Command::ToolDetail { id: request, evidence }));
+                    self.overlay = Some(Overlay::Detail(Detail {
+                        request: request.clone(),
+                        tool,
+                        subject,
+                        record: Loaded::Waiting,
+                        scroll: 0,
+                    }));
+                    return Some(Action::Send(Command::ToolDetail {
+                        id: request,
+                        evidence,
+                    }));
                 }
             }
             _ => {}
@@ -2561,9 +2995,7 @@ impl LiveState {
         {
             return self.open_review(Some(index));
         }
-        let found = self
-            .selected
-            .and_then(|index| self.call_record(index));
+        let found = self.selected.and_then(|index| self.call_record(index));
         let Some((tool, subject, evidence)) = found else {
             self.selected = None;
             return None;
@@ -2679,15 +3111,36 @@ fn unverified_cause(reason: &str, evidence: &Value) -> String {
     }
     if evidence["workspaceChanged"] == "no" && evidence["carriedChanges"] == Value::Bool(true) {
         let denied = evidence["denied"].as_u64().unwrap_or(0);
-        let denial = if denied > 0 { format!(" ({denied} action{} denied)", if denied == 1 { "" } else { "s" }) } else { String::new() };
-        return format!("No files changed this turn{denial}; changes from an earlier turn are still unverified.");
+        let denial = if denied > 0 {
+            format!(
+                " ({denied} action{} denied)",
+                if denied == 1 { "" } else { "s" }
+            )
+        } else {
+            String::new()
+        };
+        return format!(
+            "No files changed this turn{denial}; changes from an earlier turn are still unverified."
+        );
     }
-    let changed = if evidence["workspaceChanged"] == "unknown" { "Files may have changed" } else { "Files changed" };
-    let last = evidence["verifierRuns"].as_array().and_then(|runs| runs.last());
-    let command = last.and_then(|run| run["command"].as_str()).map(short_command);
+    let changed = if evidence["workspaceChanged"] == "unknown" {
+        "Files may have changed"
+    } else {
+        "Files changed"
+    };
+    let last = evidence["verifierRuns"]
+        .as_array()
+        .and_then(|runs| runs.last());
+    let command = last
+        .and_then(|run| run["command"].as_str())
+        .map(short_command);
     match (last.and_then(|run| run["phase"].as_str()), command) {
-        (Some("before_change"), Some(c)) => format!("{changed}. {c} ran before the change; nothing checked the change itself."),
-        (Some("completion"), Some(c)) => format!("{changed}. {c} ran, but the change was edited after it."),
+        (Some("before_change"), Some(c)) => {
+            format!("{changed}. {c} ran before the change; nothing checked the change itself.")
+        }
+        (Some("completion"), Some(c)) => {
+            format!("{changed}. {c} ran, but the change was edited after it.")
+        }
         _ => format!("{changed}, but no verifier ran before the agent finished."),
     }
 }
@@ -2706,13 +3159,20 @@ pub fn outcome_for(turn: &Value) -> Outcome {
     let execution = turn["execution"].as_str().unwrap_or("");
     let outcome = turn["outcome"].as_str().unwrap_or("");
     let reason = turn["reason"].as_str().unwrap_or("");
-    let detail = turn["detail"].as_str().filter(|d| !d.is_empty()).map(str::to_string);
+    let detail = turn["detail"]
+        .as_str()
+        .filter(|d| !d.is_empty())
+        .map(str::to_string);
     let verifier = turn["verification"]["command"].as_str().map(str::to_string);
     let text = |s: &str| Some(s.to_string()).filter(|s| !s.is_empty());
     let mut items = Vec::new();
     let objective = &turn["objective"];
-    let open_objective = objective["status"].as_str().is_some_and(|status| status != "completed")
-        && objective["remaining"].as_array().is_some_and(|remaining| !remaining.is_empty());
+    let open_objective = objective["status"]
+        .as_str()
+        .is_some_and(|status| status != "completed")
+        && objective["remaining"]
+            .as_array()
+            .is_some_and(|remaining| !remaining.is_empty());
     let inference_failed = turn["inferenceFailure"].is_object();
     let reason = if reason.is_empty() && open_objective && execution == "COMPLETED" {
         "REQUIREMENTS_INCOMPLETE"
@@ -2734,28 +3194,48 @@ pub fn outcome_for(turn: &Value) -> Outcome {
                 )),
                 text("check the result against the source yourself (v shows the receipt)"),
             ),
-            _ => ("Done · verified".to_string(), verifier.map(|c| format!("{c} passed")), None),
+            _ => (
+                "Done · verified".to_string(),
+                verifier.map(|c| format!("{c} passed")),
+                None,
+            ),
         },
         // The suite passed but nothing shows it tested the change: nothing else broke, the change itself is unproven.
         // The tests cover the change, but only tests Nexus wrote (or that passed before it too) check it.
-        ("COMPLETED", "REGRESSION_FREE", _) if turn["verification"]["independent"] == Value::Bool(false) => (
-            "Done · tests pass (own tests only)".to_string(),
-            Some(format!(
-                "{} passed, but {}.",
-                verifier.unwrap_or_else(|| "The test command".into()),
-                turn["verification"]["independenceDetail"].as_str().unwrap_or("nothing independent of Nexus shows the change")
-            )),
-            text("check the change against what you asked for (/diff), or configure a verifier you trust"),
-        ),
+        ("COMPLETED", "REGRESSION_FREE", _)
+            if turn["verification"]["independent"] == Value::Bool(false) =>
+        {
+            (
+                "Done · tests pass (own tests only)".to_string(),
+                Some(format!(
+                    "{} passed, but {}.",
+                    verifier.unwrap_or_else(|| "The test command".into()),
+                    turn["verification"]["independenceDetail"]
+                        .as_str()
+                        .unwrap_or("nothing independent of Nexus shows the change")
+                )),
+                text(
+                    "check the change against what you asked for (/diff), or configure a verifier you trust",
+                ),
+            )
+        }
         ("COMPLETED", "REGRESSION_FREE", _) => (
             "Done · tests passed, change not covered".to_string(),
-            Some(format!("{} passed, but none of the tests it ran covers the changed files.", verifier.unwrap_or_else(|| "The test command".into()))),
-            text("add a test for the change (or run one that names it), or check it yourself with /diff"),
+            Some(format!(
+                "{} passed, but none of the tests it ran covers the changed files.",
+                verifier.unwrap_or_else(|| "The test command".into())
+            )),
+            text(
+                "add a test for the change (or run one that names it), or check it yourself with /diff",
+            ),
         ),
         ("COMPLETED", "NOT_REQUIRED", _) => {
             let denied = turn["turnEvidence"]["denied"].as_u64().unwrap_or(0);
             let cause = if denied > 0 {
-                format!("No files changed: you denied {denied} action{}.", if denied == 1 { "" } else { "s" })
+                format!(
+                    "No files changed: you denied {denied} action{}.",
+                    if denied == 1 { "" } else { "s" }
+                )
             } else {
                 "No files changed, so there was nothing to verify.".to_string()
             };
@@ -2773,7 +3253,13 @@ pub fn outcome_for(turn: &Value) -> Outcome {
         ),
         ("COMPLETED", "NOT_ESTABLISHED", "VERIFIER_FAILED") => (
             "Verification failed".to_string(),
-            Some(format!("{} failed", detail.clone().or(verifier).unwrap_or_else(|| "the verifier".into()))),
+            Some(format!(
+                "{} failed",
+                detail
+                    .clone()
+                    .or(verifier)
+                    .unwrap_or_else(|| "the verifier".into())
+            )),
             text("v shows the failing check; ask Nexus to fix it"),
         ),
         ("COMPLETED", "NOT_ESTABLISHED", "VERIFIER_TIMED_OUT") => (
@@ -2783,10 +3269,17 @@ pub fn outcome_for(turn: &Value) -> Outcome {
         ),
         ("COMPLETED", "NOT_ESTABLISHED", "REQUIREMENTS_INCOMPLETE") => {
             if let Some(remaining) = turn["objective"]["remaining"].as_array() {
-                items = remaining.iter().filter_map(Value::as_str).map(str::to_string).collect();
+                items = remaining
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect();
             }
             let open = items.len();
-            let mut cause = format!("The agent finished with {open} requirement{} not done.", if open == 1 { "" } else { "s" });
+            let mut cause = format!(
+                "The agent finished with {open} requirement{} not done.",
+                if open == 1 { "" } else { "s" }
+            );
             if let Some(check) = objective["failedCheck"].as_str() {
                 cause.push_str(&format!(" Failed check: {check}."));
             }
@@ -2799,7 +3292,11 @@ pub fn outcome_for(turn: &Value) -> Outcome {
                     .or_else(|| text("reply to continue, or /requirements to review or accept a reduced scope")),
             )
         }
-        ("COMPLETED", _, _) => ("Done · result not established".to_string(), detail.clone().or_else(|| text(reason)), text("v shows the receipt")),
+        ("COMPLETED", _, _) => (
+            "Done · result not established".to_string(),
+            detail.clone().or_else(|| text(reason)),
+            text("v shows the receipt"),
+        ),
         ("INTERRUPTED", _, _) => {
             // The controller's phase names are internal; say when it was in the operator's words.
             let when = match turn["interruption"]["phase"].as_str().unwrap_or("work") {
@@ -2811,21 +3308,44 @@ pub fn outcome_for(turn: &Value) -> Outcome {
                 "between_steps" => "between steps".to_string(),
                 other => format!("during {}", other.replace('_', " ")),
             };
-            let skipped = turn["interruption"]["undispatchedToolCalls"].as_u64().unwrap_or(0);
+            let skipped = turn["interruption"]["undispatchedToolCalls"]
+                .as_u64()
+                .unwrap_or(0);
             let mut cause = format!("You stopped the turn {when}.");
             if skipped > 0 {
-                cause.push_str(&format!(" {skipped} planned tool call{} did not run.", if skipped == 1 { "" } else { "s" }));
+                cause.push_str(&format!(
+                    " {skipped} planned tool call{} did not run.",
+                    if skipped == 1 { "" } else { "s" }
+                ));
             }
             ("Cancelled".to_string(), Some(cause), None)
         }
-        ("FAILED", _, "INFERENCE_FAILED") => ("Model request failed".to_string(), if inference_failed { None } else { detail.clone() }, text("send again, or choose another model with /model")),
-        ("FAILED", _, _) => ("Turn failed".to_string(), detail.clone().or_else(|| text(reason)), text("v shows the receipt")),
+        ("FAILED", _, "INFERENCE_FAILED") => (
+            "Model request failed".to_string(),
+            if inference_failed {
+                None
+            } else {
+                detail.clone()
+            },
+            text("send again, or choose another model with /model"),
+        ),
+        ("FAILED", _, _) => (
+            "Turn failed".to_string(),
+            detail.clone().or_else(|| text(reason)),
+            text("v shows the receipt"),
+        ),
         ("BLOCKED", _, "CONTEXT_CAPACITY_EXCEEDED") => (
             "Context is full".to_string(),
-            detail.clone().map(|d| format!("The request would exceed the model's context ({d} tokens).")),
+            detail
+                .clone()
+                .map(|d| format!("The request would exceed the model's context ({d} tokens).")),
             text("/compact, then send again"),
         ),
-        ("BLOCKED", _, _) => ("Blocked".to_string(), detail.clone().or_else(|| text(reason)), text("v shows the receipt")),
+        ("BLOCKED", _, _) => (
+            "Blocked".to_string(),
+            detail.clone().or_else(|| text(reason)),
+            text("v shows the receipt"),
+        ),
         ("LIMIT_REACHED", _, _) => {
             let what = match reason {
                 "STEP_BUDGET_EXHAUSTED" | "STEP_LIMIT_REACHED" => "the step budget",
@@ -2833,18 +3353,39 @@ pub fn outcome_for(turn: &Value) -> Outcome {
                 "STAGNATION_DETECTED" => "too many steps without progress",
                 _ => "a limit",
             };
-            (format!("Stopped at {what}"), detail.clone(), text("reply to continue from here, or raise the budget"))
+            (
+                format!("Stopped at {what}"),
+                detail.clone(),
+                text("reply to continue from here, or raise the budget"),
+            )
         }
-        _ => ("Turn ended".to_string(), detail.clone().or_else(|| text(reason)), text("v shows the receipt")),
+        _ => (
+            "Turn ended".to_string(),
+            detail.clone().or_else(|| text(reason)),
+            text("v shows the receipt"),
+        ),
     };
-    Outcome { title, cause, next, items }
+    Outcome {
+        title,
+        cause,
+        next,
+        items,
+    }
 }
 
 /// Same projection as `TerminalUI.turnSummary` in `cli/src/ui.ts`: a failing or timed-out verifier is a failure;
 /// an operator's cancel or a budget stop is not.
 pub fn tone_for(turn: &Value) -> Tone {
-    match (turn["execution"].as_str(), turn["outcome"].as_str(), turn["reason"].as_str()) {
-        (Some("COMPLETED"), Some("VERIFIED"), _) if turn["contextNotRetained"].as_u64().unwrap_or(0) > 0 => Tone::Caution,
+    match (
+        turn["execution"].as_str(),
+        turn["outcome"].as_str(),
+        turn["reason"].as_str(),
+    ) {
+        (Some("COMPLETED"), Some("VERIFIED"), _)
+            if turn["contextNotRetained"].as_u64().unwrap_or(0) > 0 =>
+        {
+            Tone::Caution
+        }
         (Some("COMPLETED"), Some("VERIFIED" | "NOT_REQUIRED"), _) => Tone::Good,
         (Some("COMPLETED"), _, Some("VERIFIER_FAILED" | "VERIFIER_TIMED_OUT")) => Tone::Bad,
         (Some("COMPLETED"), _, _) => Tone::Caution,
@@ -2863,7 +3404,12 @@ mod tests {
         let turn: Value = serde_json::from_str(r#"{"execution":"COMPLETED","outcome":"VERIFIED","verification":{"status":"PASSED","command":"node review_verifier.mjs"},"contextNotRetained":3}"#).unwrap();
         let outcome = outcome_for(&turn);
         assert_eq!(outcome.title, "Done · verified (some context lost)");
-        assert_eq!(outcome.cause.as_deref(), Some("node review_verifier.mjs passed; 3 tool outputs the work may rest on left context and were not read again."));
+        assert_eq!(
+            outcome.cause.as_deref(),
+            Some(
+                "node review_verifier.mjs passed; 3 tool outputs the work may rest on left context and were not read again."
+            )
+        );
         assert!(matches!(tone_for(&turn), Tone::Caution));
         let plain: Value = serde_json::from_str(r#"{"execution":"COMPLETED","outcome":"VERIFIED","verification":{"status":"PASSED","command":"npm test"}}"#).unwrap();
         assert_eq!(outcome_for(&plain).title, "Done · verified");
@@ -2875,7 +3421,12 @@ mod tests {
         let turn: Value = serde_json::from_str(r#"{"execution":"COMPLETED","outcome":"REGRESSION_FREE","reason":"REGRESSION_FREE","verification":{"status":"PASSED","command":"npm test","independent":false,"independenceDetail":"the existing tests passed before the change too; the new behaviour is checked only by tests Nexus wrote"}}"#).unwrap();
         let outcome = outcome_for(&turn);
         assert_eq!(outcome.title, "Done · tests pass (own tests only)");
-        assert_eq!(outcome.cause.as_deref(), Some("npm test passed, but the existing tests passed before the change too; the new behaviour is checked only by tests Nexus wrote."));
+        assert_eq!(
+            outcome.cause.as_deref(),
+            Some(
+                "npm test passed, but the existing tests passed before the change too; the new behaviour is checked only by tests Nexus wrote."
+            )
+        );
     }
 
     #[test]
@@ -2883,7 +3434,10 @@ mod tests {
         let turn: Value = serde_json::from_str(r#"{"execution":"COMPLETED","outcome":"REGRESSION_FREE","reason":"REGRESSION_FREE","verification":{"status":"PASSED","command":"npm test"}}"#).unwrap();
         let outcome = outcome_for(&turn);
         assert_eq!(outcome.title, "Done · tests passed, change not covered");
-        assert_eq!(outcome.cause.as_deref(), Some("npm test passed, but none of the tests it ran covers the changed files."));
+        assert_eq!(
+            outcome.cause.as_deref(),
+            Some("npm test passed, but none of the tests it ran covers the changed files.")
+        );
         assert!(matches!(tone_for(&turn), Tone::Caution));
     }
     #[test]
@@ -2917,27 +3471,46 @@ mod tests {
 
     #[test]
     fn the_unverified_cause_stays_true_when_the_verifier_ran_stale_or_the_state_is_unknown() {
-        let cause = |json: &str| outcome_for(&serde_json::from_str::<Value>(json).unwrap()).cause.unwrap();
+        let cause = |json: &str| {
+            outcome_for(&serde_json::from_str::<Value>(json).unwrap())
+                .cause
+                .unwrap()
+        };
         // A completion run followed by a later edit is a run, not "no verifier ran" (review of #473).
         assert_eq!(
-            cause(r#"{"execution":"COMPLETED","outcome":"UNVERIFIED","reason":"VERIFICATION_NOT_RUN","turnEvidence":{"workspaceChanged":"yes","carriedChanges":false,"denied":0,"verifierRuns":[{"command":"npm test","phase":"before_change","passed":true},{"command":"npm test","phase":"completion","passed":true}]}}"#),
+            cause(
+                r#"{"execution":"COMPLETED","outcome":"UNVERIFIED","reason":"VERIFICATION_NOT_RUN","turnEvidence":{"workspaceChanged":"yes","carriedChanges":false,"denied":0,"verifierRuns":[{"command":"npm test","phase":"before_change","passed":true},{"command":"npm test","phase":"completion","passed":true}]}}"#
+            ),
             "Files changed. npm test ran, but the change was edited after it."
         );
         // The workspace comparison failed: do not claim files changed.
         assert_eq!(
-            cause(r#"{"execution":"COMPLETED","outcome":"UNVERIFIED","reason":"VERIFICATION_NOT_RUN","turnEvidence":{"workspaceChanged":"unknown","carriedChanges":false,"denied":0,"verifierRuns":[]}}"#),
+            cause(
+                r#"{"execution":"COMPLETED","outcome":"UNVERIFIED","reason":"VERIFICATION_NOT_RUN","turnEvidence":{"workspaceChanged":"unknown","carriedChanges":false,"denied":0,"verifierRuns":[]}}"#
+            ),
             "Files may have changed, but no verifier ran before the agent finished."
         );
         // Other unverified reasons keep their own wording; the carried-change text is for VERIFICATION_NOT_RUN only.
         assert_eq!(
-            cause(r#"{"execution":"COMPLETED","outcome":"UNVERIFIED","reason":"NO_TESTS_EXECUTED","turnEvidence":{"workspaceChanged":"no","carriedChanges":true,"denied":0,"verifierRuns":[]}}"#),
+            cause(
+                r#"{"execution":"COMPLETED","outcome":"UNVERIFIED","reason":"NO_TESTS_EXECUTED","turnEvidence":{"workspaceChanged":"no","carriedChanges":true,"denied":0,"verifierRuns":[]}}"#
+            ),
             "Files changed, but no verifier ran before the agent finished."
         );
         // A long verifier command does not push the cause past a screenful.
         let long = "x".repeat(400);
-        let cause_long = cause(&format!(r#"{{"execution":"COMPLETED","outcome":"UNVERIFIED","reason":"VERIFICATION_NOT_RUN","turnEvidence":{{"workspaceChanged":"yes","carriedChanges":false,"denied":0,"verifierRuns":[{{"command":"{long}","phase":"before_change","passed":true}}]}}}}"#));
-        assert!(cause_long.chars().count() < 140, "{} chars", cause_long.chars().count());
-        assert!(cause_long.contains('…') && cause_long.ends_with("nothing checked the change itself."), "{cause_long}");
+        let cause_long = cause(&format!(
+            r#"{{"execution":"COMPLETED","outcome":"UNVERIFIED","reason":"VERIFICATION_NOT_RUN","turnEvidence":{{"workspaceChanged":"yes","carriedChanges":false,"denied":0,"verifierRuns":[{{"command":"{long}","phase":"before_change","passed":true}}]}}}}"#
+        ));
+        assert!(
+            cause_long.chars().count() < 140,
+            "{} chars",
+            cause_long.chars().count()
+        );
+        assert!(
+            cause_long.contains('…') && cause_long.ends_with("nothing checked the change itself."),
+            "{cause_long}"
+        );
     }
 
     use crate::protocol::parse_event;
@@ -2973,21 +3546,33 @@ mod tests {
         let mut state = LiveState::new();
         state.apply(ev(r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"auto","git":null,"busy":false,"session":"sess-1"}"#));
         assert_eq!(state.session.session_id.as_deref(), Some("sess-1"));
-        assert!(!state.session_saved, "fresh session is not yet saved to disk");
+        assert!(
+            !state.session_saved,
+            "fresh session is not yet saved to disk"
+        );
 
         // When a turn completes:
         state.apply(ev(r#"{"v":1,"type":"turn.result","id":"t1","heading":"Done","line":"Finished task","turn":{}}"#));
-        assert!(state.session_saved, "turn result confirms session was saved");
+        assert!(
+            state.session_saved,
+            "turn result confirms session was saved"
+        );
 
         // When resuming with history:
         let mut resumed = LiveState::new();
         resumed.apply(ev(r#"{"v":1,"type":"history","session":"sess-old","total":3,"messages":[{"role":"user","text":"hi"}]}"#));
-        assert!(resumed.session_saved, "history confirms non-empty saved session");
+        assert!(
+            resumed.session_saved,
+            "history confirms non-empty saved session"
+        );
 
         // When resume slash command succeeds:
         let mut cmd_state = LiveState::new();
         cmd_state.apply(ev(r#"{"v":1,"type":"slash.result","id":"s1","command":"resume","success":true,"output":"Resumed session sess-old."}"#));
-        assert!(cmd_state.session_saved, "successful resume command confirms saved session");
+        assert!(
+            cmd_state.session_saved,
+            "successful resume command confirms saved session"
+        );
     }
 
     fn with(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
@@ -3015,14 +3600,22 @@ mod tests {
         type_text(&mut state, "use tabs");
         assert_eq!(
             state.on_key(key(KeyCode::Enter)),
-            Some(Action::Send(Command::Steer { id: "g1".into(), text: "use tabs".into() }))
+            Some(Action::Send(Command::Steer {
+                id: "g1".into(),
+                text: "use tabs".into()
+            }))
         );
         assert_eq!(steer_state(&state, "g1"), Some(SteerState::Sending));
-        state.apply(ev(r#"{"v":1,"type":"steer.ack","id":"g1","status":"queued","message":"Steering queued"}"#));
+        state.apply(ev(
+            r#"{"v":1,"type":"steer.ack","id":"g1","status":"queued","message":"Steering queued"}"#,
+        ));
         assert_eq!(steer_state(&state, "g1"), Some(SteerState::Queued));
         state.apply(ev(r#"{"v":1,"type":"steer.ack","id":"g1","status":"applied","message":"Applied at step 4."}"#));
         assert_eq!(steer_state(&state, "g1"), Some(SteerState::Applied));
-        assert!(state.composer.is_empty(), "applied steering is not given back");
+        assert!(
+            state.composer.is_empty(),
+            "applied steering is not given back"
+        );
     }
 
     #[test]
@@ -3032,12 +3625,19 @@ mod tests {
         state.on_key(key(KeyCode::Enter));
         state.apply(ev(r#"{"v":1,"type":"steer.ack","id":"g1","status":"cancelled","message":"Not applied","text":"stop and summarise"}"#));
         assert_eq!(steer_state(&state, "g1"), Some(SteerState::Cancelled));
-        assert_eq!(state.composer.expand(state.composer.text()), "stop and summarise");
+        assert_eq!(
+            state.composer.expand(state.composer.text()),
+            "stop and summarise"
+        );
         state.composer.clear();
         state.on_paste("line one\nline two");
         state.on_key(key(KeyCode::Enter));
         state.apply(ev(r#"{"v":1,"type":"steer.ack","id":"g2","status":"rejected","message":"/test is running"}"#));
-        assert_eq!(state.composer.expand(state.composer.text()), "line one\nline two", "text kept by the client when the ack carries none");
+        assert_eq!(
+            state.composer.expand(state.composer.text()),
+            "line one\nline two",
+            "text kept by the client when the ack carries none"
+        );
     }
 
     #[test]
@@ -3050,13 +3650,42 @@ mod tests {
         type_text(&mut state, "SC:reset go");
         state.on_key(key(KeyCode::Enter));
         state.apply(ev(r#"{"v":1,"type":"steer.ack","id":"g1","status":"cancelled","message":"Not applied","text":"SC:e500 go"}"#));
-        let notices = |state: &LiveState| state.transcript.iter().filter(|e| matches!(e, Entry::Notice(t) if t.contains("one message"))).count();
-        assert_eq!(notices(&state), 0, "the first returned message lands in an empty draft: nothing is joined yet");
+        let notices = |state: &LiveState| {
+            state
+                .transcript
+                .iter()
+                .filter(|e| matches!(e, Entry::Notice(t) if t.contains("one message")))
+                .count()
+        };
+        assert_eq!(
+            notices(&state),
+            0,
+            "the first returned message lands in an empty draft: nothing is joined yet"
+        );
         state.apply(ev(r#"{"v":1,"type":"steer.ack","id":"g2","status":"cancelled","message":"Not applied","text":"SC:reset go"}"#));
-        assert_eq!(state.composer.expand(state.composer.text()), "SC:e500 go\nSC:reset go", "both are kept, one per line");
-        assert_eq!(notices(&state), 1, "the join is announced: {:?}", state.transcript);
-        let Some(Entry::Notice(text)) = state.transcript.iter().rev().find(|e| matches!(e, Entry::Notice(t) if t.contains("one message"))) else { panic!() };
-        assert!(text.contains("one message") && text.contains("edit"), "{text}");
+        assert_eq!(
+            state.composer.expand(state.composer.text()),
+            "SC:e500 go\nSC:reset go",
+            "both are kept, one per line"
+        );
+        assert_eq!(
+            notices(&state),
+            1,
+            "the join is announced: {:?}",
+            state.transcript
+        );
+        let Some(Entry::Notice(text)) = state
+            .transcript
+            .iter()
+            .rev()
+            .find(|e| matches!(e, Entry::Notice(t) if t.contains("one message")))
+        else {
+            panic!()
+        };
+        assert!(
+            text.contains("one message") && text.contains("edit"),
+            "{text}"
+        );
         // A message typed by hand and then a returned one is the same join.
         let mut typed = busy();
         typed.composer = "draft already here".into();
@@ -3069,7 +3698,11 @@ mod tests {
         let mut state = busy();
         type_text(&mut state, "add tests too");
         state.on_key(key(KeyCode::Enter));
-        state.fail("The agent sidecar exited unexpectedly.".into(), Some(1), Vec::new());
+        state.fail(
+            "The agent sidecar exited unexpectedly.".into(),
+            Some(1),
+            Vec::new(),
+        );
         assert_eq!(steer_state(&state, "g1"), Some(SteerState::Lost));
         assert_eq!(state.composer.text(), "add tests too");
     }
@@ -3078,7 +3711,9 @@ mod tests {
     fn read_only_doctor_runs_while_busy_but_doctor_fix_waits() {
         let mut state = busy();
         type_text(&mut state, "/doctor");
-        assert!(matches!(state.on_key(key(KeyCode::Enter)), Some(Action::Send(Command::Slash { ref command, .. })) if command == "doctor"));
+        assert!(
+            matches!(state.on_key(key(KeyCode::Enter)), Some(Action::Send(Command::Slash { ref command, .. })) if command == "doctor")
+        );
         type_text(&mut state, "/doctor --fix");
         assert_eq!(state.on_key(key(KeyCode::Enter)), None);
         assert_eq!(state.composer, "/doctor --fix");
@@ -3090,12 +3725,21 @@ mod tests {
         state.on_paste("/exit\nand then fix the bug");
         assert_eq!(
             state.on_key(key(KeyCode::Enter)),
-            Some(Action::Send(Command::PromptSubmit { id: "t1".into(), text: "/exit\nand then fix the bug".into() }))
+            Some(Action::Send(Command::PromptSubmit {
+                id: "t1".into(),
+                text: "/exit\nand then fix the bug".into()
+            }))
         );
         // The prompt line keeps the paste label; the text that was sent follows it, bounded in the view.
         let n = state.transcript.len();
-        assert_eq!(state.transcript[n - 2], Entry::User("[Pasted text #1: 2 lines]".into()));
-        assert_eq!(state.transcript[n - 1], Entry::Pasted("/exit\nand then fix the bug".into()));
+        assert_eq!(
+            state.transcript[n - 2],
+            Entry::User("[Pasted text #1: 2 lines]".into())
+        );
+        assert_eq!(
+            state.transcript[n - 1],
+            Entry::Pasted("/exit\nand then fix the bug".into())
+        );
     }
 
     #[test]
@@ -3103,7 +3747,13 @@ mod tests {
         let mut state = ready();
         state.on_paste("a\nb");
         assert_eq!(state.on_key(ctrl('o')), None);
-        assert_eq!(state.overlay, Some(Overlay::Paste { number: 1, scroll: 0 }));
+        assert_eq!(
+            state.overlay,
+            Some(Overlay::Paste {
+                number: 1,
+                scroll: 0
+            })
+        );
         assert_eq!(state.on_key(ctrl('x')), None);
         assert_eq!(state.overlay, None);
         assert_eq!(state.composer, "a\nb");
@@ -3115,7 +3765,10 @@ mod tests {
         assert!(state.turn_started.is_some() && state.animating());
         state.apply(ev(r#"{"v":1,"type":"activity","turn_id":"t1","phase":"tool","step":31,"segment":2,"tool":"run_command","subject":"make test"}"#));
         let first = state.activity.clone().unwrap();
-        assert_eq!((first.step, first.segment, first.tool.as_deref()), (31, 2, Some("run_command")));
+        assert_eq!(
+            (first.step, first.segment, first.tool.as_deref()),
+            (31, 2, Some("run_command"))
+        );
         state.apply(ev(r#"{"v":1,"type":"activity","turn_id":"t1","phase":"tool","step":31,"segment":2,"tool":"run_command","subject":"make test"}"#));
         state.apply(ev(r#"{"v":1,"type":"turn.result","turn_id":"t1","heading":"H","line":"L","turn":{"execution":"COMPLETED","outcome":"VERIFIED"},"model_summary":null}"#));
         assert!(state.activity.is_none());
@@ -3129,26 +3782,46 @@ mod tests {
         state.apply(ev(r#"{"v":1,"type":"tool.start","turn_id":"t1","call_id":"c1","tool":"edit_file","subject":"a.ts","evidence":"e1"}"#));
         state.apply(ev(r#"{"v":1,"type":"file.diff","turn_id":"t1","call_id":"c1","evidence":"e1","path":"a.ts","kind":"modified","added":1,"removed":1,"preview":"--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-a\n+b","truncated":true,"total_lines":90}"#));
         // The change is shown on the call's own tool row, not as a second entry.
-        let tools: Vec<&Entry> = state.transcript.iter().filter(|e| matches!(e, Entry::Tool { .. } | Entry::Diff { .. })).collect();
+        let tools: Vec<&Entry> = state
+            .transcript
+            .iter()
+            .filter(|e| matches!(e, Entry::Tool { .. } | Entry::Diff { .. }))
+            .collect();
         assert_eq!(tools.len(), 1);
         let card = tools[0].card().expect("the edit row carries its diff");
         assert_eq!((card.added, card.removed, card.truncated), (1, 1, true));
         state.on_key(key(KeyCode::Tab));
         state.on_key(key(KeyCode::Char('[')));
-        assert!(matches!(state.on_key(key(KeyCode::Enter)), Some(Action::Send(Command::ToolDetail { ref evidence, .. })) if evidence == "e1"));
-        assert!(matches!(state.overlay, Some(Overlay::Review(_))), "enter on an edit opens its complete diff");
+        assert!(
+            matches!(state.on_key(key(KeyCode::Enter)), Some(Action::Send(Command::ToolDetail { ref evidence, .. })) if evidence == "e1")
+        );
+        assert!(
+            matches!(state.overlay, Some(Overlay::Review(_))),
+            "enter on an edit opens its complete diff"
+        );
     }
 
     #[test]
     fn open_requirements_from_the_turn_are_reported_under_the_banner() {
         let mut state = busy();
         state.apply(ev(r#"{"v":1,"type":"turn.result","turn_id":"t1","heading":"TURN ENDED - REQUIREMENTS OPEN","line":"L","turn":{"execution":"COMPLETED","outcome":"NOT_ESTABLISHED","objective":{"status":"incomplete","remaining":["R2 [open] Reject negatives"],"failedCheck":"not ok 3","nextAction":"Fix R2"}},"model_summary":null}"#));
-        let Some(Entry::Banner { outcome, .. }) = state.transcript.last() else { panic!("{:?}", state.transcript) };
+        let Some(Entry::Banner { outcome, .. }) = state.transcript.last() else {
+            panic!("{:?}", state.transcript)
+        };
         assert_eq!(outcome.title, "Requirements still open");
-        assert_eq!(outcome.items, vec!["R2 [open] Reject negatives".to_string()]);
-        assert_eq!(outcome.cause.as_deref(), Some("The agent finished with 1 requirement not done. Failed check: not ok 3."));
+        assert_eq!(
+            outcome.items,
+            vec!["R2 [open] Reject negatives".to_string()]
+        );
+        assert_eq!(
+            outcome.cause.as_deref(),
+            Some("The agent finished with 1 requirement not done. Failed check: not ok 3.")
+        );
         assert_eq!(outcome.next.as_deref(), Some("Fix R2"));
-        assert!(!state.transcript.iter().any(|e| matches!(e, Entry::Info(_))), "the requirements are reported once, in the outcome");
+        assert!(
+            !state.transcript.iter().any(|e| matches!(e, Entry::Info(_))),
+            "the requirements are reported once, in the outcome"
+        );
     }
 
     #[test]
@@ -3223,14 +3896,20 @@ mod tests {
         state.on_paste("X\r\nY");
         // A multi-line paste is one buffer in the draft; its exact content is what gets submitted.
         assert_eq!(state.composer.expand(state.composer.text()), "aX\nYb");
-        assert_eq!(state.composer.display(state.composer.text()), "a[Pasted text #1: 2 lines]b");
+        assert_eq!(
+            state.composer.display(state.composer.text()),
+            "a[Pasted text #1: 2 lines]b"
+        );
         state.session.busy = true;
         type_text(&mut state, "!");
         assert_eq!(state.composer.expand(state.composer.text()), "aX\nY!b");
         // Enter while the agent works sends the draft as steering (exactly as typed and pasted).
         assert_eq!(
             state.on_key(key(KeyCode::Enter)),
-            Some(Action::Send(Command::Steer { id: "g1".into(), text: "aX\nY!b".into() }))
+            Some(Action::Send(Command::Steer {
+                id: "g1".into(),
+                text: "aX\nY!b".into()
+            }))
         );
         assert!(state.composer.is_empty());
     }
@@ -3296,13 +3975,18 @@ mod tests {
         state.session.busy = true;
         assert_eq!(
             state.on_key(key(KeyCode::Enter)),
-            Some(Action::Send(Command::Steer { id: "g1".into(), text: "work".into() }))
+            Some(Action::Send(Command::Steer {
+                id: "g1".into(),
+                text: "work".into()
+            }))
         );
         // A command other than a read-only one stays in the draft while busy, with an explanation.
         state.composer = "/undo".into();
         assert_eq!(state.on_key(key(KeyCode::Enter)), None);
         assert_eq!(state.composer, "/undo");
-        assert!(matches!(state.transcript.last(), Some(Entry::Notice(text)) if text.contains("sent as steering")));
+        assert!(
+            matches!(state.transcript.last(), Some(Entry::Notice(text)) if text.contains("sent as steering"))
+        );
     }
 
     #[test]
@@ -3334,7 +4018,10 @@ mod tests {
         type_text(&mut state, "again");
         assert_eq!(
             state.on_key(key(KeyCode::Enter)),
-            Some(Action::Send(Command::Steer { id: "g1".into(), text: "again".into() }))
+            Some(Action::Send(Command::Steer {
+                id: "g1".into(),
+                text: "again".into()
+            }))
         );
     }
 
@@ -3362,10 +4049,7 @@ mod tests {
         let mut state = ready();
         state.session.busy = true;
         assert_eq!(state.on_key(ctrl('c')), Some(Action::Send(Command::Cancel)));
-        assert_eq!(
-            state.on_key(key(KeyCode::Esc)),
-            None
-        );
+        assert_eq!(state.on_key(key(KeyCode::Esc)), None);
         state.session.busy = false;
         assert_eq!(state.on_key(key(KeyCode::Esc)), None);
         type_text(&mut state, "draft");
@@ -3387,10 +4071,7 @@ mod tests {
             Some(Action::Send(Command::Cancel))
         );
         assert!(state.cancel_requested());
-        assert_eq!(
-            state.on_key(key(KeyCode::Esc)),
-            None
-        );
+        assert_eq!(state.on_key(key(KeyCode::Esc)), None);
         assert_eq!(state.on_key(ctrl('c')), Some(Action::Quit));
     }
 
@@ -3535,7 +4216,12 @@ mod tests {
             Entry::Banner {
                 heading: "TURN INTERRUPTED".into(),
                 line: "Stopped by operator".into(),
-                outcome: Box::new(Outcome { title: "Cancelled".into(), cause: Some("You stopped the turn during work.".into()), next: None, items: vec![] }),
+                outcome: Box::new(Outcome {
+                    title: "Cancelled".into(),
+                    cause: Some("You stopped the turn during work.".into()),
+                    next: None,
+                    items: vec![]
+                }),
                 tone: Tone::Caution,
                 failure: None,
                 summary: None,
@@ -3548,7 +4234,12 @@ mod tests {
             Entry::Banner {
                 heading: "TURN COMPLETE - VERIFIED".into(),
                 line: "cargo test passed".into(),
-                outcome: Box::new(Outcome { title: "Done · verified".into(), cause: None, next: None, items: vec![] }),
+                outcome: Box::new(Outcome {
+                    title: "Done · verified".into(),
+                    cause: None,
+                    next: None,
+                    items: vec![]
+                }),
                 tone: Tone::Good,
                 failure: None,
                 summary: Some("Fixed the parser.".into()),
@@ -3584,7 +4275,12 @@ mod tests {
                 Entry::Banner {
                     heading: "TURN FAILED".into(),
                     line: "Inference failed".into(),
-                    outcome: Box::new(Outcome { title: "Model request failed".into(), cause: None, next: Some("send again, or choose another model with /model".into()), items: vec![] }),
+                    outcome: Box::new(Outcome {
+                        title: "Model request failed".into(),
+                        cause: None,
+                        next: Some("send again, or choose another model with /model".into()),
+                        items: vec![]
+                    }),
                     tone: Tone::Bad,
                     failure: Some("upstream timed out after 60s".into()),
                     summary: None,
@@ -3593,7 +4289,12 @@ mod tests {
                 Entry::Banner {
                     heading: "TURN FAILED".into(),
                     line: "Stopped".into(),
-                    outcome: Box::new(Outcome { title: "Turn failed".into(), cause: None, next: Some("v shows the receipt".into()), items: vec![] }),
+                    outcome: Box::new(Outcome {
+                        title: "Turn failed".into(),
+                        cause: None,
+                        next: Some("v shows the receipt".into()),
+                        items: vec![]
+                    }),
                     tone: Tone::Bad,
                     failure: None,
                     summary: None,
@@ -3690,22 +4391,31 @@ mod tests {
         state.apply(ev(r#"{"v":1,"type":"checkpoint.choice.request","id":"choice-1","turn_id":"t1","message":"Sensitive content prevents checkpointing."}"#));
         assert_eq!(state.on_key(key(KeyCode::Enter)), None);
         assert_eq!(state.on_key(key(KeyCode::Char('4'))), None);
-        assert_eq!(state.on_key(key(KeyCode::Enter)), Some(Action::Send(Command::CheckpointChoice {
-            id: "choice-1".into(),
-            choice: "cancel".into(),
-        })));
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            Some(Action::Send(Command::CheckpointChoice {
+                id: "choice-1".into(),
+                choice: "cancel".into(),
+            }))
+        );
         state.apply(ev(r#"{"v":1,"type":"checkpoint.choice.request","id":"choice-2","turn_id":"t1","message":"Sensitive content prevents checkpointing."}"#));
         assert_eq!(state.on_key(key(KeyCode::Char('5'))), None);
-        assert_eq!(state.on_key(key(KeyCode::Enter)), Some(Action::Send(Command::CheckpointChoice {
-            id: "choice-2".into(),
-            choice: "other".into(),
-        })));
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            Some(Action::Send(Command::CheckpointChoice {
+                id: "choice-2".into(),
+                choice: "other".into(),
+            }))
+        );
         state.apply(ev(r#"{"v":1,"type":"checkpoint.choice.request","id":"choice-3","turn_id":"t1","message":"Checkpoint failed: protected Git state could not be verified. Choose 1 read-only, 2 continue without a rollback checkpoint, 3 retry checkpoint normally, 4 cancel this turn, or 5 re-enter the instruction."}"#));
         assert_eq!(state.on_key(key(KeyCode::Char('3'))), None);
-        assert_eq!(state.on_key(key(KeyCode::Enter)), Some(Action::Send(Command::CheckpointChoice {
-            id: "choice-3".into(),
-            choice: "retry".into(),
-        })));
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            Some(Action::Send(Command::CheckpointChoice {
+                id: "choice-3".into(),
+                choice: "retry".into(),
+            }))
+        );
     }
 
     const APPROVAL: &str = r#"{"v":1,"type":"approval.request","id":"approval-1","turn_id":"t1","tool":"write_file","subject":"x.txt","preview":"{}","review":{"kind":"change","path":"x.txt","before":null,"after":"hi\n","created":true,"truncated":false}}"#;
@@ -3723,7 +4433,10 @@ mod tests {
     fn opened_at(state: &mut LiveState) -> Instant {
         let now = Instant::now() + APPROVAL_IN_FLIGHT;
         state.note_approval_shown_and_read(now);
-        assert!(matches!(&state.overlay, Some(Overlay::Approval(_))), "expected the approval modal");
+        assert!(
+            matches!(&state.overlay, Some(Overlay::Approval(_))),
+            "expected the approval modal"
+        );
         now
     }
 
@@ -3753,15 +4466,30 @@ mod tests {
             (KeyCode::Char('y'), almost),
         ] {
             assert_eq!(state.on_key_at(key(code), now), None, "{code:?}");
-            assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.notice.is_some_and(|n| n.contains("ignored"))), "{code:?} is reported");
+            assert!(
+                matches!(&state.overlay, Some(Overlay::Approval(a)) if a.notice.is_some_and(|n| n.contains("ignored"))),
+                "{code:?} is reported"
+            );
         }
         assert_eq!(state.transcript, transcript, "no decision is recorded");
-        assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.focus == Verdict::Approved && !a.confirming), "the focus is kept");
-        assert_eq!(state.composer, "draynay", "ignored letters are kept in the draft");
+        assert!(
+            matches!(&state.overlay, Some(Overlay::Approval(a)) if a.focus == Verdict::Approved && !a.confirming),
+            "the focus is kept"
+        );
+        assert_eq!(
+            state.composer, "draynay",
+            "ignored letters are kept in the draft"
+        );
         // Once the guard has passed, the same key answers.
         assert_eq!(
-            state.on_key_at(key(KeyCode::Char('y')), opened + APPROVAL_REPEAT_QUIET + APPROVAL_TYPING_RUN),
-            Some(Action::Send(Command::Approve { id: "approval-1".into(), always: false }))
+            state.on_key_at(
+                key(KeyCode::Char('y')),
+                opened + APPROVAL_REPEAT_QUIET + APPROVAL_TYPING_RUN
+            ),
+            Some(Action::Send(Command::Approve {
+                id: "approval-1".into(),
+                always: false
+            }))
         );
     }
 
@@ -3790,13 +4518,21 @@ mod tests {
         let mut state = busy_with_approval();
         let opened = opened_at(&mut state);
         let transcript = state.transcript.clone();
-        assert_eq!(state.on_key_at(key(KeyCode::Char('a')), opened), None, "`a` asks first");
-        assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.confirming && a.focus == Verdict::ApprovedForSession));
+        assert_eq!(
+            state.on_key_at(key(KeyCode::Char('a')), opened),
+            None,
+            "`a` asks first"
+        );
+        assert!(
+            matches!(&state.overlay, Some(Overlay::Approval(a)) if a.confirming && a.focus == Verdict::ApprovedForSession)
+        );
         assert_eq!(state.transcript, transcript);
         // A key that is not an answer goes to the draft and cancels the question; the focus stays on the option.
         assert_eq!(state.on_key_at(key(KeyCode::Char('x')), opened), None);
         assert_eq!(state.composer, "x");
-        assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if !a.confirming && a.focus == Verdict::ApprovedForSession));
+        assert!(
+            matches!(&state.overlay, Some(Overlay::Approval(a)) if !a.confirming && a.focus == Verdict::ApprovedForSession)
+        );
         // Enter on it asks again; `a` confirms.
         let later = opened + Duration::from_secs(1);
         assert_eq!(state.on_key_at(key(KeyCode::Enter), later), None);
@@ -3820,7 +4556,10 @@ mod tests {
         assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if !a.confirming));
         assert_eq!(
             state.on_key_at(key(KeyCode::Char('y')), opened + Duration::from_secs(2)),
-            Some(Action::Send(Command::Approve { id: "approval-1".into(), always: false }))
+            Some(Action::Send(Command::Approve {
+                id: "approval-1".into(),
+                always: false
+            }))
         );
     }
 
@@ -3847,7 +4586,9 @@ mod tests {
         // A paste over the approval panel is kept in the draft (it is text, not an answer), and the panel says so.
         state.on_paste("y");
         assert_eq!(state.composer, "dray");
-        assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.notice.is_some_and(|n| n.contains("went to your draft"))));
+        assert!(
+            matches!(&state.overlay, Some(Overlay::Approval(a)) if a.notice.is_some_and(|n| n.contains("went to your draft")))
+        );
         state.composer = "dra".into();
         state.overlay = Some(Overlay::Help { scroll: 0 });
         state.on_paste("ft");
@@ -3870,9 +4611,18 @@ mod tests {
                 .any(|line| line.kind == LineKind::Added && line.text == "+hi")
         );
         let opened = opened_at(&mut state);
-        assert_eq!(state.on_key_at(key(KeyCode::Char('x')), opened + Duration::from_millis(100)), None);
-        assert_eq!(state.composer, "x", "a key that is not an answer goes to the draft");
-        assert_eq!(state.on_key_at(key(KeyCode::Backspace), opened + Duration::from_millis(200)), None);
+        assert_eq!(
+            state.on_key_at(key(KeyCode::Char('x')), opened + Duration::from_millis(100)),
+            None
+        );
+        assert_eq!(
+            state.composer, "x",
+            "a key that is not an answer goes to the draft"
+        );
+        assert_eq!(
+            state.on_key_at(key(KeyCode::Backspace), opened + Duration::from_millis(200)),
+            None
+        );
         assert_eq!(state.composer, "", "and so does Backspace");
         assert_eq!(
             state.on_key_at(key(KeyCode::Char('y')), opened + Duration::from_millis(700)),
@@ -3893,7 +4643,11 @@ mod tests {
         state.apply(ev(APPROVAL));
         let base = opened + Duration::from_secs(10);
         state.note_approval_shown_and_read(base);
-        assert_eq!(state.on_key_at(key(KeyCode::Char('a')), base), None, "`a` asks before approving every later action");
+        assert_eq!(
+            state.on_key_at(key(KeyCode::Char('a')), base),
+            None,
+            "`a` asks before approving every later action"
+        );
         assert_eq!(
             state.on_key_at(key(KeyCode::Enter), base + Duration::from_millis(1100)),
             Some(Action::Send(Command::Approve {
@@ -4087,32 +4841,71 @@ mod tests {
     #[test]
     fn on_the_stopped_sidecar_screen_typing_fills_the_draft_and_r_q_act_only_on_an_empty_draft() {
         let mut state = ready();
-        state.fail("The agent sidecar exited unexpectedly.".into(), Some(1), Vec::new());
+        state.fail(
+            "The agent sidecar exited unexpectedly.".into(),
+            Some(1),
+            Vec::new(),
+        );
         // A character other than r or q starts a draft that is kept and shown; once there is text, r and q are text.
         assert_eq!(state.on_key(key(KeyCode::Char('h'))), None);
         for c in "ello r and q".chars() {
-            assert_eq!(state.on_key(key(KeyCode::Char(c))), None, "{c:?} typed into a draft is text, never a command");
+            assert_eq!(
+                state.on_key(key(KeyCode::Char(c))),
+                None,
+                "{c:?} typed into a draft is text, never a command"
+            );
         }
         assert_eq!(state.composer.text(), "hello r and q");
         state.on_paste(" pasted");
-        assert_eq!(state.composer.text(), "hello r and q pasted", "a paste lands in the draft too");
+        assert_eq!(
+            state.composer.text(),
+            "hello r and q pasted",
+            "a paste lands in the draft too"
+        );
         assert_eq!(state.on_key(key(KeyCode::Backspace)), None);
         assert_eq!(state.composer.text(), "hello r and q paste");
-        assert_eq!(state.on_key(key(KeyCode::Enter)), None, "Enter does not send to a stopped agent");
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            None,
+            "Enter does not send to a stopped agent"
+        );
         assert_eq!(state.composer.text(), "hello r and q paste");
         // With text in the draft the restart and quit keys are chords that cannot be typed by accident.
         assert_eq!(state.on_key(ctrl('r')), Some(Action::Restart));
-        assert_eq!(state.on_key(ctrl('c')), Some(Action::Quit), "ctrl+c quits at once");
-        assert_eq!(state.on_key(key(KeyCode::Esc)), None, "the first Esc over a draft only asks");
+        assert_eq!(
+            state.on_key(ctrl('c')),
+            Some(Action::Quit),
+            "ctrl+c quits at once"
+        );
+        assert_eq!(
+            state.on_key(key(KeyCode::Esc)),
+            None,
+            "the first Esc over a draft only asks"
+        );
         assert!(state.quit_asked);
-        assert_eq!(state.on_key(key(KeyCode::Char('x'))), None, "another key cancels the ask");
+        assert_eq!(
+            state.on_key(key(KeyCode::Char('x'))),
+            None,
+            "another key cancels the ask"
+        );
         assert!(!state.quit_asked);
         assert_eq!(state.on_key(key(KeyCode::Esc)), None);
-        assert_eq!(state.on_key(key(KeyCode::Esc)), Some(Action::Quit), "the second Esc in a row quits");
-        assert_eq!(state.composer.text(), "hello r and q pastex", "nothing was cleared by asking");
+        assert_eq!(
+            state.on_key(key(KeyCode::Esc)),
+            Some(Action::Quit),
+            "the second Esc in a row quits"
+        );
+        assert_eq!(
+            state.composer.text(),
+            "hello r and q pastex",
+            "nothing was cleared by asking"
+        );
         assert_eq!(state.on_key(key(KeyCode::Esc)), None);
         state.on_paste("!");
-        assert!(!state.quit_asked, "a paste cancels the ask like any other input");
+        assert!(
+            !state.quit_asked,
+            "a paste cancels the ask like any other input"
+        );
         state.composer.clear();
         state.composer.insert("hello r and q paste");
         // The draft survives the restart.
@@ -4129,7 +4922,9 @@ mod tests {
     #[test]
     fn a_copy_result_queues_the_clipboard_text_once_and_the_switch_and_size_limit_refuse_it() {
         let result = |clipboard: &str| {
-            ev(&format!(r#"{{"v":1,"type":"slash.result","id":"s1","command":"copy","success":true,"output":"asked the terminal","clipboard":"{clipboard}"}}"#))
+            ev(&format!(
+                r#"{{"v":1,"type":"slash.result","id":"s1","command":"copy","success":true,"output":"asked the terminal","clipboard":"{clipboard}"}}"#
+            ))
         };
         let mut state = ready();
         state.apply(result("hello\\u001b[2J"));
@@ -4138,13 +4933,27 @@ mod tests {
         state.osc52 = false;
         state.apply(result("hello"));
         assert_eq!(state.take_clipboard(), None);
-        assert!(state.transcript.iter().any(|e| matches!(e, Entry::Notice(text) if text.contains("NEXUS_OSC52=off"))));
+        assert!(
+            state
+                .transcript
+                .iter()
+                .any(|e| matches!(e, Entry::Notice(text) if text.contains("NEXUS_OSC52=off")))
+        );
         state.osc52 = true;
         state.apply(result(""));
-        assert_eq!(state.take_clipboard(), None, "an empty text would clear the clipboard");
+        assert_eq!(
+            state.take_clipboard(),
+            None,
+            "an empty text would clear the clipboard"
+        );
         state.apply(result(&"x".repeat(crate::live::OSC52_MAX_BYTES + 1)));
         assert_eq!(state.take_clipboard(), None);
-        assert!(state.transcript.iter().any(|e| matches!(e, Entry::Notice(text) if text.contains("over the"))));
+        assert!(
+            state
+                .transcript
+                .iter()
+                .any(|e| matches!(e, Entry::Notice(text) if text.contains("over the")))
+        );
     }
 
     #[test]
@@ -4280,7 +5089,10 @@ mod tests {
         assert_eq!(state.overlay, Some(Overlay::Help { scroll: 0 }));
         state.on_key(key(KeyCode::Esc));
         type_text(&mut state, "/receipt");
-        assert!(matches!(state.on_key(key(KeyCode::Enter)), Some(Action::Send(Command::Receipt { .. }))));
+        assert!(matches!(
+            state.on_key(key(KeyCode::Enter)),
+            Some(Action::Send(Command::Receipt { .. }))
+        ));
         state.on_key(key(KeyCode::Esc));
         assert!(!state.session.busy);
         type_text(&mut state, "/etc/hosts is wrong");
@@ -4721,7 +5533,8 @@ mod tests {
     fn model_slash_opens_the_picker_and_selecting_switches_through_the_sidecar() {
         let mut state = ready();
         type_text(&mut state, "/model");
-        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else {
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter))
+        else {
             panic!("expected models.list");
         };
         assert!(matches!(state.overlay, Some(Overlay::Models(_))));
@@ -4730,34 +5543,78 @@ mod tests {
         type_text(&mut state, "codex");
         assert_eq!(
             state.on_key(key(KeyCode::Enter)),
-            Some(Action::Send(Command::ModelSelect { id: "x2".into(), provider: "chatgpt".into(), model: "gpt-5-codex".into() }))
+            Some(Action::Send(Command::ModelSelect {
+                id: "x2".into(),
+                provider: "chatgpt".into(),
+                model: "gpt-5-codex".into()
+            }))
         );
         assert!(state.overlay.is_none());
         state.apply(ev(r#"{"v":1,"type":"model.result","id":"x2","success":true,"message":"Model: gpt-5-codex via ChatGPT plan"}"#));
-        assert!(matches!(state.transcript.last(), Some(Entry::Output { success: true, .. })));
+        assert!(matches!(
+            state.transcript.last(),
+            Some(Entry::Output { success: true, .. })
+        ));
     }
 
     #[test]
     fn ctrl_p_connects_a_provider_with_a_key_then_shows_its_models() {
         let mut state = ready();
         type_text(&mut state, "/model");
-        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter))
+        else {
+            panic!()
+        };
         state.apply(catalog(&id));
         assert_eq!(state.on_key(ctrl('p')), None);
         assert!(matches!(state.overlay, Some(Overlay::Connect(_))));
         state.on_key(key(KeyCode::Down)); // appliance -> chatgpt
         state.on_key(key(KeyCode::Down)); // chatgpt -> anthropic
-        assert_eq!(state.on_key(key(KeyCode::Enter)), None, "a single key method opens the key field");
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            None,
+            "a single key method opens the key field"
+        );
         state.on_paste("sk-ant-SECRET-1\n");
-        let Some(Action::Send(Command::ProviderConnect { id: request, provider, method, key: Some(secret), .. })) = state.on_key(key(KeyCode::Enter)) else {
+        let Some(Action::Send(Command::ProviderConnect {
+            id: request,
+            provider,
+            method,
+            key: Some(secret),
+            ..
+        })) = state.on_key(key(KeyCode::Enter))
+        else {
             panic!("expected provider.connect");
         };
-        assert_eq!((provider.as_str(), method.as_str(), secret.0.as_str()), ("anthropic", "api-key", "sk-ant-SECRET-1"));
-        assert!(!format!("{:?}", Command::ProviderConnect { id: request.clone(), provider: "a".into(), method: "m".into(), key: Some(secret), endpoint: None }).contains("SECRET"));
+        assert_eq!(
+            (provider.as_str(), method.as_str(), secret.0.as_str()),
+            ("anthropic", "api-key", "sk-ant-SECRET-1")
+        );
+        assert!(
+            !format!(
+                "{:?}",
+                Command::ProviderConnect {
+                    id: request.clone(),
+                    provider: "a".into(),
+                    method: "m".into(),
+                    key: Some(secret),
+                    endpoint: None
+                }
+            )
+            .contains("SECRET")
+        );
         state.apply(ev(&format!(r#"{{"v":1,"type":"provider.result","id":"{request}","provider":"anthropic","success":true,"message":"Anthropic connected (3 models available)."}}"#)));
         let outbox = state.take_outbox();
-        assert!(matches!(outbox.as_slice(), [Action::Send(Command::ModelsList { .. })]), "reopens the picker for the provider");
-        assert!(matches!(&state.overlay, Some(Overlay::Models(p)) if p.only.as_deref() == Some("anthropic")));
+        assert!(
+            matches!(
+                outbox.as_slice(),
+                [Action::Send(Command::ModelsList { .. })]
+            ),
+            "reopens the picker for the provider"
+        );
+        assert!(
+            matches!(&state.overlay, Some(Overlay::Models(p)) if p.only.as_deref() == Some("anthropic"))
+        );
     }
 
     #[test]
@@ -4765,73 +5622,163 @@ mod tests {
         // D-11: the listing is bounded and cancellable; Esc on "Listing models" stops the sidecar's request.
         let mut state = ready();
         type_text(&mut state, "/model");
-        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
-        assert_eq!(state.on_key(key(KeyCode::Esc)), Some(Action::Send(Command::ProviderCancel { id })));
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter))
+        else {
+            panic!()
+        };
+        assert_eq!(
+            state.on_key(key(KeyCode::Esc)),
+            Some(Action::Send(Command::ProviderCancel { id }))
+        );
         assert!(!matches!(state.overlay, Some(Overlay::Models(_))));
         // Once the list has arrived there is nothing to cancel.
         type_text(&mut state, "/model");
-        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter))
+        else {
+            panic!()
+        };
         state.apply(catalog(&id));
         assert_eq!(state.on_key(key(KeyCode::Esc)), None);
         // Ctrl+C closes a picker that is still listing the same way.
         type_text(&mut state, "/model");
-        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
-        assert_eq!(state.on_key(ctrl('c')), Some(Action::Send(Command::ProviderCancel { id })));
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter))
+        else {
+            panic!()
+        };
+        assert_eq!(
+            state.on_key(ctrl('c')),
+            Some(Action::Send(Command::ProviderCancel { id }))
+        );
     }
 
     #[test]
     fn a_sign_in_shows_where_to_go_and_esc_cancels_it() {
         let mut state = ready();
         type_text(&mut state, "/connect");
-        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter))
+        else {
+            panic!()
+        };
         state.apply(catalog(&id));
-        assert!(matches!(state.overlay, Some(Overlay::Connect(_))), "/connect opens the connect panel once providers are known");
+        assert!(
+            matches!(state.overlay, Some(Overlay::Connect(_))),
+            "/connect opens the connect panel once providers are known"
+        );
         state.on_key(key(KeyCode::Down)); // local endpoint -> ChatGPT
-        let Some(Action::Send(Command::ProviderConnect { id: request, key: None, .. })) = state.on_key(key(KeyCode::Enter)) else {
+        let Some(Action::Send(Command::ProviderConnect {
+            id: request,
+            key: None,
+            ..
+        })) = state.on_key(key(KeyCode::Enter))
+        else {
             panic!("chatgpt's only method is a sign-in");
         };
         state.apply(ev(&format!(r#"{{"v":1,"type":"provider.auth","id":"{request}","provider":"chatgpt","url":"https://auth.example/x","instructions":"Sign in"}}"#)));
-        assert!(matches!(&state.overlay, Some(Overlay::Connect(c)) if matches!(&c.step, crate::models::Step::Waiting { auth: Some(_), .. })));
-        assert_eq!(state.on_key(key(KeyCode::Esc)), Some(Action::Send(Command::ProviderCancel { id: request })));
+        assert!(
+            matches!(&state.overlay, Some(Overlay::Connect(c)) if matches!(&c.step, crate::models::Step::Waiting { auth: Some(_), .. }))
+        );
+        assert_eq!(
+            state.on_key(key(KeyCode::Esc)),
+            Some(Action::Send(Command::ProviderCancel { id: request }))
+        );
     }
 
     #[test]
     fn connect_panel_configures_local_endpoint_then_opens_its_model_picker() {
         let mut state = ready();
         type_text(&mut state, "/connect");
-        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter))
+        else {
+            panic!()
+        };
         state.apply(catalog(&id));
         assert!(matches!(state.overlay, Some(Overlay::Connect(_))));
-        assert_eq!(state.on_key(key(KeyCode::Enter)), None, "appliance opens local endpoint setup");
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            None,
+            "appliance opens local endpoint setup"
+        );
         state.on_paste("http://127.0.0.1:1234/v1");
         state.on_key(key(KeyCode::Enter));
         state.on_paste("local-secret");
         assert!(!format!("{:?}", state.overlay).contains("local-secret"));
-        let Some(Action::Send(Command::ProviderConnect { id: request, provider, method, key: Some(secret), endpoint: Some(endpoint) })) = state.on_key(key(KeyCode::Enter)) else {
+        let Some(Action::Send(Command::ProviderConnect {
+            id: request,
+            provider,
+            method,
+            key: Some(secret),
+            endpoint: Some(endpoint),
+        })) = state.on_key(key(KeyCode::Enter))
+        else {
             panic!("expected local provider.connect with endpoint and protected key");
         };
-        assert_eq!((provider.as_str(), method.as_str(), endpoint.as_str(), secret.0.as_str()), ("appliance", "local-endpoint", "http://127.0.0.1:1234/v1", "local-secret"));
-        assert!(!format!("{:?}", Command::ProviderConnect { id: request.clone(), provider, method, key: Some(secret), endpoint: Some(endpoint) }).contains("local-secret"));
+        assert_eq!(
+            (
+                provider.as_str(),
+                method.as_str(),
+                endpoint.as_str(),
+                secret.0.as_str()
+            ),
+            (
+                "appliance",
+                "local-endpoint",
+                "http://127.0.0.1:1234/v1",
+                "local-secret"
+            )
+        );
+        assert!(
+            !format!(
+                "{:?}",
+                Command::ProviderConnect {
+                    id: request.clone(),
+                    provider,
+                    method,
+                    key: Some(secret),
+                    endpoint: Some(endpoint)
+                }
+            )
+            .contains("local-secret")
+        );
         state.apply(ev(&format!(r#"{{"v":1,"type":"provider.result","id":"{request}","provider":"appliance","success":true,"message":"Local endpoint ready (127.0.0.1; 2 models found). Choose a model to finish setup."}}"#)));
-        assert!(matches!(&state.overlay, Some(Overlay::Models(p)) if p.only.as_deref() == Some("appliance")));
-        assert!(matches!(state.take_outbox().as_slice(), [Action::Send(Command::ModelsList { .. })]));
+        assert!(
+            matches!(&state.overlay, Some(Overlay::Models(p)) if p.only.as_deref() == Some("appliance"))
+        );
+        assert!(matches!(
+            state.take_outbox().as_slice(),
+            [Action::Send(Command::ModelsList { .. })]
+        ));
     }
 
     #[test]
     fn escaping_pending_local_endpoint_discovery_sends_matching_cancel_and_ignores_late_success() {
         let mut state = ready();
         type_text(&mut state, "/connect");
-        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter))
+        else {
+            panic!()
+        };
         state.apply(catalog(&id));
         state.on_key(key(KeyCode::Enter));
         state.on_paste("http://127.0.0.1:1234/v1");
         state.on_key(key(KeyCode::Enter));
         state.on_paste("pending-secret");
-        let Some(Action::Send(Command::ProviderConnect { id: request, .. })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        let Some(Action::Send(Command::ProviderConnect { id: request, .. })) =
+            state.on_key(key(KeyCode::Enter))
+        else {
+            panic!()
+        };
 
-        assert_eq!(state.on_key(key(KeyCode::Esc)), Some(Action::Send(Command::ProviderCancel { id: request.clone() })));
+        assert_eq!(
+            state.on_key(key(KeyCode::Esc)),
+            Some(Action::Send(Command::ProviderCancel {
+                id: request.clone()
+            }))
+        );
         state.apply(ev(&format!(r#"{{"v":1,"type":"provider.result","id":"{request}","provider":"appliance","success":true,"message":"late success"}}"#)));
-        assert!(matches!(state.overlay, Some(Overlay::Connect(_))), "late success must not open the model picker after Escape");
+        assert!(
+            matches!(state.overlay, Some(Overlay::Connect(_))),
+            "late success must not open the model picker after Escape"
+        );
         assert!(!matches!(state.overlay, Some(Overlay::Models(_))));
     }
 
@@ -4839,22 +5786,40 @@ mod tests {
     fn closing_local_endpoint_model_picker_cancels_uncommitted_setup() {
         let mut state = ready();
         type_text(&mut state, "/connect");
-        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        let Some(Action::Send(Command::ModelsList { id })) = state.on_key(key(KeyCode::Enter))
+        else {
+            panic!()
+        };
         state.apply(catalog(&id));
         state.on_key(key(KeyCode::Enter)); // local appliance option
         state.on_paste("http://127.0.0.1:1234/v1");
         state.on_key(key(KeyCode::Enter));
         state.on_paste("pending-secret");
-        let Some(Action::Send(Command::ProviderConnect { id: request, .. })) = state.on_key(key(KeyCode::Enter)) else { panic!() };
+        let Some(Action::Send(Command::ProviderConnect { id: request, .. })) =
+            state.on_key(key(KeyCode::Enter))
+        else {
+            panic!()
+        };
         state.apply(ev(&format!(r#"{{"v":1,"type":"provider.result","id":"{request}","provider":"appliance","success":true,"message":"verified"}}"#)));
         let outbox = state.take_outbox();
-        let [Action::Send(Command::ModelsList { id: catalog_request })] = outbox.as_slice() else { panic!("expected model discovery after verification") };
+        let [
+            Action::Send(Command::ModelsList {
+                id: catalog_request,
+            }),
+        ] = outbox.as_slice()
+        else {
+            panic!("expected model discovery after verification")
+        };
         let catalog_request = catalog_request.clone();
         state.apply(catalog(&catalog_request));
-        assert!(matches!(&state.overlay, Some(Overlay::Models(picker)) if picker.local_endpoint_setup_id.as_deref() == Some(request.as_str())));
-        assert_eq!(state.on_key(key(KeyCode::Esc)), Some(Action::Send(Command::ProviderLocalCancel { id: request })));
+        assert!(
+            matches!(&state.overlay, Some(Overlay::Models(picker)) if picker.local_endpoint_setup_id.as_deref() == Some(request.as_str()))
+        );
+        assert_eq!(
+            state.on_key(key(KeyCode::Esc)),
+            Some(Action::Send(Command::ProviderLocalCancel { id: request }))
+        );
     }
-
 
     /// WP-1317 D-01: approval keys answer a visible, focused choice at once; one short guard against keys already in
     /// flight from the composer when the panel appears.
@@ -4866,7 +5831,10 @@ mod tests {
         }
 
         fn approve(id: &str, always: bool) -> Option<Action> {
-            Some(Action::Send(Command::Approve { id: id.into(), always }))
+            Some(Action::Send(Command::Approve {
+                id: id.into(),
+                always,
+            }))
         }
 
         fn deny(id: &str) -> Option<Action> {
@@ -4879,7 +5847,10 @@ mod tests {
             let t0 = Instant::now();
             let mut state = ready();
             for (i, c) in "make x".chars().enumerate() {
-                assert_eq!(state.on_key_at(key(KeyCode::Char(c)), at(t0, i as u64 * 100)), None);
+                assert_eq!(
+                    state.on_key_at(key(KeyCode::Char(c)), at(t0, i as u64 * 100)),
+                    None
+                );
             }
             assert!(state.on_key_at(key(KeyCode::Enter), at(t0, 600)).is_some());
             state.apply(ev(APPROVAL));
@@ -4889,9 +5860,12 @@ mod tests {
 
         /// The frame as drawn now (the panel was already marked shown, so drawing does not re-time it).
         fn screen(state: &mut LiveState) -> String {
-            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
             let mut layout = LiveLayout::default();
-            terminal.draw(|frame| layout = crate::live_view::render_live(frame, state)).unwrap();
+            terminal
+                .draw(|frame| layout = crate::live_view::render_live(frame, state))
+                .unwrap();
             state.note_layout(layout);
             terminal.backend().to_string()
         }
@@ -4902,11 +5876,17 @@ mod tests {
             // within a second of it is ignored; one after that answers.
             let (mut state, t0) = panel(1000);
             assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 1300)), None);
-            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 2700)), approve("approval-1", false));
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('y')), at(t0, 2700)),
+                approve("approval-1", false)
+            );
             assert_eq!(state.overlay, None);
             // A slow model: `y` 100 ms after the panel appears answers it too (nothing was in flight).
             let (mut state, t0) = panel(5000);
-            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 5100)), approve("approval-1", false));
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('y')), at(t0, 5100)),
+                approve("approval-1", false)
+            );
         }
 
         #[test]
@@ -4914,58 +5894,113 @@ mod tests {
             let t = |c| key(KeyCode::Char(c));
             // x, Backspace, z in one batch leaves `z` in the draft.
             let (mut state, t0) = panel(5000);
-            assert_eq!(state.on_key_burst_at(vec![t('x'), key(KeyCode::Backspace), t('z')], at(t0, 6000)), None);
+            assert_eq!(
+                state.on_key_burst_at(vec![t('x'), key(KeyCode::Backspace), t('z')], at(t0, 6000)),
+                None
+            );
             assert_eq!(state.composer.text(), "z");
             assert!(state.approval_id().is_some());
             // A `y` inside a batch does not approve (it is text); neither do n, a or Enter.
             for decision in [t('y'), t('n'), t('a'), key(KeyCode::Enter)] {
                 let (mut state, t0) = panel(5000);
-                assert_eq!(state.on_key_burst_at(vec![t('q'), decision], at(t0, 6000)), None);
-                assert!(state.approval_id().is_some(), "{decision:?} in a batch must not answer");
+                assert_eq!(
+                    state.on_key_burst_at(vec![t('q'), decision], at(t0, 6000)),
+                    None
+                );
+                assert!(
+                    state.approval_id().is_some(),
+                    "{decision:?} in a batch must not answer"
+                );
             }
             let (mut state, t0) = panel(5000);
-            assert_eq!(state.on_key_burst_at(vec![t('y'), t('e'), t('s')], at(t0, 6000)), None);
+            assert_eq!(
+                state.on_key_burst_at(vec![t('y'), t('e'), t('s')], at(t0, 6000)),
+                None
+            );
             assert_eq!(state.composer.text(), "yes", "a leading y is text too");
             // Arrows still navigate inside a batch; a lone y after the guard has expired approves.
-            assert_eq!(state.on_key_burst_at(vec![key(KeyCode::Left), key(KeyCode::Right)], at(t0, 6050)), None);
-            assert_eq!(state.on_key_at(t('y'), at(t0, 6100)), None, "still inside the guard");
-            assert_eq!(state.on_key_at(t('y'), at(t0, 8000)), approve("approval-1", false));
+            assert_eq!(
+                state.on_key_burst_at(vec![key(KeyCode::Left), key(KeyCode::Right)], at(t0, 6050)),
+                None
+            );
+            assert_eq!(
+                state.on_key_at(t('y'), at(t0, 6100)),
+                None,
+                "still inside the guard"
+            );
+            assert_eq!(
+                state.on_key_at(t('y'), at(t0, 8000)),
+                approve("approval-1", false)
+            );
             // Navigation in a batch with a decision key: the key is inert and the focus moved.
             let (mut state, t0) = panel(5000);
-            assert_eq!(state.on_key_burst_at(vec![key(KeyCode::Left), t('y')], at(t0, 6000)), None);
+            assert_eq!(
+                state.on_key_burst_at(vec![key(KeyCode::Left), t('y')], at(t0, 6000)),
+                None
+            );
             assert!(state.approval_id().is_some());
             // A single key is not a burst.
             let (mut state, t0) = panel(5000);
-            assert_eq!(state.on_key_burst_at(vec![t('y')], at(t0, 6000)), approve("approval-1", false));
+            assert_eq!(
+                state.on_key_burst_at(vec![t('y')], at(t0, 6000)),
+                approve("approval-1", false)
+            );
             // Esc inside a batch still denies.
             let (mut state, t0) = panel(5000);
-            assert_eq!(state.on_key_burst_at(vec![t('x'), key(KeyCode::Esc)], at(t0, 6000)), deny("approval-1"));
+            assert_eq!(
+                state.on_key_burst_at(vec![t('x'), key(KeyCode::Esc)], at(t0, 6000)),
+                deny("approval-1")
+            );
         }
 
         #[test]
         fn n_denies_at_once() {
             let (mut state, t0) = panel(1000);
-            assert_eq!(state.on_key_at(key(KeyCode::Char('n')), at(t0, 2700)), deny("approval-1"));
-            assert!(matches!(state.transcript.last(), Some(Entry::Decision { verdict: Verdict::Denied, .. })));
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('n')), at(t0, 2700)),
+                deny("approval-1")
+            );
+            assert!(matches!(
+                state.transcript.last(),
+                Some(Entry::Decision {
+                    verdict: Verdict::Denied,
+                    ..
+                })
+            ));
         }
 
         #[test]
         fn enter_takes_the_focused_option_which_is_shown_focused() {
             let (mut state, t0) = panel(5000);
-            assert!(screen(&mut state).contains("▸y Approve"), "Approve is focused when the panel opens");
-            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 5100)), approve("approval-1", false));
+            assert!(
+                screen(&mut state).contains("▸y Approve"),
+                "Approve is focused when the panel opens"
+            );
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Enter), at(t0, 5100)),
+                approve("approval-1", false)
+            );
         }
 
         #[test]
         fn arrows_and_tab_reach_every_drawn_option() {
             let (mut state, t0) = panel(5000);
             assert_eq!(state.on_key_at(key(KeyCode::Right), at(t0, 5100)), None);
-            assert!(screen(&mut state).contains("▸a Approve all later actions"), "→ reaches the middle option");
+            assert!(
+                screen(&mut state).contains("▸a Approve all later actions"),
+                "→ reaches the middle option"
+            );
             assert_eq!(state.on_key_at(key(KeyCode::Right), at(t0, 5200)), None);
-            assert!(screen(&mut state).contains("▸n Deny"), "→ again reaches Deny");
+            assert!(
+                screen(&mut state).contains("▸n Deny"),
+                "→ again reaches Deny"
+            );
             assert_eq!(state.on_key_at(key(KeyCode::Left), at(t0, 5300)), None);
             assert_eq!(state.on_key_at(key(KeyCode::Left), at(t0, 5400)), None);
-            assert!(screen(&mut state).contains("▸y Approve"), "← ← back to Approve");
+            assert!(
+                screen(&mut state).contains("▸y Approve"),
+                "← ← back to Approve"
+            );
             // Tab and Shift+Tab cycle through all three.
             for (code, focused) in [
                 (KeyCode::Tab, "▸a Approve all later actions"),
@@ -4974,33 +6009,68 @@ mod tests {
                 (KeyCode::BackTab, "▸n Deny"),
             ] {
                 assert_eq!(state.on_key_at(key(code), at(t0, 5500)), None);
-                assert!(screen(&mut state).contains(focused), "{code:?} focuses {focused}");
+                assert!(
+                    screen(&mut state).contains(focused),
+                    "{code:?} focuses {focused}"
+                );
             }
-            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 5600)), deny("approval-1"));
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Enter), at(t0, 5600)),
+                deny("approval-1")
+            );
             // "Approve all later actions" from the keyboard: → then Enter asks to confirm, Enter again confirms.
             let (mut state, t0) = panel(5000);
             assert_eq!(state.on_key_at(key(KeyCode::Right), at(t0, 5100)), None);
-            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 5200)), None, "the first Enter asks to confirm");
-            assert!(screen(&mut state).contains("every later action"), "the confirmation says what it approves");
-            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 6300)), approve("approval-1", true));
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Enter), at(t0, 5200)),
+                None,
+                "the first Enter asks to confirm"
+            );
+            assert!(
+                screen(&mut state).contains("every later action"),
+                "the confirmation says what it approves"
+            );
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Enter), at(t0, 6300)),
+                approve("approval-1", true)
+            );
             // `a` asks the same confirmation; `a` again confirms.
             let (mut state, t0) = panel(5000);
             assert_eq!(state.on_key_at(key(KeyCode::Char('a')), at(t0, 5100)), None);
-            assert_eq!(state.on_key_at(key(KeyCode::Char('a')), at(t0, 6200)), approve("approval-1", true));
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('a')), at(t0, 6200)),
+                approve("approval-1", true)
+            );
         }
 
         #[test]
         fn a_key_in_flight_when_the_panel_opens_is_ignored_and_the_panel_says_so() {
             // The panel appears 100 ms after the Enter that sent the prompt; a second Enter and a `y` follow at once.
             let (mut state, t0) = panel(700);
-            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 720)), None, "the stray Enter does not approve");
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Enter), at(t0, 720)),
+                None,
+                "the stray Enter does not approve"
+            );
             assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 760)), None);
             let shown = screen(&mut state);
-            assert!(shown.contains("ignored") && shown.contains("panel just opened"), "{shown}");
-            assert!(shown.contains("▸y Approve"), "the focus is not reset: {shown}");
-            assert_eq!(state.composer, "y", "the ignored `y` is kept as typing in the draft; the Enter is not");
+            assert!(
+                shown.contains("ignored") && shown.contains("panel just opened"),
+                "{shown}"
+            );
+            assert!(
+                shown.contains("▸y Approve"),
+                "the focus is not reset: {shown}"
+            );
+            assert_eq!(
+                state.composer, "y",
+                "the ignored `y` is kept as typing in the draft; the Enter is not"
+            );
             // A moment later the same key answers.
-            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 2000)), approve("approval-1", false));
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('y')), at(t0, 2000)),
+                approve("approval-1", false)
+            );
         }
 
         #[test]
@@ -5010,12 +6080,18 @@ mod tests {
             state.apply(ev(APPROVAL));
             state.apply(ev(&APPROVAL.replace("approval-1", "approval-2")));
             state.note_approval_shown_and_read(at(t0, 0));
-            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 3000)), approve("approval-1", false));
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('y')), at(t0, 3000)),
+                approve("approval-1", false)
+            );
             // The next request opens on the next frame. The `y` that answered the first may still be held, so a `y`
             // 400 ms later (inside the repeat window) is ignored; one after the key has been quiet answers.
             state.note_approval_shown_and_read(at(t0, 3016));
             assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 3416)), None);
-            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 4500)), approve("approval-2", false));
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('y')), at(t0, 4500)),
+                approve("approval-2", false)
+            );
         }
 
         #[test]
@@ -5026,7 +6102,10 @@ mod tests {
             assert!(state.on_key_at(key(KeyCode::Enter), at(t0, 0)).is_some());
             // Steering being typed while the agent works, right up to the moment the panel appears.
             for (i, c) in "use te".chars().enumerate() {
-                assert_eq!(state.on_key_at(key(KeyCode::Char(c)), at(t0, 1000 + i as u64 * 100)), None);
+                assert_eq!(
+                    state.on_key_at(key(KeyCode::Char(c)), at(t0, 1000 + i as u64 * 100)),
+                    None
+                );
             }
             state.apply(ev(APPROVAL));
             state.note_approval_shown_and_read(at(t0, 1600));
@@ -5036,8 +6115,14 @@ mod tests {
             assert_eq!(state.composer, "use test");
             assert!(matches!(state.overlay, Some(Overlay::Approval(_))));
             // And the letters still answer the panel.
-            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 2500)), approve("approval-1", false));
-            assert_eq!(state.composer, "use test", "the draft is kept for after the decision");
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('y')), at(t0, 2500)),
+                approve("approval-1", false)
+            );
+            assert_eq!(
+                state.composer, "use test",
+                "the draft is kept for after the decision"
+            );
         }
 
         #[test]
@@ -5046,13 +6131,31 @@ mod tests {
             let (mut state, t0) = panel(1000);
             let mut now = 5000;
             for c in "try it".chars() {
-                assert_eq!(state.on_key_at(key(KeyCode::Char(c)), at(t0, now)), None, "{c:?}");
+                assert_eq!(
+                    state.on_key_at(key(KeyCode::Char(c)), at(t0, now)),
+                    None,
+                    "{c:?}"
+                );
                 now += 120;
             }
-            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, now)), None, "the Enter ending the sentence does not approve");
-            assert_eq!(state.composer, "try it", "every letter, the `y` included, is in the draft");
-            assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.notice.is_some_and(|n| n.contains("you were typing"))));
-            assert!(state.transcript.iter().all(|e| !matches!(e, Entry::Decision { .. })));
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Enter), at(t0, now)),
+                None,
+                "the Enter ending the sentence does not approve"
+            );
+            assert_eq!(
+                state.composer, "try it",
+                "every letter, the `y` included, is in the draft"
+            );
+            assert!(
+                matches!(&state.overlay, Some(Overlay::Approval(a)) if a.notice.is_some_and(|n| n.contains("you were typing")))
+            );
+            assert!(
+                state
+                    .transcript
+                    .iter()
+                    .all(|e| !matches!(e, Entry::Decision { .. }))
+            );
             // The same with `n` and `a` inside words, and `a` does not even ask for the confirmation.
             for c in "an".chars() {
                 now += 120;
@@ -5061,7 +6164,10 @@ mod tests {
             assert_eq!(state.composer, "try itan");
             assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if !a.confirming));
             // After a pause the same key answers.
-            assert_eq!(state.on_key_at(key(KeyCode::Char('n')), at(t0, now + 1000)), deny("approval-1"));
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('n')), at(t0, now + 1000)),
+                deny("approval-1")
+            );
         }
 
         #[test]
@@ -5075,40 +6181,83 @@ mod tests {
             state.apply(ev(APPROVAL));
             state.note_approval_shown_and_read(at(t0, 950));
             for (i, c) in "any".chars().enumerate() {
-                assert_eq!(state.on_key_at(key(KeyCode::Char(c)), at(t0, 1000 + i as u64 * 120)), None, "{c:?}");
+                assert_eq!(
+                    state.on_key_at(key(KeyCode::Char(c)), at(t0, 1000 + i as u64 * 120)),
+                    None,
+                    "{c:?}"
+                );
             }
             assert_eq!(state.composer, "xany", "every letter is text");
             assert!(matches!(state.overlay, Some(Overlay::Approval(_))));
-            assert!(state.transcript.iter().all(|e| !matches!(e, Entry::Decision { .. })));
+            assert!(
+                state
+                    .transcript
+                    .iter()
+                    .all(|e| !matches!(e, Entry::Decision { .. }))
+            );
         }
 
         #[test]
         fn a_double_tapped_a_does_not_confirm_approve_all_and_a_deliberate_second_press_does() {
             let (mut state, t0) = panel(5000);
-            assert_eq!(state.on_key_at(key(KeyCode::Char('a')), at(t0, 5000)), None, "`a` asks");
-            assert_eq!(state.on_key_at(key(KeyCode::Char('a')), at(t0, 5030)), None, "a double tap does not confirm");
-            assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.confirming && a.notice.is_some_and(|n| n.contains("confirm question just opened"))));
-            assert_eq!(state.on_key_at(key(KeyCode::Char('a')), at(t0, 6130)), approve("approval-1", true), "1.1 s after the last press it confirms");
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('a')), at(t0, 5000)),
+                None,
+                "`a` asks"
+            );
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('a')), at(t0, 5030)),
+                None,
+                "a double tap does not confirm"
+            );
+            assert!(
+                matches!(&state.overlay, Some(Overlay::Approval(a)) if a.confirming && a.notice.is_some_and(|n| n.contains("confirm question just opened")))
+            );
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('a')), at(t0, 6130)),
+                approve("approval-1", true),
+                "1.1 s after the last press it confirms"
+            );
         }
 
         #[test]
         fn a_held_enter_on_all_later_never_confirms_and_stays_inert_until_released() {
             let (mut state, t0) = panel(5000);
             assert_eq!(state.on_key_at(key(KeyCode::Right), at(t0, 5000)), None);
-            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 5100)), None, "asks");
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Enter), at(t0, 5100)),
+                None,
+                "asks"
+            );
             // Auto-repeat arrives as presses every 30 ms for a second.
             for i in 1..=33u64 {
-                assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 5100 + i * 30)), None, "repeat {i}");
+                assert_eq!(
+                    state.on_key_at(key(KeyCode::Enter), at(t0, 5100 + i * 30)),
+                    None,
+                    "repeat {i}"
+                );
             }
-            assert!(state.transcript.iter().all(|e| !matches!(e, Entry::Decision { .. })));
-            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 5100 + 33 * 30 + 1100)), approve("approval-1", true), "a fresh press after a pause confirms");
+            assert!(
+                state
+                    .transcript
+                    .iter()
+                    .all(|e| !matches!(e, Entry::Decision { .. }))
+            );
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Enter), at(t0, 5100 + 33 * 30 + 1100)),
+                approve("approval-1", true),
+                "a fresh press after a pause confirms"
+            );
         }
 
         #[test]
         fn esc_denies_at_any_time_including_inside_the_confirm_delay() {
             let (mut state, t0) = panel(5000);
             assert_eq!(state.on_key_at(key(KeyCode::Char('a')), at(t0, 5000)), None);
-            assert_eq!(state.on_key_at(key(KeyCode::Esc), at(t0, 5010)), deny("approval-1"));
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Esc), at(t0, 5010)),
+                deny("approval-1")
+            );
         }
 
         #[test]
@@ -5116,15 +6265,32 @@ mod tests {
             let t0 = Instant::now();
             let mut state = ready();
             type_text(&mut state, "go");
-            assert!(state.on_key_at(key(KeyCode::Enter), at(t0, 0)).is_some(), "Enter sends the prompt");
+            assert!(
+                state.on_key_at(key(KeyCode::Enter), at(t0, 0)).is_some(),
+                "Enter sends the prompt"
+            );
             state.apply(ev(APPROVAL));
             state.note_approval_shown_and_read(at(t0, 100));
             // The key is still held: repeats every 30 ms from 130 ms to 700 ms, well past the 250 ms minimum guard.
             for i in 0..20u64 {
-                assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 130 + i * 30)), None, "repeat {i}");
+                assert_eq!(
+                    state.on_key_at(key(KeyCode::Enter), at(t0, 130 + i * 30)),
+                    None,
+                    "repeat {i}"
+                );
             }
-            assert!(state.transcript.iter().all(|e| !matches!(e, Entry::Decision { .. })), "nothing was approved");
-            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 130 + 19 * 30 + 1000)), approve("approval-1", false), "a fresh press answers");
+            assert!(
+                state
+                    .transcript
+                    .iter()
+                    .all(|e| !matches!(e, Entry::Decision { .. })),
+                "nothing was approved"
+            );
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Enter), at(t0, 130 + 19 * 30 + 1000)),
+                approve("approval-1", false),
+                "a fresh press answers"
+            );
         }
 
         #[test]
@@ -5132,14 +6298,24 @@ mod tests {
             let t0 = Instant::now();
             let mut state = ready();
             type_text(&mut state, "go");
-            assert!(state.on_key_at(key(KeyCode::Enter), at(t0, 0)).is_some(), "Enter sends the prompt and stays held");
+            assert!(
+                state.on_key_at(key(KeyCode::Enter), at(t0, 0)).is_some(),
+                "Enter sends the prompt and stays held"
+            );
             state.apply(ev(APPROVAL));
             state.note_approval_shown_and_read(at(t0, 100));
             // The first auto-repeat of a held key arrives after the typical 500 ms initial delay.
-            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 500)), None, "the repeat does not approve");
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Enter), at(t0, 500)),
+                None,
+                "the repeat does not approve"
+            );
             assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 530)), None);
             // A fresh press once the key has been quiet answers.
-            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 1700)), approve("approval-1", false));
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Enter), at(t0, 1700)),
+                approve("approval-1", false)
+            );
         }
 
         #[test]
@@ -5150,9 +6326,21 @@ mod tests {
             assert!(state.on_key_at(key(KeyCode::Enter), at(t0, 0)).is_some());
             state.apply(ev(APPROVAL));
             state.note_approval_shown_and_read(at(t0, 100));
-            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 620)), None, "repeat after 620 ms");
-            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 660)), None, "repeat after 660 ms (X11 default)");
-            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 1800)), approve("approval-1", false), "a fresh press after the key was quiet");
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Enter), at(t0, 620)),
+                None,
+                "repeat after 620 ms"
+            );
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Enter), at(t0, 660)),
+                None,
+                "repeat after 660 ms (X11 default)"
+            );
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Enter), at(t0, 1800)),
+                approve("approval-1", false),
+                "a fresh press after the key was quiet"
+            );
         }
 
         #[test]
@@ -5170,19 +6358,48 @@ mod tests {
                 }
                 state.apply(ev(APPROVAL));
                 state.note_approval_shown_and_read(at(t0, 50_100));
-                assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 50_150)), None, "paste={paste}: Enter 50 ms after the panel");
-                assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 52_000)), approve("approval-1", false), "paste={paste}: a later press answers");
+                assert_eq!(
+                    state.on_key_at(key(KeyCode::Enter), at(t0, 50_150)),
+                    None,
+                    "paste={paste}: Enter 50 ms after the panel"
+                );
+                assert_eq!(
+                    state.on_key_at(key(KeyCode::Enter), at(t0, 52_000)),
+                    approve("approval-1", false),
+                    "paste={paste}: a later press answers"
+                );
             }
         }
 
         #[test]
         fn a_held_a_asks_and_its_first_repeat_does_not_confirm_approve_all() {
             let (mut state, t0) = panel(5000);
-            assert_eq!(state.on_key_at(key(KeyCode::Char('a')), at(t0, 5000)), None, "asks");
-            assert_eq!(state.on_key_at(key(KeyCode::Char('a')), at(t0, 5660)), None, "first repeat at the X11 default delay");
-            assert_eq!(state.on_key_at(key(KeyCode::Char('a')), at(t0, 5700)), None, "repeats");
-            assert!(state.transcript.iter().all(|e| !matches!(e, Entry::Decision { .. })));
-            assert_eq!(state.on_key_at(key(KeyCode::Char('a')), at(t0, 5700 + 1100)), approve("approval-1", true), "a fresh press 1.1 s after the last key confirms");
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('a')), at(t0, 5000)),
+                None,
+                "asks"
+            );
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('a')), at(t0, 5660)),
+                None,
+                "first repeat at the X11 default delay"
+            );
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('a')), at(t0, 5700)),
+                None,
+                "repeats"
+            );
+            assert!(
+                state
+                    .transcript
+                    .iter()
+                    .all(|e| !matches!(e, Entry::Decision { .. }))
+            );
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('a')), at(t0, 5700 + 1100)),
+                approve("approval-1", true),
+                "a fresh press 1.1 s after the last key confirms"
+            );
         }
 
         #[test]
@@ -5195,20 +6412,42 @@ mod tests {
             state.apply(ev(APPROVAL));
             state.note_approval_input_ignored_at(at(t0, 5000));
             state.note_approval_shown_and_read(at(t0, 5010));
-            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 5130)), None, "the `y` of \"my\" 120 ms later is text");
-            assert!(state.transcript.iter().all(|e| !matches!(e, Entry::Decision { .. })));
-            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 7000)), approve("approval-1", false), "a later deliberate `y` answers");
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('y')), at(t0, 5130)),
+                None,
+                "the `y` of \"my\" 120 ms later is text"
+            );
+            assert!(
+                state
+                    .transcript
+                    .iter()
+                    .all(|e| !matches!(e, Entry::Decision { .. }))
+            );
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('y')), at(t0, 7000)),
+                approve("approval-1", false),
+                "a later deliberate `y` answers"
+            );
         }
 
         #[test]
         fn a_paste_starts_the_typing_run_at_its_own_time() {
             let (mut state, t0) = panel(5000);
             state.on_paste_at("x", at(t0, 20_000));
-            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 20_100)), None, "100 ms after the paste");
-            assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.last_text == Some(at(t0, 20_100))));
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('y')), at(t0, 20_100)),
+                None,
+                "100 ms after the paste"
+            );
+            assert!(
+                matches!(&state.overlay, Some(Overlay::Approval(a)) if a.last_text == Some(at(t0, 20_100)))
+            );
             let (mut state, t0) = panel(5000);
             state.on_paste_at("x", at(t0, 20_000));
-            assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.last_text == Some(at(t0, 20_000))), "stamped with the injected time");
+            assert!(
+                matches!(&state.overlay, Some(Overlay::Approval(a)) if a.last_text == Some(at(t0, 20_000))),
+                "stamped with the injected time"
+            );
         }
 
         #[test]
@@ -5216,12 +6455,23 @@ mod tests {
             let t0 = Instant::now();
             let mut state = ready();
             type_text(&mut state, "go");
-            assert!(state.on_key_at(key(KeyCode::Enter), at(t0, 0)).is_some(), "Enter sends the prompt and stays held");
+            assert!(
+                state.on_key_at(key(KeyCode::Enter), at(t0, 0)).is_some(),
+                "Enter sends the prompt and stays held"
+            );
             state.apply(ev(APPROVAL));
             state.note_approval_shown_and_read(at(t0, 100));
             assert_eq!(state.on_key_at(key(KeyCode::Tab), at(t0, 300)), None);
-            assert_eq!(state.on_key_at(key(KeyCode::Char('n')), at(t0, 320)), None, "a tap inside the wait is ignored");
-            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 660)), None, "the held key's first repeat is still inside the wait");
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('n')), at(t0, 320)),
+                None,
+                "a tap inside the wait is ignored"
+            );
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Enter), at(t0, 660)),
+                None,
+                "the held key's first repeat is still inside the wait"
+            );
         }
 
         /// Enter submits the prompt at 0, the panel is drawn at 100.
@@ -5238,20 +6488,48 @@ mod tests {
         #[test]
         fn an_enter_pressed_and_held_inside_the_wait_stays_inert_through_its_first_repeats() {
             let (mut state, t0) = after_a_submit();
-            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 900)), None, "ignored: inside the 1 s wait");
-            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 1560)), None, "first repeat at 660 ms");
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Enter), at(t0, 900)),
+                None,
+                "ignored: inside the 1 s wait"
+            );
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Enter), at(t0, 1560)),
+                None,
+                "first repeat at 660 ms"
+            );
             assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 1590)), None);
-            assert!(state.transcript.iter().all(|e| !matches!(e, Entry::Decision { .. })));
-            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 1590 + 1000)), approve("approval-1", false), "a fresh press 1 s after the last ignored key");
+            assert!(
+                state
+                    .transcript
+                    .iter()
+                    .all(|e| !matches!(e, Entry::Decision { .. }))
+            );
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Enter), at(t0, 1590 + 1000)),
+                approve("approval-1", false),
+                "a fresh press 1 s after the last ignored key"
+            );
         }
 
         #[test]
         fn a_y_pressed_and_held_inside_the_wait_stays_inert_through_its_first_repeats() {
             let (mut state, t0) = after_a_submit();
             assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 900)), None);
-            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 1560)), None, "first repeat at 660 ms");
-            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 2200)), None, "and the next one");
-            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 2200 + 1000)), approve("approval-1", false));
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('y')), at(t0, 1560)),
+                None,
+                "first repeat at 660 ms"
+            );
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('y')), at(t0, 2200)),
+                None,
+                "and the next one"
+            );
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('y')), at(t0, 2200 + 1000)),
+                approve("approval-1", false)
+            );
         }
 
         #[test]
@@ -5265,7 +6543,9 @@ mod tests {
                 times.push(next);
             }
             for t in times {
-                approved |= state.on_key_at(key(KeyCode::Char('a')), at(t0, t)).is_some();
+                approved |= state
+                    .on_key_at(key(KeyCode::Char('a')), at(t0, t))
+                    .is_some();
             }
             assert!(!approved, "a held `a` approved all later actions");
         }
@@ -5276,7 +6556,12 @@ mod tests {
         fn a_burst_or_paste_with_a_decision_key_held_at_its_end_is_never_answered_by_the_repeat() {
             for text in ["xy", "y", "xxxxn", "ya", "x\n"] {
                 for burst_at in [5000u64, 5400, 6500, 9000] {
-                    for code in [KeyCode::Char('y'), KeyCode::Char('a'), KeyCode::Char('n'), KeyCode::Enter] {
+                    for code in [
+                        KeyCode::Char('y'),
+                        KeyCode::Char('a'),
+                        KeyCode::Char('n'),
+                        KeyCode::Enter,
+                    ] {
                         let (mut state, t0) = panel(5000);
                         state.on_paste_at(text, at(t0, burst_at));
                         // The last key of the burst is held: first repeat after 660 ms, then every 30 ms.
@@ -5289,7 +6574,10 @@ mod tests {
                             }
                             t += 30;
                         }
-                        assert_eq!(answered, None, "{text:?} at {burst_at}: a repeat of {code:?} answered {answered:?} ms after the burst");
+                        assert_eq!(
+                            answered, None,
+                            "{text:?} at {burst_at}: a repeat of {code:?} answered {answered:?} ms after the burst"
+                        );
                     }
                 }
             }
@@ -5299,12 +6587,21 @@ mod tests {
         fn a_typing_run_ignores_a_held_enter_and_its_repeats_too() {
             let (mut state, t0) = panel(5000);
             assert_eq!(state.on_key_at(key(KeyCode::Char('x')), at(t0, 5000)), None);
-            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 5100)), None, "inside the typing run");
-            assert_eq!(state.on_key_at(key(KeyCode::Enter), at(t0, 5100 + 660)), None, "first repeat of that Enter");
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Enter), at(t0, 5100)),
+                None,
+                "inside the typing run"
+            );
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Enter), at(t0, 5100 + 660)),
+                None,
+                "first repeat of that Enter"
+            );
         }
 
         #[test]
-        fn no_held_key_starting_anywhere_in_the_wait_is_approved_by_a_repeat_inside_a_second_of_the_last_ignored_key() {
+        fn no_held_key_starting_anywhere_in_the_wait_is_approved_by_a_repeat_inside_a_second_of_the_last_ignored_key()
+         {
             for code in [KeyCode::Enter, KeyCode::Char('y'), KeyCode::Char('a')] {
                 for delay in [500u64, 660, 800] {
                     for offset in (0..2000u64).step_by(50) {
@@ -5322,7 +6619,11 @@ mod tests {
                             let action = state.on_key_at(key(code), at(t0, t));
                             if matches!(action, Some(Action::Send(Command::Approve { .. }))) {
                                 // Only a press that follows a second of quiet may answer (a fresh press, not a repeat).
-                                assert!(t - last_key >= 1000, "{code:?} held from {start} (repeat delay {delay}) approved at {t}, only {} ms after the previous key", t - last_key);
+                                assert!(
+                                    t - last_key >= 1000,
+                                    "{code:?} held from {start} (repeat delay {delay}) approved at {t}, only {} ms after the previous key",
+                                    t - last_key
+                                );
                                 break;
                             }
                             last_key = t;
@@ -5334,7 +6635,16 @@ mod tests {
 
         /// A frame of the approval panel as the view reports it: 6 rows at 60 columns, two of them in the window.
         fn frame(top: usize) -> LiveLayout {
-            LiveLayout { overlay_rows: 2, overlay_limit: 4, approval_drawn: true, approval_total: 6, approval_top: top, approval_seen_to: top + 2, approval_width: 60, ..LiveLayout::default() }
+            LiveLayout {
+                overlay_rows: 2,
+                overlay_limit: 4,
+                approval_drawn: true,
+                approval_total: 6,
+                approval_top: top,
+                approval_seen_to: top + 2,
+                approval_width: 60,
+                ..LiveLayout::default()
+            }
         }
 
         fn a_six_row_command() -> (LiveState, Instant) {
@@ -5346,16 +6656,26 @@ mod tests {
         }
 
         #[test]
-        fn only_rows_that_were_drawn_count_and_a_jump_to_the_end_counts_none_of_the_rows_it_skipped() {
+        fn only_rows_that_were_drawn_count_and_a_jump_to_the_end_counts_none_of_the_rows_it_skipped()
+         {
             let (mut state, t0) = a_six_row_command();
             state.note_layout(frame(0));
             assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 5000)), None);
-            assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.notice.is_some_and(|n| n.contains("read every row"))));
+            assert!(
+                matches!(&state.overlay, Some(Overlay::Approval(a)) if a.notice.is_some_and(|n| n.contains("read every row")))
+            );
             // End: the next frame draws rows 4..6, but rows 2..4 were never drawn.
             state.on_key_at(key(KeyCode::End), at(t0, 5100));
             state.note_layout(frame(4));
-            assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if !a.read_all && a.seen_through == 2), "the skipped rows are unread");
-            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 8000)), None, "a jump never approves rows it did not draw");
+            assert!(
+                matches!(&state.overlay, Some(Overlay::Approval(a)) if !a.read_all && a.seen_through == 2),
+                "the skipped rows are unread"
+            );
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('y')), at(t0, 8000)),
+                None,
+                "a jump never approves rows it did not draw"
+            );
         }
 
         #[test]
@@ -5370,8 +6690,14 @@ mod tests {
             }
             state.on_key_at(key(KeyCode::Down), at(t0, 5500));
             state.note_layout(frame(4));
-            assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.read_all && a.notice.is_none()), "the stale refusal is gone");
-            assert_eq!(state.on_key_at(key(KeyCode::Char('y')), at(t0, 7000)), approve("a1", false));
+            assert!(
+                matches!(&state.overlay, Some(Overlay::Approval(a)) if a.read_all && a.notice.is_none()),
+                "the stale refusal is gone"
+            );
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('y')), at(t0, 7000)),
+                approve("a1", false)
+            );
         }
 
         #[test]
@@ -5382,9 +6708,18 @@ mod tests {
             }
             assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.read_all));
             // Wrapping changed: the rows seen at the old width are not the rows of the new one.
-            state.note_layout(LiveLayout { approval_width: 50, approval_total: 7, ..frame(0) });
-            assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if !a.read_all && a.seen_through == 2));
-            state.note_layout(LiveLayout { approval_drawn: false, ..frame(5) });
+            state.note_layout(LiveLayout {
+                approval_width: 50,
+                approval_total: 7,
+                ..frame(0)
+            });
+            assert!(
+                matches!(&state.overlay, Some(Overlay::Approval(a)) if !a.read_all && a.seen_through == 2)
+            );
+            state.note_layout(LiveLayout {
+                approval_drawn: false,
+                ..frame(5)
+            });
             assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if !a.read_all));
         }
 
@@ -5394,7 +6729,10 @@ mod tests {
             assert_eq!(state.on_key_at(key(KeyCode::Char('a')), at(t0, 5100)), None);
             assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if a.confirming));
             state.on_paste("some text");
-            assert!(matches!(&state.overlay, Some(Overlay::Approval(a)) if !a.confirming), "the question is gone");
+            assert!(
+                matches!(&state.overlay, Some(Overlay::Approval(a)) if !a.confirming),
+                "the question is gone"
+            );
             assert!(!state.composer.text().is_empty());
         }
 
@@ -5411,7 +6749,11 @@ mod tests {
                 assert_eq!(state.on_key_at(key, at(t0, 5100)), None, "{key:?}");
             }
             assert!(matches!(state.overlay, Some(Overlay::Approval(_))));
-            assert_eq!(state.on_key_at(key(KeyCode::Char('Y')), at(t0, 5200)), approve("approval-1", false), "Shift+y is y");
+            assert_eq!(
+                state.on_key_at(key(KeyCode::Char('Y')), at(t0, 5200)),
+                approve("approval-1", false),
+                "Shift+y is y"
+            );
         }
     }
 
@@ -5451,7 +6793,11 @@ mod tests {
         state.apply(ev(&wait_notice(1)));
         state.apply(ev(r#"{"v":1,"type":"notice","text":"Resumed session a."}"#));
         state.apply(ev(&wait_notice(2)));
-        assert_eq!(statuses(&state).len(), 1, "same turn: the row is updated even after another notice");
+        assert_eq!(
+            statuses(&state).len(),
+            1,
+            "same turn: the row is updated even after another notice"
+        );
         type_text(&mut state, "again");
         state.on_key(key(KeyCode::Enter));
         state.apply(ev(&wait_notice(1)));
@@ -5465,7 +6811,11 @@ mod tests {
         state.on_key(key(KeyCode::Enter));
         state.apply(ev(&wait_notice(3)));
         type_text(&mut state, "/details");
-        assert_eq!(state.on_key(key(KeyCode::Enter)), None, "answered locally, nothing is sent");
+        assert_eq!(
+            state.on_key(key(KeyCode::Enter)),
+            None,
+            "answered locally, nothing is sent"
+        );
         assert!(
             matches!(state.transcript.last(), Some(Entry::Output { text, success: true, .. }) if text.contains("HTTP 429 (attempt 3)")),
             "{:?}",
@@ -5478,17 +6828,26 @@ mod tests {
         let mut state = ready();
         type_text(&mut state, "/details");
         assert_eq!(state.on_key(key(KeyCode::Enter)), None);
-        assert!(matches!(state.transcript.last(), Some(Entry::Output { text, .. }) if text.contains("No provider error")));
+        assert!(
+            matches!(state.transcript.last(), Some(Entry::Output { text, .. }) if text.contains("No provider error"))
+        );
     }
 
     #[test]
     fn a_prompt_refused_for_want_of_a_provider_goes_back_to_the_composer_with_the_reason() {
         let mut state = ready();
         type_text(&mut state, "fix the bug");
-        assert!(matches!(state.on_key(key(KeyCode::Enter)), Some(Action::Send(Command::PromptSubmit { .. }))));
+        assert!(matches!(
+            state.on_key(key(KeyCode::Enter)),
+            Some(Action::Send(Command::PromptSubmit { .. }))
+        ));
         state.apply(ev(r#"{"v":1,"type":"error","id":"t1","code":"NO_PROVIDER","message":"No model is connected: nothing answers at http://localhost:1234/v1. Next: type /connect."}"#));
         assert!(!state.session.busy, "the composer is unlocked");
-        assert_eq!(state.composer.text(), "fix the bug", "the draft is not lost");
+        assert_eq!(
+            state.composer.text(),
+            "fix the bug",
+            "the draft is not lost"
+        );
         assert!(
             matches!(state.transcript.last(), Some(Entry::Notice(t)) if t.starts_with("No model is connected") && !t.contains("NO_PROVIDER")),
             "{:?}",
@@ -5503,8 +6862,14 @@ mod tests {
         state.on_paste("line one\nline two");
         state.on_key(key(KeyCode::Enter));
         state.apply(ev(r#"{"v":1,"type":"error","id":"t1","code":"NO_PROVIDER","message":"No model is connected."}"#));
-        assert_eq!(state.composer.display(state.composer.text()), "see [Pasted text #1: 2 lines]");
-        assert_eq!(state.composer.expand(state.composer.text()), "see line one\nline two");
+        assert_eq!(
+            state.composer.display(state.composer.text()),
+            "see [Pasted text #1: 2 lines]"
+        );
+        assert_eq!(
+            state.composer.expand(state.composer.text()),
+            "see line one\nline two"
+        );
     }
 
     #[test]
@@ -5524,7 +6889,11 @@ mod tests {
         state.composer.take();
         state.composer.up();
         state.composer.up();
-        assert_eq!(state.composer.text(), "typed after the second send", "history made after the send survives the restore");
+        assert_eq!(
+            state.composer.text(),
+            "typed after the second send",
+            "history made after the send survives the restore"
+        );
     }
 
     #[test]
@@ -5544,17 +6913,37 @@ mod tests {
         state.on_paste("line one\nline two");
         state.on_key(key(KeyCode::Enter));
         let sent_at = state.transcript.len() - 2;
-        assert!(matches!(state.transcript[sent_at], Entry::User(_)) && matches!(state.transcript[sent_at + 1], Entry::Pasted(_)));
+        assert!(
+            matches!(state.transcript[sent_at], Entry::User(_))
+                && matches!(state.transcript[sent_at + 1], Entry::Pasted(_))
+        );
         state.apply(ev(r#"{"v":1,"type":"error","id":"t1","code":"NO_PROVIDER","message":"No model is connected."}"#));
         assert!(
-            !state.transcript.iter().any(|e| matches!(e, Entry::User(_) | Entry::Pasted(_))),
+            !state
+                .transcript
+                .iter()
+                .any(|e| matches!(e, Entry::User(_) | Entry::Pasted(_))),
             "no entry still claims the prompt was sent: {:?}",
             state.transcript
         );
-        assert_eq!(state.transcript[sent_at], Entry::Unsent("see [Pasted text #1: 2 lines]".into()));
-        assert_eq!(state.transcript[sent_at + 1], Entry::Unsent(String::new()), "the paste block that went with it is gone too");
-        assert_eq!(state.transcript.len(), sent_at + 3, "marked in place, nothing removed (indices stay valid)");
-        assert_eq!(state.composer.display(state.composer.text()), "see [Pasted text #1: 2 lines]");
+        assert_eq!(
+            state.transcript[sent_at],
+            Entry::Unsent("see [Pasted text #1: 2 lines]".into())
+        );
+        assert_eq!(
+            state.transcript[sent_at + 1],
+            Entry::Unsent(String::new()),
+            "the paste block that went with it is gone too"
+        );
+        assert_eq!(
+            state.transcript.len(),
+            sent_at + 3,
+            "marked in place, nothing removed (indices stay valid)"
+        );
+        assert_eq!(
+            state.composer.display(state.composer.text()),
+            "see [Pasted text #1: 2 lines]"
+        );
     }
 
     #[test]
@@ -5563,7 +6952,9 @@ mod tests {
         let mut state = ready();
         type_text(&mut state, "first");
         state.on_key(key(KeyCode::Enter));
-        state.apply(ev(r#"{"v":1,"type":"assistant.delta","turn_id":"other","text":"x"}"#));
+        state.apply(ev(
+            r#"{"v":1,"type":"assistant.delta","turn_id":"other","text":"x"}"#,
+        ));
         assert!(state.sent_prompt.is_none());
     }
 
@@ -5573,19 +6964,37 @@ mod tests {
         type_text(&mut state, "first");
         state.on_paste("secret\nbuffer");
         state.on_key(key(KeyCode::Enter));
-        assert!(state.sent_prompt.is_some(), "kept while the sidecar may still refuse it");
-        state.apply(ev(r#"{"v":1,"type":"activity","turn_id":"t1","phase":"inference","step":1,"segment":1}"#));
-        assert!(state.sent_prompt.is_none(), "accepted: the paste buffers are not kept");
+        assert!(
+            state.sent_prompt.is_some(),
+            "kept while the sidecar may still refuse it"
+        );
+        state.apply(ev(
+            r#"{"v":1,"type":"activity","turn_id":"t1","phase":"inference","step":1,"segment":1}"#,
+        ));
+        assert!(
+            state.sent_prompt.is_none(),
+            "accepted: the paste buffers are not kept"
+        );
         // A refusal that arrives after acceptance (a stale id) changes nothing.
         state.apply(ev(r#"{"v":1,"type":"error","id":"t1","code":"NO_PROVIDER","message":"No model is connected."}"#));
-        assert!(matches!(state.transcript.iter().find(|e| matches!(e, Entry::User(_) | Entry::Unsent(_))), Some(Entry::User(_))));
-        state.apply(ev(r#"{"v":1,"type":"turn.result","heading":"h","line":"l","turn":{},"saved":false}"#));
+        assert!(matches!(
+            state
+                .transcript
+                .iter()
+                .find(|e| matches!(e, Entry::User(_) | Entry::Unsent(_))),
+            Some(Entry::User(_))
+        ));
+        state.apply(ev(
+            r#"{"v":1,"type":"turn.result","heading":"h","line":"l","turn":{},"saved":false}"#,
+        ));
         assert!(state.sent_prompt.is_none());
         // A turn that ends before any activity event (an error for the prompt) drops it too.
         state.composer.take();
         type_text(&mut state, "second");
         state.on_key(key(KeyCode::Enter));
-        state.apply(ev(r#"{"v":1,"type":"error","id":"t2","code":"INTERNAL","message":"boom"}"#));
+        state.apply(ev(
+            r#"{"v":1,"type":"error","id":"t2","code":"INTERNAL","message":"boom"}"#,
+        ));
         assert!(state.sent_prompt.is_none());
     }
 }
