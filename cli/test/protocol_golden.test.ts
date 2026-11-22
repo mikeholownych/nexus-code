@@ -23,6 +23,14 @@ test("protocol golden corpus is present and versioned", () => {
   }
 });
 
+test("the golden hello event carries the typed slash-command catalogue", () => {
+  const hello = records.find((record) => record.name === "hello");
+  assert.ok(hello, "the corpus includes the hello event");
+  const value = JSON.parse(hello.json);
+  assert.ok(Array.isArray(value.commands), "hello commands must be an array in the shared corpus");
+  assert.deepEqual(value.commands[0], { name: "help", usage: "/help", summary: "Show help" });
+});
+
 test("the golden corpus covers capability negotiation in both directions", () => {
   const named = (direction: string, name: string) => records.filter((r) => r.direction === direction && r.name === name).map((r) => JSON.parse(r.json));
   const hellos = named("event", "hello");

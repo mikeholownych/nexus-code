@@ -40,7 +40,6 @@ test("the newest version-ledger entry records the current schema and protocol ve
 // Golden records that predate a field the type now requires. The Rust client still accepts them (older sidecars), so
 // they stay in the corpus; each must fail for exactly the reason listed, so this list can only shrink.
 const GOLDEN_MISSING_REQUIRED: Record<string, string[]> = {
-  hello: ["$: missing required commands"],
   "tool.end": ["$: missing required evidence"],
 };
 

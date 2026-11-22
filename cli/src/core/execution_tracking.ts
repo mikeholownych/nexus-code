@@ -168,6 +168,10 @@ export interface ExecutionTracking {
   version: number;
   /** Steps charged to this objective across turns and in-turn delegated agents. */
   cumulativeSteps: number;
+  /** Tool dispatcher admissions since this field was introduced; this is a lower bound for upgraded legacy tasks. */
+  toolInvocations: number;
+  /** False when the record predates tool invocation accounting or its counter was malformed. */
+  toolInvocationHistoryComplete: boolean;
   turns: number;
   /** Consecutive steps without progress, across turns; operator input resets it. */
   stepsWithoutProgress: number;
@@ -197,6 +201,8 @@ export function createTracking(): ExecutionTracking {
   return {
     version: TRACKING_VERSION,
     cumulativeSteps: 0,
+    toolInvocations: 0,
+    toolInvocationHistoryComplete: true,
     turns: 0,
     stepsWithoutProgress: 0,
     lastProgressStep: 0,
@@ -222,14 +228,22 @@ export function createTracking(): ExecutionTracking {
  * same object: every holder (the running turn's tracker, compaction, the ledger) must share one record.
  */
 export function normalizeTracking(raw: unknown): ExecutionTracking {
-  if (!raw || typeof raw !== "object") return createTracking();
+  if (!raw || typeof raw !== "object") {
+    const tracking = createTracking();
+    tracking.toolInvocationHistoryComplete = false;
+    return tracking;
+  }
   const t = raw as Record<string, any>;
+  const hasValidToolCount = Number.isSafeInteger(t.toolInvocations) && t.toolInvocations >= 0;
+  const hasToolHistoryFlag = typeof t.toolInvocationHistoryComplete === "boolean";
   const base = createTracking() as unknown as Record<string, any>;
   for (const [key, value] of Object.entries(base)) {
     if (Array.isArray(value)) {
       if (!Array.isArray(t[key])) t[key] = [];
     } else if (typeof value === "number") {
       if (typeof t[key] !== "number" || !Number.isFinite(t[key])) t[key] = value;
+    } else if (typeof value === "boolean") {
+      if (typeof t[key] !== "boolean") t[key] = value;
     } else if (key === "evicted") {
       t[key] = { ...value, ...(t[key] && typeof t[key] === "object" ? t[key] : {}) };
     } else if (key === "recovery") {
@@ -247,6 +261,8 @@ export function normalizeTracking(raw: unknown): ExecutionTracking {
       t[key] = r;
     }
   }
+  t.toolInvocations = hasValidToolCount ? t.toolInvocations : 0;
+  t.toolInvocationHistoryComplete = hasValidToolCount && hasToolHistoryFlag ? t.toolInvocationHistoryComplete : false;
   return t as ExecutionTracking;
 }
 
@@ -359,7 +375,7 @@ export function outcomeIdentity(success: boolean, text: string): string {
 
 const WORKSPACE_OBSERVERS = new Set([
   "read_file", "batch_read", "list_dir", "file_tree", "find_files", "search_code", "outline_file", "file_info",
-  "read_findings", "read_objective", "read_archive", "git_status", "git_diff", "git_log", "semantic_search",
+  "read_findings", "read_objective", "read_archive", "read_tool_output", "git_status", "git_diff", "git_log", "semantic_search",
   "hybrid_search", "symbol_search", "lsp_definition", "lsp_references", "lsp_hover", "lsp_diagnostics",
   // A completion attempt's verdict is determined by the workspace: resubmitting on an unchanged one cannot change it.
   "task_completed",
@@ -486,6 +502,16 @@ export class ExecutionTracker {
 
   beginStep(): number {
     return ++this.data.cumulativeSteps;
+  }
+
+  /** Reserve a bounded number of dispatcher admissions before they can cause an effect. */
+  admitToolInvocations(requested: number, maximum: number): number {
+    if (!Number.isSafeInteger(requested) || requested < 0 || !Number.isSafeInteger(maximum) || maximum < 0) {
+      throw new Error("Tool invocation admission requires non-negative safe integer counts.");
+    }
+    const admitted = Math.min(requested, Math.max(0, maximum - this.data.toolInvocations));
+    this.data.toolInvocations += admitted;
+    return admitted;
   }
 
   /** Records a single tool result; the verdict says whether it was new, a poll, or part of a demonstrated loop. */
@@ -859,7 +885,8 @@ export class ExecutionTracker {
   summary(): string {
     const d = this.data;
     const loops = this.loops();
-    const parts = [`${d.cumulativeSteps} steps over ${d.turns} turn(s)`];
+    const toolCount = d.toolInvocationHistoryComplete ? `${d.toolInvocations} tool dispatches` : `at least ${d.toolInvocations} tool dispatches (earlier count unknown)`;
+    const parts = [`${d.cumulativeSteps} steps over ${d.turns} turn(s)`, toolCount];
     if (d.stepsWithoutProgress) parts.push(`${d.stepsWithoutProgress} step(s) since the last progress`);
     if (loops.length) parts.push(`repeated without progress: ${loops.slice(0, 3).map((r) => `${r.action} ×${r.count}`).join("; ")}`);
     if (d.failedApproaches.length) parts.push(`${d.failedApproaches.length} failed approach(es) recorded`);

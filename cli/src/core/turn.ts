@@ -47,6 +47,8 @@ export type TurnReason =
   | "STEP_PAUSED"
   /** Continued turn: the total step budget across segments is spent. */
   | "STEP_BUDGET_EXHAUSTED"
+  /** The objective-wide tool dispatcher admission ceiling is spent. */
+  | "TOOL_INVOCATION_BUDGET_EXHAUSTED"
   /** Continued turn: the wall-clock budget is spent. */
   | "TIME_BUDGET_EXHAUSTED"
   /** Continued turn: no progress for the configured number of steps, or bounded recovery from a repeated action failed. */
@@ -354,6 +356,11 @@ export interface TurnResult {
     stepsWithoutProgress: number;
     /** Steps run on this objective across all its turns (observability; never a limit). */
     cumulativeSteps?: number;
+    /** Tool dispatches charged to this objective and the fixed ceiling. */
+    toolInvocations?: number;
+    maxToolInvocations?: number;
+    /** False means earlier dispatches predate this counter or the persisted counter was malformed. */
+    toolInvocationHistoryComplete?: boolean;
     /** Demonstrated loops: the same action and result on an unchanged workspace, at least REPEAT_THRESHOLD times. */
     repeated?: Array<{ action: string; count: number; firstStep: number; lastStep: number }>;
     /** Why repetition could not be judged against workspace state this turn, when it could not. */
@@ -586,6 +593,9 @@ export function summarizeTurn(t: TurnResult): { heading: string; line: string } 
     }
     if (t.reason === "STEP_BUDGET_EXHAUSTED") {
       return { heading: "STEP BUDGET EXHAUSTED", line: `execution=LIMIT_REACHED outcome=NOT_ESTABLISHED (${t.steps.used}/${t.steps.max} steps${segments}; raise --max-total-steps to allow more)` };
+    }
+    if (t.reason === "TOOL_INVOCATION_BUDGET_EXHAUSTED") {
+      return { heading: "TOOL INVOCATION BUDGET EXHAUSTED", line: `execution=LIMIT_REACHED outcome=NOT_ESTABLISHED (${t.detail ?? "objective tool invocation limit reached"}; raise --max-tool-invocations only when starting a new objective)` };
     }
     return { heading: "STEP LIMIT REACHED", line: `execution=LIMIT_REACHED outcome=NOT_ESTABLISHED (${t.steps.used}/${t.steps.max} steps)` };
   }
