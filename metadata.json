@@ -1,0 +1,53 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M80T9VZ2XWX1VPEB5G7XZ9D0",
+  "strategy": "manual-commit",
+  "branch": "v1/vr1-nexus-verify",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "cli/src/core/verification_outcome.ts",
+    "cli/src/core/verify.ts",
+    "cli/src/index.ts",
+    "cli/src/verify_contract.ts",
+    "cli/test/verification_outcome.test.ts",
+    "cli/test/verify_command.test.ts",
+    "docs/USER_MANUAL.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 14439,
+    "cache_read_tokens": 5187535,
+    "output_tokens": 6049,
+    "api_call_count": 8,
+    "subagent_tokens": {
+      "input_tokens": 84,
+      "cache_creation_tokens": 212074,
+      "cache_read_tokens": 10306596,
+      "output_tokens": 109184,
+      "api_call_count": 42
+    }
+  },
+  "redaction": {
+    "replacements": 620,
+    "layers": {
+      "betterleaks": 2,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 43,
+      "credentialed_uri": 3,
+      "entropy": 572,
+      "key_context": 0,
+      "provider_token": 2,
+      "shell_stdin": 0
+    }
+  }
+}
