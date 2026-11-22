@@ -2,7 +2,7 @@
  * VR-1: the machine contract of `nexus verify`: the verdicts, the process exit codes and the JSON document `--json`
  * prints (the same document `--receipt <file>` writes). docs/USER_MANUAL.md documents the exit codes from the table
  * below and test/verify_command.test.ts fails when the manual falls behind. The published schema
- * (docs/protocol/verify-result-v1.schema.json) is generated from the types here by scripts/gen_verify_result_schema.mjs,
+ * (docs/protocol/verify-result-v2.schema.json) is generated from the types here by scripts/gen_verify_result_schema.mjs,
  * so they are plain data (no functions, no index signatures); test/verify_schema.test.ts fails when it falls behind.
  */
 import type { EngineeringOutcome, TypecheckEvidence, VerificationEvidence } from "./core/turn.js";
@@ -16,7 +16,7 @@ import type { TypecheckMode } from "./tester.js";
  * renaming a member, or changing a member's type or meaning, bumps it. Every change is recorded in
  * docs/protocol/VERIFY_RESULT_VERSIONS.json.
  */
-export const VERIFY_RESULT_SCHEMA_VERSION = 1;
+export const VERIFY_RESULT_SCHEMA_VERSION = 2;
 
 /**
  * VERIFIED: evidence independent of the change shows it. REGRESSION_FREE: the tests pass, which shows only that nothing

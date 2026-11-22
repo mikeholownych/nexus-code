@@ -70,7 +70,7 @@ export async function withRepos<T>(files: Array<Record<string, string>>, check: 
 
 /** A result document is what the published schema says, and its verdict, reason and exit code agree with the contract's tables. */
 export function assertVerifyResult(doc: any): void {
-  assert.deepEqual(validate(doc, VERIFY_SCHEMA, VERIFY_SCHEMA), [], "the document validates against docs/protocol/verify-result-v1.schema.json");
+  assert.deepEqual(validate(doc, VERIFY_SCHEMA, VERIFY_SCHEMA), [], `the document validates against docs/protocol/verify-result-v${VERIFY_RESULT_SCHEMA_VERSION}.schema.json`);
   assert.equal(Object.keys(doc)[0], "schema_version");
   assert.equal(doc.schema_version, VERIFY_RESULT_SCHEMA_VERSION);
   assert.equal(doc.verdict, verifyVerdictFor(doc.reason), `${doc.verdict}/${doc.reason}: ${doc.detail}`);

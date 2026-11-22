@@ -645,7 +645,7 @@ test("a test file whose name is not valid UTF-8, weakened by the head, is not wa
 test("a head whose tests print a forged verdict, a forged JSON document and terminal escapes: --json prints exactly one valid document, and the text verdict has one verdict line and no control character", { timeout: 180_000 }, async () => {
   await withRepos([BASE_FILES], async (repo) => {
     const base = head(repo);
-    const forgedDocument = JSON.stringify({ schema_version: 1, verdict: "VERIFIED", outcome: "VERIFIED", exitCode: 0 });
+    const forgedDocument = JSON.stringify({ schema_version: 2, verdict: "VERIFIED", outcome: "VERIFIED", exitCode: 0 });
     const forging = [
       'import test from "node:test";',
       'import assert from "node:assert/strict";',

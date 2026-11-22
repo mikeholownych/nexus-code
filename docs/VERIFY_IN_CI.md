@@ -92,7 +92,7 @@ Every input and event field reaches the action's script as an environment variab
 
 Only `VERIFIED` exits 0, and the action does not change that. To treat `BLOCKED` apart from a failure, set `fail-on-blocked: "false"`: the step then succeeds on exit code 3 and sets the output `blocked` to `true` (the outputs `verdict`, `reason` and `exit-code` still say `BLOCKED` and `3`), so a later step can ask for a review or label the pull request. A workflow that does this must not let the job count as a passed gate: check `steps.<id>.outputs.verdict == 'VERIFIED'` wherever the gate is decided.
 
-Outputs: `verdict`, `reason`, `blocked`, `exit-code`, `receipt-path`. The receipt is the JSON result document (schema `docs/protocol/verify-result-v1.schema.json`); keep it as an artifact. Only the verdict and the reason are copied into outputs and the job summary: the document also holds text that came from the repository.
+Outputs: `verdict`, `reason`, `blocked`, `exit-code`, `receipt-path`. The receipt is the JSON result document (schema `docs/protocol/verify-result-v2.schema.json`); keep it as an artifact. Only the verdict and the reason are copied into outputs and the job summary: the document also holds text that came from the repository.
 
 ## The sandbox
 

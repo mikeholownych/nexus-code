@@ -1,5 +1,5 @@
 /**
- * VR-1: the published schema of the `nexus verify --json` document (docs/protocol/verify-result-v1.schema.json) and its
+ * VR-1: the published schema of the `nexus verify --json` document (docs/protocol/verify-result-v2.schema.json) and its
  * version ledger. The documents themselves are validated where they are produced: every result in
  * test/verify_command.test.ts and test/verify_typecheck_guard.test.ts goes through the schema (helpers/verify_fixture.ts).
  */
@@ -55,7 +55,7 @@ test("the schema is a union of a result and an error document; its reasons and v
 test("the schema accepts the error document and rejects what a consumer relies on being there", () => {
   const error: VerifyJsonError = { schema_version: VERIFY_RESULT_SCHEMA_VERSION, error: "--base x does not name a commit in this repository", exitCode: 2 };
   assert.deepEqual(validate(error, schema, schema), []);
-  assert.ok(validate({ ...error, schema_version: 2 }, schema, schema).length > 0);
+  assert.ok(validate({ ...error, schema_version: VERIFY_RESULT_SCHEMA_VERSION + 1 }, schema, schema).length > 0);
   assert.ok(validate({ error: "x", exitCode: 2 }, schema, schema).length > 0, "a document without schema_version");
   assert.ok(validate({ schema_version: VERIFY_RESULT_SCHEMA_VERSION, verdict: "VERIFIED" }, schema, schema).length > 0, "a result without its required members");
 });

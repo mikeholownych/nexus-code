@@ -8,5 +8,10 @@
     "schema_version": 1,
     "schemaSha256": "119a86e8b5642d57db8f54260599966bf28d04cb1f09aad384bdd37bf9ac3018",
     "note": "Additive, schema_version stays 1 (nexus verify --sandbox, VR-1 slice 3). New optional members: sandbox (requested, engine, network) on the result and sandboxed on each entry of runs; this producer always writes both, and they are optional in the schema so that a document written before them still validates. One new value of the reason enumeration: SANDBOX_UNAVAILABLE (verdict BLOCKED, exit 3), written only when --sandbox was requested; a document with it does not validate against the earlier schema text, whose enumeration is closed. No member was removed or renamed and none changed type or meaning; a consumer that ignores unknown members and treats an unknown reason as not VERIFIED is unaffected."
+  },
+  {
+    "schema_version": 2,
+    "schemaSha256": "53c2e7c98c04eca6104a6ae540c2fce551e0638bcec4a1b8e168c40bff39a394",
+    "note": "Bump schema_version because sandbox.requested now means the operator explicitly selected a sandbox; implicit default confinement is reflected by the effective engine and per-run sandboxed facts. This changes the field's meaning, so consumers must reject version 2 until they account for the distinction."
   }
 ]
