@@ -23,6 +23,19 @@ test("protocol golden corpus is present and versioned", () => {
   }
 });
 
+test("the golden corpus covers capability negotiation in both directions", () => {
+  const named = (direction: string, name: string) => records.filter((r) => r.direction === direction && r.name === name).map((r) => JSON.parse(r.json));
+  const hellos = named("event", "hello");
+  assert.ok(hellos.some((hello) => hello.protocol_min === undefined), "a hello from a sidecar older than negotiation stays in the corpus");
+  const hello = hellos.find((h) => h.protocol_min !== undefined);
+  assert.ok(hello, "a hello with the negotiation fields");
+  assert.ok(Number.isInteger(hello.protocol_min) && Number.isInteger(hello.protocol_max) && hello.protocol_min <= hello.protocol && hello.protocol <= hello.protocol_max);
+  assert.ok(Array.isArray(hello.capabilities) && Array.isArray(hello.experimental));
+  assert.equal(named("command", "initialize").length, 1);
+  const [initialized] = named("event", "initialized");
+  assert.ok(initialized && Array.isArray(initialized.capabilities) && Array.isArray(initialized.experimental));
+});
+
 test("sidecar events in the golden corpus encode to exactly the recorded wire shape", () => {
   for (const record of records.filter((r) => r.direction === "event")) {
     const { v: _version, ...event } = JSON.parse(record.json);

@@ -294,13 +294,16 @@
       ]
     },
     "ErrorCode": {
+      "description": "`UNSUPPORTED_PROTOCOL`: `initialize` named a version range that shares no version with the sidecar's.\n`EXPERIMENTAL_DISABLED`: an experimental feature was used on a connection that did not enable it at `initialize`.",
       "enum": [
         "BAD_REQUEST",
         "BUSY",
+        "EXPERIMENTAL_DISABLED",
         "INTERNAL",
         "NOT_FOUND",
         "NO_PENDING_APPROVAL",
-        "NO_PROVIDER"
+        "NO_PROVIDER",
+        "UNSUPPORTED_PROTOCOL"
       ]
     },
     "EvidenceStatus": {
@@ -929,6 +932,51 @@
           ]
         },
         {
+          "title": "initialize",
+          "type": "object",
+          "properties": {
+            "client": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "version"
+              ]
+            },
+            "experimental": {
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string"
+            },
+            "protocol_max": {
+              "type": "number"
+            },
+            "protocol_min": {
+              "type": "number"
+            },
+            "type": {
+              "const": "initialize"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "client",
+            "id",
+            "type",
+            "v"
+          ]
+        },
+        {
           "title": "model.select",
           "type": "object",
           "properties": {
@@ -1459,6 +1507,13 @@
           "title": "hello",
           "type": "object",
           "properties": {
+            "capabilities": {
+              "description": "Stable features the sidecar supports (SIDECAR_CAPABILITIES), sorted.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
             "commands": {
               "type": "array",
               "items": {
@@ -1481,10 +1536,25 @@
                 ]
               }
             },
+            "experimental": {
+              "description": "Experimental features the sidecar offers; each stays off until `initialize` asks with `experimental: true`.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
             "pid": {
               "type": "number"
             },
             "protocol": {
+              "description": "The version the sidecar speaks by default.",
+              "type": "number"
+            },
+            "protocol_max": {
+              "type": "number"
+            },
+            "protocol_min": {
+              "description": "The inclusive range of protocol versions this sidecar can speak. Absent from a sidecar older than capability negotiation: it speaks exactly `protocol`.",
               "type": "number"
             },
             "type": {
@@ -1529,6 +1599,44 @@
             "messages",
             "session",
             "total",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "initialized",
+          "type": "object",
+          "properties": {
+            "capabilities": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "experimental": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "id": {
+              "type": "string"
+            },
+            "protocol": {
+              "type": "number"
+            },
+            "type": {
+              "const": "initialized"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "capabilities",
+            "experimental",
+            "id",
+            "protocol",
             "type",
             "v"
           ]
