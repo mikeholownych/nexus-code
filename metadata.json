@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M821TYTNYT1KABXX53GQDYCK",
+  "strategy": "manual-commit",
+  "branch": "v1/wm3-repeat-evidence",
+  "checkpoints_count": 7,
+  "files_touched": [
+    "docs/evidence/v1.2.2/20261122T030030Z.json",
+    "docs/evidence/v1.2.2/20261122T030030Z.json.sha256",
+    "docs/evidence/v1.2.2/MQ4_THIRD_RUN_2026-11-22.md",
+    "docs/evidence/v1.2.2/WM3_REPEAT_20261122.json",
+    "docs/evidence/v1.2.2/WM3_REPEAT_20261122.json.sha256",
+    "docs/evidence/v1.2.2/WM3_REPEAT_20261122.md",
+    "docs/v1.2.2/BACKLOG.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1028591,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 119270144,
+    "output_tokens": 272665,
+    "api_call_count": 816,
+    "subagent_tokens_complete": false
+  },
+  "redaction": {
+    "replacements": 1588,
+    "layers": {
+      "betterleaks": 463,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 70,
+      "credentialed_uri": 66,
+      "entropy": 1208,
+      "key_context": 0,
+      "provider_token": 12,
+      "shell_stdin": 0
+    }
+  }
+}
