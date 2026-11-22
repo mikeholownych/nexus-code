@@ -1,7 +1,7 @@
 [
   {
     "schema_version": 1,
-    "schemaSha256": "e7faeacac81db552c9fcfc760a52d42b00d1df2d80747e4717a0b8d8d31ab984",
+    "schemaSha256": "91476420429efefd62690c0458aca20b2b4b1346cb794a9fad2d606b3adcecbf",
     "note": "First published schema of the nexus run --json document, generated from RunJsonOutput in cli/src/run_contract.ts on release/v1.3.0. The only change to the printed document is the new first member schema_version; every existing member keeps its name, type and meaning."
   }
 ]
