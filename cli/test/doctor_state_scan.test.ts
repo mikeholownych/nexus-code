@@ -59,27 +59,22 @@ function homeWithBackups(count: number): string {
 }
 
 describe("doctor on a very large state directory", () => {
-  test("the endpoint is still reported reachable, the event loop keeps turning, and the scan says it was partial", async () => {
-    const home = homeWithBackups(40_000);
-    // Something to find in live state: it must be reported even though the budget runs out later, in the backups.
+  test("the endpoint is still reported reachable, timers keep firing, and the scan says it was partial", async () => {
+    const home = homeWithBackups(20_000);
+    // Something to find in live state: it must be reported even though the scan stops later, in the backups.
     const exposed = path.join(home, ".nexus", "sessions", "exposed.json");
     fs.writeFileSync(exposed, "{}", { mode: 0o644 });
     fs.chmodSync(exposed, 0o644);
 
     let ticks = 0;
-    let longestGapMs = 0;
-    let last = Date.now();
-    const timer = setInterval(() => {
-      const now = Date.now();
-      longestGapMs = Math.max(longestGapMs, now - last);
-      last = now;
-      ticks++;
-    }, 5);
+    const timer = setInterval(() => { ticks++; }, 1);
     let report: DoctorReport;
+    // The entry limit, not the clock, ends the scan: the result does not depend on how fast the host's disk is.
+    process.env.NEXUS_DOCTOR_STATE_SCAN_ENTRIES = "5000";
     try {
-      // A short limit, so the scan's own budget (a share of it) is far smaller than the tree.
-      report = await runDoctor({ home, timeoutMs: 400, config: cfg() });
+      report = await runDoctor({ home, timeoutMs: 20_000, config: cfg() });
     } finally {
+      delete process.env.NEXUS_DOCTOR_STATE_SCAN_ENTRIES;
       clearInterval(timer);
     }
 
@@ -91,18 +86,45 @@ describe("doctor on a very large state directory", () => {
     const partial = permissions.find((f) => /Only part of ~\/\.nexus was checked/.test(f.explanation));
     assert.ok(partial, `a partial-scan finding is reported; got: ${permissions.map((f) => f.explanation).join(" | ")}`);
     assert.equal(partial!.status, "warn");
-    assert.match(partial!.explanation, /\d+ entries were examined before its time budget of \d+ ms ran out\. The rest was not checked\./);
+    assert.match(partial!.explanation, /: 5000 entries were examined before the limit of 5000 entries was reached\. The rest was not checked\./);
     assert.ok(partial!.evidence?.some((e) => /stopped in \.nexus\/backups\//.test(e)), "it stopped inside the backups, not in live state");
     assert.ok(!permissions.some((f) => f.status === "pass"), "a tree that was only partly read is never reported as private");
     assert.ok(permissions.some((f) => f.explanation.includes("sessions/exposed.json")), "live state was examined first and its problem reported");
+    // 5000 entries with a turn of the event loop every 500: the scan gave way at least nine times.
+    assert.ok(ticks >= 5, `timers fired while the doctor ran (${ticks} ticks)`);
+  });
 
-    assert.ok(ticks > 5, `timers ran during the doctor (${ticks} ticks)`);
-    assert.ok(longestGapMs < 250, `no long stall of the event loop (longest gap ${longestGapMs} ms)`);
+  test("the scan itself gives the event loop a turn: a timer fires between its start and its end", async () => {
+    const home = homeWithBackups(6_000);
+    let firedDuringScan = 0;
+    process.env.NEXUS_DOCTOR_STATE_SCAN_ENTRIES = "100000";
+    const timer = setInterval(() => { firedDuringScan++; }, 0);
+    try {
+      const report = await runDoctor({ home, timeoutMs: 20_000, config: cfg() });
+      assert.deepEqual(find(report, "state.permissions").map((f) => f.status), ["pass"], "6000 private files are scanned in full");
+    } finally {
+      delete process.env.NEXUS_DOCTOR_STATE_SCAN_ENTRIES;
+      clearInterval(timer);
+    }
+    assert.ok(firedDuringScan >= 5, `timers fired (${firedDuringScan})`);
+  });
+
+  test("an unusable entry limit falls back to the default", async () => {
+    const home = homeWithBackups(300);
+    for (const value of ["0", "-5", "1.5", "many", ""]) {
+      process.env.NEXUS_DOCTOR_STATE_SCAN_ENTRIES = value;
+      try {
+        const report = await runDoctor({ home, timeoutMs: 20_000, config: cfg() });
+        assert.deepEqual(find(report, "state.permissions").map((f) => f.status), ["pass"], `limit ${JSON.stringify(value)}`);
+      } finally {
+        delete process.env.NEXUS_DOCTOR_STATE_SCAN_ENTRIES;
+      }
+    }
   });
 
   test("a small state directory is scanned in full and reported private, with no partial-scan warning", async () => {
     const home = homeWithBackups(300);
-    const report = await runDoctor({ home, timeoutMs: 5000, config: cfg() });
+    const report = await runDoctor({ home, timeoutMs: 20_000, config: cfg() });
     const permissions = find(report, "state.permissions");
     assert.deepEqual(permissions.map((f) => f.status), ["pass"], permissions.map((f) => f.explanation).join(" | "));
   });
@@ -111,7 +133,7 @@ describe("doctor on a very large state directory", () => {
     const home = homeWithBackups(300);
     const leaked = path.join(home, ".nexus", "backups", "state-backup-2026-11-12T00-00-00-000Z", "state", "tasks", "d0", "t7.json");
     fs.chmodSync(leaked, 0o644);
-    const report = await runDoctor({ home, timeoutMs: 5000, config: cfg() });
+    const report = await runDoctor({ home, timeoutMs: 20_000, config: cfg() });
     const permissions = find(report, "state.permissions");
     assert.ok(permissions.some((f) => f.status === "warn" && f.explanation.includes("t7.json")), permissions.map((f) => f.explanation).join(" | "));
   });

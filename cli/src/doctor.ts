@@ -790,6 +790,11 @@ const stateDirCheck: Check = async (ctx) => {
 
 /** Entries one permissions scan of ~/.nexus examines before it stops and reports the rest as unchecked. */
 export const STATE_SCAN_MAX_ENTRIES = 200_000;
+/** The operator's own entry limit (NEXUS_DOCTOR_STATE_SCAN_ENTRIES, a positive whole number), else the default. */
+function stateScanMaxEntries(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = (env.NEXUS_DOCTOR_STATE_SCAN_ENTRIES ?? "").trim();
+  return /^[1-9]\d{0,8}$/.test(raw) ? Number(raw) : STATE_SCAN_MAX_ENTRIES;
+}
 /** The scan gives the event loop a turn this often, so the other checks keep running beside it. */
 const STATE_SCAN_YIELD_EVERY = 500;
 /** Share of the check's own time limit the scan may use, so it reports a partial result instead of timing out. */
@@ -817,6 +822,7 @@ const statePermissionsCheck: Check = async (ctx, signal) => {
     // stops at a budget and says what it did not look at; it never reports a tree it only partly read as private.
     const started = Date.now();
     const budgetMs = Math.max(250, Math.floor(ctx.timeoutMs * STATE_SCAN_TIME_SHARE));
+    const maxEntries = stateScanMaxEntries();
     let examined = 0;
     let stoppedIn: string | undefined;
     // Depth-first with an explicit stack. Live state first, backups last: if the budget runs out, it runs out in copies.
@@ -832,7 +838,7 @@ const statePermissionsCheck: Check = async (ctx, signal) => {
       }
       const later: Array<{ dir: string; depth: number }> = [];
       for (const entry of entries) {
-        if (examined >= STATE_SCAN_MAX_ENTRIES || Date.now() - started >= budgetMs || signal.aborted) {
+        if (examined >= maxEntries || Date.now() - started >= budgetMs || signal.aborted) {
           stoppedIn = dir;
           break scan;
         }
@@ -868,12 +874,12 @@ const statePermissionsCheck: Check = async (ctx, signal) => {
       for (let i = later.length - 1; i >= 0; i--) stack.push(later[i]);
     }
     if (stoppedIn !== undefined) {
-      const why = signal.aborted ? "the check was cancelled" : examined >= STATE_SCAN_MAX_ENTRIES ? `the limit of ${STATE_SCAN_MAX_ENTRIES} entries was reached` : `its time budget of ${budgetMs} ms ran out`;
+      const why = signal.aborted ? "the check was cancelled" : examined >= maxEntries ? `the limit of ${maxEntries} entries was reached` : `its time budget of ${budgetMs} ms ran out`;
       out.push(f(
         "state.permissions", "state", "warn",
         `Only part of ~/.nexus was checked for permissions: ${examined} entries were examined before ${why}. The rest was not checked.`,
         [nexusDir, `stopped in ${path.relative(ctx.home, stoppedIn) || "."}`],
-        "A state directory this large is usually old upgrade backups under ~/.nexus/backups; remove the ones you no longer need, or rerun with a longer --timeout.",
+        "A state directory this large is usually old upgrade backups under ~/.nexus/backups; remove the ones you no longer need. To look further, raise NEXUS_DOCTOR_STATE_SCAN_ENTRIES or pass a longer --timeout.",
       ));
     }
   }
