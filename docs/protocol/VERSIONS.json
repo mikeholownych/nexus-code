@@ -1,0 +1,7 @@
+[
+  {
+    "protocol": 1,
+    "schemaSha256": "b2747ba8d5d56e8450df9c161b1c773b7beefd5c79ccd75fa07dfccda169b66a",
+    "note": "First published schema of protocol v1, generated from cli/src/protocol.ts as it stood on release/v1.3.0. No wire change."
+  }
+]
