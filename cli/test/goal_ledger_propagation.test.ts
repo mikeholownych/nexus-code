@@ -3,6 +3,7 @@ import test from "node:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import "./helpers/leak_guard.js";
 import { AutonomousAgent } from "../src/agent.js";
 import { objectiveLedgerForGoalUnit } from "../src/goal.js";
 import { createLedger, type ObjectiveLedger } from "../src/core/objective.js";
