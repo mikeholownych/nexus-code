@@ -25,6 +25,8 @@ import { assertTaskSnapshotDigest } from "./runner_integrity.mjs";
 import { runPostAgentPhase } from "./check_phase.mjs";
 import { EVAL_RUNTIME_FILES } from "./runtime_files.mjs";
 import { captureWorkspaceSnapshot, needsEvaluatorConfigurationBaseline, runCodeEvaluators } from "./evaluators/code/runner.mjs";
+import { createWorkflowDriver } from "./workflow_driver.mjs";
+import { validateWorkflowArm } from "./workflow_modes.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = parseArgs(process.argv.slice(2));
@@ -36,6 +38,11 @@ if (!args.config || !args.out || (args.dataset && (args.dataset === true || args
 const configBytes = fs.readFileSync(args.config);
 const configSha256 = createHash("sha256").update(configBytes).digest("hex");
 const config = JSON.parse(configBytes.toString("utf8"));
+if (config.workflowArm !== undefined) {
+  try { validateWorkflowArm(config.workflowArm); }
+  catch (error) { console.error(`eval/run.mjs: ${error.message}`); process.exit(2); }
+  if ((config.agent ?? "nexus") !== "nexus") { console.error("eval/run.mjs: workflowArm currently requires the Nexus sidecar adapter"); process.exit(2); }
+}
 const datasetRoot = args.dataset ? path.resolve(args.dataset) : null;
 const only = args.only ? new Set(String(args.only).split(",")) : null;
 let dataset = null;
@@ -104,6 +111,10 @@ for (const id of tasks) {
   const taskFile = confinedPath(snapshot, "task.json");
   const frozenTask = JSON.parse(fs.readFileSync(taskFile, "utf8"));
   taskRecords.push({ id, dir: snapshot, treeSha256: before, task: datasetRow ? { ...datasetRow.task, dir: snapshot } : frozenTask, split: datasetRow?.split ?? null, versionedDataset: Boolean(datasetRow) });
+}
+if (config.workflowArm && taskRecords.some(({ task }) => !["T1", "T2"].includes(task.tier))) {
+  console.error("eval/run.mjs: workflowArm currently supports T1/T2 tasks only; T3 steering and T4 interruption semantics are not preserved across all arms");
+  process.exit(2);
 }
 if (config.qualification === true && only) {
   console.error("eval/run.mjs: qualification task subsets are forbidden; use a frozen corpus run or an explicitly recorded infrastructure-pair rerun");
@@ -200,6 +211,7 @@ for (let run = 1; run <= runs; run++) {
 }
 
 async function runOnce(task, run) {
+  const startedMs = Date.now();
   // Under the resource contract these are on a tmpfs, so candidate writes count against the run's memory limit.
   const scratch = config.resources?.workspaceRoot ?? os.tmpdir();
   const ws = fs.mkdtempSync(path.join(scratch, `nexus-eval-${task.id}-`));
@@ -260,12 +272,9 @@ async function runOnce(task, run) {
       maxCompletionTokens: config.limits?.output,
       maxTotalCompletionTokens: config.limits?.totalOutput,
     });
-    const started = Date.now();
     let agent;
-    let agentEndedAt;
     try {
       agent = await runAgent(task, ws, home, budget, agentIdentity, proxyDir, localToken, proxy);
-      agentEndedAt = Date.now();
       if (config.runAs) {
         for (const dir of [ws, home]) await normalizeRunAsPermissions(config.runAs, dir, asUserSpec);
       }
@@ -273,7 +282,6 @@ async function runOnce(task, run) {
       await proxy?.close();
       fs.rmSync(proxyDir, { recursive: true, force: true });
     }
-    const wallMs = agentEndedAt - started;
     if (agent.containmentProblem) throw new Error(`candidate containment failed: ${agent.containmentProblem}`);
     const model = proxy ? proxy.stats() : null;
     const fixtureFaults = observeT4Fixture(task, agent, agent.resources, config.resources);
@@ -310,9 +318,15 @@ async function runOnce(task, run) {
     }
     const turn = agent.json?.turn ?? null;
     // Nexus reports a structured outcome; for the other agents a clean exit within the budget is their completion claim.
-    const claimedComplete = turn
+    const workflow = agent.json?.workflow ?? null;
+    const claimedComplete = workflow
+      ? workflow.slashResult
+        ? workflow.slashResult.success === true
+        : turn?.execution === "COMPLETED" && ["VERIFIED", "REGRESSION_FREE", "UNVERIFIED", "NOT_REQUIRED"].includes(turn.outcome)
+      : turn
       ? turn.execution === "COMPLETED" && ["VERIFIED", "REGRESSION_FREE", "UNVERIFIED", "NOT_REQUIRED"].includes(turn.outcome)
       : agent.code === 0 && !agent.timedOut && !agent.outputExceeded;
+    const wallMs = Date.now() - startedMs;
     return {
       ...base,
       wallMs,
@@ -327,16 +341,22 @@ async function runOnce(task, run) {
       falseVerified: turn?.outcome === "VERIFIED" && !hidden.pass,
       contaminated,
       tokens: agent.json?.tokenStats ?? null,
+      tokenAccounting: agent.json?.tokenStats ? { reportedRequests: agent.json.tokenStats.reportedRequests ?? null, estimatedRequests: agent.json.tokenStats.estimatedRequests ?? null, totalIsReportedOrEstimated: true } : { status: "unavailable" },
+      toolCallsObserved: workflow?.toolCalls ?? turn?.continuation?.toolInvocations ?? null,
+      toolCallCountSource: workflow ? "sidecar_tool_start_events" : turn?.continuation?.toolInvocations !== undefined ? "turn_dispatch_counter" : "unavailable",
+      providerRecoveryAttempts: Array.isArray(turn?.providerRecovery) ? turn.providerRecovery.reduce((sum, recovery) => sum + Math.max(0, (recovery.submissions?.length ?? 0) - 1) + (recovery.probes ?? 0), 0) : null,
       ...(evaluators.length ? { evaluators, evaluatorsPass: evaluators.every((r) => r.passed) } : {}),
       ...(hardening ? { hardened: { baseline: hardening.baseline, applied: hardening.applied.length, discarded: hardening.discarded, configChanges: hardening.configChanges } } : {}),
       ...(t3 ? { t3 } : {}),
+      ...(config.workflowArm ? { workflow: { arm: config.workflowArm, phase: workflow?.phase ?? "oneshot", commandSuccess: workflow?.slashResult?.success ?? null, output: workflow?.slashResult?.output ?? null, armCompliance: workflow?.armCompliance ?? (config.workflowArm === "serial" ? true : null), toolCallsObserved: workflow?.toolCalls ?? turn?.continuation?.toolInvocations ?? null, toolCounts: workflow?.toolCounts ?? {}, successfulToolCounts: workflow?.successfulToolCounts ?? {}, progressEvents: workflow?.progressEvents ?? null, errors: workflow?.errors ?? [] } } : {}),
+      contextCompactions: countCompactions(home),
       model,
       ...((agent.t4FaultsInjected?.length || fixtureFaults.length) ? { t4FaultsInjected: [...(agent.t4FaultsInjected ?? []), ...fixtureFaults] } : {}),
       resources: config.resources ? { agent: agent.resources, hidden: hidden.resources ?? null, regression: regression?.resources ?? null, ...(t3BaselineResources.length ? { t3Baseline: t3BaselineResources } : {}) } : null,
       logs: saveLogs(task, run, agent, hidden, regression),
     };
   } catch (err) {
-    return { ...base, wallMs: 0, error: String(err?.message ?? err), hiddenPass: false, regressionPass: null, falseVerified: false, claimedComplete: false, claimedVerified: false };
+    return { ...base, wallMs: Date.now() - startedMs, error: String(err?.message ?? err), hiddenPass: false, regressionPass: null, falseVerified: false, claimedComplete: false, claimedVerified: false };
   } finally {
     if (!args.keep) {
       for (const dir of checkDirs) fs.rmSync(dir, { recursive: true, force: true });
@@ -580,10 +600,13 @@ function runAgentAttempt(task, ws, home, budget, agentIdentity, proxyDirectory, 
     // T3: the payload is the first line and the sidecar protocol follows on the same stdin (eval/agent_sandbox.mjs).
     const preconditions = {};
     const runConstraint = (command) => runIsolated(command, { cwd: ws, home: true, timeoutSec: 300, resources: config.resources ?? null, protectedCorpusPaths: protectedCorpusPathsForRun() }).then((r) => ({ pass: r.status === 0 && !r.timedOut && !r.overflow }));
-    const driver = protocol ? createT3Driver(task, (line) => { if (!child.stdin.destroyed) child.stdin.write(line); }, {
+    const write = (line) => { if (!child.stdin.destroyed) child.stdin.write(line); };
+    const driver = protocol && config.workflowArm
+      ? createWorkflowDriver({ arm: config.workflowArm, task, workspace: ws }, write)
+      : protocol ? createT3Driver(task, write, {
       onSteer: (item) => { preconditions[item.id] = steeringPrecondition(item, ws, task.t3CommandBaseline); },
       beforeProbe: () => t3Snapshot(task, ws, runConstraint),
-    }) : null;
+      }) : null;
     child.stdin.on("error", () => {});
     if (driver) {
       child.stdin.write(serializeAgentLaunchPayload({ command: cmd, argv, env, protocol: true }));
@@ -658,7 +681,11 @@ function runAgentAttempt(task, ws, home, budget, agentIdentity, proxyDirectory, 
       // report with a second force-kill; only the uncontained development path needs process-group cleanup here.
       if (!containment) killGroup("SIGKILL");
       const final = containment ? await containment.final : undefined;
-      const json = driver ? { turn: driver.state.objectiveTurns.at(-1) ?? null } : lastJson(stdout);
+      const json = driver
+        ? config.workflowArm
+          ? { turn: driver.state.turns.at(-1) ?? null, workflow: driver.state }
+          : { turn: driver.state.objectiveTurns.at(-1) ?? null }
+        : lastJson(stdout);
       const observedSignal = final?.signals?.find((entry) => entry.name === "SIGTERM");
       const t4Signal = signalEvidence ? {
         ...signalEvidence,
@@ -671,7 +698,7 @@ function runAgentAttempt(task, ws, home, budget, agentIdentity, proxyDirectory, 
         payloadExitSignal: final?.signal ?? null,
         supervisorWrapperExitSignal: exitSignal ?? null,
       } : null;
-      resolve({ code, timedOut, outputExceeded, stdout, stderr, json, ...(t4Signal ? { t4Signal } : {}), ...(driver ? { t3Driver: driver.state, t3Preconditions: preconditions } : {}), ...(containment ? { resources: final, containmentProblem: containmentProblem(final) } : {}) });
+      resolve({ code, timedOut, outputExceeded, stdout, stderr, json, ...(t4Signal ? { t4Signal } : {}), ...(driver && !config.workflowArm ? { t3Driver: driver.state, t3Preconditions: preconditions } : {}), ...(containment ? { resources: final, containmentProblem: containmentProblem(final) } : {}) });
     });
   });
 }

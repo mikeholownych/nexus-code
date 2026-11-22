@@ -8,6 +8,7 @@ export const EVAL_RUNTIME_FILES = [
   "eval/runner_integrity.mjs", "eval/runner_api.mjs", "eval/oracle.mjs", "eval/infra.mjs",
   "eval/workspace.mjs", "eval/resources.mjs", "eval/cgroup_supervisor.mjs", "eval/t3.mjs",
   "eval/hardened_check.mjs", "eval/check_phase.mjs", "eval/toolchain-versions.json", "eval/scan-compiler-exposure.mjs",
+  "eval/workflow_modes.mjs", "eval/workflow_driver.mjs", "eval/compare_workflows.mjs", "eval/score_workflows.mjs",
   "eval/evaluators/code/index.mjs",
   "eval/evaluators/code/syntax_ast.mjs",
   "eval/evaluators/code/build.mjs",

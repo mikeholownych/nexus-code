@@ -369,3 +369,35 @@ runs per task as many as the window allows, run-major, target 5.
 without it, so `eval/host/provision.sh` stops and `eval/host/validate.mjs` fails on a host where it is missing or unusable.
 Memory, process-count, CPU and total-disk limits come only from the resource contract above (`config.resources`); a run
 without one has the per-file cap but no cgroup budget for these commands.
+
+## PA-4 orchestration comparison (development protocol)
+
+`compare_workflows.mjs` evaluates the same versioned task set through five Nexus execution arms: ordinary serial
+execution; a parent that first requests three read-only subagent analyses; `/team full --independent-review`;
+`/goal`; and a sequential `/batch` graph using the existing operation specification. Every child run uses the existing
+`run.mjs` isolation, hidden evaluator, model proxy, and fresh workspace and HOME. Task, model, sampling, context/output
+limits, and time/step budgets are held from the input config. The tool rotates arm order per task and replicate,
+preserves every run directory and failure log, and writes a manifest before starting.
+
+```bash
+node eval/compare_workflows.mjs \
+  --config eval/configs/gateway-engineering-deep.json \
+  --dataset eval/datasets/core-v1 --split benchmark \
+  --runs 2 --out eval/out/pa4-comparison-<label>
+node eval/score_workflows.mjs eval/out/pa4-comparison-<label>
+```
+
+The comparison runner currently refuses qualification configs and is development evidence only. Any promotion decision
+requires a separately approved held-out comparison and independent acceptance review. `score_workflows.mjs` reports
+deterministic task success before wall time and inference requests; efficiency comparison requires at least one serial
+success, ten attempts per arm, no lower observed success, a no-worse 95% Wilson lower bound, and one complete matching
+model fingerprint across every arm. The fingerprint must include served-weight SHA-256 and server build; a model alias
+alone cannot qualify an efficiency comparison. Failed invocations remain in the rate and wall-time denominators. Wall time is end-to-end `eval/run.mjs` process time, including workspace
+preparation and deterministic post-run evaluation. Independent acceptance is not collected by this scorer. Runner token fields are reported with their original names and are
+not converted into exact token usage. Missing provider telemetry stays unavailable. Tool calls, committed context
+compactions, provider recovery attempts, observed (not inferred) tool-call counts, run failures, and verifier evidence are retained per task where the
+lower-level runner observes them; unknown or missing metrics are not filled with estimates. The evaluator removes each
+per-run HOME after it saves result receipts, so this protocol does not qualify restart/recovery behavior.
+The independent-agent arm is counted as a compliant attempt only when the sidecar observes exactly three successful
+`spawn_subagent` tool completions; instructing the model without observing completed child calls does not count as a successful trial.
+The batch reviewer role is not recorded as independent acceptance evidence; independent verdicts remain a separate review gate.

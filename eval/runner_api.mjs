@@ -38,8 +38,8 @@ export function createAgentLaunchPayload({ task, config, agentIdentity, home, bu
       env.NEXUS_TOOL_OUTPUT_MASK_TOKENS = String(config.toolOutputMaskTokens);
     }
     const contextArgs = nexusContextLimitArgs(config, limits.context);
-    if (task.tier === "T3") {
-      // T3 drives the sidecar, the operator channel that carries steering, with the same model, budgets and limits.
+    if (task.tier === "T3" || (config.workflowArm && config.workflowArm !== "serial")) {
+      // T3 and PA-4 comparisons drive the sidecar, the operator channel, with the same model, budgets and limits.
       const checkout = agentIdentity.argsPrefix[0] === path.join(ROOT, "cli/dist/index.js");
       // An installed package is <package>/bin/nexus with the sidecar at <package>/lib/cli/dist/sidecar.js.
       const packageDir = checkout ? null : path.dirname(path.dirname(fs.realpathSync(agentIdentity.command)));
