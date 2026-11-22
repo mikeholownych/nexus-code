@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_0163cmXBb1hRtzi23AcU82GG",
+  "agent_id": "a4fd67a2b94b11d36",
+  "subagent_type": "Plan",
+  "task_description": "Plan GV-2 audit export",
+  "token_usage": {
+    "input_tokens": 42,
+    "cache_creation_tokens": 208478,
+    "cache_read_tokens": 2414230,
+    "output_tokens": 31992,
+    "api_call_count": 21
+  },
+  "started_at": "2026-11-22T06:13:36.937041874Z",
+  "completed_at": "2026-11-22T06:19:10.584207757Z"
+}
