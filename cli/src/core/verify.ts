@@ -1047,6 +1047,15 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
       });
     if (baselineOpenedFiles) {
       for (const file of baselineOpenedFiles.keys()) {
+        // strace records directory opens (including `.` and `test`) as well
+        // as file opens. They describe test-runner discovery, not oracle data.
+        // Keep paths that cannot be inspected: inability to classify one must
+        // fail closed below rather than silently dropping it.
+        try {
+          if (fs.statSync(path.resolve(headDir, file)).isDirectory()) continue;
+        } catch {
+          // Retain the path as an oracle candidate when its type is unknown.
+        }
         if (!baselineProductFiles.has(file) && !trustedFiles.has(file)) oracleTestFiles.add(file);
         // Aggregate syscall counts cannot tell a test/helper read from a
         // candidate read of the same oracle. If test-side code can read files
@@ -1150,11 +1159,12 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
         // extraTestFileOpens above; a new test is not part of the baseline
         // oracle merely because the runner loaded it.
         if (isTestRunnerSourceFile(file)) return false;
-        try {
-          return !fs.statSync(path.resolve(headDir, file)).isDirectory();
-        } catch {
-          return true;
-        }
+        // Keep directory observations here: when changed product code can read
+        // the workspace, a new read of a test directory can reveal oracle
+        // filenames. Baseline directory discovery was excluded above; any
+        // candidate-only increase remains ambiguous and therefore lowers the
+        // verdict.
+        return true;
       }) : [];
       const allOracleReads = [...new Set([...reads, ...candidateOnlyWorkspaceReads])].sort();
       if (allOracleReads.length) {
