@@ -259,6 +259,12 @@ describe("verification config guard", () => {
     assert.equal(taskState.verificationConfigAttempts[0].decision, "blocked");
     assert.match(exported.markdown, /Verification configuration edits/);
     assert.match(exported.markdown, /blocked `write_file` Makefile/);
+    // GV-3: the export says whether the attempt log reads as it was written, and says so when it does not.
+    assert.match(exported.markdown, /Record integrity: chain intact \(1 record\)\./);
+    const altered = JSON.parse(JSON.stringify(state));
+    altered.verificationConfigAttempts[0].decision = "approved";
+    const tampered = buildSessionExport({} as any, { ...altered, id: "s", workspace: repo, model: "m" } as any);
+    assert.match(tampered.markdown, /Record integrity: CHAIN BROKEN at position 1 of 1: record 0 was changed after it was written\./);
   });
 
   test("creating a new test file is free; creating new config, CI, verifier or policy files is gated", async () => {
