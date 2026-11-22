@@ -1,5 +1,7 @@
 # Sidecar protocol schema
 
+The protocol reference for client authors is [`../PROTOCOL.md`](../PROTOCOL.md): transport, negotiation, every command and event, error codes and compatibility rules. This page is about the schema file and how it is kept current.
+
 `sidecar-v1.schema.json` is the JSON Schema (draft 2020-12) of the Nexus sidecar protocol, version 1: the newline-delimited JSON a client exchanges with the Node sidecar. `$defs.SidecarEvent` is every message the sidecar sends, `$defs.SidecarCommand` every message a client sends. Each is a `oneOf` over the message variants, told apart by the constant `type`; every message also carries `v`, the protocol version.
 
 The file is generated from the types in `cli/src/protocol.ts` by the TypeScript type checker. Do not edit it by hand: change the types, then regenerate.
@@ -29,6 +31,12 @@ A tuple (`ReceiptRow`) is the exception: its length is fixed, as in the type.
 - JSDoc comments on types and properties become `description`.
 - Definitions, properties, `required` lists, enum values and variants are sorted, so the output is the same on every run.
 - A type with no JSON form (a function, an enum, a tuple with optional elements) stops the generator with an error naming the property.
+
+## Samples and recordings derived from the schema
+
+- `cli/test/fixtures/protocol_v1_schema_samples.jsonl` holds a minimal and a full sample of every message, generated from the schema by `node cli/scripts/gen_protocol_samples.mjs` (`--check` exits 1 when it is stale). The Rust client's tests parse the event samples, so regenerate it after regenerating the schema.
+- `cli/test/fixtures/protocol_v1_rust_commands.jsonl` holds the lines the Rust client serializes. A Rust test keeps it equal to the client's output (`NEXUS_UPDATE_PROTOCOL_FIXTURES=1 cargo test --bin nexus-tui rust_commands` rewrites it); `cli/test/protocol_parity.test.ts` validates it against the schema.
+- `cli/test/fixtures/wire/*.json` are recorded sessions replayed against the real sidecar by `cli/test/protocol_wire.test.ts`. `NEXUS_WIRE_RECORD=1` on that test rewrites them from the sidecar's real output; `cli/test/helpers/wire_fixture.ts` documents the format.
 
 ## The `nexus run --json` document
 
