@@ -50,6 +50,10 @@ import {
   TOOL_PREVIEW_LINES,
   MAX_TEXT_FIELD,
   PROTOCOL_VERSION,
+  PROTOCOL_MIN,
+  PROTOCOL_MAX,
+  SIDECAR_CAPABILITIES,
+  EXPERIMENTAL_FEATURES,
   SteerStatus,
   ProtocolError,
   SidecarCommand,
@@ -84,6 +88,8 @@ export interface SidecarOptions {
   resume?: string;
   /** Prompt history file; defaults to ~/.nexus_history. */
   historyFile?: string;
+  /** Experimental features this sidecar offers; defaults to EXPERIMENTAL_FEATURES (tests inject a list). */
+  experimentalFeatures?: readonly string[];
 }
 
 /** Drives one ApplicationCore from protocol commands and reports its activity as protocol events. */
@@ -125,6 +131,10 @@ export class SidecarServer {
   private providerProblem?: StartupEndpointProblem;
   /** The start-up probe in flight (at most 3 s); a prompt waits for it so it is gated like any later one. */
   private startupProbe: Promise<void> = Promise.resolve();
+  /** Experimental features this sidecar offers, sorted. */
+  private readonly experimentalOffered: readonly string[];
+  /** What `initialize` settled for this connection; undefined until one succeeds (a client need not send it). */
+  private negotiated?: { protocol: number; experimental: readonly string[] };
 
   constructor(options: SidecarOptions) {
     this.app = options.app;
@@ -140,10 +150,14 @@ export class SidecarServer {
     // Outside a turn (an operator /compact), a commit still writes this session's record.
     this.app.getAgent().setProgressListener(() => this.saveSession(this.sessionTitle));
     this.history = loadPromptHistory(options.historyFile ?? path.join(os.homedir(), ".nexus_history"));
+    this.experimentalOffered = [...new Set(options.experimentalFeatures ?? EXPERIMENTAL_FEATURES)].sort();
   }
 
   start(): void {
-    this.emit({ type: "hello", protocol: PROTOCOL_VERSION, pid: process.pid, commands: slashCatalog() });
+    this.emit({
+      type: "hello", protocol: PROTOCOL_VERSION, pid: process.pid, commands: slashCatalog(),
+      protocol_min: PROTOCOL_MIN, protocol_max: PROTOCOL_MAX, capabilities: [...SIDECAR_CAPABILITIES], experimental: [...this.experimentalOffered],
+    });
     let resumed: { ok: boolean; message: string } | undefined;
     try {
       resumed = this.resume ? this.resumeSession(this.resume) : undefined;
@@ -183,6 +197,9 @@ export class SidecarServer {
       return;
     }
     switch (command.type) {
+      case "initialize":
+        this.initialize(command.id, command.protocol_min ?? PROTOCOL_VERSION, command.protocol_max ?? PROTOCOL_VERSION, command.experimental === true);
+        return;
       case "prompt.submit":
         this.submit(command.id, command.text);
         return;
@@ -263,6 +280,44 @@ export class SidecarServer {
         await this.shutdown();
         return;
     }
+  }
+
+  /**
+   * Negotiation for this connection. It only records connection state, so it is answered at any time, a running turn
+   * included. Rule: a connection negotiates once. After an `initialized` answer every later `initialize` is refused
+   * with BAD_REQUEST, because a version or an experimental set that changed mid-connection would leave both sides
+   * unsure which rules a message in flight was written under. An `initialize` refused with UNSUPPORTED_PROTOCOL
+   * settled nothing, so the client may send another; the sidecar keeps serving either way.
+   */
+  private initialize(id: string, clientMin: number, clientMax: number, experimental: boolean): void {
+    if (this.negotiated) {
+      this.emit({ type: "error", id, code: "BAD_REQUEST", message: `initialize was already answered on this connection (protocol ${this.negotiated.protocol}); a connection negotiates once.` });
+      return;
+    }
+    const protocol = Math.min(clientMax, PROTOCOL_MAX);
+    if (protocol < Math.max(clientMin, PROTOCOL_MIN)) {
+      this.emit({
+        type: "error", id, code: "UNSUPPORTED_PROTOCOL",
+        message: `No common protocol version: the client speaks ${clientMin} to ${clientMax}, this sidecar speaks ${PROTOCOL_MIN} to ${PROTOCOL_MAX}.`,
+      });
+      return;
+    }
+    this.negotiated = { protocol, experimental: experimental ? this.experimentalOffered : [] };
+    this.emit({ type: "initialized", id, protocol, capabilities: [...SIDECAR_CAPABILITIES], experimental: [...this.negotiated.experimental] });
+  }
+
+  /**
+   * The gate every experimental feature's handler calls first: true when this connection enabled `name` (it sent
+   * `initialize` with `experimental: true` and this sidecar offers `name`). Otherwise it answers `id` with
+   * EXPERIMENTAL_DISABLED and returns false, and the handler does nothing.
+   */
+  requireExperimental(name: string, id?: string): boolean {
+    if (this.negotiated?.experimental.includes(name)) return true;
+    const message = this.experimentalOffered.includes(name)
+      ? `${name} is experimental: send initialize with experimental: true before using it.`
+      : `${name} is not an experimental feature this sidecar offers.`;
+    this.emit({ type: "error", ...(id ? { id } : {}), code: "EXPERIMENTAL_DISABLED", message });
+    return false;
   }
 
   /** Sign-ins in progress, by request id (provider.cancel stops one). */

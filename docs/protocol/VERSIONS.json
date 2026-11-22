@@ -3,5 +3,10 @@
     "protocol": 1,
     "schemaSha256": "b2747ba8d5d56e8450df9c161b1c773b7beefd5c79ccd75fa07dfccda169b66a",
     "note": "First published schema of protocol v1, generated from cli/src/protocol.ts as it stood on release/v1.3.0. No wire change."
+  },
+  {
+    "protocol": 1,
+    "schemaSha256": "ce28a2f81e914a2ec675872b4fb96ef14bc19afb827126208abaaa6d83633fc9",
+    "note": "Capability negotiation, additive, so the version stays 1. hello gains the optional fields protocol_min, protocol_max, capabilities and experimental; the new command initialize is answered by the new event initialized; error codes UNSUPPORTED_PROTOCOL and EXPERIMENTAL_DISABLED are added. An older client ignores the new hello fields and never sends initialize, so it sees what it saw before; a newer client that finds no range in hello falls back to the exact-version check, and one that sends initialize to an older sidecar gets BAD_REQUEST (unknown message type) and carries on without negotiation. No existing field or message changed meaning."
   }
 ]

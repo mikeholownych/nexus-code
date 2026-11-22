@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crate::models::{AuthInfo, Connect, ConnectIntent, Fetch, Picker, PickerIntent, Step};
-use crate::protocol::{Catalog, Command, Event, PROTOCOL_VERSION, ReceiptSection, Review, Secret, SlashSpec};
+use crate::protocol::{Catalog, Command, Event, ReceiptSection, Review, Secret, SlashSpec, hello_mismatch};
 use crate::review::{ReviewLine, review_lines};
 use crate::slash::{self, Invocation};
 
@@ -929,15 +929,19 @@ impl LiveState {
             return;
         }
         match event {
-            Event::Hello { protocol, commands } if protocol == PROTOCOL_VERSION => {
-                self.commands = commands;
-                self.link = Link::Ready;
+            // Compatible by range overlap when the sidecar announces a range, by exact version when it is older.
+            // This view does not send `initialize`: a sidecar that leaves it out keeps protocol 1 as first published.
+            Event::Hello { protocol, commands, protocol_min, protocol_max, .. } => {
+                match hello_mismatch(protocol, protocol_min, protocol_max) {
+                    None => {
+                        self.commands = commands;
+                        self.link = Link::Ready;
+                    }
+                    Some(reason) => self.fail(reason, None, Vec::new()),
+                }
             }
-            Event::Hello { protocol, .. } => self.fail(
-                format!("The agent sidecar speaks protocol {protocol}; this view needs protocol {PROTOCOL_VERSION}."),
-                None,
-                Vec::new(),
-            ),
+            // Never requested (see above); a stray one changes nothing.
+            Event::Initialized { .. } => {}
             Event::SessionState { workspace_name, model, mode, git, busy, session, posture, read_only, context_tokens, context_limit, endpoint_kind } => {
                 self.session = Session {
                     session_id: session,
@@ -4158,10 +4162,58 @@ mod tests {
         state.apply(Event::Hello {
             protocol: 2,
             commands: Vec::new(),
+            protocol_min: None,
+            protocol_max: None,
+            capabilities: Vec::new(),
+            experimental: Vec::new(),
         });
         assert!(
             matches!(&state.link, Link::Crashed { reason, .. } if reason.contains("protocol 2"))
         );
+    }
+
+    #[test]
+    fn an_older_sidecar_without_a_range_is_matched_exactly_as_before() {
+        let mut state = LiveState::new();
+        state.apply(ev(r#"{"v":1,"type":"hello","protocol":1,"pid":1}"#));
+        assert!(matches!(state.link, Link::Ready));
+        let mut state = LiveState::new();
+        state.apply(ev(r#"{"v":1,"type":"hello","protocol":2,"pid":1}"#));
+        assert!(matches!(
+            &state.link,
+            Link::Crashed { reason, .. }
+                if reason == "The agent sidecar speaks protocol 2; this view needs protocol 1."
+        ));
+    }
+
+    #[test]
+    fn a_sidecar_range_that_includes_this_client_is_accepted_and_one_that_excludes_it_fails() {
+        let mut state = LiveState::new();
+        state.apply(ev(
+            r#"{"v":1,"type":"hello","protocol":1,"pid":1,"commands":[{"name":"diff","usage":"/diff","summary":"s"}],"protocol_min":1,"protocol_max":2,"capabilities":["steer"],"experimental":[]}"#,
+        ));
+        assert!(matches!(state.link, Link::Ready));
+        assert_eq!(state.commands.len(), 1);
+        let mut state = LiveState::new();
+        state.apply(ev(
+            r#"{"v":1,"type":"hello","protocol":2,"pid":1,"protocol_min":2,"protocol_max":3,"capabilities":[],"experimental":[]}"#,
+        ));
+        assert!(matches!(
+            &state.link,
+            Link::Crashed { reason, .. }
+                if reason == "The agent sidecar speaks protocol 2 to 3; this view needs protocol 1 to 1."
+        ));
+    }
+
+    #[test]
+    fn an_initialized_event_this_view_never_asked_for_changes_nothing() {
+        let mut state = ready();
+        let before = state.transcript.clone();
+        state.apply(ev(
+            r#"{"v":1,"type":"initialized","id":"i1","protocol":1,"capabilities":["steer"],"experimental":[]}"#,
+        ));
+        assert!(matches!(state.link, Link::Ready));
+        assert_eq!(state.transcript, before);
     }
 
     const IDLE_STATE: &str = r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"auto","git":null,"busy":false}"#;
@@ -4177,6 +4229,10 @@ mod tests {
                     summary: format!("{name} summary"),
                 })
                 .collect(),
+            protocol_min: None,
+            protocol_max: None,
+            capabilities: Vec::new(),
+            experimental: Vec::new(),
         }
     }
 
