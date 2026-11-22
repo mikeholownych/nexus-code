@@ -57,7 +57,7 @@ import { advertisementChanged, describeCapabilities, resolveLimits, toolHeadroom
 import { snapshotModel } from "./core/models_snapshot.js";
 import { ProviderRecoveryController, RecoveryCancelled, RecoveryClock, RecoveryHooks, RecoveryPolicy, realRecoveryClock, recoveryPolicyFromEnv, startupProblemWarning, startupEndpointProblems, type StartupEndpointProblem } from "./core/provider_recovery.js";
 import { LocalTraceRecorder, type SpanHandle, type TraceAttributes, type TraceStatus } from "./core/trace.js";
-import { ObjectiveLedger, SteeringConflict, READ_OBJECTIVE_CAPABILITY, REQUIREMENTS_CAPABILITY, STEERING_PREFIX, invalidateVerified, requirementDone, blockedRequirements, gatingRequirements, isNewObjective, ledgerNeedsPinning, openRequirements, priorAttempt, queueSteering, steeringNegations, recordSteeringConflict, resolveSteeringConflict, settleSteeringConflicts, recoveryInput, renderPinnedLedger, missingGatingRequirements, PINNED_LEDGER_PREFIX, renderRecoveryContext, trackingOf } from "./core/objective.js";
+import { ObjectiveLedger, SteeringConflict, LEDGER_VERSION, READ_OBJECTIVE_CAPABILITY, REQUIREMENTS_CAPABILITY, STEERING_PREFIX, createLedger, invalidateVerified, requirementDone, blockedRequirements, gatingRequirements, isNewObjective, ledgerNeedsPinning, openRequirements, priorAttempt, queueSteering, steeringNegations, recordSteeringConflict, resolveSteeringConflict, settleSteeringConflicts, recoveryInput, renderPinnedLedger, missingGatingRequirements, PINNED_LEDGER_PREFIX, renderRecoveryContext, trackingOf } from "./core/objective.js";
 import { maskToolOutputs, maskThresholdFromEnv, READ_TOOL_OUTPUT_CAPABILITY } from "./core/tool_output_mask.js";
 import { ELIDED_FINDINGS_PREFIX, READ_FINDINGS_CAPABILITY, READ_ARCHIVE_CAPABILITY, readArchive, condenseFinding, elidedFindingsNote, findingId, incompleteOutputNotice, indexFinding, isCondensedFinding } from "./core/findings.js";
 import { FILE_EDIT_TOOLS, snapshot } from "./file_diff.js";
@@ -2015,6 +2015,36 @@ export class AutonomousAgent {
 
   public getObjective(): ObjectiveLedger | undefined {
     return this.objective;
+  }
+
+  /**
+   * Seeds a fresh durable role task with its parent goal's acceptance ledger before its first turn. This preserves the
+   * normal constructor-captured workspace baseline; restoring a session here would deliberately invalidate it.
+   */
+  public initializeFreshObjectiveLedger(ledger: ObjectiveLedger): void {
+    if (!this.durable || this.objective || this.messages.length !== 1 || this.messages[0]?.role !== "system") {
+      throw new Error("an objective ledger can only seed a fresh durable task before its first turn");
+    }
+    if (
+      ledger.version !== LEDGER_VERSION ||
+      typeof ledger.objective !== "string" || !ledger.objective.trim() ||
+      !Array.isArray(ledger.requirements) ||
+      createLedger(ledger.objective, ledger.startedAt).objectiveSha256 !== ledger.objectiveSha256
+    ) {
+      throw new Error("cannot seed a task with an invalid objective ledger");
+    }
+    const seeded = structuredClone(ledger);
+    this.objective = seeded;
+    try {
+      this.checkpointDurableState("parent objective ledger seeded before first turn");
+      const persisted = this.stateManager.loadTaskState(this.currentTaskId).objective;
+      if (!persisted || JSON.stringify(persisted) !== JSON.stringify(seeded)) {
+        throw new Error("the seeded objective ledger was not durably persisted");
+      }
+    } catch (error) {
+      this.objective = undefined;
+      throw error;
+    }
   }
 
   /** What `prompt` would do to the tracked objective if submitted now (for the host's notice before the turn). */
