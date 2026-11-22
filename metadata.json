@@ -1,0 +1,59 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M80HV1Z34WJG2P4ZXQ29TQMA",
+  "strategy": "manual-commit",
+  "branch": "v1/pf1b-capability-negotiation",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cli/src/protocol.ts",
+    "cli/src/sidecar.ts",
+    "cli/test/fixtures/protocol_v1_golden.jsonl",
+    "cli/test/protocol.test.ts",
+    "cli/test/protocol_golden.test.ts",
+    "cli/test/protocol_schema.test.ts",
+    "cli/test/sidecar.test.ts",
+    "cli/test/sidecar_initialize.test.ts",
+    "cli/test/sidecar_projection.test.ts",
+    "core/src/bin/nexus_tui/live_state.rs",
+    "core/src/bin/nexus_tui/protocol.rs",
+    "docs/protocol/VERSIONS.json",
+    "docs/protocol/sidecar-v1.schema.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 11654,
+    "cache_read_tokens": 3711914,
+    "output_tokens": 4215,
+    "api_call_count": 8,
+    "subagent_tokens": {
+      "input_tokens": 40,
+      "cache_creation_tokens": 79168,
+      "cache_read_tokens": 2244760,
+      "output_tokens": 41566,
+      "api_call_count": 20
+    }
+  },
+  "redaction": {
+    "replacements": 551,
+    "layers": {
+      "betterleaks": 2,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 43,
+      "credentialed_uri": 3,
+      "entropy": 505,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
