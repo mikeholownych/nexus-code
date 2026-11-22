@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_011PzCDnrB453PUWjS9v39DU",
+  "agent_id": "a90600ff635660533",
+  "subagent_type": "general-purpose",
+  "task_description": "LS-1 S4+S5 LSP lifecycle output",
+  "token_usage": {
+    "input_tokens": 108,
+    "cache_creation_tokens": 352249,
+    "cache_read_tokens": 13907328,
+    "output_tokens": 161678,
+    "api_call_count": 54
+  },
+  "started_at": "2026-11-22T16:58:46.010669073Z",
+  "completed_at": "2026-11-22T17:38:50.533556476Z"
+}
