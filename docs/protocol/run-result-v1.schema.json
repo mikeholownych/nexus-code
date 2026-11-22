@@ -1117,6 +1117,7 @@
         "STEP_PAUSED",
         "TIME_BUDGET_EXHAUSTED",
         "TOOL_CALL_LOOP",
+        "TOOL_INVOCATION_BUDGET_EXHAUSTED",
         "UNHANDLED_ERROR",
         "VERIFICATION_NOT_RUN",
         "VERIFIER_FAILED",
@@ -1150,6 +1151,9 @@
           "properties": {
             "cumulativeSteps": {
               "description": "Steps run on this objective across all its turns (observability; never a limit).",
+              "type": "number"
+            },
+            "maxToolInvocations": {
               "type": "number"
             },
             "repeated": {
@@ -1194,6 +1198,14 @@
             },
             "stopReason": {
               "type": "string"
+            },
+            "toolInvocationHistoryComplete": {
+              "description": "False means earlier dispatches predate this counter or the persisted counter was malformed.",
+              "type": "boolean"
+            },
+            "toolInvocations": {
+              "description": "Tool dispatches charged to this objective and the fixed ceiling.",
+              "type": "number"
             }
           },
           "required": [
