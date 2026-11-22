@@ -44,8 +44,9 @@ test("a fresh durable role task stores its parent ledger without invalidating it
   process.env.HOME = home;
   process.env.XDG_CONFIG_HOME = path.join(home, ".config");
   process.env.NEXUS_STATE_DIR = path.join(home, ".nexus");
+  let agent: AutonomousAgent | undefined;
   try {
-    const agent = new AutonomousAgent(f.config, 1, { durable: true, role: "implementer", unitId: "implement" });
+    agent = new AutonomousAgent(f.config, 1, { durable: true, role: "implementer", unitId: "implement" });
     const parent = createLedger("Implement a feature and verify its acceptance requirement.");
     assert.equal(agent.hasUnverifiedChanges(), false);
     agent.initializeFreshObjectiveLedger(parent);
@@ -54,6 +55,7 @@ test("a fresh durable role task stores its parent ledger without invalidating it
     assert.equal(agent.hasUnverifiedChanges(), false, "fresh seeding preserves the normal workspace baseline");
     assert.throws(() => agent.initializeFreshObjectiveLedger(parent), /fresh durable task/);
   } finally {
+    agent?.shutdown();
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
