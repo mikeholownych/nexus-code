@@ -1,0 +1,1 @@
+PR #715 should not merge as it stands. Its default nexus verify can still be forged by the change it checks, and it records that as a documented limit instead of fixing it.

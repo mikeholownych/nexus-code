@@ -1,0 +1,55 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M822CA1H29SX3DXR34J5XYQN",
+  "session_id": "01a1f54f-2cb2-7201-ad27-acf2d9bbd90e",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-22T16:46:13.710982647Z",
+  "branch": "codex/pa4-comparative-evaluation",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "docs/v1.3.0/PA4_COMPARATIVE_EVALUATION.md",
+    "eval/README.md",
+    "eval/compare_workflows.mjs",
+    "eval/score_workflows.mjs",
+    "eval/score_workflows.test.mjs"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6-luna",
+  "turn_id": "df4a6e85d95c",
+  "checkpoint_transcript_start": 61969,
+  "transcript_lines_at_start": 61969,
+  "compact_transcript_start": 9186,
+  "token_usage": {
+    "input_tokens": 89919,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 9059968,
+    "output_tokens": 18853,
+    "api_call_count": 58,
+    "subagent_tokens": {
+      "input_tokens": 24407,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 2702976,
+      "output_tokens": 5693,
+      "api_call_count": 12
+    },
+    "subagent_tokens_complete": true
+  },
+  "redaction": {
+    "replacements": 1608,
+    "layers": {
+      "betterleaks": 477,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 71,
+      "credentialed_uri": 68,
+      "entropy": 1218,
+      "key_context": 0,
+      "provider_token": 12,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 46
+  }
+}
