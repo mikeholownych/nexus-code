@@ -18,5 +18,10 @@
     "protocol": 1,
     "schemaSha256": "8db364275bdc319ad41f8f6896a9e4f68a79555a8b3b1999194c3118d216c4b5",
     "note": "Clarify verifier input binding in the protocol documentation. Description-only schema change; the wire shape and meaning are unchanged, so protocol stays 1."
+  },
+  {
+    "protocol": 1,
+    "schemaSha256": "2417ecafee1ba9f5a6d953caf063dac8b48ae6142d84a8260ad12c48f9540809",
+    "note": "Add additive history tool-result metadata for complete ACP session/load replay; protocol stays 1."
   }
 ]

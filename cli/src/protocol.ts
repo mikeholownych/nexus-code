@@ -11,6 +11,8 @@ import type { EvidenceStatus, ReceiptSection } from "./evidence.js";
 import type { Catalog } from "./model_catalog.js";
 
 export const PROTOCOL_VERSION = 1;
+/** Maximum ACP history pages emitted for one session/load replay. */
+export const SIDECAR_MAX_HISTORY_PAGES = 1024;
 /**
  * The inclusive range of protocol versions this sidecar can speak: `hello` announces it, `initialize` negotiates
  * inside it, and `parseCommand` accepts a message whose `v` lies in it. A version bump changes this pair (and
@@ -88,9 +90,11 @@ export type SteerStatus = "held" | "queued" | "applied" | "deferred" | "cancelle
 
 /** One entry of a resumed conversation: a message, a tool the agent called, or the last turn's outcome. */
 export interface HistoryEntry {
-  role: "user" | "assistant" | "steering" | "tool" | "outcome";
+  role: "user" | "assistant" | "steering" | "tool" | "tool_result" | "outcome";
   text: string;
   tool?: string;
+  toolCallId?: string;
+  status?: "pending" | "completed" | "failed";
   heading?: string;
   turn?: TurnResult;
 }
@@ -220,8 +224,8 @@ export type SidecarEvent =
    * client shows `text` as it always did.
    */
   | { type: "notice"; text: string; key?: string; detail?: string }
-  /** A resumed session's recent conversation (user and assistant text only), oldest first; `total` counts all of it. */
-  | { type: "history"; session: string; total: number; messages: HistoryEntry[] }
+  /** A resumed session's retained transcript, oldest first. ACP requests use bounded pages; terminal clients retain one window. */
+  | { type: "history"; session: string; total: number; page?: number; pages?: number; messages: HistoryEntry[]; error?: string }
   | {
       type: "tool.detail";
       id: string;

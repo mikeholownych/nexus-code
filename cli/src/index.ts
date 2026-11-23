@@ -41,6 +41,7 @@ import { streamEventSink, streamObserver } from "./stream_json.js";
 import { RUN_RESULT_SCHEMA_VERSION, resolveRunTask, runExitCode, runJsonResult } from "./run_contract.js";
 import { VERIFY_RESULT_SCHEMA_VERSION, verifyExitCode, type VerifyJsonError } from "./verify_contract.js";
 import { VerifyInterrupted, VerifyUsageError, renderVerifyText, verifyChange, type VerifySandboxRequest } from "./core/verify.js";
+import { runAcpStdio } from "./acp_stdio.js";
 
 function collectAnswer(value: string, previous: string[] = []): string[] {
   return [...previous, value];
@@ -1496,6 +1497,15 @@ program
   .action(async (options: any) => {
     const { uninstallCommand } = await import("./uninstall.js");
     uninstallCommand(options);
+  });
+
+program
+  .command("acp")
+  .description("Serve the Agent Client Protocol over stdio")
+  .action(() => {
+    const config = buildConfig(program.opts());
+    config.surface = "tui";
+    runAcpStdio({ config, version: getBuildIdentity().string });
   });
 
 registerOperationCommands(program);

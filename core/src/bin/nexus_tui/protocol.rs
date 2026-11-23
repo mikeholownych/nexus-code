@@ -1414,6 +1414,9 @@ mod tests {
         ("file.diff", &["turn_id"]),
         // The pid of the sidecar is the child this client spawned.
         ("hello", &["pid"]),
+        // ACP session/load uses these fields for paginated replay and fail-closed errors; the terminal client's
+        // legacy resume path sends one recent-history event and does not consume ACP replay metadata.
+        ("history", &["error", "page", "pages"]),
         ("stream.stall", &["turn_id"]),
         // The record is found again by the request `id`; the transcript already holds what the call was.
         ("tool.detail", &["evidence", "subject", "tool"]),
