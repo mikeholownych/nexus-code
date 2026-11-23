@@ -208,8 +208,10 @@ export interface VerificationEvidence {
   independent?: boolean;
   independenceDetail?: string;
   /**
-   * False when the workspace-resolved verifier definition could not be bound before the work (for example a
-   * node_modules tree under `npm test`), so no pass can be independent evidence. The turn is then at most REGRESSION_FREE.
+   * False when the verifier's inputs could not be bound to the tree that was committed: either its workspace-resolved
+   * definition was unbindable (for example a node_modules tree under `npm test`) or test files changed while it ran
+   * (including a test that restored itself before exit). No such pass can be independent evidence; the turn is then at
+   * most REGRESSION_FREE, and independenceDetail names which binding failed.
    */
   definitionBound?: false;
   /** Deadline the verifier was given, recorded when it timed out. */

@@ -702,6 +702,13 @@
           "description": "The process ran inside the sandbox named in `sandbox.engine`. Always written; absent only in a document from before `--sandbox` existed (the run was not sandboxed).",
           "type": "boolean"
         },
+        "testFixtureReads": {
+          "description": "Test-oracle files or candidate-only workspace paths opened/observed more often than by the base run. Such a pass is not independent; paths can include test-support data, not only test files.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "timedOut": {
           "type": "boolean"
         }

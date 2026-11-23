@@ -11,7 +11,7 @@ import { formatDiagnosticHints } from "../diagnostics.js";
 import { captureVerificationState, recordVerificationIfEligible } from "../worktrunk/verification.js";
 import { runTestSuiteWithExecutor, discoverVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand } from "../tester.js";
 import { TOOL_GROUPS } from "./tool_groups.js";
-import { snapshotVerifierDefinitionWithReason, requiresWorkspaceVerifierDefinitionBinding, trustedDeliverablesFromBaseline, testsChangedSince, verifierDefinitionChangedSince, verifierDefinitionMatchesSnapshot, tddRedTestsMatchSnapshot, type Independence } from "./independent_check.js";
+import { readWorkspaceTestSnapshot, snapshotVerifierDefinitionWithReason, requiresWorkspaceVerifierDefinitionBinding, trustedDeliverablesFromBaseline, testsChangedSince, verifierDefinitionChangedSince, verifierDefinitionMatchesSnapshot, tddRedTestsMatchSnapshot, type Independence } from "./independent_check.js";
 import { VerificationEvidence } from "./turn.js";
 import { createHash } from "node:crypto";
 import { unmetObligationsMessage } from "./regression_obligations.js";
@@ -29,6 +29,30 @@ import { isSpecialistRole, missingSpecialistInputs, specialistInputsProblem } fr
 
 function sha256Digest(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
+export interface TestSnapshotDigest {
+  digest: string | null;
+  /** The honest reason a digest could not be taken, distinct from a digest that changed between two reads. */
+  problem?: string;
+}
+
+/**
+ * A digest of every discoverable test file as it stands at one moment, hashed as raw bytes. The verifier binding below
+ * compares the digest taken before the verifier with one taken after it, so a test that rewrites itself while it runs
+ * - even one restored to its base content before exit - cannot be judged on its post-run content. An incomplete
+ * discovery or unreadable file fails closed with the reason why, not a claim that the files changed.
+ */
+export function testSnapshotDigest(workspace: string): TestSnapshotDigest {
+  const snapshot = readWorkspaceTestSnapshot(workspace);
+  if (!snapshot.files) return { digest: null, problem: snapshot.problem };
+  const hash = createHash("sha256");
+  const length = Buffer.alloc(4);
+  for (const [file, bytes] of [...snapshot.files].sort(([a], [b]) => a.localeCompare(b))) {
+    length.writeUInt32BE(bytes.length);
+    hash.update(file).update("\0").update(length).update(bytes);
+  }
+  return { digest: hash.digest("hex") };
 }
 
 export function setupSpineHandlersImpl(this: any): void {
@@ -224,12 +248,26 @@ export function setupSpineHandlersImpl(this: any): void {
           const deadlineSecs = this.config.verifierTimeoutSecs ?? DEFAULT_VERIFIER_TIMEOUT_SECS;
           this.activity("verifying", { tool: verifierCommand });
           verificationStateBefore = this.isRecordableWorktree() && !this.config.dryRun ? captureVerificationState(this.config.workspace) : undefined;
+          const testsBeforeVerifier = testSnapshotDigest(this.config.workspace);
           const verifierStartedAt = Date.now();
           const testRes = await runTestSuiteWithExecutor(
             this.config.workspace,
             (command) => this.bridge.executeTool("run_command", { command, timeout_secs: deadlineSecs }),
             verifierCommand
           );
+          const testsAfterVerifier = testSnapshotDigest(this.config.workspace);
+          const snapshotProblem = testsBeforeVerifier.problem ?? testsAfterVerifier.problem;
+          const testsMutatedDuringVerifier = testsBeforeVerifier.digest !== null && testsAfterVerifier.digest !== null && testsBeforeVerifier.digest !== testsAfterVerifier.digest;
+          // A command that can outlive the call may write after the second digest too. Fail closed rather than
+          // pretending that two digests bracket the whole interval in which the oracle could have been changed.
+          const backgroundCommands = this.turnBackgroundCommands > 0;
+          const verifierInputUnbound = snapshotProblem !== undefined || testsMutatedDuringVerifier || backgroundCommands;
+          const inputMutationDetail = snapshotProblem
+            ?? (backgroundCommands
+              ? "a command in this turn can outlive the call and change workspace files while the verifier runs, so its pass cannot be bound to the tree that was committed"
+              : testsMutatedDuringVerifier
+                ? "test files changed while the verifier ran (including a test that restored itself before exit), so its pass cannot be bound to the tree that was committed"
+                : undefined);
           // Configured or discovered, a verifier is evidence about the change only when its run shows tests that
           // executed and cover the changed files.
           hasExecuted = hasExecutedTests(testRes.rawOutput || "");
@@ -239,7 +277,7 @@ export function setupSpineHandlersImpl(this: any): void {
           // candidate-controlled tests. Only a verifier definition and test snapshot captured
           // before the current task's edits can bind workspace changes.
           const configuredTestsStable = source !== "configured" || !baselineTestsChanged;
-          isDeliverableBound = (!this.verificationBaselineInvalidated && hasExecuted && configuredTestsStable && isVerifierDeliverableBound(
+          isDeliverableBound = (!this.verificationBaselineInvalidated && !verifierInputUnbound && hasExecuted && configuredTestsStable && isVerifierDeliverableBound(
             this.config.workspace,
             Array.from(this.modifiedFiles),
             verifierCommand,
@@ -264,8 +302,9 @@ export function setupSpineHandlersImpl(this: any): void {
           const testsAndTypesPass = testRes.success && !typecheckBlock;
           // A discovered verifier's pass makes the change VERIFIED only on independent evidence (fail-before /
           // pass-after on tests the change did not write); the operator's configured verifier is their own check.
-          const independence: Independence | undefined = unboundDetail
-            ? { independent: false, detail: unboundDetail }
+          const bindingDetail = unboundDetail ?? inputMutationDetail;
+          const independence: Independence | undefined = bindingDetail
+            ? { independent: false, detail: bindingDetail }
             : source === "discovered" && testsAndTypesPass && isDeliverableBound ? await this.judgeIndependence(verifierCommand, deadlineSecs, onConfirm) : undefined;
           const evidence: VerificationEvidence = {
             status: testsAndTypesPass ? "PASSED" : testRes.timedOut ? "TIMED_OUT" : "FAILED",
@@ -275,7 +314,7 @@ export function setupSpineHandlersImpl(this: any): void {
             hasExecutedTests: hasExecuted,
             ...(typecheck ? { typecheck } : {}),
             isDeliverableBound,
-            ...(unboundDetail ? { definitionBound: false } : {}),
+            ...(bindingDetail ? { definitionBound: false } : {}),
             ...(independence ? { independent: independence.independent, independenceDetail: independence.detail } : {}),
             ...(testRes.timedOut ? { deadlineSecs } : {}),
             outputSha256: createHash("sha256").update(testRes.rawOutput || "").digest("hex"),

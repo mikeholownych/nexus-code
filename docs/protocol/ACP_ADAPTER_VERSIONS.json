@@ -1,0 +1,7 @@
+[
+  {
+    "schema_version": 1,
+    "schemaSha256": "178eaba3c51574e25f72e22a41f79a64ca8e1ed98417df2c8a7fcbfd69c789b6",
+    "note": "First published schema of the messages of the ACP adapter (AC-1), generated from AcpAdapterDocument in cli/src/acp/types.ts on release/v1.3.0: what a client may send that Nexus acts on (initialize, session/new, session/load, session/prompt, session/cancel, $/cancel_request, _nexus/receipt/get, and the reply to session/request_permission) and what Nexus sends (results, errors, session/update with agent_message_chunk, user_message_chunk, tool_call, tool_call_update and session_info_update, and session/request_permission). It describes Nexus's subset of the Agent Client Protocol version 1 plus Nexus's own extension method and _meta members, not ACP itself. Nothing was published before it. Types and pure functions only in this change: no command speaks these messages yet. Experimental: names and fields may change, each change with an entry here."
+  }
+]

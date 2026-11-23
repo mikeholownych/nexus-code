@@ -105,6 +105,9 @@ test("a fix that makes the base's failing test pass is VERIFIED (exit 0); the te
       assert.deepEqual(doc.typecheck, { status: "NOT_APPLICABLE", mode: "enforce", detail: "the head tree has no configured type-check project" });
       assert.deepEqual(doc.guard, { status: "CLEAR", mode: "approve", policySource: "default", findings: [], complete: true });
       assert.deepEqual(doc.approvedVerificationEdits, []);
+      assert.equal(doc.review.status, "COMPLETE");
+      assert.equal(doc.review.verdict, "ACCEPT");
+      assert.deepEqual(doc.review.suspectedDefects, []);
       // --receipt writes the same document.
       assert.equal(fs.readFileSync(receipt, "utf8"), json.stdout);
 
@@ -115,7 +118,7 @@ test("a fix that makes the base's failing test pass is VERIFIED (exit 0); the te
       assert.match(text.stdout, /^ {2}head run +passed; tests ran$/m);
       assert.match(text.stdout, /^ {2}type-check +NOT_APPLICABLE \(enforce\): the head tree has no configured type-check project$/m);
       assert.match(text.stdout, /^ {2}guard +CLEAR \(mode approve, default policy\): 0 changed verification file\(s\)$/m);
-      assert.match(text.stdout, /^ {2}not run +review$/m);
+      assert.match(text.stdout, /^ {2}review +ACCEPT: 0 suspected defect\(s\), 0 scope violation\(s\), 0 unproven criterion\/criteria$/m);
       assert.deepEqual(text.leftovers, []);
     } finally {
       fs.rmSync(receipt, { force: true });
@@ -147,6 +150,10 @@ test("the known-bad change (the failing test deleted, the bug left in) is NOT VE
     assert.match(doc.verification.independenceDetail, /passes only with tests the change added or edited/);
     assert.deepEqual(phases(doc), ["base", "head", "base_tests_on_head"]);
     assert.equal(doc.runs[2].passed, false, "the base's test files fail against the head's code");
+    assert.equal(doc.review.status, "COMPLETE");
+    assert.equal(doc.review.verdict, "REJECT", "the independent reviewer records the approved weakening as a defect");
+    assert.deepEqual(doc.review.suspectedDefects, [{ path: TEST_FILE, description: `the change weakens ${TEST_FILE}: fewer-assertions` }]);
+    assert.notEqual(doc.verdict, "VERIFIED", "a REJECT never promotes a pass");
   });
 });
 
@@ -161,7 +168,8 @@ test("a head whose weakened test restores itself while it runs is still judged o
     assert.equal(doc.runs[1].passed, true, "the head's own run passes");
     assert.notEqual(doc.verdict, "VERIFIED");
     assert.equal(doc.verification.independent, false);
-    assert.deepEqual(phases(doc), ["base", "head", "base_tests_on_head"]);
+    assert.match(doc.verification.independenceDetail, /test\/math\.test\.mjs/);
+    assert.deepEqual(phases(doc), ["base", "head"]);
   });
 });
 
@@ -209,6 +217,7 @@ test("the head cannot choose its own verifier: a rewritten scripts.test is not r
     assert.equal(second.code, verifyExitCode("unverified"));
     assert.equal("verifier" in none, false);
     assert.deepEqual(none.runs, [], "nothing the head defines was run");
+    assert.equal(none.review.status, "NOT_RUN", "no head run means there was nothing to review");
     assert.match(none.detail, /the head defines npm test, but the head is the change under test/);
   });
 });
@@ -264,6 +273,7 @@ test("a discovered verifier needs approval: BLOCKED (exit 3) with the command an
     assert.equal(blocked.reason, "VERIFIER_NOT_APPROVED");
     assert.equal(json.code, verifyExitCode("blocked"));
     assert.deepEqual(blocked.runs, [], "nothing was run");
+    assert.equal(blocked.review.status, "NOT_RUN", "an unapproved verifier ran nothing, so nothing was reviewed");
     assert.equal(blocked.verifier.approval, "none");
     assert.equal(blocked.verifier.digest, BASE_VERIFIER_DIGEST);
 

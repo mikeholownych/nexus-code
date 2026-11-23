@@ -1,5 +1,5 @@
 /**
- * VR-1: the published schema of the `nexus verify --json` document (docs/protocol/verify-result-v2.schema.json) and its
+ * VR-1: the published schema of the `nexus verify --json` document (docs/protocol/verify-result-v3.schema.json) and its
  * version ledger. The documents themselves are validated where they are produced: every result in
  * test/verify_command.test.ts and test/verify_typecheck_guard.test.ts goes through the schema (helpers/verify_fixture.ts).
  */
