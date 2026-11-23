@@ -275,7 +275,7 @@ test("the import graph of cli/src/acp stays inside its allowlist", () => {
   assert.deepEqual(files, ["jsonrpc.ts", "mapping.ts", "types.ts", "validate.ts"], "a new module in cli/src/acp is checked here: add it deliberately");
   const valueAllowed = (specifier: string) =>
     /^node:(crypto|path|url)$/.test(specifier) || /^\.\/(jsonrpc|mapping|types|validate)\.js$/.test(specifier) || specifier === "../core/unified_diff.js" || specifier === "../safe_text.js";
-  const typeAllowed = (specifier: string) => valueAllowed(specifier) || /^\.\.\/(protocol|evidence|approval_review|core\/turn)\.js$/.test(specifier);
+  const typeAllowed = (specifier: string) => valueAllowed(specifier) || /^\.\.\/(protocol|evidence|approval_review|core\/turn|verify_contract)\.js$/.test(specifier);
   for (const file of files) {
     const source = fs.readFileSync(path.join(dir, file), "utf8");
     const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");

@@ -3,12 +3,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { HarnessConfig } from "./types.js";
 import { ApplicationCore } from "./core/app.js";
+import { pinBase, VerifyService, type PinnedBase, type VerifyServiceDeps } from "./core/verify_service.js";
 import { formatSafeSidecarDiagnostic, SidecarServer } from "./sidecar.js";
 import { PROTOCOL_VERSION, SIDECAR_MAX_HISTORY_PAGES, type SidecarEvent } from "./protocol.js";
 import {
   ACP_CANCEL_REQUEST_METHOD, ACP_ERROR, ACP_MAX_INFLIGHT_REQUESTS, ACP_MAX_PENDING_PERMISSIONS_PER_SESSION,
   ACP_MAX_OVERSIZED_LINES, ACP_MAX_SESSIONS, ACP_PERMISSION_TIMEOUT_SECS, ACP_RECEIPT_STORE_SIZE, ACP_TOMBSTONE_COUNT,
-  type AcpId, type AcpVerification,
+  ACP_VERIFY_METHOD, type AcpId, type AcpVerification,
 } from "./acp/types.js";
 import {
   BoundedLineReader, RequestCorrelator, encodeMessage, errorResponse, notification,
@@ -22,13 +23,15 @@ import {
 } from "./acp/mapping.js";
 import {
   canonicalCwd, validateCancel, validateCancelRequest, validateInitialize, validateLoadSession,
-  validateNewSession, validatePrompt, validateReceiptGet,
+  validateNewSession, validatePrompt, validateReceiptGet, validateVerify,
 } from "./acp/validate.js";
 
 type SidecarLike = { start(): void; handleLine(line: string): Promise<void> };
 type Session = {
   id: string; cwd: string; mcp: { count: number; names: string[] }; sidecar: SidecarLike;
+  verifyBase: PinnedBase | { error: string };
   events: SidecarEvent[]; tools: SidecarEvent[]; pendingPrompt?: { rpcId: AcpId; commandId: string };
+  pendingVerify?: { rpcId: AcpId; controller: AbortController; cancelled: boolean; completion?: Promise<unknown> };
   pendingApproval?: { id: string; rpcId: number; toolCallId: string; timer: NodeJS.Timeout };
   pendingReceipt?: { commandId: string; resolve: (event: SidecarEvent | undefined) => void };
   /** The prompt was answered early (cancelled request, refused checkpoint) and its turn is still winding down: no new prompt until the turn's result arrives, or that result would answer the new prompt. */
@@ -44,6 +47,7 @@ export interface AcpStdioOptions {
   isDirectory?: (value: string) => boolean;
   /** How long a signalled process waits for its sessions to stop before it exits anyway. */
   shutdownGraceMs?: number;
+  verifyDeps?: VerifyServiceDeps;
 }
 
 const ACP_SHUTDOWN_GRACE_MS = 10_000;
@@ -55,14 +59,24 @@ export class AcpStdioServer {
   private readonly permissionRequests = new RequestCorrelator<{ sessionId: string; approvalId: string }>({ tombstones: ACP_TOMBSTONE_COUNT });
   private readonly sessions = new Map<string, Session>();
   private readonly receipts = new Map<string, ReturnType<typeof nexusReceipt>>();
+  private readonly latestReceipts = new Map<string, string>();
   private readonly pending = new Map<string, AcpId>();
   private readonly loadingSessionIds = new Set<string>();
+  private readonly verifyService: VerifyService;
   private startingSessions = 0;
   private initialized = false;
   private closed = false;
 
   constructor(private readonly options: AcpStdioOptions) {
     this.write = options.write ?? ((line) => process.stdout.write(line));
+    const config = options.config;
+    this.verifyService = new VerifyService({
+      verifierCommand: config.authoritativeVerifierCommand,
+      deliverables: config.trustedDeliverableFiles ?? [],
+      timeoutSecs: config.verifierTimeoutSecs,
+      readOnly: Boolean(config.readOnly) || config.approvalMode === "read-only",
+      surface: "acp",
+    }, options.verifyDeps);
   }
 
   /** Feed raw stdin bytes. Invalid/oversized lines are answered without retaining unbounded input. */
@@ -82,11 +96,14 @@ export class AcpStdioServer {
     this.closed = true;
     const shutdowns: Promise<void>[] = [];
     for (const session of this.sessions.values()) {
+      session.pendingVerify?.controller.abort();
+      if (session.pendingVerify?.completion) shutdowns.push(session.pendingVerify.completion.then(() => undefined));
       if (session.pendingApproval) clearTimeout(session.pendingApproval.timer);
       shutdowns.push(session.sidecar.handleLine(JSON.stringify({ v: PROTOCOL_VERSION, type: "shutdown" })));
     }
     this.sessions.clear();
     this.pending.clear();
+    this.latestReceipts.clear();
     await Promise.allSettled(shutdowns);
   }
 
@@ -128,7 +145,9 @@ export class AcpStdioServer {
     } finally {
       const promptStillRunning = incoming.kind === "request" && incoming.method === "session/prompt"
         && [...this.sessions.values()].some((session) => session.pendingPrompt?.rpcId === incoming.id);
-      if (incoming.kind === "request" && !promptStillRunning) this.pending.delete(this.requestKey(incoming.id));
+      const verifyStillRunning = incoming.kind === "request" && incoming.method === ACP_VERIFY_METHOD
+        && [...this.sessions.values()].some((session) => session.pendingVerify?.rpcId === incoming.id);
+      if (incoming.kind === "request" && !promptStillRunning && !verifyStillRunning) this.pending.delete(this.requestKey(incoming.id));
     }
   }
 
@@ -153,6 +172,7 @@ export class AcpStdioServer {
     if (message.method === "session/new" && message.kind === "request") return this.newSession(message.id, message.params);
     if (message.method === "session/load" && message.kind === "request") return this.loadSession(message.id, message.params);
     if (message.method === "session/prompt" && message.kind === "request") return this.prompt(message.id, message.params);
+    if (message.method === ACP_VERIFY_METHOD && message.kind === "request") return this.verify(message.id, message.params);
     if (message.method === "session/cancel" && message.kind === "notification") {
       const parsed = validateCancel(message.params);
       if (parsed.ok) { const session = this.sessions.get(parsed.value.sessionId); if (session) await this.sidecarCommand(session, { type: "cancel" }); }
@@ -172,6 +192,14 @@ export class AcpStdioServer {
           }
         }
         const id = this.pending.get(this.requestKey(parsed.value.requestId));
+        for (const session of this.sessions.values()) {
+          const verify = session.pendingVerify;
+          if (verify && this.requestKey(verify.rpcId) === this.requestKey(parsed.value.requestId)) {
+            verify.cancelled = true;
+            verify.controller.abort();
+            return;
+          }
+        }
         if (id !== undefined) {
           for (const session of this.sessions.values()) if (session.pendingPrompt?.rpcId === id) {
             session.pendingPrompt = undefined;
@@ -200,6 +228,7 @@ export class AcpStdioServer {
   }
 
   private async startSession(cwd: string, mcp: { count: number; names: string[] }, resume?: string): Promise<Session | undefined> {
+    const verifyBase = pinBase(cwd);
     const config = { ...this.options.config, workspace: cwd, surface: "tui" as const };
     const events: SidecarEvent[] = [];
     const early: string[] = [];
@@ -207,7 +236,7 @@ export class AcpStdioServer {
     const sink = (line: string) => session ? this.onSidecarLine(session, line) : early.push(line);
     const sidecar = this.options.createSidecar?.(config, resume, sink)
       ?? new SidecarServer({ app: new ApplicationCore(config), resume, fullHistoryReplay: resume !== undefined, write: sink });
-    session = { id: "", cwd, mcp, sidecar, events, tools: [] };
+    session = { id: "", cwd, mcp, sidecar, events, tools: [], verifyBase };
     try {
       sidecar.start();
     } catch (err) {
@@ -234,6 +263,7 @@ export class AcpStdioServer {
     if (!parsed.ok) { this.replyError(id, parsed.error); return; }
     const cwd = this.canonical(parsed.value.cwd);
     if (!cwd) { this.replyError(id, { code: ACP_ERROR.INVALID_PARAMS, message: "cwd does not exist or is not a readable directory" }); return; }
+    if (this.hasVerificationOverlap(cwd)) { this.replyError(id, { code: ACP_ERROR.INTERNAL_ERROR, message: "a verification is running for this workspace; retry session creation when it finishes" }); return; }
     if (this.sessions.size + this.startingSessions >= ACP_MAX_SESSIONS) { this.replyError(id, { code: ACP_ERROR.INTERNAL_ERROR, message: "the connection already has the maximum number of sessions" }); return; }
     this.startingSessions++;
     try {
@@ -253,6 +283,7 @@ export class AcpStdioServer {
     if (!parsed.ok) { this.replyError(id, parsed.error); return; }
     const cwd = this.canonical(parsed.value.cwd);
     if (!cwd) { this.replyError(id, { code: ACP_ERROR.INVALID_PARAMS, message: "cwd does not exist or is not a readable directory" }); return; }
+    if (this.hasVerificationOverlap(cwd)) { this.replyError(id, { code: ACP_ERROR.INTERNAL_ERROR, message: "a verification is running for this workspace; retry session loading when it finishes" }); return; }
     if (this.sessions.has(parsed.value.sessionId) || this.loadingSessionIds.has(parsed.value.sessionId)) { this.replyError(id, { code: ACP_ERROR.INVALID_PARAMS, message: "session is already active on this connection" }); return; }
     if (this.sessions.size + this.startingSessions >= ACP_MAX_SESSIONS) { this.replyError(id, { code: ACP_ERROR.INTERNAL_ERROR, message: "the connection already has the maximum number of sessions" }); return; }
     this.startingSessions++;
@@ -305,6 +336,7 @@ export class AcpStdioServer {
     const rawSessionId = (params && typeof params === "object") ? (params as any).sessionId : undefined;
     const session = typeof rawSessionId === "string" ? this.sessions.get(rawSessionId) : undefined;
     if (!session) { this.replyError(id, { code: ACP_ERROR.INVALID_PARAMS, message: "sessionId is not active on this connection" }); return; }
+    if (this.hasVerificationOverlap(session.cwd)) { this.replyError(id, { code: ACP_ERROR.INTERNAL_ERROR, message: "a verification is running for this workspace; retry the prompt when it finishes" }); return; }
     const parsed = validatePrompt(params, { workspace: session.cwd, fs: { realpath: (value) => fs.realpathSync(value), isDirectory: (value) => fs.statSync(value).isDirectory() } });
     if (!parsed.ok) { this.replyError(id, parsed.error); return; }
     if (session.pendingPrompt) { this.replyError(id, { code: ACP_ERROR.INTERNAL_ERROR, message: "this session already has a prompt in progress" }); return; }
@@ -317,9 +349,77 @@ export class AcpStdioServer {
   private async getReceipt(id: AcpId, params: unknown): Promise<void> {
     const parsed = validateReceiptGet(params);
     if (!parsed.ok) { this.replyError(id, parsed.error); return; }
-    const receipt = parsed.value.receiptId ? this.receipts.get(parsed.value.receiptId) : [...this.receipts.values()].reverse().find((value) => value.session_id === parsed.value.sessionId);
+    const explicitReceiptId = parsed.value.receiptId !== undefined;
+    const receiptId = parsed.value.receiptId ?? this.latestReceipts.get(parsed.value.sessionId);
+    if (receiptId) {
+      const verificationReceipt = this.verifyService.receipt(receiptId, parsed.value.sessionId);
+      if (verificationReceipt) {
+        this.send(resultResponse(id, { ...verificationReceipt, surface: "acp", session_id: parsed.value.sessionId }));
+        return;
+      }
+    }
+    const receipt = receiptId ? this.receipts.get(receiptId) : [...this.receipts.values()].reverse().find((value) => value.session_id === parsed.value.sessionId);
+    if (!explicitReceiptId && !receipt) {
+      const latestTurn = [...this.receipts.values()].reverse().find((value) => value.session_id === parsed.value.sessionId);
+      if (latestTurn) { this.send(resultResponse(id, latestTurn)); return; }
+    }
     if (!receipt || receipt.session_id !== parsed.value.sessionId) { this.replyError(id, { code: ACP_ERROR.INVALID_PARAMS, message: "receipt is not available on this connection" }); return; }
     this.send(resultResponse(id, receipt));
+  }
+
+  private hasVerificationOverlap(cwd: string): boolean {
+    return [...this.sessions.values()].some((session) => session.pendingVerify && this.workspacesOverlap(cwd, session.cwd));
+  }
+
+  private hasPromptOverlap(cwd: string): boolean {
+    return [...this.sessions.values()].some((session) => (session.pendingPrompt || session.stopping) && this.workspacesOverlap(cwd, session.cwd));
+  }
+
+  private workspacesOverlap(left: string, right: string): boolean {
+    const within = (parent: string, child: string) => {
+      const relative = path.relative(parent, child);
+      return relative === "" || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`));
+    };
+    return within(left, right) || within(right, left);
+  }
+
+  private async verify(id: AcpId, params: unknown): Promise<void> {
+    const parsed = validateVerify(params);
+    if (!parsed.ok) { this.replyError(id, parsed.error); return; }
+    const session = this.sessions.get(parsed.value.sessionId);
+    if (!session) { this.replyError(id, { code: ACP_ERROR.INVALID_PARAMS, message: "sessionId is not active on this connection" }); return; }
+    if (this.startingSessions > 0) {
+      this.replyError(id, { code: ACP_ERROR.INTERNAL_ERROR, message: "verification cannot run while an ACP session is starting or loading" });
+      return;
+    }
+    if (this.hasPromptOverlap(session.cwd)) {
+      this.replyError(id, { code: ACP_ERROR.INTERNAL_ERROR, message: "verification cannot run while a session turn is active or stopping" });
+      return;
+    }
+    if (this.hasVerificationOverlap(session.cwd)) {
+      this.replyError(id, { code: ACP_ERROR.INTERNAL_ERROR, message: "a verification is already running for this workspace" });
+      return;
+    }
+    if ("error" in session.verifyBase) {
+      this.replyError(id, { code: ACP_ERROR.INTERNAL_ERROR, message: session.verifyBase.error });
+      return;
+    }
+    const pending: NonNullable<Session["pendingVerify"]> = { rpcId: id, controller: new AbortController(), cancelled: false };
+    session.pendingVerify = pending;
+    try {
+      const completion = this.verifyService.verify({ sessionId: session.id, worktree: session.cwd, base: session.verifyBase }, pending.controller.signal);
+      pending.completion = completion;
+      const outcome = await completion;
+      if (pending.cancelled) { this.send(cancelledRequestError(id)); return; }
+      if ("error" in outcome) {
+        this.replyError(id, { code: ACP_ERROR.INTERNAL_ERROR, message: `verification did not produce a verdict: ${outcome.error.message}`, data: { reason: outcome.error.kind } });
+        return;
+      }
+      this.latestReceipts.set(session.id, outcome.summary.receipt_id);
+      this.send(resultResponse(id, outcome.summary));
+    } finally {
+      if (session.pendingVerify === pending) session.pendingVerify = undefined;
+    }
   }
 
   private async sidecarCommand(session: Session, command: Record<string, unknown>): Promise<void> {
@@ -423,6 +523,7 @@ export class AcpStdioServer {
     const verification: AcpVerification = verificationFromTurn({ sessionId: session.id, turnId, turn: event.turn, sections });
     const receipt = nexusReceipt(session.id, verification, sections);
     this.receipts.set(receipt.receipt_id, receipt);
+    this.latestReceipts.set(session.id, receipt.receipt_id);
     while (this.receipts.size > ACP_RECEIPT_STORE_SIZE) this.receipts.delete(this.receipts.keys().next().value as string);
     const mapped = turnToStop(event.turn);
     this.send(sessionUpdate(session.id, verificationUpdate(verification) as any));

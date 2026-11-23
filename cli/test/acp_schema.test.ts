@@ -1,5 +1,5 @@
 /**
- * AC-1: the published schema of the ACP adapter's messages (docs/protocol/acp-adapter-v1.schema.json), its version
+ * AC-1: the published schema of the ACP adapter's messages, its version
  * ledger, and the agreement of the schema with the messages the mapping builds. The schema describes Nexus's subset of
  * the Agent Client Protocol, not ACP itself.
  */
@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { sha256 } from "../scripts/gen_protocol_schema.mjs";
 import { ACP_ADAPTER_LEDGER_FILE, acpAdapterLedgerProblem, acpAdapterSchemaFile, generateAcpAdapterSchema } from "../scripts/gen_acp_schema.mjs";
 import { encodeMessage, parseMessage } from "../src/acp/jsonrpc.js";
-import { ACP_ADAPTER_SCHEMA_VERSION, ACP_ERROR, ACP_PERMISSION_OPTIONS, ACP_RECEIPT_GET_METHOD } from "../src/acp/types.js";
+import { ACP_ADAPTER_SCHEMA_VERSION, ACP_ERROR, ACP_PERMISSION_OPTIONS, ACP_RECEIPT_GET_METHOD, ACP_VERIFY_METHOD } from "../src/acp/types.js";
 import { AGENT_EXAMPLES, CLIENT_EXAMPLES } from "./helpers/acp_examples.js";
 import { validate } from "./helpers/json_schema.js";
 
@@ -30,7 +30,7 @@ test("the checked-in ACP adapter schema equals a fresh generation from src/acp/t
 test("gen_acp_schema.mjs --check passes on the checked-in schema and ledger", () => {
   const result = spawnSync(process.execPath, [path.join(cli, "scripts", "gen_acp_schema.mjs"), "--check"], { cwd: cli, encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /docs\/protocol\/acp-adapter-v1\.schema\.json is current/);
+  assert.equal(result.stdout.trim(), `${path.relative(path.dirname(cli), acpAdapterSchemaFile(ACP_ADAPTER_SCHEMA_VERSION))} is current`);
 });
 
 test("the newest ACP adapter ledger entry records the current schema and schema_version", () => {
@@ -55,12 +55,12 @@ test("the schema says it is Nexus's subset of ACP, and its root is the two direc
   assert.deepEqual(schema.$ref, "#/$defs/AcpAdapterDocument");
   assert.deepEqual(refs(schema.$defs.AcpAdapterDocument.anyOf), [
     "AcpCancelNotification", "AcpCancelRequestNotification", "AcpErrorResponse", "AcpInitializeRequest", "AcpLoadSessionRequest", "AcpNewSessionRequest", "AcpPermissionErrorResponse",
-    "AcpPermissionRequest", "AcpPermissionResponse", "AcpPromptRequest", "AcpReceiptGetRequest", "AcpResultResponse", "AcpSessionUpdateNotification",
+    "AcpPermissionRequest", "AcpPermissionResponse", "AcpPromptRequest", "AcpReceiptGetRequest", "AcpResultResponse", "AcpSessionUpdateNotification", "AcpVerifyRequest",
   ]);
   const method = (name: string) => schema.$defs[name].properties.method.const;
   assert.deepEqual(
-    ["AcpInitializeRequest", "AcpNewSessionRequest", "AcpLoadSessionRequest", "AcpPromptRequest", "AcpReceiptGetRequest", "AcpCancelNotification", "AcpCancelRequestNotification", "AcpSessionUpdateNotification", "AcpPermissionRequest"].map(method),
-    ["initialize", "session/new", "session/load", "session/prompt", ACP_RECEIPT_GET_METHOD, "session/cancel", "$/cancel_request", "session/update", "session/request_permission"],
+    ["AcpInitializeRequest", "AcpNewSessionRequest", "AcpLoadSessionRequest", "AcpPromptRequest", "AcpReceiptGetRequest", "AcpVerifyRequest", "AcpCancelNotification", "AcpCancelRequestNotification", "AcpSessionUpdateNotification", "AcpPermissionRequest"].map(method),
+    ["initialize", "session/new", "session/load", "session/prompt", ACP_RECEIPT_GET_METHOD, ACP_VERIFY_METHOD, "session/cancel", "$/cancel_request", "session/update", "session/request_permission"],
   );
 });
 
