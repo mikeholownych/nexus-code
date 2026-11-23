@@ -42,7 +42,7 @@ import { SafePathError, ancestryProblem, chmodVerified, identityOf, mkdirVerifie
 import { isNexusDirPermissive } from "./core/durable_file.js";
 export { isNexusDirPermissive };
 import { DEFAULT_REPEATED_CALL_HARD, DEFAULT_REPEATED_CALL_SOFT } from "./core/repeated_calls.js";
-import { DEFAULT_CONVERGENCE_ATTEMPTS, type HarnessConfig } from "./types.js";
+import { DEFAULT_CONVERGENCE_ATTEMPTS, DEFAULT_MAX_INFERENCE_SUBMISSIONS, type HarnessConfig } from "./types.js";
 
 export const DOCTOR_SCHEMA_VERSION = 2;
 export type DoctorStatus = "pass" | "warn" | "fail" | "skip";
@@ -284,6 +284,7 @@ const CONFIG_KEYS: Array<{ key: string; flag?: string; field: keyof HarnessConfi
   { key: "workspace", flag: "workspace", field: "workspace" },
   { key: "max steps per segment", flag: "maxSteps", field: (c) => (c.continuation ? `${c.maxSteps} (checkpoint interval, not a limit)` : `${c.maxSteps} (turn limit: continuation off)`), fallback: "30" },
   { key: "NEXUS_MAX_TOTAL_STEPS", flag: "maxTotalSteps", field: (c) => (c.continuation ? (Number.isFinite(c.continuation.maxTotalSteps) ? String(c.continuation.maxTotalSteps) : "none") : "continuation off"), fallback: "none" },
+  { key: "NEXUS_MAX_INFERENCE_SUBMISSIONS", field: (c) => String(c.maxInferenceSubmissions ?? DEFAULT_MAX_INFERENCE_SUBMISSIONS), fallback: String(DEFAULT_MAX_INFERENCE_SUBMISSIONS) },
   { key: "NEXUS_MAX_TURN_MINUTES", flag: "maxTurnMinutes", field: (c) => (c.continuation ? (Number.isFinite(c.continuation.maxTurnMinutes) ? String(c.continuation.maxTurnMinutes) : "none") : "continuation off"), fallback: "none" },
   { key: "NEXUS_STAGNATION_STEPS", flag: "stagnationSteps", field: (c) => (c.continuation ? String(c.continuation.stagnationSteps) : "continuation off"), fallback: "12" },
   { key: "NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS", field: (c) => String(c.continuation?.verifierConvergenceAttempts ?? DEFAULT_CONVERGENCE_ATTEMPTS), fallback: "3" },

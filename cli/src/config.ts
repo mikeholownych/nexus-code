@@ -17,7 +17,7 @@ import { clampApprovalRequest, clampSandbox, clampSandboxNetwork, type Effective
 import { managedPolicy } from "./core/policy_runtime.js";
 import { readSmallFile } from "./core/checkout_trust.js";
 import { resolveRepeatedCallSettings } from "./core/repeated_calls.js";
-import { ContinuationBudget, DEFAULT_CONTINUATION, DEFAULT_CONVERGENCE_ATTEMPTS, DEFAULT_MAX_TOOL_INVOCATIONS, MAX_CONTINUATION_MINUTES, MAX_CONTINUATION_STEPS, MAX_TOOL_INVOCATIONS, HarnessConfig, ApprovalMode } from "./types.js";
+import { ContinuationBudget, DEFAULT_CONTINUATION, DEFAULT_CONVERGENCE_ATTEMPTS, DEFAULT_MAX_INFERENCE_SUBMISSIONS, DEFAULT_MAX_TOOL_INVOCATIONS, MAX_CONTINUATION_MINUTES, MAX_CONTINUATION_STEPS, MAX_INFERENCE_SUBMISSIONS, MAX_TOOL_INVOCATIONS, HarnessConfig, ApprovalMode } from "./types.js";
 
 /** A project `.env` larger than this is ignored (it is repository-controlled). */
 const MAX_PROJECT_ENV_BYTES = 256 * 1024;
@@ -185,6 +185,7 @@ const PROJECT_ENV_KEYS = new Set([
   "NEXUS_CONTINUATION",
   "NEXUS_MAX_TOTAL_STEPS",
   "NEXUS_MAX_TOOL_INVOCATIONS",
+  "NEXUS_MAX_INFERENCE_SUBMISSIONS",
   "NEXUS_MAX_TURN_MINUTES",
   "NEXUS_STAGNATION_STEPS",
   "NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS",
@@ -448,6 +449,7 @@ export function buildConfigWithPolicy(options: any, policy: EffectivePolicy): Ha
   const maxSteps = options.maxSteps ? parseInt(options.maxSteps, 10) : 30;
   const continuation = continuationBudget(options);
   const maxToolInvocations = toolInvocationLimit(options);
+  const maxInferenceSubmissions = inferenceSubmissionLimit(options);
   const repeatedCalls = repeatedCallSettings();
   const temperature = options.temperature ? parseFloat(options.temperature) : 0.2;
   const shell = options.shell || operatorSetting("LOCAL_HARNESS_SHELL") || process.env.LOCAL_HARNESS_SHELL || "bash";
@@ -570,6 +572,7 @@ export function buildConfigWithPolicy(options: any, policy: EffectivePolicy): Ha
     workspace,
     maxSteps,
     maxToolInvocations,
+    maxInferenceSubmissions,
     ...(continuation ? { continuation } : {}),
     repeatedCalls: { soft: repeatedCalls.soft, hard: repeatedCalls.hard },
     temperature,
@@ -804,6 +807,7 @@ export function continuationBudget(options: any): ContinuationBudget | undefined
     ...DEFAULT_CONTINUATION,
     maxTotalSteps: Number.isFinite(steps) ? Math.floor(steps) : steps,
     maxToolInvocations: toolInvocationLimit(options),
+    maxInferenceSubmissions: inferenceSubmissionLimit(options),
     maxTurnMinutes: positive(options.maxTurnMinutes, effectiveSetting("NEXUS_MAX_TURN_MINUTES"), DEFAULT_CONTINUATION.maxTurnMinutes, MAX_CONTINUATION_MINUTES),
     stagnationSteps: Math.floor(positive(options.stagnationSteps, effectiveSetting("NEXUS_STAGNATION_STEPS"), DEFAULT_CONTINUATION.stagnationSteps)),
     verifierConvergenceAttempts: Math.floor(positive(undefined, effectiveSetting("NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS"), DEFAULT_CONVERGENCE_ATTEMPTS)),
@@ -817,6 +821,16 @@ export function toolInvocationLimit(options: any): number {
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value < 1) throw new Error(`Invalid tool invocation budget '${String(raw)}': expected a positive integer.`);
   if (value > MAX_TOOL_INVOCATIONS) throw new Error(`Invalid tool invocation budget '${String(raw)}': maximum is ${MAX_TOOL_INVOCATIONS}.`);
+  return value;
+}
+
+/** Objective-wide inference request ceiling. Retries count as submissions; availability probes do not. */
+export function inferenceSubmissionLimit(options: any): number {
+  const raw = options.maxInferenceSubmissions ?? effectiveSetting("NEXUS_MAX_INFERENCE_SUBMISSIONS");
+  if (raw === undefined || raw === null || raw === "") return DEFAULT_MAX_INFERENCE_SUBMISSIONS;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1) throw new Error(`Invalid inference submission budget '${String(raw)}': expected a positive integer.`);
+  if (value > MAX_INFERENCE_SUBMISSIONS) throw new Error(`Invalid inference submission budget '${String(raw)}': maximum is ${MAX_INFERENCE_SUBMISSIONS}.`);
   return value;
 }
 
