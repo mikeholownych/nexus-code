@@ -1,0 +1,52 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M830DQ4WPRNDHTXKJRYWG9RV",
+  "strategy": "manual-commit",
+  "branch": "v1/ac1b-acp-adapter-core",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "cli/src/acp/types.ts",
+    "cli/src/acp_stdio.ts",
+    "cli/src/index.ts",
+    "cli/test/acp_stdio.test.ts",
+    "docs/ACP.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1578527,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 144973824,
+    "output_tokens": 432842,
+    "api_call_count": 995,
+    "subagent_tokens": {
+      "input_tokens": 167247,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 5569024,
+      "output_tokens": 34631,
+      "api_call_count": 59
+    },
+    "subagent_tokens_complete": true
+  },
+  "redaction": {
+    "replacements": 1885,
+    "layers": {
+      "betterleaks": 552,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 99,
+      "credentialed_uri": 78,
+      "entropy": 1426,
+      "key_context": 0,
+      "provider_token": 25,
+      "shell_stdin": 0
+    }
+  }
+}
