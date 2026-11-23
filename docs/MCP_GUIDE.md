@@ -125,7 +125,7 @@ nexus --authoritative-verifier "npm test" --deliverable-file src/parser.ts serve
 The result text is one JSON object: `service_version`, `receipt_id` (`vr-` and 32 hex digits), `receipt_uri`, `receipt_sha256`, `verify_schema_version`, `verdict`, `outcome`, `reason`, `detail`, `base`, `head`, `verifier`, `operator_hint` and `issued_at`. Every verdict, `BLOCKED` and `UNVERIFIED` included, is a normal result (`isError: false`) with a receipt. `isError: true` means no verdict was reached and no receipt exists; the text is then `{ "schema_version", "error", "exitCode" }`. That happens when:
 
 - a verification is already running (one at a time per server; the second call is refused, not queued);
-- the server runs in read-only mode (`--read-only` or `--mode read-only`), or the managed policy requires a person for command execution (`approval.require_human` with `exec`);
+- the server runs in read-only mode (`--read-only`, `--mode read-only` or `NEXUS_APPROVAL_MODE=read-only`), or the managed policy requires a person for command execution (`approval.require_human` with `exec`);
 - the workspace had no commit when the server started;
 - the verification was stopped by its deadline, or the result document was larger than 4 MiB.
 
@@ -133,5 +133,13 @@ The result text is one JSON object: `service_version`, `receipt_id` (`vr-` and 3
 
 Read a receipt with `resources/read` on `nexus://verify-receipt/<receipt_id>`. It holds the full `nexus verify` result document (`result`, schema v3), the workspace, when the base was pinned, and `receipt_sha256`, the SHA-256 of `JSON.stringify(result)`. `resources/list` shows the retained receipts. Receipts are kept in the server's memory only: the last 32, gone when the server exits. No request can create or change one.
 
-**What this does not protect against.** The guarantee is about the request. `serve-mcp` gives the same client `run_command`, and a client that can run commands as the server's user can act outside the protocol: change the installed dependencies that verification links in (`node_modules`, `.venv`, which Git ignores), the user's Git configuration, or the Nexus installation itself. No check inside the server stops that. Where the client is not trusted to that degree, run the server as a separate user or in CI.
+**What this does not protect against.** The guarantee is about the request. `serve-mcp` gives the same client `run_command`, and a client that can run commands as the server's user can act outside the protocol. No check inside the server stops any of the following:
+
+- It can change what verification links in from the workspace: installed dependencies (`node_modules`, `.venv`), which Git ignores.
+- It can edit the server user's home: `~/.config/nexus/config.env` (operator settings such as `NEXUS_VERIFIER_ENV_PASSTHROUGH`), a user-tier managed policy, and the user's Git configuration.
+- It can replace the operator's verifier script, or a binary the verifier finds on `PATH`, when these live outside the workspace: they are as writable by that user as anything else. The Nexus installation itself is too.
+- A receipt is not secret from the client. It carries the workspace path, changed file names and the end of the output of a verifier run that did not pass, as the `nexus verify` result document does.
+- If the server is killed with SIGKILL, the running verifier goes on until its own deadline and the scratch directories of that verification stay in the temp directory. SIGTERM and SIGINT stop the verification and remove them before the server exits.
+
+Where the client is not trusted to that degree, run the server as a separate user or in CI.
 

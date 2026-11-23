@@ -1201,18 +1201,28 @@ program
     // VR-2: nexus_verify runs only what the operator names here, so it is checked now, not at a caller's first request.
     const verifierCommand = options.authoritativeVerifier === undefined ? undefined : String(options.authoritativeVerifier).trim();
     let deliverables: string[];
+    const configModule = await import("./config.js");
     try {
-      const { normalizeTrustedDeliverableFiles } = await import("./config.js");
       if (verifierCommand === "") throw new Error("--authoritative-verifier needs a command");
-      deliverables = normalizeTrustedDeliverableFiles(ws, options.deliverableFile);
+      deliverables = configModule.normalizeTrustedDeliverableFiles(ws, options.deliverableFile);
     } catch (err: any) {
       console.error(`error: ${err?.message ?? err}`);
       exitAfterFlush(2);
       return;
     }
+    // Read-only however it was selected (flag, NEXUS_APPROVAL_MODE, config.env): the resolution every command uses.
+    // A configuration that cannot be resolved leaves the mode unknown, so nexus_verify is refused rather than guessed at;
+    // the server still starts, as it did before, for its other tools.
+    let readOnly = true;
+    try {
+      const config = configModule.buildConfig(options);
+      readOnly = config.readOnly || config.approvalMode === "read-only";
+    } catch (err: any) {
+      console.error(`nexus serve-mcp: the configuration could not be resolved, so nexus_verify is refused as in read-only mode: ${formatDiagnosticForOutput(err)}`);
+    }
     if (!verifierCommand) console.error("nexus serve-mcp: no --authoritative-verifier was given, so the nexus_verify tool runs no verifier (start with: nexus --authoritative-verifier <command> serve-mcp).");
     const { McpServer } = await import("./mcp.js");
-    const server = new McpServer(ws, options.shell, { verifierCommand, deliverables, readOnly: Boolean(options.readOnly) || options.mode === "read-only" });
+    const server = new McpServer(ws, options.shell, { verifierCommand, deliverables, readOnly });
     await server.startStdio();
   });
 

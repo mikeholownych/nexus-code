@@ -26,8 +26,8 @@ export const VERIFY_MAX_RESULT_BYTES = 4 * 1024 * 1024;
 export const VERIFY_WORKER_TAG = "nexus-verify-worker/1";
 
 const RECEIPT_ID = /^vr-[0-9a-f]{32}$/;
-/** Time the worker gets to stop after SIGTERM before it and its children are killed. */
-const KILL_GRACE_MS = 10_000;
+/** Time a stopped verification gets after SIGTERM before its verifier is killed; the worker is killed after as long again. */
+export const VERIFY_KILL_GRACE_MS = 10_000;
 const VERDICTS: readonly string[] = ["VERIFIED", "REGRESSION_FREE", "UNVERIFIED", "BLOCKED"];
 
 export interface VerifyWorkerJob {
@@ -169,17 +169,22 @@ function forkRunner(workerModule: URL, killGraceMs: number): VerifyRunner {
     let settled = false;
     // A verifier runs under `timeout`, which leaves the worker's process group, so the group alone does not reach it:
     // every descendant is signalled by its own pid.
-    const signalTree = (name: NodeJS.Signals) => {
+    const signalTree = (name: NodeJS.Signals, worker = true) => {
       if (child.pid === undefined) return;
-      for (const pid of [...descendants(child.pid), child.pid]) {
+      for (const pid of [...descendants(child.pid), ...(worker ? [child.pid] : [])]) {
         try { process.kill(pid, name); } catch { /* already gone */ }
       }
-      try { process.kill(-child.pid, name); } catch { /* already gone */ }
+      if (worker) try { process.kill(-child.pid, name); } catch { /* already gone */ }
     };
     const onAbort = () => {
       // SIGTERM ends the running verifier, which lets the worker remove its scratch trees and exit.
       signalTree("SIGTERM");
-      killTimer = setTimeout(() => signalTree("SIGKILL"), killGraceMs);
+      // A verifier that ignores SIGTERM is killed first and the worker spared, so the scratch trees are still removed;
+      // a worker that does not finish even then is killed with whatever it has started since.
+      killTimer = setTimeout(() => {
+        signalTree("SIGKILL", false);
+        killTimer = setTimeout(() => signalTree("SIGKILL"), killGraceMs);
+      }, killGraceMs);
     };
     const onProcessExit = () => signalTree("SIGKILL");
     const finish = (final: VerifyWorkerReply) => {
@@ -220,6 +225,8 @@ export class VerifyService {
   /** Insertion-ordered, so the first key is the oldest receipt. Each entry keeps the exact text it is served as. */
   private readonly receipts = new Map<string, { receipt: VerifyServiceReceipt; text: string }>();
   private running: AbortController | undefined;
+  /** Resolves when the running verification has settled: its worker and what the worker started are gone. */
+  private settled: Promise<void> | undefined;
 
   constructor(config: VerifyServiceConfig, deps: VerifyServiceDeps = {}) {
     this.config = { ...config, deliverables: [...config.deliverables] };
@@ -229,7 +236,7 @@ export class VerifyService {
     this.random = deps.random ?? (() => randomBytes(16).toString("hex"));
     this.watchdogMs = deps.watchdogMs ?? (6 * this.timeoutSecs + 300) * 1000;
     const here = import.meta.url;
-    this.run = deps.run ?? forkRunner(deps.workerModule ?? new URL(`./verify_worker${here.endsWith(".ts") ? ".ts" : ".js"}`, here), deps.killGraceMs ?? KILL_GRACE_MS);
+    this.run = deps.run ?? forkRunner(deps.workerModule ?? new URL(`./verify_worker${here.endsWith(".ts") ? ".ts" : ".js"}`, here), deps.killGraceMs ?? VERIFY_KILL_GRACE_MS);
   }
 
   /**
@@ -253,6 +260,8 @@ export class VerifyService {
 
     const controller = new AbortController();
     this.running = controller;
+    let settle!: () => void;
+    this.settled = new Promise((resolve) => (settle = resolve));
     let timedOut = false;
     const watchdog = setTimeout(() => {
       timedOut = true;
@@ -277,6 +286,8 @@ export class VerifyService {
       clearTimeout(watchdog);
       signal?.removeEventListener("abort", onAbort);
       this.running = undefined;
+      this.settled = undefined;
+      settle();
     }
   }
 
@@ -366,5 +377,11 @@ export class VerifyService {
   /** Stops the running verification, if any; its caller gets an error and no receipt. */
   abort(): void {
     this.running?.abort();
+  }
+
+  /** Stops the running verification and resolves once nothing of it is left running. */
+  async stop(): Promise<void> {
+    this.abort();
+    await this.settled;
   }
 }

@@ -45,7 +45,7 @@ interface Client {
  * with a throwaway HOME and temp directory and no operator environment. The worker is forked the same way as the
  * server was started. Every stdout line must be one JSON-RPC message: anything else fails `close`.
  */
-function startServer(repo: string, globals: string[] = [], prepareHome?: (home: string) => void): Client {
+function startServer(repo: string, globals: string[] = [], prepareHome?: (home: string) => void, extraEnv: Record<string, string> = {}): Client {
   const env = { ...process.env };
   for (const key of Object.keys(env)) if (/^(LOCAL_LLM_|LOCAL_HARNESS_|NEXUS_|GIT_)/.test(key) || key === "NODE_TEST_CONTEXT") delete env[key];
   const home = makeHome();
@@ -53,7 +53,7 @@ function startServer(repo: string, globals: string[] = [], prepareHome?: (home: 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-mcp-verify-tmp-"));
   const child: ChildProcess = spawn(process.execPath, [...cliEntry(), ...globals, "serve-mcp", "-w", repo], {
     cwd: CLI_DIR,
-    env: { ...env, HOME: home, TMPDIR: tmp, XDG_CONFIG_HOME: path.join(home, ".config"), XDG_DATA_HOME: path.join(home, ".local", "share"), XDG_STATE_HOME: path.join(home, ".local", "state"), XDG_CACHE_HOME: path.join(home, ".cache") },
+    env: { ...env, HOME: home, TMPDIR: tmp, XDG_CONFIG_HOME: path.join(home, ".config"), XDG_DATA_HOME: path.join(home, ".local", "share"), XDG_STATE_HOME: path.join(home, ".local", "state"), XDG_CACHE_HOME: path.join(home, ".cache"), ...extraEnv },
     stdio: ["pipe", "pipe", "pipe"],
   });
   let stderr = "";
@@ -116,9 +116,9 @@ function startServer(repo: string, globals: string[] = [], prepareHome?: (home: 
 }
 
 /** Runs `check` against a server on a fresh fixture repository and stops the server and removes the repository after. */
-async function withServer(files: Record<string, string>, globals: string[], check: (client: Client, repo: string) => Promise<void>, prepareHome?: (home: string) => void): Promise<void> {
+async function withServer(files: Record<string, string>, globals: string[], check: (client: Client, repo: string) => Promise<void>, prepareHome?: (home: string) => void, extraEnv?: Record<string, string>): Promise<void> {
   const repo = makeRepo(files);
-  const client = startServer(repo, globals, prepareHome);
+  const client = startServer(repo, globals, prepareHome, extraEnv);
   let failure: unknown;
   try {
     await check(client, repo);
@@ -290,6 +290,37 @@ test("notifications/cancelled stops the worker and the verifier it runs: no resp
   });
 });
 
+test("SIGTERM to the server stops a verifier that ignores SIGTERM and removes the scratch trees before the server exits", { timeout: 180_000 }, async () => {
+  const marker = `33${process.pid}.${Date.now() % 100000}`;
+  const repo = makeRepo(BASE_FILES);
+  const client = startServer(repo, ["--authoritative-verifier", `trap '' TERM; sleep ${marker}`]);
+  // Everything that carries the verifier's command line but the server: timeout, bash, the sandbox and the sleep.
+  const running = () => processes().filter((entry) => entry.pid !== client.pid && entry.args.includes(`sleep ${marker}`)).map((entry) => entry.pid);
+  let exited: number | null | undefined;
+  try {
+    writeFiles(repo, GOOD);
+    client.write(`${JSON.stringify({ jsonrpc: "2.0", id: 700, method: "tools/call", params: { name: TOOL, arguments: {} } })}\n`);
+    let worker = 0;
+    await waitUntil(() => {
+      worker ||= processes().find((entry) => entry.ppid === client.pid && entry.args.includes("verify_worker"))?.pid ?? 0;
+      return worker > 0 && processes().some((entry) => entry.pid !== client.pid && /(^|\/)sleep /.test(entry.args) && entry.args.includes(marker));
+    }, 90_000);
+    const verifier = running();
+    const signalled = Date.now();
+    process.kill(client.pid, "SIGTERM");
+    // close() also fails when a scratch directory is left in the server's temp directory.
+    exited = await client.close();
+    assert.equal(exited, 143);
+    assert.ok(Date.now() - signalled < 25_000, "the server exits within its kill grace and a few seconds");
+    assert.ok(processGone(worker), "the worker is gone when the server exits");
+    assert.ok(verifier.every(processGone) && running().length === 0, "the verifier and its sandbox are gone when the server exits");
+    assert.deepEqual(client.responses.filter((message) => message.id === 700), [], "no verdict was made up for the stopped call");
+  } finally {
+    if (exited === undefined) await client.close().catch(() => {});
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test("read-only mode, a managed policy that requires a person, and a workspace with no commit refuse with an error and no receipt", { timeout: 180_000 }, async () => {
   const refused = async (client: Client, pattern: RegExp) => {
     const doc = refusalOf(await client.call({}));
@@ -301,6 +332,8 @@ test("read-only mode, a managed policy that requires a person, and a workspace w
   for (const globals of [["--read-only"], ["--mode", "read-only"]]) {
     await withServer(BASE_FILES, [...globals, ...OPERATOR], (client) => refused(client, /read-only mode does not allow/));
   }
+  // Read-only selected by the environment, not a flag, is the same mode.
+  await withServer(BASE_FILES, OPERATOR, (client) => refused(client, /read-only mode does not allow/), undefined, { NEXUS_APPROVAL_MODE: "read-only" });
   await withServer(BASE_FILES, OPERATOR, (client) => refused(client, /managed policy requires a person/), (home) => {
     const dir = path.join(home, ".config", "nexus");
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });

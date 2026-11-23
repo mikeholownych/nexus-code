@@ -6,7 +6,7 @@ import { ToolDefinition, ExecutionResult } from "./types.js";
 import { HARNESS_TOOLS, RustCoreBridge } from "./tools.js";
 import { isWorkspaceTrusted, WORKSPACE_MCP_FILES } from "./workspace_trust.js";
 import { VERIFY_RESULT_SCHEMA_VERSION, verifyExitCode, type VerifyJsonError } from "./verify_contract.js";
-import { pinBase, VerifyService, VERIFY_RECEIPT_URI_PREFIX, type PinnedBase, type VerifyServiceDeps } from "./core/verify_service.js";
+import { pinBase, VerifyService, VERIFY_KILL_GRACE_MS, VERIFY_RECEIPT_URI_PREFIX, type PinnedBase, type VerifyServiceDeps } from "./core/verify_service.js";
 import pc from "picocolors";
 
 export interface McpServerConfig {
@@ -966,6 +966,9 @@ export class McpServer {
           if (req?.method === "tools/call" && req.params?.name === MCP_VERIFY_TOOL) {
             void this.handleMessage(req).then((res) => {
               if (res) stdout.write(JSON.stringify(res) + "\n");
+            }).catch((err: any) => {
+              // Nothing awaits this call, so a throw here would otherwise end the server as an unhandled rejection.
+              stdout.write(JSON.stringify({ jsonrpc: "2.0", id: req.id ?? null, error: { code: -32603, message: `Internal error: ${err?.message ?? err}` } }) + "\n");
             });
             continue;
           }
@@ -989,6 +992,23 @@ export class McpServer {
         this.shutdown();
       }, 200);
     });
+
+    // A signal's default action would end this process at once and leave a running verifier and its scratch trees
+    // behind. Stop the verification first, wait until nothing of it is left, then exit as the signal would have.
+    let stopping = false;
+    const stop = (code: number) => {
+      if (stopping) return;
+      stopping = true;
+      // Not unref'd: it must fire even if nothing else keeps the process alive. Exiting kills what is still running.
+      const hardExit = setTimeout(() => process.exit(code), VERIFY_KILL_GRACE_MS + 5_000);
+      void this.verifyService.stop().catch(() => {}).then(() => {
+        clearTimeout(hardExit);
+        this.shutdown();
+        process.exit(code);
+      });
+    };
+    process.on("SIGINT", () => stop(130));
+    process.on("SIGTERM", () => stop(143));
   }
 
   public async handleMessage(req: any): Promise<any | null> {
