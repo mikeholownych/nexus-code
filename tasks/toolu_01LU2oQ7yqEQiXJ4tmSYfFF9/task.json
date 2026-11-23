@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01LU2oQ7yqEQiXJ4tmSYfFF9",
+  "agent_id": "ab4031325254896e9",
+  "subagent_type": "reviewer",
+  "task_description": "Review PR #752 ACP fixes",
+  "token_usage": {
+    "input_tokens": 46,
+    "cache_creation_tokens": 71468,
+    "cache_read_tokens": 1034854,
+    "output_tokens": 12022,
+    "api_call_count": 23
+  },
+  "started_at": "2026-11-23T18:06:04.496126535Z",
+  "completed_at": "2026-11-23T18:13:19.559027125Z"
+}
