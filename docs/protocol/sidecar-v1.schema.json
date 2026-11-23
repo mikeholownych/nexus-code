@@ -343,13 +343,24 @@
             "outcome",
             "steering",
             "tool",
+            "tool_result",
             "user"
+          ]
+        },
+        "status": {
+          "enum": [
+            "completed",
+            "failed",
+            "pending"
           ]
         },
         "text": {
           "type": "string"
         },
         "tool": {
+          "type": "string"
+        },
+        "toolCallId": {
           "type": "string"
         },
         "turn": {
@@ -1576,11 +1587,20 @@
           "title": "history",
           "type": "object",
           "properties": {
+            "error": {
+              "type": "string"
+            },
             "messages": {
               "type": "array",
               "items": {
                 "$ref": "#/$defs/HistoryEntry"
               }
+            },
+            "page": {
+              "type": "number"
+            },
+            "pages": {
+              "type": "number"
             },
             "session": {
               "type": "string"
