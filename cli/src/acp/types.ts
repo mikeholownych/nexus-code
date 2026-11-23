@@ -14,7 +14,7 @@ import type { ReceiptSection } from "../evidence.js";
 import type { VerifyJsonResult } from "../verify_contract.js";
 
 /** Version of the published schema of this adapter's messages (the ledger key `schema_version`). */
-export const ACP_ADAPTER_SCHEMA_VERSION = 2;
+export const ACP_ADAPTER_SCHEMA_VERSION = 3;
 
 /**
  * The ACP protocol version Nexus speaks: an integer major version, currently 1 (published specification,

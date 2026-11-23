@@ -1,0 +1,2810 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "nexus ACP adapter v3: Nexus's subset of the Agent Client Protocol",
+  "description": "Generated from AcpAdapterDocument in cli/src/acp/types.ts by cli/scripts/gen_acp_schema.mjs. Do not edit by hand. One line of an ACP connection to Nexus (newline-delimited JSON-RPC 2.0), in either direction: a message a client may send that Nexus acts on (AcpClientMessage), or a message Nexus sends (AcpAgentMessage). This is NOT the schema of the Agent Client Protocol: it describes only the subset of ACP version 1 that Nexus implements, plus Nexus's own extension methods (`_nexus/receipt/get`, `_nexus/verify`) and its `_meta` members (`nexus/...`). A valid ACP message outside this subset is answered with an error or ignored. Experimental: names and fields may change.",
+  "$ref": "#/$defs/AcpAdapterDocument",
+  "$defs": {
+    "AcpAdapterDocument": {
+      "description": "One line of the connection, in either direction: the root of the published schema.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AcpCancelNotification"
+        },
+        {
+          "$ref": "#/$defs/AcpCancelRequestNotification"
+        },
+        {
+          "$ref": "#/$defs/AcpErrorResponse"
+        },
+        {
+          "$ref": "#/$defs/AcpInitializeRequest"
+        },
+        {
+          "$ref": "#/$defs/AcpLoadSessionRequest"
+        },
+        {
+          "$ref": "#/$defs/AcpNewSessionRequest"
+        },
+        {
+          "$ref": "#/$defs/AcpPermissionErrorResponse"
+        },
+        {
+          "$ref": "#/$defs/AcpPermissionRequest"
+        },
+        {
+          "$ref": "#/$defs/AcpPermissionResponse"
+        },
+        {
+          "$ref": "#/$defs/AcpPromptRequest"
+        },
+        {
+          "$ref": "#/$defs/AcpReceiptGetRequest"
+        },
+        {
+          "$ref": "#/$defs/AcpResultResponse"
+        },
+        {
+          "$ref": "#/$defs/AcpSessionUpdateNotification"
+        },
+        {
+          "$ref": "#/$defs/AcpVerifyRequest"
+        }
+      ]
+    },
+    "AcpAgentCapabilities": {
+      "description": "No `sessionCapabilities`: Nexus offers no session list, resume, fork, close or delete.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpAgentCapabilitiesMeta"
+        },
+        "loadSession": {
+          "const": true
+        },
+        "mcpCapabilities": {
+          "type": "object",
+          "properties": {
+            "http": {
+              "const": false
+            },
+            "sse": {
+              "const": false
+            }
+          },
+          "required": [
+            "http",
+            "sse"
+          ]
+        },
+        "promptCapabilities": {
+          "type": "object",
+          "properties": {
+            "audio": {
+              "const": false
+            },
+            "embeddedContext": {
+              "const": false
+            },
+            "image": {
+              "const": false
+            }
+          },
+          "required": [
+            "audio",
+            "embeddedContext",
+            "image"
+          ]
+        }
+      },
+      "required": [
+        "_meta",
+        "loadSession",
+        "mcpCapabilities",
+        "promptCapabilities"
+      ]
+    },
+    "AcpAgentCapabilitiesMeta": {
+      "type": "object",
+      "properties": {
+        "nexus/experimental": {
+          "const": true
+        },
+        "nexus/extensions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "nexus/sidecar_protocol": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "nexus/experimental",
+        "nexus/extensions",
+        "nexus/sidecar_protocol"
+      ]
+    },
+    "AcpAgentMessageChunk": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "$ref": "#/$defs/AcpTextContent"
+        },
+        "sessionUpdate": {
+          "const": "agent_message_chunk"
+        }
+      },
+      "required": [
+        "content",
+        "sessionUpdate"
+      ]
+    },
+    "AcpCancelNotification": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "session/cancel"
+        },
+        "params": {
+          "$ref": "#/$defs/AcpCancelParams"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "method",
+        "params"
+      ]
+    },
+    "AcpCancelParams": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ]
+    },
+    "AcpCancelRequestNotification": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "$/cancel_request"
+        },
+        "params": {
+          "$ref": "#/$defs/AcpCancelRequestParams"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "method",
+        "params"
+      ]
+    },
+    "AcpCancelRequestParams": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "requestId": {
+          "$ref": "#/$defs/AcpId"
+        }
+      },
+      "required": [
+        "requestId"
+      ]
+    },
+    "AcpClientError": {
+      "description": "The error member of a response a client sends to an agent request.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "number"
+        },
+        "data": {},
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "AcpDiffInfo": {
+      "description": "What Nexus knows about a diff beyond its text. `truncated`: the blocks come from a bounded preview or a cut diff.",
+      "type": "object",
+      "properties": {
+        "added": {
+          "type": "number"
+        },
+        "kind": {
+          "enum": [
+            "added",
+            "deleted",
+            "modified"
+          ]
+        },
+        "removed": {
+          "type": "number"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "added",
+        "kind",
+        "removed",
+        "truncated"
+      ]
+    },
+    "AcpError": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/AcpErrorCode"
+        },
+        "data": {
+          "$ref": "#/$defs/AcpErrorData"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "AcpErrorCode": {
+      "enum": [
+        -32000,
+        -32600,
+        -32601,
+        -32602,
+        -32603,
+        -32700,
+        -32800
+      ]
+    },
+    "AcpErrorData": {
+      "description": "Details of an error, in the standard `data` member (`_meta` is not allowed on a JSON-RPC error).",
+      "type": "object",
+      "properties": {
+        "exit_code": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "field": {
+          "description": "The parameter that failed validation (-32602).",
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "reason": {
+          "description": "A stable word for the cause, for example a sidecar error code or `sidecar_start_failed`.",
+          "type": "string"
+        }
+      }
+    },
+    "AcpErrorResponse": {
+      "description": "`id` is null when the request's id could not be read (not JSON, too deep, too long, a batch).",
+      "type": "object",
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/AcpError"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AcpId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "jsonrpc": {
+          "const": "2.0"
+        }
+      },
+      "required": [
+        "error",
+        "id",
+        "jsonrpc"
+      ]
+    },
+    "AcpHistoryExtent": {
+      "description": "Conversation entries replayed on load, and how many the session holds.",
+      "type": "object",
+      "properties": {
+        "sent": {
+          "type": "number"
+        },
+        "total": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "sent",
+        "total"
+      ]
+    },
+    "AcpId": {
+      "description": "A JSON-RPC request id: a string or an integer.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "AcpImplementationInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ]
+    },
+    "AcpInitializeParams": {
+      "description": "`clientCapabilities` is accepted and never consulted: Nexus calls no client method (`fs/*`, `terminal/*`) whatever it says.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "clientCapabilities": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "clientInfo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AcpImplementationInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "protocolVersion": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "protocolVersion"
+      ]
+    },
+    "AcpInitializeRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/AcpId"
+        },
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "initialize"
+        },
+        "params": {
+          "$ref": "#/$defs/AcpInitializeParams"
+        }
+      },
+      "required": [
+        "id",
+        "jsonrpc",
+        "method",
+        "params"
+      ]
+    },
+    "AcpInitializeResult": {
+      "type": "object",
+      "properties": {
+        "agentCapabilities": {
+          "$ref": "#/$defs/AcpAgentCapabilities"
+        },
+        "agentInfo": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "const": "nexus"
+            },
+            "title": {
+              "const": "Nexus Code"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "title",
+            "version"
+          ]
+        },
+        "authMethods": {
+          "description": "Always empty: Nexus has no authentication method over ACP.",
+          "type": "array",
+          "items": {}
+        },
+        "protocolVersion": {
+          "const": 1
+        }
+      },
+      "required": [
+        "agentCapabilities",
+        "agentInfo",
+        "authMethods",
+        "protocolVersion"
+      ]
+    },
+    "AcpLoadSessionParams": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "additionalDirectories": {
+          "description": "Accepted only when empty or null.",
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {}
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "mcpServers": {
+          "type": "array",
+          "items": {}
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cwd",
+        "mcpServers",
+        "sessionId"
+      ]
+    },
+    "AcpLoadSessionRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/AcpId"
+        },
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "session/load"
+        },
+        "params": {
+          "$ref": "#/$defs/AcpLoadSessionParams"
+        }
+      },
+      "required": [
+        "id",
+        "jsonrpc",
+        "method",
+        "params"
+      ]
+    },
+    "AcpLoadSessionResult": {
+      "description": "The specification's `session/load` response is an empty object; Nexus's own data is under `_meta`.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpSessionMeta"
+        }
+      }
+    },
+    "AcpMcpServersIgnored": {
+      "description": "Client-supplied MCP servers that were not connected: how many, and the sanitised names of the first of them.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "number"
+        },
+        "names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "count",
+        "names"
+      ]
+    },
+    "AcpMeta": {
+      "description": "Custom data. Never read for authority: no `_meta` member a client sends changes what a session may do.",
+      "type": "object",
+      "additionalProperties": {}
+    },
+    "AcpNewSessionParams": {
+      "description": "`mcpServers` is required by the specification and must be an array; its entries are not connected (see\nACP_DEVIATION_NO_CLIENT_MCP_SERVERS). `additionalDirectories` is accepted only when empty, and `systemPrompt` is\nrefused when present: Nexus supports neither.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "additionalDirectories": {
+          "description": "Accepted only when empty or null.",
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {}
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "mcpServers": {
+          "type": "array",
+          "items": {}
+        }
+      },
+      "required": [
+        "cwd",
+        "mcpServers"
+      ]
+    },
+    "AcpNewSessionRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/AcpId"
+        },
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "session/new"
+        },
+        "params": {
+          "$ref": "#/$defs/AcpNewSessionParams"
+        }
+      },
+      "required": [
+        "id",
+        "jsonrpc",
+        "method",
+        "params"
+      ]
+    },
+    "AcpNewSessionResult": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpSessionMeta"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ]
+    },
+    "AcpPermissionCancelled": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "outcome": {
+          "const": "cancelled"
+        }
+      },
+      "required": [
+        "outcome"
+      ]
+    },
+    "AcpPermissionErrorResponse": {
+      "description": "An error answer to `session/request_permission`: a denial.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/AcpClientError"
+        },
+        "id": {
+          "type": "number"
+        },
+        "jsonrpc": {
+          "const": "2.0"
+        }
+      },
+      "required": [
+        "error",
+        "id",
+        "jsonrpc"
+      ]
+    },
+    "AcpPermissionOption": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "allow_once",
+            "reject_once"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "optionId": {
+          "enum": [
+            "allow_once",
+            "reject_once"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "optionId"
+      ]
+    },
+    "AcpPermissionOutcome": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AcpPermissionCancelled"
+        },
+        {
+          "$ref": "#/$defs/AcpPermissionSelected"
+        }
+      ]
+    },
+    "AcpPermissionRequest": {
+      "description": "`id` is an integer from a random start, so a reply sent before the request exists matches nothing.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "number"
+        },
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "session/request_permission"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "options": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AcpPermissionOption"
+              }
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "toolCall": {
+              "$ref": "#/$defs/AcpPermissionToolCall"
+            }
+          },
+          "required": [
+            "options",
+            "sessionId",
+            "toolCall"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "jsonrpc",
+        "method",
+        "params"
+      ]
+    },
+    "AcpPermissionResponse": {
+      "description": "The client's answer to `session/request_permission`; `id` is the integer id of that request.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "number"
+        },
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "result": {
+          "$ref": "#/$defs/AcpPermissionResult"
+        }
+      },
+      "required": [
+        "id",
+        "jsonrpc",
+        "result"
+      ]
+    },
+    "AcpPermissionResult": {
+      "description": "Only `selected` with the allow-once option id approves; every other result, well-formed or not, denies.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "outcome": {
+          "$ref": "#/$defs/AcpPermissionOutcome"
+        }
+      },
+      "required": [
+        "outcome"
+      ]
+    },
+    "AcpPermissionSelected": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "optionId": {
+          "type": "string"
+        },
+        "outcome": {
+          "const": "selected"
+        }
+      },
+      "required": [
+        "optionId",
+        "outcome"
+      ]
+    },
+    "AcpPermissionToolCall": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpPermissionToolCallMeta"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AcpToolCallContent"
+          }
+        },
+        "kind": {
+          "$ref": "#/$defs/AcpToolKind"
+        },
+        "rawInput": {
+          "$ref": "#/$defs/AcpToolRawInput"
+        },
+        "status": {
+          "const": "pending"
+        },
+        "title": {
+          "type": "string"
+        },
+        "toolCallId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "_meta",
+        "content",
+        "kind",
+        "rawInput",
+        "status",
+        "title",
+        "toolCallId"
+      ]
+    },
+    "AcpPermissionToolCallMeta": {
+      "type": "object",
+      "properties": {
+        "nexus/approval_digest": {
+          "description": "SHA-256 of the canonical `{tool, subject, preview, review}` of the approval this request asks about.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "nexus/approval_digest"
+      ]
+    },
+    "AcpPosture": {
+      "description": "The session's posture as the operator's machine set it. Reported, never set, over ACP.",
+      "type": "object",
+      "properties": {
+        "mode": {
+          "enum": [
+            "auto",
+            "read-only",
+            "review"
+          ]
+        },
+        "read_only": {
+          "type": "boolean"
+        },
+        "sandbox": {
+          "type": "string"
+        },
+        "trusted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "mode",
+        "read_only",
+        "sandbox",
+        "trusted"
+      ]
+    },
+    "AcpPromptBlock": {
+      "description": "The baseline content blocks (published specification, content). `image`, `audio` and `resource` need capabilities Nexus does not declare, and are refused.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AcpResourceLinkBlock"
+        },
+        {
+          "$ref": "#/$defs/AcpTextBlock"
+        }
+      ]
+    },
+    "AcpPromptParams": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "prompt": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AcpPromptBlock"
+          }
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "prompt",
+        "sessionId"
+      ]
+    },
+    "AcpPromptRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/AcpId"
+        },
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "session/prompt"
+        },
+        "params": {
+          "$ref": "#/$defs/AcpPromptParams"
+        }
+      },
+      "required": [
+        "id",
+        "jsonrpc",
+        "method",
+        "params"
+      ]
+    },
+    "AcpPromptResult": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpVerificationMeta"
+        },
+        "stopReason": {
+          "$ref": "#/$defs/AcpStopReason"
+        }
+      },
+      "required": [
+        "stopReason"
+      ]
+    },
+    "AcpReceiptGetParams": {
+      "description": "Without `receiptId`: the latest receipt of the session.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "receiptId": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ]
+    },
+    "AcpReceiptGetRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/AcpId"
+        },
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "_nexus/receipt/get"
+        },
+        "params": {
+          "$ref": "#/$defs/AcpReceiptGetParams"
+        }
+      },
+      "required": [
+        "id",
+        "jsonrpc",
+        "method",
+        "params"
+      ]
+    },
+    "AcpResourceLinkBlock": {
+      "description": "Reduced to one reference line of the prompt; Nexus never reads or fetches the URI.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "annotations": {},
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mimeType": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "size": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": {
+          "const": "resource_link"
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "uri"
+      ]
+    },
+    "AcpResultResponse": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/AcpId"
+        },
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AcpInitializeResult"
+            },
+            {
+              "$ref": "#/$defs/AcpLoadSessionResult"
+            },
+            {
+              "$ref": "#/$defs/AcpNewSessionResult"
+            },
+            {
+              "$ref": "#/$defs/AcpPromptResult"
+            },
+            {
+              "$ref": "#/$defs/NexusReceipt"
+            },
+            {
+              "$ref": "#/$defs/NexusVerificationReceipt"
+            },
+            {
+              "$ref": "#/$defs/NexusVerifyResult"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "jsonrpc",
+        "result"
+      ]
+    },
+    "AcpSessionInfoUpdate": {
+      "description": "The verification carrier: no field of its own, the object under `_meta`.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpVerificationMeta"
+        },
+        "sessionUpdate": {
+          "const": "session_info_update"
+        }
+      },
+      "required": [
+        "_meta",
+        "sessionUpdate"
+      ]
+    },
+    "AcpSessionMeta": {
+      "type": "object",
+      "properties": {
+        "nexus/history": {
+          "$ref": "#/$defs/AcpHistoryExtent"
+        },
+        "nexus/mcp_servers_ignored": {
+          "$ref": "#/$defs/AcpMcpServersIgnored"
+        },
+        "nexus/posture": {
+          "$ref": "#/$defs/AcpPosture"
+        }
+      }
+    },
+    "AcpSessionUpdate": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AcpAgentMessageChunk"
+        },
+        {
+          "$ref": "#/$defs/AcpSessionInfoUpdate"
+        },
+        {
+          "$ref": "#/$defs/AcpToolCall"
+        },
+        {
+          "$ref": "#/$defs/AcpToolCallUpdate"
+        },
+        {
+          "$ref": "#/$defs/AcpUserMessageChunk"
+        }
+      ]
+    },
+    "AcpSessionUpdateNotification": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "session/update"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "sessionId": {
+              "type": "string"
+            },
+            "update": {
+              "$ref": "#/$defs/AcpSessionUpdate"
+            }
+          },
+          "required": [
+            "sessionId",
+            "update"
+          ]
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "method",
+        "params"
+      ]
+    },
+    "AcpStopReason": {
+      "description": "`refusal` exists in the specification and is never sent: a gate denial is a failed tool call inside a turn that continues.",
+      "enum": [
+        "cancelled",
+        "end_turn",
+        "max_tokens",
+        "max_turn_requests"
+      ]
+    },
+    "AcpTextBlock": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "annotations": {},
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "const": "text"
+        }
+      },
+      "required": [
+        "text",
+        "type"
+      ]
+    },
+    "AcpTextContent": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "const": "text"
+        }
+      },
+      "required": [
+        "text",
+        "type"
+      ]
+    },
+    "AcpToolCall": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/AcpToolKind"
+        },
+        "rawInput": {
+          "$ref": "#/$defs/AcpToolRawInput"
+        },
+        "sessionUpdate": {
+          "const": "tool_call"
+        },
+        "status": {
+          "$ref": "#/$defs/AcpToolStatus"
+        },
+        "title": {
+          "type": "string"
+        },
+        "toolCallId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "sessionUpdate",
+        "status",
+        "title",
+        "toolCallId"
+      ]
+    },
+    "AcpToolCallContent": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AcpToolDiffContent"
+        },
+        {
+          "$ref": "#/$defs/AcpToolTextContent"
+        }
+      ]
+    },
+    "AcpToolCallUpdate": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpToolCallUpdateMeta"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AcpToolCallContent"
+          }
+        },
+        "rawOutput": {
+          "$ref": "#/$defs/AcpToolRawOutput"
+        },
+        "sessionUpdate": {
+          "const": "tool_call_update"
+        },
+        "status": {
+          "$ref": "#/$defs/AcpToolStatus"
+        },
+        "toolCallId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionUpdate",
+        "toolCallId"
+      ]
+    },
+    "AcpToolCallUpdateMeta": {
+      "type": "object",
+      "properties": {
+        "nexus/diff": {
+          "$ref": "#/$defs/AcpDiffInfo"
+        }
+      }
+    },
+    "AcpToolDiffContent": {
+      "description": "`path` is absolute. `oldText` is null for a new file. One block per hunk: the text is the hunk's lines, not the whole file.",
+      "type": "object",
+      "properties": {
+        "newText": {
+          "type": "string"
+        },
+        "oldText": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "type": {
+          "const": "diff"
+        }
+      },
+      "required": [
+        "newText",
+        "oldText",
+        "path",
+        "type"
+      ]
+    },
+    "AcpToolKind": {
+      "description": "The tool kinds of the specification that Nexus uses; `move` and `switch_mode` exist there and no Nexus tool is one.",
+      "enum": [
+        "delete",
+        "edit",
+        "execute",
+        "fetch",
+        "other",
+        "read",
+        "search",
+        "think"
+      ]
+    },
+    "AcpToolRawInput": {
+      "description": "The tool's name and subject as the sidecar reported them (already redacted and bounded).",
+      "type": "object",
+      "properties": {
+        "subject": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "subject",
+        "tool"
+      ]
+    },
+    "AcpToolRawOutput": {
+      "type": "object",
+      "properties": {
+        "denied": {
+          "description": "The operator declined the call at its approval prompt; it did not run.",
+          "type": "boolean"
+        },
+        "duration_ms": {
+          "type": "number"
+        },
+        "exit_code": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "timed_out": {
+          "type": "boolean"
+        }
+      }
+    },
+    "AcpToolStatus": {
+      "enum": [
+        "completed",
+        "failed",
+        "in_progress",
+        "pending"
+      ]
+    },
+    "AcpToolTextContent": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "$ref": "#/$defs/AcpTextContent"
+        },
+        "type": {
+          "const": "content"
+        }
+      },
+      "required": [
+        "content",
+        "type"
+      ]
+    },
+    "AcpUserMessageChunk": {
+      "description": "Sent only while replaying a loaded session.",
+      "type": "object",
+      "properties": {
+        "content": {
+          "$ref": "#/$defs/AcpTextContent"
+        },
+        "sessionUpdate": {
+          "const": "user_message_chunk"
+        }
+      },
+      "required": [
+        "content",
+        "sessionUpdate"
+      ]
+    },
+    "AcpValidationReceipt": {
+      "description": "The validation receipt of an authoritative verifier run, as the receipt's \"Validation receipt\" section shows it.",
+      "type": "object",
+      "properties": {
+        "candidate": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate",
+        "id",
+        "status"
+      ]
+    },
+    "AcpVerification": {
+      "description": "What Nexus can demonstrate about a turn. `end_turn` says nothing about verification; this object does.\n`receipt_id`: the validation receipt id when one is active, else `turn:<sessionId>:<turnId>`. `turn_id` is null only\nfor the last outcome of a loaded session, whose turn id the session record does not carry.",
+      "type": "object",
+      "properties": {
+        "execution": {
+          "$ref": "#/$defs/ExecutionState"
+        },
+        "outcome": {
+          "$ref": "#/$defs/EngineeringOutcome"
+        },
+        "reason": {
+          "$ref": "#/$defs/TurnReason"
+        },
+        "receipt_id": {
+          "type": "string"
+        },
+        "turn_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unverified_changes_pending": {
+          "type": "boolean"
+        },
+        "validation_receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AcpValidationReceipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "verifier": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AcpVerifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "verifier_runs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AcpVerifierRun"
+          }
+        }
+      },
+      "required": [
+        "execution",
+        "outcome",
+        "receipt_id",
+        "turn_id",
+        "unverified_changes_pending",
+        "validation_receipt",
+        "verifier",
+        "verifier_runs"
+      ]
+    },
+    "AcpVerificationMeta": {
+      "type": "object",
+      "properties": {
+        "nexus/verification": {
+          "$ref": "#/$defs/AcpVerification"
+        }
+      },
+      "required": [
+        "nexus/verification"
+      ]
+    },
+    "AcpVerifier": {
+      "type": "object",
+      "properties": {
+        "candidate": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        },
+        "exit_success": {
+          "type": "boolean"
+        },
+        "output_sha256": {
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "configured",
+            "discovered"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/VerificationStatus"
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "AcpVerifierRun": {
+      "description": "One verifier run of the turn.",
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "phase": {
+          "enum": [
+            "before_change",
+            "completion"
+          ]
+        }
+      },
+      "required": [
+        "command",
+        "passed",
+        "phase"
+      ]
+    },
+    "AcpVerifyParams": {
+      "description": "The caller identifies an active session only; all verification authority belongs to the server operator.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ]
+    },
+    "AcpVerifyRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/AcpId"
+        },
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "_nexus/verify"
+        },
+        "params": {
+          "$ref": "#/$defs/AcpVerifyParams"
+        }
+      },
+      "required": [
+        "id",
+        "jsonrpc",
+        "method",
+        "params"
+      ]
+    },
+    "EngineeringOutcome": {
+      "description": "VERIFIED        - the verifier selected for this workspace ran and passed against the current changes\nUNVERIFIED      - work ended with a result that was not (or could not be) verified; see reason. Either changes\n                  no passing verifier covers, or an answer resting on tool output that context compaction removed\n                  during the turn and the model did not re-read (CONTEXT_EVIDENCE_NOT_RETAINED)\nNOT_ESTABLISHED - no engineering result was established (turn did not complete, or verifier failed)\nNOT_REQUIRED    - the turn made no workspace change and every tool output it relied on was still in context",
+      "enum": [
+        "NOT_ESTABLISHED",
+        "NOT_REQUIRED",
+        "REGRESSION_FREE",
+        "UNVERIFIED",
+        "VERIFIED"
+      ]
+    },
+    "ExecutionState": {
+      "enum": [
+        "BLOCKED",
+        "COMPLETED",
+        "FAILED",
+        "INTERRUPTED",
+        "LIMIT_REACHED"
+      ]
+    },
+    "NexusReceipt": {
+      "description": "Result of `_nexus/receipt/get`. Nexus's own type, not part of the specification. Kept in memory for the process only.",
+      "type": "object",
+      "properties": {
+        "receipt_id": {
+          "type": "string"
+        },
+        "sections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReceiptSection"
+          }
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "turn_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "verification": {
+          "$ref": "#/$defs/AcpVerification"
+        }
+      },
+      "required": [
+        "receipt_id",
+        "sections",
+        "session_id",
+        "turn_id",
+        "verification"
+      ]
+    },
+    "NexusVerificationReceipt": {
+      "description": "Receipt of a workspace verification requested over ACP. Its result is the existing `nexus verify` v3 document.",
+      "type": "object",
+      "properties": {
+        "base_pinned_at": {
+          "type": "string"
+        },
+        "issued_at": {
+          "type": "string"
+        },
+        "receipt_id": {
+          "type": "string"
+        },
+        "receipt_sha256": {
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/VerifyJsonResult"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "surface": {
+          "const": "acp"
+        },
+        "workspace": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "base_pinned_at",
+        "issued_at",
+        "receipt_id",
+        "receipt_sha256",
+        "result",
+        "session_id",
+        "surface",
+        "workspace"
+      ]
+    },
+    "NexusVerifyResult": {
+      "description": "Small result returned from `_nexus/verify`; the full verification result lives in its receipt.",
+      "type": "object",
+      "properties": {
+        "base": {
+          "type": "object",
+          "properties": {
+            "commit": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "tree": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "commit",
+            "tree"
+          ]
+        },
+        "detail": {
+          "type": "string"
+        },
+        "head": {
+          "type": "object",
+          "properties": {
+            "tree": {
+              "type": "string"
+            },
+            "workingTree": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "tree",
+            "workingTree"
+          ]
+        },
+        "issued_at": {
+          "type": "string"
+        },
+        "operator_hint": {
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "NOT_ESTABLISHED",
+            "REGRESSION_FREE",
+            "UNVERIFIED",
+            "VERIFIED"
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/VerifyReason"
+        },
+        "receipt_id": {
+          "type": "string"
+        },
+        "receipt_sha256": {
+          "type": "string"
+        },
+        "receipt_uri": {
+          "type": "string"
+        },
+        "service_version": {
+          "type": "number"
+        },
+        "verdict": {
+          "$ref": "#/$defs/VerifyVerdict"
+        },
+        "verifier": {
+          "type": "object",
+          "properties": {
+            "approval": {
+              "type": "string"
+            },
+            "command": {
+              "type": "string"
+            },
+            "digest": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "approval",
+            "command",
+            "digest",
+            "source"
+          ]
+        },
+        "verify_schema_version": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "issued_at",
+        "outcome",
+        "receipt_id",
+        "receipt_sha256",
+        "receipt_uri",
+        "service_version",
+        "verdict",
+        "verify_schema_version"
+      ]
+    },
+    "ReceiptRow": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "ReceiptSection": {
+      "type": "object",
+      "properties": {
+        "note": {
+          "description": "Why the section is empty, or a footnote.",
+          "type": "string"
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReceiptRow"
+          }
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rows",
+        "title"
+      ]
+    },
+    "SandboxDenialEvent": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "category": {
+          "$ref": "#/$defs/SandboxEventCategory"
+        },
+        "engine": {
+          "$ref": "#/$defs/SandboxEventEngine"
+        },
+        "kind": {
+          "$ref": "#/$defs/SandboxEventKind"
+        },
+        "operation": {
+          "description": "Code-defined label for the refused operation: `verify`, a tool name, or a worker.",
+          "type": "string"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "reason": {
+          "description": "Short, control-character-free reason from the refusing code path.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "at",
+        "category",
+        "engine",
+        "kind",
+        "operation",
+        "profile",
+        "reason"
+      ]
+    },
+    "SandboxEventCategory": {
+      "enum": [
+        "engine",
+        "filesystem",
+        "network",
+        "policy"
+      ]
+    },
+    "SandboxEventEngine": {
+      "description": "VR-3: the profile-agnostic shape of a sandbox refusal. A denial is evidence for a receipt and a flight record; it is\nnever an approval and never raises a verdict. `profile` is `\"default\"` until SB-1 introduces named profiles, so the\nshape does not have to change when those names arrive.",
+      "enum": [
+        "auto",
+        "bwrap",
+        "docker",
+        "none"
+      ]
+    },
+    "SandboxEventKind": {
+      "enum": [
+        "denied",
+        "unavailable",
+        "violation"
+      ]
+    },
+    "TurnReason": {
+      "enum": [
+        "CONTEXT_CAPACITY_EXCEEDED",
+        "CONTEXT_EVIDENCE_NOT_RETAINED",
+        "INFERENCE_FAILED",
+        "INFERENCE_SUBMISSION_BUDGET_EXHAUSTED",
+        "NEEDS_INPUT",
+        "NO_APPLICABLE_VERIFIER",
+        "NO_TESTS_EXECUTED",
+        "OPERATOR_INTERRUPT",
+        "PERSISTENCE_FAILED",
+        "REGRESSION_FREE",
+        "REPOSITORY_STATE_CHANGED",
+        "REQUIREMENTS_INCOMPLETE",
+        "STAGNATION_DETECTED",
+        "STEP_BUDGET_EXHAUSTED",
+        "STEP_LIMIT_REACHED",
+        "STEP_PAUSED",
+        "TIME_BUDGET_EXHAUSTED",
+        "TOOL_CALL_LOOP",
+        "TOOL_INVOCATION_BUDGET_EXHAUSTED",
+        "UNHANDLED_ERROR",
+        "VERIFICATION_NOT_RUN",
+        "VERIFIER_FAILED",
+        "VERIFIER_NOT_CONVERGING",
+        "VERIFIER_TIMED_OUT"
+      ]
+    },
+    "TypecheckBaselineRecord": {
+      "type": "object",
+      "properties": {
+        "configPath": {
+          "type": "string"
+        },
+        "errorCount": {
+          "description": "Located errors on the base; present when the base run can serve as a baseline.",
+          "type": "number"
+        },
+        "status": {
+          "description": "NOT_RUN: discovery already ruled the project out (skipped, or its tool is missing).",
+          "enum": [
+            "ENVIRONMENT",
+            "FAILED",
+            "NOT_RUN",
+            "PASSED",
+            "PREEXISTING",
+            "TIMED_OUT",
+            "UNAVAILABLE"
+          ]
+        },
+        "tool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "configPath",
+        "status",
+        "tool"
+      ]
+    },
+    "TypecheckEvidence": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "baselineErrorCount": {
+          "description": "Errors the baseline run (before the change) already had.",
+          "type": "number"
+        },
+        "candidateId": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        },
+        "configPath": {
+          "type": "string"
+        },
+        "configSha256": {
+          "type": "string"
+        },
+        "enforced": {
+          "description": "False when the result is recorded only (operator-configured verifier, or NEXUS_TYPECHECK mode \"record\").",
+          "type": "boolean"
+        },
+        "errorCount": {
+          "type": "number"
+        },
+        "excerpt": {
+          "description": "Redacted, control characters made visible, capped, and fenced as untrusted compiler output.",
+          "type": "string"
+        },
+        "exitCode": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "firstDiagnostics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "introducedCount": {
+          "description": "Errors in the run that the pre-change baseline run did not have (present only when a baseline was captured).",
+          "type": "number"
+        },
+        "projects": {
+          "description": "Per-project evidence when a workspace contains multiple configured type-check projects.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TypecheckEvidence"
+          }
+        },
+        "scope": {
+          "description": "What the result holds for: \"under <configPath>\", never universal.",
+          "type": "string"
+        },
+        "shellChangedFiles": {
+          "description": "Files counted as modified that no edit tool touched (changed through the shell), when any.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "status": {
+          "description": "ENVIRONMENT: the check could not run or be attributed here (not a candidate failure). PREEXISTING: errors exist, but\nnone in a file the candidate modified; it is not a pass and does not block.",
+          "enum": [
+            "ENVIRONMENT",
+            "FAILED",
+            "NOT_APPLICABLE",
+            "PASSED",
+            "PREEXISTING",
+            "TIMED_OUT",
+            "UNAVAILABLE"
+          ]
+        },
+        "tool": {
+          "type": "string"
+        },
+        "toolSha256": {
+          "description": "Hash of the resolved tool launcher.",
+          "type": "string"
+        },
+        "toolVersion": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "at",
+        "status"
+      ]
+    },
+    "TypecheckMode": {
+      "enum": [
+        "enforce",
+        "off",
+        "record"
+      ]
+    },
+    "VerificationClass": {
+      "enum": [
+        "build",
+        "ci",
+        "package_scripts",
+        "policy",
+        "test_config",
+        "test_file",
+        "verifier_script"
+      ]
+    },
+    "VerificationEvidence": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "candidateId": {
+          "type": "string"
+        },
+        "command": {
+          "description": "The verifier actually selected: configured override or one discovered from repository files.",
+          "type": "string"
+        },
+        "deadlineSecs": {
+          "description": "Deadline the verifier was given, recorded when it timed out.",
+          "type": "number"
+        },
+        "definitionBound": {
+          "description": "False when the verifier's inputs could not be bound to the tree that was committed: either its workspace-resolved\ndefinition was unbindable (for example a node_modules tree under `npm test`) or test files changed while it ran\n(including a test that restored itself before exit). No such pass can be independent evidence; the turn is then at\nmost REGRESSION_FREE, and independenceDetail names which binding failed.",
+          "const": false
+        },
+        "exitSuccess": {
+          "type": "boolean"
+        },
+        "filtered": {
+          "description": "True when the selected test command includes a filter and therefore cannot stand for the full suite.",
+          "type": "boolean"
+        },
+        "hasExecutedTests": {
+          "type": "boolean"
+        },
+        "independenceDetail": {
+          "type": "string"
+        },
+        "independent": {
+          "description": "A discovered verifier's pass is independent evidence of the change: tests that existed before it, unmodified,\nfailed before and pass after. False (with independenceDetail) when only the agent's own tests, or tests that also\npassed before, check it — the turn is then REGRESSION_FREE, not VERIFIED.",
+          "type": "boolean"
+        },
+        "isDeliverableBound": {
+          "type": "boolean"
+        },
+        "outputSha256": {
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "configured",
+            "discovered"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/VerificationStatus"
+        },
+        "typecheck": {
+          "description": "Type-check run beside the verifier. A scoped fact about the named configuration, never about the code in general.",
+          "$ref": "#/$defs/TypecheckEvidence"
+        }
+      },
+      "required": [
+        "at",
+        "status"
+      ]
+    },
+    "VerificationMode": {
+      "enum": [
+        "approve",
+        "block",
+        "off",
+        "record"
+      ]
+    },
+    "VerificationStatus": {
+      "enum": [
+        "FAILED",
+        "NO_APPLICABLE_VERIFIER",
+        "PASSED",
+        "TIMED_OUT"
+      ]
+    },
+    "VerifyBaselineSummary": {
+      "type": "object",
+      "properties": {
+        "failed": {
+          "description": "The verifier failed on the base tree.",
+          "type": "boolean"
+        },
+        "testFiles": {
+          "description": "Test files captured from the base tree; null when one was too large to capture.",
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "usable": {
+          "description": "The base run can serve as the \"failed before\" half: it failed, by itself, with tests that ran.",
+          "type": "boolean"
+        },
+        "verifierDefinitionBound": {
+          "description": "The files that define the verifier were captured from the base tree.",
+          "type": "boolean"
+        },
+        "verifierUnbindableReason": {
+          "description": "Why they could not be captured.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "failed",
+        "testFiles",
+        "usable",
+        "verifierDefinitionBound"
+      ]
+    },
+    "VerifyGuard": {
+      "description": "The verification-file guard: which changed files define or weaken the verification, under the BASE tree's policy.",
+      "type": "object",
+      "properties": {
+        "complete": {
+          "description": "False when a changed file could not be classified (unreadable, too large, or too many findings).",
+          "type": "boolean"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VerifyGuardFinding"
+          }
+        },
+        "mode": {
+          "description": "`approve`: a finding that requires approval blocks until approved. `block`: it blocks, and approval is not accepted.",
+          "$ref": "#/$defs/VerificationMode"
+        },
+        "policySource": {
+          "description": "`base_tree`: the base tree's `.nexus-security.json` (it can only tighten). `default`: the base tree has none. The head's is never read.",
+          "enum": [
+            "base_tree",
+            "default"
+          ]
+        },
+        "status": {
+          "description": "NOT_RUN: verification stopped before the change was read. CLEAR: nothing waits for a decision. BLOCKED: a finding does, or the scan is incomplete.",
+          "enum": [
+            "BLOCKED",
+            "CLEAR",
+            "NOT_RUN"
+          ]
+        }
+      },
+      "required": [
+        "complete",
+        "findings",
+        "status"
+      ]
+    },
+    "VerifyGuardFinding": {
+      "description": "One changed file that decides how the change is verified.",
+      "type": "object",
+      "properties": {
+        "approved": {
+          "description": "The operator approved this path. Approval lets the verdict be reported; it never makes the change VERIFIED.",
+          "type": "boolean"
+        },
+        "class": {
+          "$ref": "#/$defs/VerificationClass"
+        },
+        "kind": {
+          "enum": [
+            "added",
+            "deleted",
+            "modified"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "requiresApproval": {
+          "description": "The edit needs `--approve-verification-edit <path>`: a verification configuration file, or a weakened test.",
+          "type": "boolean"
+        },
+        "weakening": {
+          "description": "For a test file: what the edit removed (a heuristic over the text). Absent when nothing was detected.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "approved",
+        "class",
+        "kind",
+        "path",
+        "requiresApproval"
+      ]
+    },
+    "VerifyIngredient": {
+      "description": "An ingredient of the verdict that this version does not run. Later versions add statuses and members.",
+      "type": "object",
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "status": {
+          "const": "NOT_RUN"
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "VerifyJsonResult": {
+      "description": "Printed when verification reached a verdict, whatever the verdict. It is also the receipt.",
+      "type": "object",
+      "properties": {
+        "approvedVerificationEdits": {
+          "description": "The paths given with `--approve-verification-edit`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "base": {
+          "description": "Absent when the checkout was refused before anything was resolved.",
+          "$ref": "#/$defs/VerifyTreeRef"
+        },
+        "baseline": {
+          "$ref": "#/$defs/VerifyBaselineSummary"
+        },
+        "changedFileCount": {
+          "type": "number"
+        },
+        "changedFiles": {
+          "description": "Paths that differ between base and head (at most 200 are listed).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "deliverables": {
+          "description": "The operator-declared deliverable files.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "detail": {
+          "type": "string"
+        },
+        "durationMs": {
+          "type": "number"
+        },
+        "environment": {
+          "description": "Names (never values) of verdict-affecting environment variables that were set.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "exitCode": {
+          "description": "The process exit code.",
+          "type": "number"
+        },
+        "guard": {
+          "$ref": "#/$defs/VerifyGuard"
+        },
+        "head": {
+          "$ref": "#/$defs/VerifyTreeRef"
+        },
+        "limits": {
+          "$ref": "#/$defs/VerifyLimits"
+        },
+        "linkedDependencyDirs": {
+          "description": "Dependency directories of the caller's checkout that were linked into both scratch trees.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "nexusVersion": {
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "NOT_ESTABLISHED",
+            "REGRESSION_FREE",
+            "UNVERIFIED",
+            "VERIFIED"
+          ]
+        },
+        "reason": {
+          "description": "Absent only when the verdict is VERIFIED.",
+          "$ref": "#/$defs/VerifyReason"
+        },
+        "review": {
+          "$ref": "#/$defs/VerifyReview"
+        },
+        "runs": {
+          "description": "Every verifier process that ran, in order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VerifyRunRecord"
+          }
+        },
+        "sandbox": {
+          "description": "Always written; absent only in a document from before `--sandbox` existed (nothing was sandboxed).",
+          "$ref": "#/$defs/VerifySandbox"
+        },
+        "sandboxEvents": {
+          "description": "Sandbox refusals encountered in this run. Present only when one happened; a denial is evidence, never an approval.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SandboxDenialEvent"
+          }
+        },
+        "schema_version": {
+          "description": "Version of this document's schema. Always the first member.",
+          "const": 3
+        },
+        "startedAt": {
+          "type": "string"
+        },
+        "typecheck": {
+          "$ref": "#/$defs/VerifyTypecheck"
+        },
+        "verdict": {
+          "$ref": "#/$defs/VerifyVerdict"
+        },
+        "verification": {
+          "description": "The evidence the outcome was derived from.",
+          "$ref": "#/$defs/VerificationEvidence"
+        },
+        "verifier": {
+          "description": "Absent when no verifier applies.",
+          "$ref": "#/$defs/VerifyVerifierRecord"
+        }
+      },
+      "required": [
+        "approvedVerificationEdits",
+        "changedFileCount",
+        "changedFiles",
+        "deliverables",
+        "durationMs",
+        "environment",
+        "exitCode",
+        "guard",
+        "limits",
+        "linkedDependencyDirs",
+        "nexusVersion",
+        "outcome",
+        "review",
+        "runs",
+        "schema_version",
+        "startedAt",
+        "typecheck",
+        "verdict"
+      ]
+    },
+    "VerifyLimits": {
+      "type": "object",
+      "properties": {
+        "maxTreeBytes": {
+          "type": "number"
+        },
+        "maxTreeFiles": {
+          "type": "number"
+        },
+        "timeoutSecs": {
+          "description": "Deadline of each verifier run, and of the type-checks of each side, in seconds.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "maxTreeBytes",
+        "maxTreeFiles",
+        "timeoutSecs"
+      ]
+    },
+    "VerifyReason": {
+      "description": "Why the verdict is not VERIFIED: the outcome ladder's reasons, and the ones only `nexus verify` gives.",
+      "enum": [
+        "GUARD_INCOMPLETE",
+        "INTERNAL_ERROR",
+        "NOTHING_TO_VERIFY",
+        "NO_APPLICABLE_VERIFIER",
+        "NO_TESTS_EXECUTED",
+        "REGRESSION_FREE",
+        "REVIEW_REJECTED",
+        "SANDBOX_UNAVAILABLE",
+        "TREE_LIMIT_EXCEEDED",
+        "TYPECHECK_FAILED",
+        "TYPECHECK_NOT_RUN",
+        "TYPECHECK_TIMED_OUT",
+        "TYPECHECK_UNAVAILABLE",
+        "UNSUPPORTED_TREE",
+        "UNTRUSTED_CHECKOUT",
+        "VERIFICATION_EDIT_BLOCKED",
+        "VERIFICATION_NOT_RUN",
+        "VERIFIER_DEFINITION_CHANGED",
+        "VERIFIER_DEFINITION_NOT_CAPTURED",
+        "VERIFIER_FAILED",
+        "VERIFIER_NOT_APPROVED",
+        "VERIFIER_TIMED_OUT"
+      ]
+    },
+    "VerifyReview": {
+      "description": "The independent reviewer's result. `NOT_RUN` is honest when no head verifier ran, so nothing was reviewed;\n`COMPLETE` publishes only the members this reviewer writes, using the vocabulary of the project's existing\n`IndependentReviewVerdict` (ACCEPT/REJECT, observations, defects, unproven criteria and scope violations). Internal\nmembers such as `boundaryReport`, `changeAssessment` and a defect's optional line are deliberately not published.\nA REJECT can withhold VERIFIED but never raise a verdict: deterministic verifier evidence stays the authority for a\npassing result.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/VerifyIngredient"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "reviewerConfidenceNote": {
+              "type": "string"
+            },
+            "scopeViolations": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "status": {
+              "const": "COMPLETE"
+            },
+            "suspectedDefects": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "description": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "description",
+                  "path"
+                ]
+              }
+            },
+            "unprovenCriteria": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "verdict": {
+              "enum": [
+                "ACCEPT",
+                "REJECT"
+              ]
+            },
+            "verifiedObservations": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "reviewerConfidenceNote",
+            "scopeViolations",
+            "status",
+            "suspectedDefects",
+            "unprovenCriteria",
+            "verdict",
+            "verifiedObservations"
+          ]
+        }
+      ]
+    },
+    "VerifyRunRecord": {
+      "type": "object",
+      "properties": {
+        "durationMs": {
+          "type": "number"
+        },
+        "executedTests": {
+          "description": "The output shows at least one test that ran.",
+          "type": "boolean"
+        },
+        "exitCode": {
+          "description": "Null when the process was killed or never started.",
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outputSha256": {
+          "type": "string"
+        },
+        "outputTail": {
+          "description": "The end of the output of a run that did not pass: repository-controlled text, redacted and capped.",
+          "type": "string"
+        },
+        "outputTruncated": {
+          "type": "boolean"
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "phase": {
+          "description": "`base_tests_on_head`: the test files as they were on the base, run against the head's code.",
+          "enum": [
+            "base",
+            "base_tests_on_head",
+            "head"
+          ]
+        },
+        "sandboxed": {
+          "description": "The process ran inside the sandbox named in `sandbox.engine`. Always written; absent only in a document from before `--sandbox` existed (the run was not sandboxed).",
+          "type": "boolean"
+        },
+        "testFixtureReads": {
+          "description": "Test-oracle files or candidate-only workspace paths opened/observed more often than by the base run. Such a pass is not independent; paths can include test-support data, not only test files.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "timedOut": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "durationMs",
+        "executedTests",
+        "exitCode",
+        "outputSha256",
+        "outputTruncated",
+        "passed",
+        "phase",
+        "timedOut"
+      ]
+    },
+    "VerifySandbox": {
+      "description": "How the processes `nexus verify` started on repository content were confined: the verifier on each side, the base's\ntests against the head, and the type-checks. One answer for all of them: a run is never started outside a sandbox\nthat was requested.",
+      "type": "object",
+      "properties": {
+        "engine": {
+          "description": "The engine every process ran in. `none`: no sandbox (not requested, or requested and unavailable, in which case nothing ran).",
+          "enum": [
+            "bwrap",
+            "docker",
+            "none"
+          ]
+        },
+        "network": {
+          "description": "The confined processes could use the network (`--sandbox-network`). Always false when `engine` is `none`: an unconfined process has the caller's network, which this member does not describe.",
+          "type": "boolean"
+        },
+        "requested": {
+          "description": "The operator explicitly selected a sandbox; the effective engine and run records also show default confinement.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "engine",
+        "network",
+        "requested"
+      ]
+    },
+    "VerifyTreeRef": {
+      "description": "One side of the comparison.",
+      "type": "object",
+      "properties": {
+        "commit": {
+          "description": "The commit; null for the working tree, which has none.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ref": {
+          "description": "What the operator named: a ref, or \"(working tree)\".",
+          "type": "string"
+        },
+        "tree": {
+          "description": "The Git tree that was materialised and verified. For the working tree: tracked and untracked files that are not ignored, as `git add -A` would stage them (Nexus's own `.nexus` state left out).",
+          "type": "string"
+        },
+        "workingTree": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "commit",
+        "ref",
+        "tree",
+        "workingTree"
+      ]
+    },
+    "VerifyTypecheck": {
+      "description": "The project type-checks. The evidence of every project (tool, configuration, status, counts, tool hash) is in\n`verification.typecheck.projects`; this is the summary and the base side.",
+      "type": "object",
+      "properties": {
+        "baseline": {
+          "description": "The same projects on the base tree: what a \"new\" error on the head is measured against.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TypecheckBaselineRecord"
+          }
+        },
+        "detail": {
+          "type": "string"
+        },
+        "missingFromHead": {
+          "description": "Projects of the base tree that the head no longer has (tool and configuration path).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mode": {
+          "description": "`enforce`: a failing check lowers the verdict. `record`: recorded only (your own `--verifier`). `off`: disabled by NEXUS_TYPECHECK.",
+          "$ref": "#/$defs/TypecheckMode"
+        },
+        "status": {
+          "description": "NOT_RUN: the verifier did not pass on the head (or verification stopped earlier), so no type-check was run.\nOtherwise the combined status of the head's projects, as in `verification.typecheck.status`.",
+          "enum": [
+            "ENVIRONMENT",
+            "FAILED",
+            "NOT_APPLICABLE",
+            "NOT_RUN",
+            "PASSED",
+            "PREEXISTING",
+            "TIMED_OUT",
+            "UNAVAILABLE"
+          ]
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "VerifyVerdict": {
+      "description": "VERIFIED: evidence independent of the change shows it. REGRESSION_FREE: the tests pass, which shows only that nothing\nthey cover broke. UNVERIFIED: nothing was established (see `outcome` and `reason`). BLOCKED: a person must decide\nbefore anything is run or concluded.",
+      "enum": [
+        "BLOCKED",
+        "REGRESSION_FREE",
+        "UNVERIFIED",
+        "VERIFIED"
+      ]
+    },
+    "VerifyVerifierRecord": {
+      "type": "object",
+      "properties": {
+        "approval": {
+          "description": "How it was approved: it is the operator's own command, `--yes`, a matching `--approve-verifier` digest, or not at all.",
+          "enum": [
+            "digest",
+            "none",
+            "operator_command",
+            "yes"
+          ]
+        },
+        "command": {
+          "type": "string"
+        },
+        "digest": {
+          "description": "sha256 of the command and the script body it resolves to in the base tree.",
+          "type": "string"
+        },
+        "evidence": {
+          "description": "The base-tree file that justifies a discovered verifier, or \"configured\".",
+          "type": "string"
+        },
+        "script": {
+          "description": "The script body the command resolves to in the base tree (capped), when there is one.",
+          "type": "string"
+        },
+        "source": {
+          "description": "`configured`: the operator's `--verifier`. `discovered`: selected from the files of the base tree.",
+          "enum": [
+            "configured",
+            "discovered"
+          ]
+        }
+      },
+      "required": [
+        "approval",
+        "command",
+        "digest",
+        "evidence",
+        "source"
+      ]
+    }
+  }
+}
