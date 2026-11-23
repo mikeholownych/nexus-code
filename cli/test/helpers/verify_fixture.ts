@@ -9,7 +9,7 @@ import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { verifyChange, type VerifyOperatorContext, type VerifyRequest } from "../../src/core/verify.js";
+import { verifyChange, type VerifyDependencies, type VerifyOperatorContext, type VerifyRequest } from "../../src/core/verify.js";
 import { VERIFY_RESULT_SCHEMA_VERSION, verifyExitCode, verifyExitNameFor, verifyVerdictFor, type VerifyJsonResult } from "../../src/verify_contract.js";
 import { verifyResultSchemaFile } from "../../scripts/gen_verify_result_schema.mjs";
 import { makeHome, makeRepo } from "./fixtures.js";
@@ -77,7 +77,12 @@ export function assertVerifyResult(doc: any): void {
   assert.equal(doc.exitCode, verifyExitCode(verifyExitNameFor(doc.reason)));
   assert.equal(doc.verdict === "VERIFIED", doc.exitCode === 0, "exit 0 if and only if VERIFIED");
   assert.equal(doc.verdict === "VERIFIED", doc.outcome === "VERIFIED");
-  assert.equal(doc.review.status, "NOT_RUN");
+  assert.ok(["NOT_RUN", "COMPLETE"].includes(doc.review.status), "the reviewer's status is one the contract declares");
+  if (doc.review.status === "COMPLETE") {
+    assert.ok(["ACCEPT", "REJECT"].includes(doc.review.verdict), "a completed review has a verdict");
+    for (const member of ["verifiedObservations", "suspectedDefects", "unprovenCriteria", "scopeViolations"]) assert.ok(Array.isArray(doc.review[member]), member);
+    if (doc.review.verdict === "REJECT") assert.notEqual(doc.verdict, "VERIFIED", "a rejected review never accompanies VERIFIED");
+  }
   // The sandbox record is always written, and every run says the same as it: a run is never outside a sandbox that was used.
   assert.equal(typeof doc.sandbox?.requested, "boolean");
   assert.ok(["none", "bwrap", "docker"].includes(doc.sandbox.engine), `sandbox.engine ${doc.sandbox.engine}`);
@@ -175,7 +180,7 @@ export interface InProcessRun { result: VerifyJsonResult; leftovers: string[] }
 export async function verifyInProcess(
   request: VerifyRequest,
   operator: VerifyOperatorContext = {},
-  options: { env?: Record<string, string>; tsc?: "real" | string } = {},
+  options: { env?: Record<string, string>; tsc?: "real" | string; deps?: VerifyDependencies } = {},
 ): Promise<InProcessRun> {
   const saved = { ...process.env };
   const home = makeHome();
@@ -184,7 +189,7 @@ export async function verifyInProcess(
   for (const key of Object.keys(process.env)) if (/^(LOCAL_LLM_|LOCAL_HARNESS_|NEXUS_|GIT_|XDG_)/.test(key) || key === "NODE_TEST_CONTEXT") delete process.env[key];
   Object.assign(process.env, { HOME: home, TMPDIR: tmp, PATH: tools.PATH }, options.env ?? {});
   try {
-    const result = JSON.parse(JSON.stringify(await verifyChange(request, operator))) as VerifyJsonResult;
+    const result = JSON.parse(JSON.stringify(await verifyChange(request, operator, options.deps ?? {}))) as VerifyJsonResult;
     assertVerifyResult(result);
     for (const [name, value] of Object.entries(options.env ?? {})) assert.equal(process.env[name], value, `${name} is left as the caller set it`);
     return { result, leftovers: fs.readdirSync(tmp).filter((name) => name.startsWith("nexus-")) };

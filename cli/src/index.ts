@@ -1234,10 +1234,12 @@ program
     const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
     const delay = parseInt(options.delay, 10) || 0;
     try {
-      const { manifest, events } = FlightPlayer.loadFlight(ws, flightId);
+      const { manifest, events, integrity } = FlightPlayer.loadFlight(ws, flightId);
       console.log(pc.bold(pc.cyan(`\n🛫 Replaying Flight: ${manifest.flightId}`)));
       console.log(`Model: ${pc.bold(manifest.model)} | Workspace: ${pc.dim(manifest.workspace)}`);
-      console.log(`Recorded: ${pc.dim(manifest.recordedAt)} | Events: ${events.length}\n`);
+      console.log(`Recorded: ${pc.dim(manifest.recordedAt)} | Events: ${events.length}`);
+      // GV-3: the chain is checked on load; showing the verdict here is what makes tampering visible to an operator.
+      console.log(`Record integrity: ${FlightPlayer.describeIntegrity(integrity)}\n`);
 
       await FlightPlayer.replay(events, (ev) => {
         const stepPrefix = ev.step !== undefined ? `[Step ${ev.step}] ` : "";
