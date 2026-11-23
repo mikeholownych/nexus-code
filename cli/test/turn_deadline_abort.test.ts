@@ -71,3 +71,31 @@ test("the active turn deadline cancels a running shell tool without a later side
     fs.rmSync(workspace, { recursive: true, force: true });
   }
 });
+
+test("a normally completed turn clears its active deadline timer", { timeout: 20_000 }, async () => {
+  const gateway = await startGateway(() => ({ kind: "text", content: "done" }));
+  const workspace = makeRepo();
+  const config: HarnessConfig = {
+    endpoint: gateway.url,
+    model: "m",
+    maxSteps: 2,
+    continuation: { ...DEFAULT_CONTINUATION, maxTurnMinutes: 1 },
+    temperature: 0,
+    workspace,
+    shell: "bash",
+    approvalMode: "auto",
+    fullAccess: true,
+  };
+  const agent = new AutonomousAgent(config);
+  (agent as any).ui = new Proxy({}, { get: () => () => {} });
+  try {
+    const result = await agent.runTurn("Finish normally.");
+    assert.equal(result.execution, "COMPLETED");
+    assert.equal(result.outcome, "NOT_REQUIRED");
+    assert.equal(gateway.requests.length, 1);
+  } finally {
+    agent.shutdown();
+    await gateway.close();
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});

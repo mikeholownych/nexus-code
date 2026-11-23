@@ -315,7 +315,6 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
       deadlineTimer = setTimeout(() => {
         if (this.requestCancel("time budget")) timeBudgetExpired = true;
       }, Math.max(0, turnDeadline - Date.now()));
-      deadlineTimer.unref?.();
     }
     let completionNudges = 0;
     // Recovery state (notes, stage, refusals) lives in the tracker: in the ledger when durable, so compaction cannot
