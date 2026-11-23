@@ -175,3 +175,29 @@ test("the flight recorder writes a typed denial that replays with an intact chai
   assert.equal(raw.includes("sandbox_unavailable"), true);
   assert.equal(raw.includes("SANDBOX_UNAVAILABLE"), false, "the flight event is a typed refusal, not a verify reason");
 });
+
+import { ExecutionSpine } from "../src/core/spine.js";
+
+test("ExecutionSpine converts structured sandboxDenial into receipt sandboxEvents with engine from context", async () => {
+  const spine = new ExecutionSpine();
+  spine.registerHandler("run_command", async () => ({
+    success: false,
+    output: "",
+    error: "Read-only mode violation: filesystem-isolated shell execution is unavailable. No supported sandbox engine is available.",
+    sandboxDenial: { kind: "unavailable" as const, category: "engine" as const, reason: "No supported sandbox engine is available." },
+  }));
+
+  const receipt = await spine.execute(
+    { invocationId: "inv-1", taskId: "task-1", toolName: "run_command", args: { command: "echo hi" } },
+    { workspaceRoot: "/tmp/ws", metadata: { sandbox: "bwrap" } },
+  );
+
+  assert.equal(receipt.success, false);
+  assert.equal(receipt.sandboxEvents?.length, 1);
+  assert.equal(receipt.sandboxEvents?.[0].engine, "bwrap");
+  assert.equal(receipt.sandboxEvents?.[0].kind, "unavailable");
+  assert.equal(receipt.sandboxEvents?.[0].category, "engine");
+  assert.equal(receipt.sandboxEvents?.[0].operation, "run_command");
+  assert.equal(receipt.sandboxEvents?.[0].profile, "default");
+  assert.ok(!("verdict" in (receipt.sandboxEvents?.[0] ?? {})));
+});

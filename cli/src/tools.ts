@@ -1698,7 +1698,7 @@ export class RustCoreBridge {
                 success: false,
                 output: "",
                 error: "Read-only mode violation: workspace identity changed before command execution.",
-                sandboxDenial: { kind: "violation", category: "policy", reason: "workspace identity changed before command execution" },
+                sandboxDenial: { kind: "violation", category: "filesystem", reason: "workspace identity changed before command execution" },
               };
             }
 

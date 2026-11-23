@@ -51,25 +51,3 @@ export function sandboxDenialEvent(input: {
     at: new Date().toISOString(),
   };
 }
-
-/**
- * Build a typed event from a tool error only when the error is actually about sandbox confinement. Other denials
- * (approval, read-only policy, verification-file protection) keep their existing paths and are not mislabelled.
- */
-export function sandboxDenialFromError(error: string | undefined, engine: SandboxEventEngine, operation: string): SandboxDenialEvent | undefined {
-  if (!error) return undefined;
-  if (!/sandbox|bubblewrap|bwrap|docker|filesystem-isolated|worker isolation|confinement|pinned workspace|workspace identity/i.test(error)) return undefined;
-  const category: SandboxEventCategory = /network/i.test(error)
-    ? "network"
-    : /unavailable|not available|not found|could not be built|could not be confined|daemon is not reachable|no supported sandbox engine|no sandboxing engine/i.test(error)
-      ? "engine"
-      : /violation|escaped|pinned workspace|workspace identity|path/i.test(error)
-        ? "filesystem"
-        : "policy";
-  const kind: SandboxEventKind = category === "engine"
-    ? "unavailable"
-    : /violation|escaped/i.test(error)
-      ? "violation"
-      : "denied";
-  return sandboxDenialEvent({ kind, engine, operation, category, reason: error });
-}

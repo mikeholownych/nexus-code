@@ -674,7 +674,7 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
     dryRun: this.config.dryRun,
     readOnly: this.isReadOnly(),
     bridge: this.bridge,
-    metadata: { actor, stepIndex: currentStep, verificationAuthority },
+    metadata: { actor, stepIndex: currentStep, verificationAuthority, sandbox: this.config.sandbox },
     defaultHandler: async (tName, tArgs) => {
       if (this.mcpManager.isMcpTool(tName)) {
         return await this.mcpManager.executeMcpTool(tName, tArgs);
