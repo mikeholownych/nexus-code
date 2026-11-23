@@ -10,12 +10,20 @@ import type { HarnessConfig } from "./types.js";
 export const GOAL_ID_PREFIX = "goal-";
 export type GoalStatus = "RUNNING" | "WAITING" | "PAUSED" | "BLOCKED" | "COMPLETE" | "CANCELLED";
 
+export interface GoalUsage {
+  agentRuns: number;
+  reportedTokens: number;
+  estimatedTokens: number;
+  inferenceRequests: number;
+}
+
 export interface GoalResult {
   id: string;
   status: GoalStatus;
   operation: DurableOperationState;
   ledger?: ObjectiveLedger;
   reason?: string;
+  usage?: GoalUsage;
 }
 
 export interface GoalRunnerOptions {
@@ -210,13 +218,31 @@ export class GoalOrchestrator {
     this.store.manager.saveTaskState(task);
   }
 
+  private usage(operation: DurableOperationState): GoalUsage {
+    const usage: GoalUsage = { agentRuns: 0, reportedTokens: 0, estimatedTokens: 0, inferenceRequests: 0 };
+    for (const unit of operation.units) {
+      usage.agentRuns += unit.runs;
+      if (!unit.agentTaskId) continue;
+      try {
+        const stats = this.store.manager.loadTaskState(unit.agentTaskId, this.config.workspace).tokenStats;
+        if (!stats) continue;
+        if (typeof stats.requests === "number" && stats.requests > 0 && stats.reportedRequests === stats.requests) usage.reportedTokens += stats.total;
+        else usage.estimatedTokens += stats.total;
+        usage.inferenceRequests += stats.requests ?? 0;
+      } catch {
+        // Missing child accounting remains unmeasured; no estimate is fabricated.
+      }
+    }
+    return usage;
+  }
+
   private result(operation: DurableOperationState): GoalResult {
     const release = this.store.acquire(operation.id);
     try {
       const fresh = this.store.load(operation.id);
       const ledger = foldUnitLedgers(fresh, this.store, this.config.workspace);
       const state = goalStatus(fresh, ledger);
-      return { id: fresh.id, status: state.status, operation: fresh, ...(ledger ? { ledger } : {}), ...(state.reason ? { reason: state.reason } : {}) };
+      return { id: fresh.id, status: state.status, operation: fresh, usage: this.usage(fresh), ...(ledger ? { ledger } : {}), ...(state.reason ? { reason: state.reason } : {}) };
     } finally {
       release();
     }

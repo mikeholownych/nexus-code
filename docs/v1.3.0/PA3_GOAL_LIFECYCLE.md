@@ -50,8 +50,9 @@ scope changes unavailable in read-only mode.
 - Goal decomposition currently reuses the existing full team graph; arbitrary requirement-to-work-unit mapping is not
   exposed by `/goal`. Use `/batch` when an operator needs an authored work-unit DAG.
 - PA-3 stretch gaps remain to be audited/implemented: stall counting by failure fingerprint (not turn count) at the
-  goal/operation semantics level where applicable, optional token budget roll-up from sub-operations, and full PA-3
-  acceptance qualification. `/team` remains experimental until PA-1 and PA-2 are complete.
+  goal/operation semantics level where applicable, optional token budget roll-up/cap enforcement from sub-operations
+  (usage roll-up is reported; no cap enforcement yet), and full PA-3 acceptance qualification. `/team` remains
+  experimental until PA-1 and PA-2 are complete.
 - Restart-specific interrupted-effect reconciliation beyond stale-boot pause still requires qualification.
 - No inference-provider or homelab-ai changes are required. Provider-neutral end-to-end qualification remains separate.
 
