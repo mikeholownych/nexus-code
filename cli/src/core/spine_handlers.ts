@@ -3,19 +3,21 @@ import { randomUUID } from "node:crypto";
 import { HarnessConfig } from "../types.js";
 import { registerBridgeCapabilities } from "../tools.js";
 import { PolicyContext } from "./approval_policy.js";
+import { describeSource } from "./managed_policy.js";
+import { approvalDecisionSource, clampApprovalSettings, humanRequirementForEffect } from "./policy_runtime.js";
 import { isWorkspaceTrusted } from "../workspace_trust.js";
 import { MAX_SKILL_MATCHES, oneLine } from "../skills.js";
 import { formatDiagnosticHints } from "../diagnostics.js";
 import { captureVerificationState, recordVerificationIfEligible } from "../worktrunk/verification.js";
 import { runTestSuiteWithExecutor, discoverVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand } from "../tester.js";
 import { TOOL_GROUPS } from "./tool_groups.js";
-import { snapshotVerifierDefinitionWithReason, requiresWorkspaceVerifierDefinitionBinding, trustedDeliverablesFromBaseline, testsChangedSince, verifierDefinitionChangedSince, verifierDefinitionMatchesSnapshot, tddRedTestsMatchSnapshot, type Independence } from "./independent_check.js";
+import { readWorkspaceTestSnapshot, snapshotVerifierDefinitionWithReason, requiresWorkspaceVerifierDefinitionBinding, trustedDeliverablesFromBaseline, testsChangedSince, verifierDefinitionChangedSince, verifierDefinitionMatchesSnapshot, tddRedTestsMatchSnapshot, type Independence } from "./independent_check.js";
 import { VerificationEvidence } from "./turn.js";
 import { createHash } from "node:crypto";
 import { unmetObligationsMessage } from "./regression_obligations.js";
 import { RequirementUpdate, applyRequirementUpdates, invalidateVerified, isHardRequirement, readObjective, blockedRequirements, failedCheckFrom, attemptEvidence, describeAttemptEvidence, gatingRequirements, openRequirements, priorAttempt, convergenceSignal, convergenceHistory, recordAttempt } from "./objective.js";
 import { readArchive, readFindings } from "./findings.js";
-import { resolveMaskedOutput } from "./tool_output_mask.js";
+import { readToolOutput, resolveMaskedOutput } from "./tool_output_mask.js";
 import { snapshot } from "../file_diff.js";
 import pc from "picocolors";
 import { collectMaterialDependencies } from "../material_deps.js";
@@ -27,6 +29,30 @@ import { isSpecialistRole, missingSpecialistInputs, specialistInputsProblem } fr
 
 function sha256Digest(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
+export interface TestSnapshotDigest {
+  digest: string | null;
+  /** The honest reason a digest could not be taken, distinct from a digest that changed between two reads. */
+  problem?: string;
+}
+
+/**
+ * A digest of every discoverable test file as it stands at one moment, hashed as raw bytes. The verifier binding below
+ * compares the digest taken before the verifier with one taken after it, so a test that rewrites itself while it runs
+ * - even one restored to its base content before exit - cannot be judged on its post-run content. An incomplete
+ * discovery or unreadable file fails closed with the reason why, not a claim that the files changed.
+ */
+export function testSnapshotDigest(workspace: string): TestSnapshotDigest {
+  const snapshot = readWorkspaceTestSnapshot(workspace);
+  if (!snapshot.files) return { digest: null, problem: snapshot.problem };
+  const hash = createHash("sha256");
+  const length = Buffer.alloc(4);
+  for (const [file, bytes] of [...snapshot.files].sort(([a], [b]) => a.localeCompare(b))) {
+    length.writeUInt32BE(bytes.length);
+    hash.update(file).update("\0").update(length).update(bytes);
+  }
+  return { digest: hash.digest("hex") };
 }
 
 export function setupSpineHandlersImpl(this: any): void {
@@ -191,15 +217,25 @@ export function setupSpineHandlersImpl(this: any): void {
           if (!approved) {
             const isTrusted = isWorkspaceTrusted(this.config.workspace, this.isReadOnly());
             const mode = this.getApprovalMode();
-            const policyContext: PolicyContext = {
+            // GV-1: the refusal is worded under the same clamp as the tool gate, and names the tier that decided.
+            const managed = this.bridge.getSecurityManager().getEffectivePolicy();
+            const human = humanRequirementForEffect(managed, "exec");
+            const askedContext: PolicyContext = {
               mode,
               trusted: isTrusted,
               sandbox: this.config.sandbox,
               approvedEgressOrigins: this.approvedEgressOrigins,
               fullAccess: Boolean(this.config.fullAccess) && !this.isReadOnly(),
             };
+            const policyContext: PolicyContext = clampApprovalSettings(managed, askedContext, human);
+            const decidedBy = approvalDecisionSource(managed, askedContext);
+            const guidance = human
+              ? human.message
+              : decidedBy.tier !== "default"
+                ? `Managed policy disables automatic approvals here. ${describeSource(decidedBy)}`
+                : `Run with --yes or --mode auto to explicitly select automatic approvals. ${describeSource(decidedBy)}`;
             const error = (!onConfirm && this.approvalPolicy.requiresDecision("exec", policyContext))
-              ? `Error: Verifier '${verifierCommand}' requires operator approval (exec), but no operator is present (headless execution). Run with --yes or --mode auto to explicitly select automatic approvals.`
+              ? `Error: Verifier '${verifierCommand}' requires operator approval (exec), but no operator is present (headless execution). ${guidance}`
               : `Verification Oracle: verifier execution was not approved by operator (${verifierCommand}).`;
             return {
               success: false,
@@ -212,12 +248,26 @@ export function setupSpineHandlersImpl(this: any): void {
           const deadlineSecs = this.config.verifierTimeoutSecs ?? DEFAULT_VERIFIER_TIMEOUT_SECS;
           this.activity("verifying", { tool: verifierCommand });
           verificationStateBefore = this.isRecordableWorktree() && !this.config.dryRun ? captureVerificationState(this.config.workspace) : undefined;
+          const testsBeforeVerifier = testSnapshotDigest(this.config.workspace);
           const verifierStartedAt = Date.now();
           const testRes = await runTestSuiteWithExecutor(
             this.config.workspace,
             (command) => this.bridge.executeTool("run_command", { command, timeout_secs: deadlineSecs }),
             verifierCommand
           );
+          const testsAfterVerifier = testSnapshotDigest(this.config.workspace);
+          const snapshotProblem = testsBeforeVerifier.problem ?? testsAfterVerifier.problem;
+          const testsMutatedDuringVerifier = testsBeforeVerifier.digest !== null && testsAfterVerifier.digest !== null && testsBeforeVerifier.digest !== testsAfterVerifier.digest;
+          // A command that can outlive the call may write after the second digest too. Fail closed rather than
+          // pretending that two digests bracket the whole interval in which the oracle could have been changed.
+          const backgroundCommands = this.turnBackgroundCommands > 0;
+          const verifierInputUnbound = snapshotProblem !== undefined || testsMutatedDuringVerifier || backgroundCommands;
+          const inputMutationDetail = snapshotProblem
+            ?? (backgroundCommands
+              ? "a command in this turn can outlive the call and change workspace files while the verifier runs, so its pass cannot be bound to the tree that was committed"
+              : testsMutatedDuringVerifier
+                ? "test files changed while the verifier ran (including a test that restored itself before exit), so its pass cannot be bound to the tree that was committed"
+                : undefined);
           // Configured or discovered, a verifier is evidence about the change only when its run shows tests that
           // executed and cover the changed files.
           hasExecuted = hasExecutedTests(testRes.rawOutput || "");
@@ -227,7 +277,7 @@ export function setupSpineHandlersImpl(this: any): void {
           // candidate-controlled tests. Only a verifier definition and test snapshot captured
           // before the current task's edits can bind workspace changes.
           const configuredTestsStable = source !== "configured" || !baselineTestsChanged;
-          isDeliverableBound = (!this.verificationBaselineInvalidated && hasExecuted && configuredTestsStable && isVerifierDeliverableBound(
+          isDeliverableBound = (!this.verificationBaselineInvalidated && !verifierInputUnbound && hasExecuted && configuredTestsStable && isVerifierDeliverableBound(
             this.config.workspace,
             Array.from(this.modifiedFiles),
             verifierCommand,
@@ -252,8 +302,9 @@ export function setupSpineHandlersImpl(this: any): void {
           const testsAndTypesPass = testRes.success && !typecheckBlock;
           // A discovered verifier's pass makes the change VERIFIED only on independent evidence (fail-before /
           // pass-after on tests the change did not write); the operator's configured verifier is their own check.
-          const independence: Independence | undefined = unboundDetail
-            ? { independent: false, detail: unboundDetail }
+          const bindingDetail = unboundDetail ?? inputMutationDetail;
+          const independence: Independence | undefined = bindingDetail
+            ? { independent: false, detail: bindingDetail }
             : source === "discovered" && testsAndTypesPass && isDeliverableBound ? await this.judgeIndependence(verifierCommand, deadlineSecs, onConfirm) : undefined;
           const evidence: VerificationEvidence = {
             status: testsAndTypesPass ? "PASSED" : testRes.timedOut ? "TIMED_OUT" : "FAILED",
@@ -263,7 +314,7 @@ export function setupSpineHandlersImpl(this: any): void {
             hasExecutedTests: hasExecuted,
             ...(typecheck ? { typecheck } : {}),
             isDeliverableBound,
-            ...(unboundDetail ? { definitionBound: false } : {}),
+            ...(bindingDetail ? { definitionBound: false } : {}),
             ...(independence ? { independent: independence.independent, independenceDetail: independence.detail } : {}),
             ...(testRes.timedOut ? { deadlineSecs } : {}),
             outputSha256: createHash("sha256").update(testRes.rawOutput || "").digest("hex"),
@@ -912,6 +963,11 @@ export function setupSpineHandlersImpl(this: any): void {
     const masked = typeof args?.query === "string" ? resolveMaskedOutput(args.query, this.messages, this.archiveForReading) : undefined;
     if (masked !== undefined) return { success: true, output: masked };
     const result = readArchive(this.archiveForReading, args ?? {});
+    return result.ok ? { success: true, output: result.text } : { success: false, output: "", error: result.text };
+  });
+
+  this.spine.registerHandler("read_tool_output", async (args: any) => {
+    const result = readToolOutput(args?.id, this.messages, this.archiveForReading);
     return result.ok ? { success: true, output: result.text } : { success: false, output: "", error: result.text };
   });
 

@@ -25,11 +25,15 @@ plus launcher symlink swap. The snapshot exists for `--restore-backup`.
 ## Verification
 
 - `npm --prefix cli run build`: pass.
-- `cli/test/upgrade_backup_performance.test.ts` (new): clone flags, private modes, manifest, nested
-  exclusion, unsupported-clone fallback, chunked progress, and restore of a cloned snapshot.
+- `cli/test/upgrade_backup_performance.test.ts` (new): clone flags, private modes, manifest, shallow
+  and deep nested backup-directory exclusion, unsupported-clone fallback, chunked progress, and
+  restore of a cloned snapshot. The standalone `config.env` backup is now included in the manifest,
+  so manifest entry count matches the counted files.
 - Existing `upgrade_transaction_recovery.test.ts`, `upgrade_safety.test.ts`, `upgrade.test.ts`,
   `upgrade_acceptance.test.ts`, `upgrade_cli.test.ts`, `upgrade_durability.test.ts`,
   `state_migration.test.ts`, `install_durability.test.ts`: 145 tests, 144 pass, 0 fail (1 skipped).
+  This attribution is for the pre-review slice; the follow-up focused run is recorded in
+  `docs/evidence/REVIEW_FIXES_01.md`.
 
 The speed-up is a design consequence, **not a measured result** on the reported host. No benchmark
 was run against the real 1.82 GB state tree, and this slice does not change restore staging (which

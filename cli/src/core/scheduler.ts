@@ -623,7 +623,14 @@ export class ConvergenceScheduler {
         this.block(u, { ...result, options: [...result.options, ...(result.offerReassign ? this.assignable(u, [resourceId]) : [])] });
         return;
       case "cancelled":
-        u.status = "RUNNABLE";
+        // A cancelled run says nothing about what it changed. Returning it to RUNNABLE let decide() resubmit it
+        // without a limit or an operator, so an effect could be repeated. Hold it for explicit reconciliation.
+        this.block(u, {
+          cause: "EXECUTION_UNKNOWN",
+          reason: `run on ${resourceId} was cancelled; its effects are unknown and it will not be replayed without a decision`,
+          question: `${u.title}: its run was cancelled and Nexus cannot tell whether it changed anything. Replay the step, or stop?`,
+          options: [{ label: "replay the step", action: { kind: "retry" } }],
+        });
         return;
     }
   }

@@ -1,8 +1,12 @@
-{"direction":"event","name":"hello","json":"{\"v\":1,\"type\":\"hello\",\"protocol\":1,\"pid\":42}"}
+{"direction":"event","name":"hello","older_sidecar":["commands"],"json":"{\"v\":1,\"type\":\"hello\",\"protocol\":1,\"pid\":42}"}
 {"direction":"event","name":"assistant.delta","json":"{\"v\":1,\"type\":\"assistant.delta\",\"turn_id\":\"t1\",\"text\":\"hi\"}"}
-{"direction":"event","name":"tool.end","json":"{\"v\":1,\"type\":\"tool.end\",\"turn_id\":\"t1\",\"call_id\":\"c1\",\"tool\":\"run_command\",\"success\":true,\"summary\":\"ok\",\"lines\":1}"}
+{"direction":"event","name":"tool.end","older_sidecar":["evidence"],"json":"{\"v\":1,\"type\":\"tool.end\",\"turn_id\":\"t1\",\"call_id\":\"c1\",\"tool\":\"run_command\",\"success\":true,\"summary\":\"ok\",\"lines\":1}"}
 {"direction":"event","name":"session.state","json":"{\"v\":1,\"type\":\"session.state\",\"workspace\":\"/w/app\",\"workspace_name\":\"app\",\"model\":\"m\",\"mode\":\"auto\",\"git\":{\"branch\":\"main\",\"dirty\":2},\"busy\":false}"}
 {"direction":"command","name":"prompt.submit","json":"{\"v\":1,\"type\":\"prompt.submit\",\"id\":\"t1\",\"text\":\"fix\\nit\"}"}
 {"direction":"command","name":"steer","json":"{\"v\":1,\"type\":\"steer\",\"id\":\"g1\",\"text\":\"use\\ntabs\"}"}
 {"direction":"command","name":"receipt","json":"{\"v\":1,\"type\":\"receipt\",\"id\":\"r1\"}"}
 {"direction":"command","name":"shutdown","json":"{\"v\":1,\"type\":\"shutdown\"}"}
+{"direction":"event","name":"hello","json":"{\"v\":1,\"type\":\"hello\",\"protocol\":1,\"pid\":42,\"commands\":[{\"name\":\"help\",\"usage\":\"/help\",\"summary\":\"Show help\"}],\"protocol_min\":1,\"protocol_max\":1,\"capabilities\":[\"answer\",\"checkpoint.choice\",\"model.select\",\"models.list\",\"provider.connect\",\"provider.disconnect\",\"receipt\",\"slash\",\"steer\",\"tool.detail\"],\"experimental\":[\"x.test\"]}"}
+{"direction":"event","name":"initialized","json":"{\"v\":1,\"type\":\"initialized\",\"id\":\"i1\",\"protocol\":1,\"capabilities\":[\"answer\",\"checkpoint.choice\",\"model.select\",\"models.list\",\"provider.connect\",\"provider.disconnect\",\"receipt\",\"slash\",\"steer\",\"tool.detail\"],\"experimental\":[]}"}
+{"direction":"command","name":"initialize","json":"{\"v\":1,\"type\":\"initialize\",\"id\":\"i1\",\"client\":{\"name\":\"nexus-tui\",\"version\":\"1.3.0\"},\"protocol_min\":1,\"protocol_max\":1,\"experimental\":false}"}
+{"direction":"event","name":"hello","json":"{\"v\":1,\"type\":\"hello\",\"protocol\":1,\"pid\":42,\"commands\":[{\"name\":\"help\",\"usage\":\"/help\",\"summary\":\"Show help\"}]}"}
