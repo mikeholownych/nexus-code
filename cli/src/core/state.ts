@@ -29,6 +29,7 @@ import { updateTaskMessages, readTaskMessages, TaskMessageLogError, type TaskMes
 import { withStateStoreGuard } from "./state_store_guard.js";
 import type { VerificationConfigAttempt } from "../security.js";
 import type { CommandRuleDecision } from "./command_rules.js";
+import type { ContextInventorySnapshot } from "./context_inventory.js";
 
 import { CURRENT_STATE_SCHEMA_VERSION, WORKTREE_BINDING_VERSION, durableLoopStateProblem, normalizeWorktreeBinding, type DurableLoopState } from "./state_schema.js";
 export { CURRENT_STATE_SCHEMA_VERSION, WORKTREE_BINDING_VERSION } from "./state_schema.js";
@@ -177,6 +178,8 @@ export interface DurableTaskState {
 
   // Context & conversation memory
   messages: ChatMessage[];
+  /** Content-free, optional context provenance snapshot. Missing legacy values reconstruct as partial/unknown. */
+  contextInventory?: ContextInventorySnapshot;
   durableNotes?: string[];
   compactionProvenance?: CompactionProvenanceRecord | null;
 

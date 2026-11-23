@@ -11,6 +11,7 @@ import { isWorkspaceTrusted } from "../workspace_trust.js";
 import { PolicyContext } from "../core/approval_policy.js";
 import { isLegacyWorktreeArgs, relocationAfter, runWorktreeCommandAsync, tokenizeWorktreeArgs } from "../worktrunk/command.js";
 import { providerCompleter } from "../worktrunk/provider.js";
+import { assessContextMaturity, buildContextInventory, inventorySourcesFromMessages, renderContextInventoryText, renderContextMaturityText, type ContextSourceItemInput } from "../core/context_inventory.js";
 import { NOT_A_REPO, SlashContext, SlashHandler, SlashOutcome, errorText, reply } from "./catalog.js";
 import { MAX_PASTE } from "../protocol.js";
 
@@ -284,6 +285,139 @@ function paste(): SlashOutcome {
   return reply("paste", `Pasted ${result.text.length} characters into the composer.`, true, { composer: result.text });
 }
 
+function context({ host, args, signal }: SlashContext): SlashOutcome {
+  const [view, ...flags] = args.trim().split(/\s+/).filter(Boolean);
+  if (!view || !["inspect", "maturity"].includes(view)) return reply("context", "Usage: /context inspect [--json] [--record] | /context maturity [--json]", false);
+  const allowed = view === "inspect" ? new Set(["--json", "--record"]) : new Set(["--json"]);
+  if (flags.some((flag) => !allowed.has(flag)) || new Set(flags).size !== flags.length) return reply("context", "Invalid or duplicate option. Use /context inspect [--json] [--record] or /context maturity [--json].", false);
+  if (signal.aborted) return reply("context", "Context inspection was cancelled.", false);
+
+  const agent = host.app.getAgent();
+  const config = host.app.getConfig();
+  const sources: Array<{ name: string; status: "ok" | "partial" | "failed"; durationMs: number; items: ContextSourceItemInput[]; detail?: string }> = [];
+  const gaps: string[] = ["Nexus does not yet persist a per-inference manifest of the exact provider request; this command captures current client-visible sources on demand.", "The composite system prompt contains rules and other sources that are not yet split into per-item provenance."];
+  const measure = (name: string, read: () => ContextSourceItemInput[], status: "ok" | "partial" = "ok", detail?: string) => {
+    const started = performance.now();
+    try {
+      const items = read();
+      sources.push({ name, status, durationMs: performance.now() - started, items, ...(detail ? { detail } : {}) });
+    } catch {
+      sources.push({ name, status: "failed", durationMs: performance.now() - started, items: [], detail: "source lookup failed; no source content was recorded" });
+      gaps.push(`${name} source lookup failed`);
+    }
+  };
+
+  measure("session_messages", () => inventorySourcesFromMessages(agent.getMessages()));
+  measure("task_ledger", () => {
+    const objective = agent.getObjective();
+    if (!objective) return [];
+    return [{ sourceType: "objective_ledger", sourceLocation: "task:objective-ledger", scope: "task", content: JSON.stringify(objective), trust: "persisted_unverified", retention: "task", inclusionReason: "pinned objective and acceptance state", retrievalMethod: "durable_task_state", freshness: "current", freshnessRule: "read from the live task ledger at inspection time", sourceRefs: objective.requirements?.map((requirement) => `requirement:${requirement.id}`) }];
+  });
+  measure("plan", () => {
+    const plan = agent.getActivePlan();
+    return plan.length ? [{ sourceType: "active_plan", sourceLocation: "task:active-plan", scope: "task", content: JSON.stringify(plan), trust: "persisted_unverified", retention: "task", inclusionReason: "current task plan", retrievalMethod: "durable_task_state", freshness: "current", freshnessRule: "read from the live task plan at inspection time" }] : [];
+  });
+  measure("durable_session_state", () => {
+    const session = host.app.getSessionManager().loadSession(host.sessionId());
+    if (!session) return [];
+    const items: ContextSourceItemInput[] = [];
+    session.durableNotes?.forEach((note, index) => items.push({
+      sourceType: "durable_note",
+      sourceLocation: `task:durable-note:${index}`,
+      scope: "task",
+      content: note,
+      trust: "persisted_unverified",
+      retention: "task",
+      inclusionReason: "durable task note retained in session state",
+      retrievalMethod: "session_store",
+    }));
+    if (session.compactionProvenance) items.push({
+      sourceType: "compaction_provenance",
+      sourceLocation: `session:compaction:${session.compactionProvenance.recordId}`,
+      scope: "session",
+      content: session.compactionProvenance.summaryContent ?? "compaction summary; content reference only",
+      trust: "persisted_unverified",
+      retention: "session_archive",
+      inclusionReason: "compaction record links the summary to archived predecessor messages",
+      retrievalMethod: "session_store",
+      sourceRefs: [session.compactionProvenance.recordId, ...session.compactionProvenance.predecessorIds],
+    });
+    return items;
+  }, "partial", "saved durable notes and compaction links only; full session messages are inventoried separately");
+  measure("project_knowledge", () => agent.getKnowledgeGraph().list().map((entry, index) => ({
+    sourceType: "durable_knowledge",
+    sourceLocation: `repository:knowledge:${entry.id || index + 1}`,
+    scope: "repository" as const,
+    content: `${entry.category}\n${entry.key}\n${entry.value}`,
+    trust: "persisted_unverified" as const,
+    retention: entry.retention?.policy === "expires_at" ? `expires_at:${entry.retention.expiresAt}` : "until_deleted",
+    inclusionReason: `persistent project memory is available to the prompt builder; validation=${entry.validationStatus ?? "legacy_unverified"}`,
+    retrievalMethod: "knowledge_graph",
+    sourceRefs: [`knowledge:${entry.id}`, ...(entry.provenance?.sourceRefs ?? [])],
+  })));
+  measure("skills", () => agent.getSkillManager().listSkills().map((skill) => ({
+    sourceType: "skill_catalog_entry",
+    sourceLocation: skill.isWorkspaceSkill ? `repository:skill:${path.relative(config.workspace, skill.path)}` : `profile:skill:${skill.name}`,
+    scope: "profile" as const,
+    content: `${skill.name}\n${skill.description}`,
+    trust: "persisted_unverified" as const,
+    retention: "skill_source_policy",
+    inclusionReason: `skill catalog is eligible for prompt discovery; activation is separate${skill.trusted === false ? "; source is not trusted" : "; source trust is recorded by SkillManager"}`,
+    retrievalMethod: "skill_manager",
+    ...(skill.isWorkspaceSkill ? { sourceRefs: [path.relative(config.workspace, skill.path)] } : {}),
+  })), "partial");
+  measure("tool_schemas", () => agent.getEffectiveTools().map((tool, index) => ({
+    sourceType: "tool_schema",
+    sourceLocation: `request:tool:${String(tool.function?.name ?? index + 1).replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80)}`,
+    scope: "turn" as const,
+    content: JSON.stringify(tool),
+    trust: "persisted_unverified" as const,
+    retention: "request_only",
+    inclusionReason: "effective tools are serialized with the inference request",
+    retrievalMethod: "tool_registry",
+    freshness: "current" as const,
+    freshnessRule: "effective runtime tool schema as observed at inspection time; invalidate after tool registry or policy changes",
+  })));
+  measure("repository_state", () => {
+    const info = getGitInfo(config.workspace);
+    return [{ sourceType: "repository_state", sourceLocation: "repository:git-status", scope: "repository", content: JSON.stringify({ isRepo: info.isRepo, branch: info.branch, dirtyCount: info.dirtyCount }), trust: "tool_output_unverified", retention: "capture_only", inclusionReason: "current workspace state snapshot", retrievalMethod: "git_status", freshness: "current", freshnessRule: "live git status at observedAt; invalidate after any workspace or repository mutation" }];
+  });
+
+  const caps = agent.getProviderCapabilities();
+  const last = agent.getLastRequestCount();
+  let contextLimit: number | undefined;
+  try { contextLimit = agent.getContextBudget().contextLimit; } catch { gaps.push("context budget could not be read"); }
+  const snapshot = buildContextInventory({
+    sessionId: host.sessionId(), taskId: agent.getTaskId(), workspace: config.workspace,
+    sources,
+    coverageGaps: gaps,
+    contextLimit,
+    contextLimitSource: caps?.contextSource ?? (config.contextLimit ? "operator" : "client_default_or_unknown"),
+    ...(last ? { lastRequestTokens: last.promptTokens, lastRequestTokenSource: last.source } : {}),
+  });
+
+  if (flags.includes("--record")) {
+    const manager = host.app.getSessionManager();
+    const session = manager.loadSession(host.sessionId());
+    if (!session) return reply("context", "No saved session exists to attach this inventory to. Run /save first, then /context inspect --record.", false);
+    manager.saveSession({ ...session, contextInventory: snapshot });
+  }
+
+  if (view === "inspect") {
+    return flags.includes("--json")
+      ? reply("context", JSON.stringify(snapshot, null, 2))
+      : reply("context", `${renderContextInventoryText(snapshot)}${flags.includes("--record") ? "\n\nInventory recorded in the current session." : ""}`);
+  }
+
+  const assessment = assessContextMaturity(snapshot, {
+    hasDurableKnowledge: Boolean(sources.find((source) => source.name === "project_knowledge")?.items.length),
+    hasActiveSkills: Boolean(sources.find((source) => source.name === "skills")?.items.length),
+  });
+  return flags.includes("--json")
+    ? reply("context", JSON.stringify(assessment, null, 2))
+    : reply("context", renderContextMaturityText(assessment));
+}
+
 export const WORKSPACE_HANDLERS: Record<string, SlashHandler> = {
   diff,
   git: gitStatus,
@@ -297,4 +431,5 @@ export const WORKSPACE_HANDLERS: Record<string, SlashHandler> = {
   test,
   copy,
   paste,
+  context,
 };

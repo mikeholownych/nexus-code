@@ -203,8 +203,8 @@ Instructions for skill-x`
           "skill has source and trust annotation"
         );
         assert.ok(
-          sysPromptTrusted.includes(`[source: ${knowledgePath}] [trust: trusted]`),
-          "knowledge has source and trust annotation"
+          sysPromptTrusted.includes(`[source: ${knowledgePath}] [trust: unverified memory; not evidence]`),
+          "knowledge has source and unverified-memory annotation"
         );
 
         // activate_skill succeeds with source annotation
@@ -225,7 +225,7 @@ Instructions for skill-x`
     });
   });
 
-  test("ACC-TRUST-05: no implicit standing rules (autoExtract opt-in) and read-only mode creates no .nexus/", async () => {
+  test("ACC-TRUST-05: conversation-derived memory is not promoted and read-only mode creates no .nexus/", async () => {
     await withHome(async (_home, ws) => {
       setWorkspaceTrusted(ws, true);
       fs.mkdirSync(path.join(ws, ".nexus"), { recursive: true });
@@ -247,7 +247,6 @@ Instructions for skill-x`
       };
       const dbPath = path.join(ws, ".nexus", "knowledge.json");
       fs.writeFileSync(dbPath, JSON.stringify(initialKnowledge, null, 2));
-      const beforeContent = fs.readFileSync(dbPath, "utf-8");
 
       // 1. Default config: NEXUS_KNOWLEDGE_AUTOEXTRACT is unset
       delete process.env.NEXUS_KNOWLEDGE_AUTOEXTRACT;
@@ -269,15 +268,21 @@ Instructions for skill-x`
         await gw.close();
       }
 
-      // knowledge.json must not have changed
+      // Legacy entries migrate additively and remain explicitly unverified.
       const afterContent = fs.readFileSync(dbPath, "utf-8");
-      assert.equal(afterContent, beforeContent, "knowledge.json unchanged when autoExtract is not opted in");
+      const migrated = JSON.parse(afterContent);
+      assert.equal(migrated.version, 2);
+      assert.equal(migrated.entries.length, 1, "the conversation turn did not add knowledge");
+      assert.equal(migrated.entries[0].validationStatus, "legacy_unverified");
 
-      // 2. Opt-in via NEXUS_KNOWLEDGE_AUTOEXTRACT=1
+      // 2. The legacy opt-in cannot promote prompt text without a reviewed operator action.
       process.env.NEXUS_KNOWLEDGE_AUTOEXTRACT = "1";
       const kg = new KnowledgeGraph(ws);
+      const beforeAutoExtract = fs.readFileSync(dbPath, "utf-8");
       const learned = kg.autoExtract("always remember to never run the tests under root", "");
-      assert.ok(learned.length > 0, "autoExtract learns when opted in");
+      assert.deepEqual(learned, [], "legacy autoExtract does not persist prompt-derived knowledge even when the old flag is set");
+      assert.deepEqual(kg.list().map((entry) => entry.key), ["rule-initial"]);
+      assert.equal(fs.readFileSync(dbPath, "utf-8"), beforeAutoExtract, "legacy autoExtract leaves durable knowledge unchanged");
       delete process.env.NEXUS_KNOWLEDGE_AUTOEXTRACT;
 
       // 3. Read-only run creates no .nexus/

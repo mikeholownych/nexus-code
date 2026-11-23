@@ -55,12 +55,13 @@ function knowledge({ host, args }: SlashContext): SlashOutcome {
   const action = sub?.toLowerCase();
   if (action === "set" && key) {
     const entry = graph.set(key, value.join(" "), "rule");
-    return reply("knowledge", `Saved [${entry.category}] ${entry.key}`);
+    const retention = entry.retention.policy === "expires_at" ? `expires ${entry.retention.expiresAt}` : "until deleted";
+    return reply("knowledge", `Saved [${entry.category}] ${entry.key} · ${entry.scope} · ${entry.validationStatus} · ${retention}. This memory is not verified evidence.`);
   }
   if (action === "delete" && key) return graph.delete(key) ? reply("knowledge", `Deleted ${key}`) : reply("knowledge", `Not found: ${key}`, false);
   const entries = graph.list();
   return entries.length
-    ? reply("knowledge", entries.map((e) => `• [${e.category}] ${e.key}: ${e.value}`).join("\n"))
+    ? reply("knowledge", entries.map((e) => `• [${e.category}] ${e.key}: ${e.value} (${e.validationStatus}; ${e.retention.policy === "expires_at" ? `expires ${e.retention.expiresAt}` : "until deleted"})`).join("\n"))
     : reply("knowledge", "No knowledge entries. Add one with /knowledge set <key> <rule>.");
 }
 

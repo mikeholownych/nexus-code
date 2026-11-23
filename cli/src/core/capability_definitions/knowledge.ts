@@ -6,13 +6,13 @@ export const manageKnowledgeCapability: CanonicalCapability = {
   "category": "knowledge",
   "mutating": true,
   "effect": "write_workspace",
-  "sideEffectContract": "Store, retrieve, query or delete persistent knowledge entries",
+  "sideEffectContract": "Retrieve, query or delete persistent knowledge entries; durable promotion is operator-only",
   "backend": "ts_native",
   "toolDefinition": {
     "type": "function",
     "function": {
       "name": "manage_knowledge",
-      "description": "Query or record persistent project idioms, rules, dependencies, and architectural decisions.",
+      "description": "Retrieve or delete existing project knowledge. Durable knowledge promotion is available only through an explicit operator command.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -20,7 +20,6 @@ export const manageKnowledgeCapability: CanonicalCapability = {
             "type": "string",
             "enum": [
               "get",
-              "set",
               "list",
               "delete",
               "query"

@@ -5,6 +5,7 @@
  * replaced by summaries (the replaced originals are included from the session's archive when it exists).
  */
 import type { SessionData, SessionManager } from "./session.js";
+import { buildSessionContextInventory, isContextInventorySnapshot, markPersistedContextFreshnessUnknown, mergeContextInventorySnapshots, type ContextInventorySnapshot } from "./core/context_inventory.js";
 import { safeOperatorText } from "./protocol.js";
 import type { ChatMessage } from "./types.js";
 import { gatingRequirements, requirementDone } from "./core/objective.js";
@@ -72,10 +73,16 @@ export function buildSessionExport(manager: SessionManager, session: SessionData
     archived = manager.readArchivedHistory(session.id);
   } catch {}
   const history = historyCompleteness(session, archived);
+  const reconstructedInventory = buildSessionContextInventory(session, archived);
+  const savedInventory = isContextInventorySnapshot(session.contextInventory) ? markPersistedContextFreshnessUnknown(session.contextInventory) : undefined;
+  const contextInventory = savedInventory
+    ? mergeContextInventorySnapshots(savedInventory, buildSessionContextInventory({ ...session, messages: [], objective: undefined, durableNotes: undefined, activePlan: [], compactionProvenance: null }, archived))
+    : reconstructedInventory;
   const objective = session.objective ?? null;
   const lastTurn = session.lastTurn ?? null;
   const json: Record<string, unknown> = {
     ...session,
+    contextInventory,
     export: {
       format: EXPORT_FORMAT,
       exportedAt: new Date().toISOString(),
@@ -101,7 +108,7 @@ export function buildSessionExport(manager: SessionManager, session: SessionData
     },
     archivedHistory: archived.messages,
   };
-  return { json, markdown: markdownExport(session, history, archived.messages) };
+  return { json, markdown: markdownExport(session, history, archived.messages, contextInventory) };
 }
 
 /**
@@ -117,7 +124,7 @@ export function escapeTableCell(value: string): string {
     .replace(/\|/g, "\\|");
 }
 
-function markdownExport(session: SessionData, history: HistoryCompleteness, archived: ChatMessage[]): string {
+function markdownExport(session: SessionData, history: HistoryCompleteness, archived: ChatMessage[], contextInventory?: ContextInventorySnapshot): string {
   const out: string[] = [
     "# Nexus Code Session Export",
     "",
@@ -178,6 +185,12 @@ function markdownExport(session: SessionData, history: HistoryCompleteness, arch
   if (session.activePlan?.length) {
     out.push("**Plan (the agent's roadmap; requirement states above are authoritative):**", "");
     for (const p of session.activePlan) out.push(`- [${p.status}] ${p.name}${p.detail ? ` — ${p.detail}` : ""}`);
+    out.push("");
+  }
+  if (contextInventory) {
+    out.push("## Context inventory (source references; content omitted)", "", `Coverage: **${contextInventory.coverage}** · ${contextInventory.metrics.includedItems} item(s) · ${contextInventory.metrics.omittedItems} omitted · ${contextInventory.metrics.estimatedTokens} estimated tokens (${contextInventory.metrics.tokenSource})`, "");
+    for (const item of contextInventory.items) out.push(`- \`${item.id}\` ${item.sourceType} — ${item.sourceLocation}; scope=${item.scope}; observed=${item.observedAt}; freshness=${item.freshness}${item.freshnessRule ? ` (${item.freshnessRule})` : ""}; trust=${item.trust}; via=${item.retrievalMethod}${item.sourceRefs?.length ? `; refs=${item.sourceRefs.join(",")}` : ""}`);
+    if (contextInventory.coverageGaps.length) out.push("", "Coverage gaps:", ...contextInventory.coverageGaps.map((gap) => `- ${gap}`));
     out.push("");
   }
   out.push("---", "");

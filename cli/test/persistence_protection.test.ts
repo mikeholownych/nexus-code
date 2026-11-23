@@ -209,22 +209,16 @@ test("legacy state with a classified identity fails recovery without writing a s
   }
 });
 
-test("knowledge persistence does not write credential plaintext and reloads a redacted entry", () => {
+test("knowledge promotion rejects credential-bearing content before it reaches durable or prompt-visible memory", () => {
   const tempDir = makeTempDir("nexus-pers002-knowledge-");
   try {
     const workspace = path.join(tempDir, "workspace");
     fs.mkdirSync(workspace);
     const graph = new KnowledgeGraph(workspace);
-    graph.set("provider credential", `Use ${syntheticGithubToken}`, "rule");
-
     const filePath = path.join(workspace, ".nexus", "knowledge.json");
-    const persisted = fs.readFileSync(filePath, "utf8");
-    assert.equal(persisted.includes(syntheticGithubToken), false);
-    assert.match(persisted, /REDACTED/);
-
-    const recovered = new KnowledgeGraph(workspace).get("provider credential");
-    assert.ok(recovered);
-    assert.match(recovered.value, /REDACTED/);
+    assert.throws(() => graph.set("provider credential", `Use ${syntheticGithubToken}`, "rule"), /Sensitive content cannot be promoted/);
+    assert.equal(fs.existsSync(filePath), false, "rejected memory does not create a durable knowledge file");
+    assert.equal(graph.get("provider credential"), undefined, "rejected memory is not exposed to the prompt builder");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

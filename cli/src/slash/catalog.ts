@@ -101,6 +101,7 @@ export const SLASH_COMMANDS: SlashSpec[] = [
   { name: "shell", usage: "/shell [bash|zsh|sh]", summary: "Show or switch the command shell" },
   { name: "cd", usage: "/cd [path]", summary: "Show or change the workspace directory" },
   { name: "tokens", usage: "/tokens", summary: "Context window use and session token totals", aliases: ["cost"] },
+  { name: "context", usage: "/context inspect [--json] [--record] | maturity [--json]", summary: "Inspect content-free context sources or assess navigability, speed, freshness and memory separately" },
   { name: "diff", usage: "/diff", summary: "Uncommitted changes as a diff" },
   { name: "git", usage: "/git", summary: "Short git status" },
   { name: "stage", usage: "/stage [reset]", summary: "Unstaged hunks, or unstage everything" },
