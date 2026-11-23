@@ -2,12 +2,45 @@
 
 For the administrator of a machine or a fleet that runs Nexus.
 
-> **Status: a library, not yet enforced.** This change adds the policy format, its parser, the merge of the tiers, the
-> loader and the decision helpers as code with tests (`cli/src/core/managed_policy*.ts`). **`nexus` does not read a
-> policy file yet and nothing described here changes what `nexus` does.** A policy file you install today has no
-> effect. Enforcement arrives in the changes that follow (plan units GV-1 and GV-5, `docs/v1.3.0/PLAN.md`). This page
-> describes what the library does when it is called, so that the format and the rules can be reviewed before anything
-> depends on them. Where a later change is needed for a behaviour, the text says "planned".
+> **Status: enforced in part.** `nexus` reads the two managed files at startup and applies the keys listed under
+> "What is enforced today". The MCP and plugin allowlists, `egress.secret_destinations`, the `nexus policy` commands
+> and the doctor findings are not in yet: a key marked "not yet" below is accepted and merged, and changes nothing.
+> Where a behaviour still needs a later change, the text says "planned".
+
+## What is enforced today
+
+The managed files are read once per process, before any command acts, and the result is frozen: a change to a file
+reaches the next `nexus` process, not a running one. A project file is read per workspace and merged under the
+managed tiers.
+
+| Key | Enforced | How |
+|---|---|---|
+| `approval.strict`, `disable_auto`, `disable_yes`, `disable_full_access` | yes | An explicit `--yes`, `--mode auto` or `NEXUS_APPROVAL_MODE=auto` is refused at launch (exit 2). During a session a switch to `auto` (`/mode auto`, an "always" answer) is ignored with a notice, and the approval gate asks whatever the session's own settings say. In the terminal UI an "always" answer still stops later prompts in that session (planned fix, see below). |
+| `approval.require_human` | yes | The named effects (`exec`, `write_workspace`, `egress`) ask in every mode, full access included. |
+| `verification.mode`, `verification.protected` | yes | The mode is a floor for verification-path protection; the globs are added to the protected verification paths. A project file's relaxations are void where either key is set. |
+| `commands.forbid` | yes | A matching `run_command` is refused in every mode. |
+| `commands.prompt` | yes | A matching `run_command` asks in every mode, full access included; with nobody to ask it is refused. |
+| `commands.disable_allow_rules` | yes | The `allow` rules of the operator's `command_rules.json` are not used; its `prompt` and `forbidden` rules keep working. |
+| `paths.protected` | yes | Added to the protected path patterns of the file tools. |
+| `egress.inspector` | yes | A floor over `NEXUS_EGRESS_POLICY`. |
+| `egress.allowed_domains` | yes, for a call that names a URL | When a managed tier sets the list, a tool call with egress effect and a `url` argument is refused unless the host is listed (an exact name, or `*.example.com` for subdomains). A call that names no URL (a web search, an MCP tool) and a shell command are not decided by this list. A project file's own `allowedDomains` keeps its existing check in the fetch tool, where a name also admits its subdomains. |
+| `egress.secret_destinations` | not yet | Nothing reads it. |
+| `sandbox.required` | yes, at launch | `--sandbox none` is refused; with no `--sandbox` the sandbox is switched on (`auto`), and a command is refused when no sandbox engine can run it. |
+| `sandbox.forbid_network` | at launch only | `--sandbox-network` and a set `NEXUS_SANDBOX_NETWORK` are refused when a session is configured. The sandbox itself does not consult the policy yet. |
+| `mcp.allow`, `mcp.disable_workspace` | not yet | Planned (GV-5). |
+| `plugins.allow`, `plugins.disable_workspace` | not yet | Planned (GV-5). |
+| `workspace.disable_env_trust` | yes | `NEXUS_TRUST_WORKSPACE=1` grants no trust and applies no project relaxation; a notice says so. |
+
+Limits of this stage:
+
+- `nexus verify` does not build a session configuration, so `approval.disable_yes` does not refuse `nexus verify --yes`
+  yet, and `sandbox.*` does not reach `nexus verify --sandbox` yet (planned).
+- The terminal UI keeps its own "always approve" state: after an "always" answer it stops asking for the rest of the
+  session, also under `approval.disable_auto` (planned). The line-mode REPL asks every time.
+- The sidecar started directly (not through `nexus`) reports a broken policy as a start failure with exit code 1,
+  not 2. It still does not start.
+- A prompt decided by the default approval mode shows no policy line; a refusal always names its source, the default
+  included.
 
 ## The three tiers
 
@@ -311,12 +344,9 @@ line 2: schema_version 2 is not supported by this Nexus (supported: 1); upgrade 
 
 ## Recovery
 
-Remember the status at the top: today nothing loads a policy, so today a broken file stops nothing. What follows is
-the design the enforcement changes are to implement.
-
-- **What still runs when a tier is broken (planned):** `nexus --version`, `nexus --help`, `nexus doctor` and a
-  `nexus policy check` command. Everything else exits with code 2 and the message above. `nexus doctor` does not
-  report on policy files yet, and `nexus policy check` does not exist yet.
+- **What still runs when a tier is broken:** `nexus --version`, `nexus --help` and `nexus doctor` (and its alias
+  `nexus check`). Everything else exits with code 2 and the message above. `nexus doctor` has no policy findings of
+  its own yet: it shows the error in its configuration finding. A `nexus policy check` command is planned.
 - **The system tier has no bypass.** No flag, environment variable, user setting or project file makes Nexus run
   past a system file it cannot use. The only fix is to repair or remove the file as root. This is the lockout risk
   of a managed policy: a typing mistake in a file pushed to a fleet stops Nexus on every machine that receives it.
@@ -362,15 +392,17 @@ workspace in `~/.config/nexus/policy_trust.json` (mode 0600, keyed by the worksp
 | `ENV_TRUSTED` | `NEXUS_TRUST_WORKSPACE=1`, not disabled by policy | applied |
 | `UNREADABLE` | the file is a symbolic link, not a regular file, larger than 64 KiB, or cannot be read | not applied; reported |
 
-- **What is asked, and when (planned).** In an interactive session, for a trusted workspace whose file is `NEW` or
-  `MISMATCH` and asks for relaxations, Nexus is to show the relaxations and ask once; a yes records the hash. A file
-  that only restricts is never asked about. The library reports this state (`approvalPending`) and provides the
-  function that records an approval; nothing asks yet.
+- **How a file is approved.** Trusting the workspace is the approval: `nexus trust <workspace>` (and the trust
+  question an interactive start asks) records the hash of the file as it is at that moment. A file that changes
+  afterwards is `MISMATCH` until `nexus trust <workspace>` is run again. A workspace that was trusted before this
+  release has no recorded hash, so its file is `NEW`: its relaxations stay off until the workspace is trusted again.
+  Nexus does not yet show the relaxations when it records an approval, and does not yet ask in the middle of a
+  session (planned); read the file before you trust the workspace.
 - **A headless run** is never asked and never stopped by the project file. The relaxations are dropped, the
   restrictions apply, and a notice says which status caused it. The run continues tighter, not looser.
 - **A project file that cannot be parsed** is not fatal, because it cannot loosen a managed tier, but it is loud:
-  none of the file is used (the managed tiers and the built-in defaults still apply), and a notice says so. Today's
-  reader ignores such a file silently; that changes with enforcement.
+  none of the file is used (the managed tiers and the built-in defaults still apply), and a notice says so.
+- **Notices** go to standard error, each once per process.
 - A broken `policy_trust.json` approves nothing, and is reported.
 
 ## Decisions carry their source
@@ -413,8 +445,9 @@ the egress inspector runs in 'block' mode, not 'off': managed policy sets the fl
 NEXUS_TRUST_WORKSPACE is ignored: managed policy disables it. [policy: ...]
 ```
 
-A flag that policy disables is to be refused at launch (exit code 2); an attempt during a session is to be clamped
-with a notice and the session continues (planned; the helpers return these answers, nothing acts on them yet).
+A flag that policy disables is refused at launch (exit code 2); an attempt during a session is clamped with a notice
+and the session continues. The texts for MCP servers and plugins are not produced yet (see "What is enforced
+today"). A runtime switch to `auto` is reported as `A request for approval mode 'auto' is ignored: ...`.
 
 ## What a policy does not protect against
 
