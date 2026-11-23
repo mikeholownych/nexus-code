@@ -13,6 +13,7 @@ import { VERIFICATION_CONFIG_PROTECTED, splitSubcommands, type VerificationEditC
 import { decideManagedCommand, describeSource, permitsEgressHost, type EffectivePolicy } from "./managed_policy.js";
 import { approvalDecisionSource, clampApprovalSettings, humanRequirementForEffect, type HumanRequirement } from "./policy_runtime.js";
 import { sandboxNetworkNotice } from "../sandbox.js";
+import { sandboxDenialFromError, sandboxEngineLabel } from "../sandbox_events.js";
 import { hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand } from "../tester.js";
 import { toolGroupOf } from "./tool_groups.js";
 import { judgeWithoutCopy, trustedDeliverablesFromBaseline } from "./independent_check.js";
@@ -869,6 +870,11 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
       }
     } catch {}
   }
+  // VR-3: a sandbox refusal is a typed receipt and flight record. The classifier only looks at errors that name
+  // confinement; it cannot turn a denial into success, an approval, or a verdict.
+  const sandboxEvent = sandboxDenialFromError(receipt.error, sandboxEngineLabel(this.config.sandbox), toolName);
+  if (sandboxEvent) receipt.sandboxEvents = [sandboxEvent];
+
   this.ui.stopSpinner(receipt.success);
 
   logAudit({
@@ -890,6 +896,7 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
       receipt.durationMs,
       receipt.error
     );
+    if (sandboxEvent) this.flightRecorder.recordSandboxDenial(currentStep, sandboxEvent);
     if (toolName === "update_plan" && receipt.success) {
       this.flightRecorder.recordDurableState(currentStep, {
         plan: this.activePlan,

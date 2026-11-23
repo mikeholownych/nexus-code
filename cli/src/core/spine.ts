@@ -13,6 +13,7 @@ import {
   changesWorkspace,
 } from "./capabilities.js";
 import type { SkillAttribution } from "./skill_activation.js";
+import type { SandboxDenialEvent } from "../sandbox_events.js";
 
 export interface InvocationRequest {
   /** Unique invocation identity (assigned if omitted) (EXEC-002) */
@@ -116,6 +117,8 @@ export interface ExecutionReceipt {
   output: string;
   /** Error message if failed or denied */
   error?: string;
+  /** VR-3: typed sandbox refusal behind this outcome, when one happened. Evidence only; never an approval. */
+  sandboxEvents?: SandboxDenialEvent[];
   /** The call may have taken effect, but its executor outcome could not be established. */
   outcomeUnknown?: boolean;
   /** Execution duration in milliseconds */

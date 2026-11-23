@@ -109,7 +109,7 @@ By default, `nexus verify` uses `--sandbox auto`: Bubblewrap when usable, otherw
 | Other processes (`/proc`), processes that outlive the run | not visible; end with the run | visible; can survive |
 | Environment | the verifier's allowlist | the same allowlist |
 
-`--sandbox none` is an explicit opt-out for trusted changes. The hostile scratch-index rewrite is still possible when an operator deliberately opts out; it is prevented by the default sandbox. The receipt records the effective sandbox in `sandbox.engine` (`bwrap`, `docker`, or `none`) and `sandboxed` on every run; `sandbox.requested` records whether the operator explicitly supplied `--sandbox`. A sandbox changes no verdict rule; it only takes authority away from the code under test.
+`--sandbox none` is an explicit opt-out for trusted changes. The hostile scratch-index rewrite is still possible when an operator deliberately opts out; it is prevented by the default sandbox. The receipt records the effective sandbox in `sandbox.engine` (`bwrap`, `docker`, or `none`) and `sandboxed` on every run; `sandbox.requested` records whether the operator explicitly supplied `--sandbox`. A refusal is also a typed `sandboxEvents` entry with its engine, profile and reason, so an audit bundle that copies the receipt carries it; the event is evidence, never a verdict or approval. A sandbox changes no verdict rule; it only takes authority away from the code under test.
 
 Engines: Bubblewrap needs unprivileged user namespaces. The Docker engine runs the commands in the pinned Alpine image of `nexus run --sandbox docker`, which has a shell and no toolchain, so a real verifier needs your own image (`NEXUS_SANDBOX_DOCKER_IMAGE`, pinned by digest, set in the workflow's `env`, never from the pull request).
 

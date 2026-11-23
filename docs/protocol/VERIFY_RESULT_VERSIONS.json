@@ -13,5 +13,10 @@
     "schema_version": 2,
     "schemaSha256": "53c2e7c98c04eca6104a6ae540c2fce551e0638bcec4a1b8e168c40bff39a394",
     "note": "Bump schema_version because sandbox.requested now means the operator explicitly selected a sandbox; implicit default confinement is reflected by the effective engine and per-run sandboxed facts. This changes the field's meaning, so consumers must reject version 2 until they account for the distinction."
+  },
+  {
+    "schema_version": 2,
+    "schemaSha256": "ad8594a4dff0fdc3d51067eb6944b814a3e29f027caaf5eee2e733d71c5e0b45",
+    "note": "Additive, schema_version stays 2 (VR-3 sandbox denial receipts). New optional sandboxEvents member on the result: typed refusals with kind, engine, profile, operation, category, reason and at. Older documents omit it; no member was removed, renamed, or changed type or meaning. A denial is evidence only: it never raises a verdict and the engine-unavailable reason still maps to BLOCKED."
   }
 ]

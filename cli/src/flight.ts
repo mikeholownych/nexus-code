@@ -7,6 +7,7 @@ import { ensurePrivateDir, appendPrivateFile } from "./core/durable_file.js";
 import { ensureGitExclude } from "./core/git_exclude.js";
 import { persistableEndpoint } from "./core/endpoint_identity.js";
 import { describeChain, linkRecord, verifyChain, type ChainLink, type ChainVerdict } from "./core/hash_chain.js";
+import type { SandboxDenialEvent } from "./sandbox_events.js";
 
 export type FlightEventType =
   | "session_start"
@@ -17,6 +18,9 @@ export type FlightEventType =
   | "durable_state"
   | "file_diff"
   | "middleware_rewrite"
+  | "sandbox_denial"
+  | "sandbox_violation"
+  | "sandbox_unavailable"
   | "turn_end"
   | "session_end";
 
@@ -226,6 +230,19 @@ export class FlightRecorder {
       durationMs,
       error,
     });
+  }
+
+  /**
+   * VR-3: a typed sandbox refusal. It is durable evidence for replay and export, never a verdict or an approval.
+   * The event is sanitized and chained by `appendEvent` like every other flight record.
+   */
+  public recordSandboxDenial(step: number, event: SandboxDenialEvent): FlightEvent {
+    const type: FlightEventType = event.kind === "violation"
+      ? "sandbox_violation"
+      : event.kind === "unavailable"
+        ? "sandbox_unavailable"
+        : "sandbox_denial";
+    return this.appendEvent(type, step, event);
   }
 
   public recordDurableState(step: number, state: Record<string, any>): FlightEvent {

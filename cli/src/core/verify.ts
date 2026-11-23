@@ -29,6 +29,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { getBuildIdentity } from "../build_identity.js";
 import { trustedGitArgs } from "../git.js";
 import { isSandboxAvailable, quoteForShell, wrapSandboxedCommand } from "../sandbox.js";
+import { sandboxDenialEvent } from "../sandbox_events.js";
 import { SecurityManager, conditionalConfigChanged, isConditionalConfig, neutersTests } from "../security.js";
 import {
   MAX_TEST_BYTES, SKIP_DIRS, buildVerifierEnvironment, describeVerifier, discoverTypechecks, discoverVerifier, hasExecutedTests, isFilteredVerifierCommand, isVerifierDeliverableBound,
@@ -574,7 +575,15 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
     if (sandboxRequest.engine !== "none") {
       sandboxEngine = usableSandboxEngine(sandboxRequest.engine);
       if (!sandboxEngine) {
-        throw new Stop("SANDBOX_UNAVAILABLE", `the ${sandboxRequest.engine === "auto" ? "default --sandbox auto" : `--sandbox ${sandboxRequest.engine}`} was requested and ${sandboxRequest.engine === "auto" ? "neither Bubblewrap nor Docker" : sandboxRequest.engine === "bwrap" ? "Bubblewrap (bwrap)" : "Docker"} could confine a test command on this host, so nothing was run. Install an engine (see nexus doctor); only use --sandbox none for changes you trust`);
+        const detail = `the ${sandboxRequest.engine === "auto" ? "default --sandbox auto" : `--sandbox ${sandboxRequest.engine}`} was requested and ${sandboxRequest.engine === "auto" ? "neither Bubblewrap nor Docker" : sandboxRequest.engine === "bwrap" ? "Bubblewrap (bwrap)" : "Docker"} could confine a test command on this host, so nothing was run. Install an engine (see nexus doctor); only use --sandbox none for changes you trust`;
+        (doc.sandboxEvents ??= []).push(sandboxDenialEvent({
+          kind: "unavailable",
+          engine: sandboxRequest.engine === "auto" ? "auto" : sandboxRequest.engine,
+          operation: "verify",
+          category: "engine",
+          reason: detail,
+        }));
+        throw new Stop("SANDBOX_UNAVAILABLE", detail);
       }
       doc.sandbox = { requested: operator.sandbox !== undefined, engine: sandboxEngine, network: sandboxRequest.network === true };
     } else {
@@ -700,7 +709,17 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
       if (!box) return runVerifierShell(line, directory, timeoutMs);
       const containerName = box.engine === "docker" ? `nexus-verify-${randomUUID()}` : undefined;
       const confined = sandboxedVerifierCommand(line, directory, box, { containerName });
-      if ("unavailable" in confined) throw new Stop("SANDBOX_UNAVAILABLE", `the ${box.engine} sandbox could not be built for a run, so the run was not started: ${confined.unavailable}`);
+      if ("unavailable" in confined) {
+        const detail = `the ${box.engine} sandbox could not be built for a run, so the run was not started: ${confined.unavailable}`;
+        (doc.sandboxEvents ??= []).push(sandboxDenialEvent({
+          kind: "unavailable",
+          engine: box.engine,
+          operation: "verify",
+          category: "engine",
+          reason: detail,
+        }));
+        throw new Stop("SANDBOX_UNAVAILABLE", detail);
+      }
       const ran = runVerifierShell(confined.command, directory, timeoutMs);
       // Killing the Docker client at the deadline leaves its container running: remove it by name.
       if (containerName && (ran.timedOut || ran.exitCode === null)) spawnSync("docker", ["rm", "--force", containerName], { stdio: "ignore", timeout: 30_000 });
@@ -937,6 +956,9 @@ export function renderVerifyText(result: VerifyJsonResult): string {
   row("sandbox", sandbox.engine !== "none"
     ? `${sandbox.engine}: every run confined to its own scratch tree, ${sandbox.network ? "WITH network (--sandbox-network)" : "no network"}`
     : sandbox.requested ? "requested, and nothing was run" : "none: repository code ran with your privileges (see --sandbox)");
+  for (const event of result.sandboxEvents ?? []) {
+    row("sandbox denial", `${event.kind} (${event.engine}/${event.profile}, ${event.category}) while ${event.operation}: ${event.reason}`);
+  }
   if (result.typecheck.status !== "NOT_RUN") {
     const projects = result.verification?.typecheck?.projects ?? [];
     row("type-check", `${result.typecheck.status}${result.typecheck.mode ? ` (${result.typecheck.mode})` : ""}${result.typecheck.detail ? `: ${result.typecheck.detail}` : ""}`);
