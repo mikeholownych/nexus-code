@@ -12,21 +12,21 @@ export const lspHoverCapability: CanonicalCapability = {
     "type": "function",
     "function": {
       "name": "lsp_hover",
-      "description": "Query Language Server Protocol (LSP) hover documentation and type signatures for a symbol at a given line and character.",
+      "description": "LSP hover: type signature and docs of the symbol at a position. \"Still indexing\" is not an answer: ask again.",
       "parameters": {
         "type": "object",
         "properties": {
           "path": {
             "type": "string",
-            "description": "The source file path to inspect."
+            "description": "Source file path."
           },
           "line": {
             "type": "number",
-            "description": "The 1-indexed line number."
+            "description": "Positive integer, 1-based line."
           },
           "character": {
             "type": "number",
-            "description": "The 1-indexed character offset on the line."
+            "description": "Positive integer, 1-based character."
           }
         },
         "required": [
@@ -51,21 +51,21 @@ export const lspDefinitionCapability: CanonicalCapability = {
     "type": "function",
     "function": {
       "name": "lsp_definition",
-      "description": "Query Language Server Protocol (LSP) definition location for a symbol at a given line and character.",
+      "description": "LSP definition of the symbol at a position: JSON [{file, line, column, endLine, endColumn}], 1-based; file is workspace-relative (external: true outside it).",
       "parameters": {
         "type": "object",
         "properties": {
           "path": {
             "type": "string",
-            "description": "The source file path containing the symbol reference."
+            "description": "Source file path."
           },
           "line": {
             "type": "number",
-            "description": "The 1-indexed line number."
+            "description": "Positive integer, 1-based line."
           },
           "character": {
             "type": "number",
-            "description": "The 1-indexed character offset on the line."
+            "description": "Positive integer, 1-based character."
           }
         },
         "required": [
@@ -90,13 +90,13 @@ export const lspDiagnosticsCapability: CanonicalCapability = {
     "type": "function",
     "function": {
       "name": "lsp_diagnostics",
-      "description": "Retrieve active Language Server Protocol (LSP) semantic compiler diagnostics for a source file.",
+      "description": "LSP diagnostics for a source file's current content. \"unavailable\" means no answer, not a clean file.",
       "parameters": {
         "type": "object",
         "properties": {
           "path": {
             "type": "string",
-            "description": "The source file path to query diagnostics for."
+            "description": "Source file path."
           }
         },
         "required": [

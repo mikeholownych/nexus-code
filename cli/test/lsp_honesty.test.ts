@@ -31,7 +31,7 @@ test("diagnostics for a file with a type error are non-empty and ok", async () =
     assert.equal(res.status === "ok" && res.diagnostics.length, 1);
     assert.equal(res.status === "ok" && res.diagnostics[0].severity, "error");
   } finally {
-    mgr.shutdownAll();
+    await mgr.shutdownAll();
   }
 });
 
@@ -41,7 +41,7 @@ test("a clean file is ok with an empty list (published, not assumed)", async () 
     const res = await mgr.diagnostics("a.ts", 3000);
     assert.deepEqual(res, { status: "ok", diagnostics: [] });
   } finally {
-    mgr.shutdownAll();
+    await mgr.shutdownAll();
   }
 });
 
@@ -51,7 +51,7 @@ test("a server that never publishes yields unavailable, never an empty ok", asyn
     const res = await mgr.diagnostics("x.silent.ts", 400);
     assert.equal(res.status, "unavailable");
   } finally {
-    mgr.shutdownAll();
+    await mgr.shutdownAll();
   }
 });
 
@@ -61,7 +61,7 @@ test("no server for the extension, or a missing file, is unavailable", async () 
     assert.equal((await mgr.diagnostics("n.txt", 300)).status, "unavailable");
     assert.equal((await mgr.diagnostics("missing.ts", 300)).status, "unavailable");
   } finally {
-    mgr.shutdownAll();
+    await mgr.shutdownAll();
   }
 });
 
@@ -73,7 +73,7 @@ test("edits after the first query produce fresh diagnostics (didChange)", async 
     const res = await mgr.diagnostics("a.ts", 3000);
     assert.equal(res.status === "ok" && res.diagnostics.length, 1);
   } finally {
-    mgr.shutdownAll();
+    await mgr.shutdownAll();
   }
 });
 
@@ -83,7 +83,7 @@ test("paths outside the workspace are refused", async () => {
     const res = await mgr.diagnostics("../../etc/passwd.ts", 300);
     assert.equal(res.status, "unavailable");
   } finally {
-    mgr.shutdownAll();
+    await mgr.shutdownAll();
   }
 });
 
@@ -93,7 +93,7 @@ test("hover sends didOpen first and shutdownAll leaves no server running", async
   assert.equal(h.found, true);
   const pids = mgr.serverPids();
   assert.equal(pids.length, 1);
-  mgr.shutdownAll();
+  await mgr.shutdownAll();
   await new Promise((r) => setTimeout(r, 300));
   for (const pid of pids) {
     assert.throws(() => process.kill(pid, 0), /ESRCH/);
@@ -111,7 +111,7 @@ test("lsp_diagnostics through the tool executor says unavailable, not success wi
     assert.match(res.error ?? "", /unavailable/);
     assert.match(res.error ?? "", /not evidence the file is free of errors/);
   } finally {
-    bridge.shutdown();
+    await bridge.shutdown();
   }
 });
 
@@ -120,7 +120,7 @@ test("a stale-version publish is not taken as the answer for the current content
   try {
     assert.deepEqual(await mgr.diagnostics("s.ts", 3000), { status: "ok", diagnostics: [] });
   } finally {
-    mgr.shutdownAll();
+    await mgr.shutdownAll();
   }
 });
 
@@ -132,7 +132,7 @@ test("a server that dies while we wait yields unavailable promptly, not after th
     assert.equal(res.status, "unavailable");
     assert.ok(Date.now() - t0 < 3000, `took ${Date.now() - t0}ms`);
   } finally {
-    mgr.shutdownAll();
+    await mgr.shutdownAll();
   }
 });
 
@@ -144,7 +144,7 @@ test("a symlink inside the workspace to a file outside it is refused", async () 
   try {
     assert.equal((await mgr.diagnostics("link.ts", 400)).status, "unavailable");
   } finally {
-    mgr.shutdownAll();
+    await mgr.shutdownAll();
   }
 });
 
@@ -158,7 +158,7 @@ test("concurrent first queries start exactly one server", async () => {
     assert.equal(b.status, "ok");
     assert.equal(fs.readFileSync(pidfile, "utf-8").trim().split("\n").length, 1);
   } finally {
-    mgr.shutdownAll();
+    await mgr.shutdownAll();
     delete process.env.FAKE_PIDFILE;
   }
 });

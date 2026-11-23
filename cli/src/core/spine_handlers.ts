@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { HarnessConfig } from "../types.js";
 import { registerBridgeCapabilities } from "../tools.js";
 import { PolicyContext } from "./approval_policy.js";
+import { describeSource } from "./managed_policy.js";
+import { approvalDecisionSource, clampApprovalSettings, humanRequirementForEffect } from "./policy_runtime.js";
 import { isWorkspaceTrusted } from "../workspace_trust.js";
 import { MAX_SKILL_MATCHES, oneLine } from "../skills.js";
 import { formatDiagnosticHints } from "../diagnostics.js";
@@ -210,15 +212,25 @@ export function setupSpineHandlersImpl(this: any): void {
           if (!approved) {
             const isTrusted = isWorkspaceTrusted(this.config.workspace, this.isReadOnly());
             const mode = this.getApprovalMode();
-            const policyContext: PolicyContext = {
+            // GV-1: the refusal is worded under the same clamp as the tool gate, and names the tier that decided.
+            const managed = this.bridge.getSecurityManager().getEffectivePolicy();
+            const human = humanRequirementForEffect(managed, "exec");
+            const askedContext: PolicyContext = {
               mode,
               trusted: isTrusted,
               sandbox: this.config.sandbox,
               approvedEgressOrigins: this.approvedEgressOrigins,
               fullAccess: Boolean(this.config.fullAccess) && !this.isReadOnly(),
             };
+            const policyContext: PolicyContext = clampApprovalSettings(managed, askedContext, human);
+            const decidedBy = approvalDecisionSource(managed, askedContext);
+            const guidance = human
+              ? human.message
+              : decidedBy.tier !== "default"
+                ? `Managed policy disables automatic approvals here. ${describeSource(decidedBy)}`
+                : `Run with --yes or --mode auto to explicitly select automatic approvals. ${describeSource(decidedBy)}`;
             const error = (!onConfirm && this.approvalPolicy.requiresDecision("exec", policyContext))
-              ? `Error: Verifier '${verifierCommand}' requires operator approval (exec), but no operator is present (headless execution). Run with --yes or --mode auto to explicitly select automatic approvals.`
+              ? `Error: Verifier '${verifierCommand}' requires operator approval (exec), but no operator is present (headless execution). ${guidance}`
               : `Verification Oracle: verifier execution was not approved by operator (${verifierCommand}).`;
             return {
               success: false,

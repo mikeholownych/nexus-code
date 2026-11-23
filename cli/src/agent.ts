@@ -68,6 +68,8 @@ import { untrustedWorkspaceExtensions } from "./workspace_trust.js";
 import { ConfirmHandler, SubagentResult, AgentObserver, AgentActivity, CompactionOutcome, CompactionCommitError, CAPABILITY_TTL_MS, TOKEN_COUNT_COOLDOWN_MS, LOW_YIELD_COMPACTIONS_BEFORE_HOLD, NEXUS_RUNTIME_IDENTITY, ContextBudgetError, LedgerNotRetainedError, DurablePlanState, CanonicalDurableProvenance, CanonicalDurableSummary, canonicalDurableProvenance, REMOVED_OBSERVATION, REMOVED_UNSEEN, REMOVED_PARTIAL, REMOVED_CHANGED, REMOVED_RECORDED, REMOVED_UNRECORDED, REMOVED_CONDENSED, REMOVED_DROPPED, REMOVAL_PREFIXES, MEMORY_NOTES_BUDGET_CHARS, ARCHIVE_FOR_READING, boundMemoryNotes, FINDINGS_PREFIX, FINDINGS_NOTE_LIMIT, FINDINGS_BUDGET_CHARS, LEGACY_SHORTENED, FINDINGS_OUTGROWN, FINDINGS_INSTRUCTIONS, unseenTruncationNotice, isTruncatedObservation, observationKey, labelSummaryBlocks, observationPresence, unreacquiredRemovals, LONG_RESPONSE_MS, truncatedReplyNotice, harnessNoteMessage, cutResponseNotice, outputDigest, withoutStepNotices, findingIdentity, shortenedFrom, withoutFindingId, recordedFindings, recordedFindingsState, recordedRetainedObservations, applyDetailBudget, normalizeMessageContent, externalInputsFingerprint, externalInputsContentIdentity, gitIndexIdentity, withPersistableEndpoints, RESUMED_WINDOW_REASON, auditCompactionsOnResume, describeArchiveRead, stepPosition, STATE_IDENTITY_BUDGET_MS, logAudit } from "./core/agent_support.js";
 import { setupSpineHandlersImpl } from "./core/spine_handlers.js";
 import { NO_COMMAND_RULES, readCommandRulesFile, type CommandRuleDecision, type CommandRuleSet } from "./core/command_rules.js";
+import { clampRuntimeApprovalMode } from "./core/managed_policy.js";
+import { managedPolicy } from "./core/policy_runtime.js";
 import { buildTurnResultImpl, runTurnImpl } from "./core/run_turn.js";
 import { dispatchToolCallImpl } from "./core/dispatch_tool_call.js";
 import type { NeedsInputOption, NeedsInputQuestion } from "./core/needs_input.js";
@@ -743,6 +745,14 @@ export class AutonomousAgent {
   }
 
   public setApprovalMode(mode: ApprovalMode): void {
+    // GV-1: a mode that managed policy disables is not entered at runtime (`/mode auto`, an "always" answer). The mode
+    // stays as it is and the operator is told which policy decided; the call being approved is not affected.
+    const clamp = clampRuntimeApprovalMode(this.bridge?.getSecurityManager().getEffectivePolicy() ?? managedPolicy(), this.config.approvalMode ?? "review", mode, "A request for approval mode 'auto'");
+    if (clamp.notice) {
+      if (this.observer?.onNotice) this.observer.onNotice(`[nexus] ${clamp.notice}`);
+      else console.warn(`[nexus] ${clamp.notice}`);
+      return;
+    }
     // Read-only selected at runtime is a mode choice, not an explicit launch invariant: record that so a later
     // /mode auto or /mode review can deliberately leave it, exactly like --mode read-only.
     if (mode === "read-only" && !this.config.readOnly && !this.config.readOnlyModeSelected) {

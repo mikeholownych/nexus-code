@@ -1,9 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
-import { egressPolicyFromEnv, workspaceRelaxesEgress, type EgressPolicy } from "./core/egress_policy.js";
+import { egressPolicyFromEnv, type EgressPolicy } from "./core/egress_policy.js";
 import { isTestPath } from "./tester.js";
-import { isWorkspaceTrusted } from "./workspace_trust.js";
+import { envTrustRequested, isWorkspaceListed, realWorkspace } from "./workspace_trust.js";
+import { clampEgressInspector, decideManagedCommand, describeSource, effectiveVerificationMode, type EffectivePolicy, type PolicySource } from "./core/managed_policy.js";
+import type { LoadedPolicy } from "./core/managed_policy_load.js";
+import { approvalHint, emitPolicyNotice, processPolicyHost } from "./core/policy_runtime.js";
 import { FILE_EDIT_TOOLS } from "./file_diff.js";
 import { linkRecord, verifyChain, type ChainLink, type ChainVerdict } from "./core/hash_chain.js";
 
@@ -50,6 +53,8 @@ export type VerificationEditDecision = (VerificationClassification & {
   label?: VerificationDecisionLabel;
   /** A deny only because nobody is there to decide (headless, mode "approve"); a rule-based deny does not carry it. */
   needsDecision?: true;
+  /** GV-1: the policy tier that set the mode this decision was made under, as `describeSource` renders it. */
+  attribution?: string;
 }) | null;
 
 export const VERIFICATION_CONFIG_PROTECTED = "VERIFICATION_CONFIG_PROTECTED";
@@ -159,6 +164,8 @@ const DEFAULT_PROTECTED_PATHS = [
   ".git",
   // The operator's list of trusted workspaces: the agent must not trust a workspace for itself.
   "trusted_workspaces.json",
+  // GV-1: the operator's approvals of project policy files: the agent must not approve a project policy for itself.
+  "policy_trust.json",
   ".env*",
   "id_rsa*",
   "id_ed25519*",
@@ -335,14 +342,26 @@ export function splitSubcommands(cmd: string): string[][] {
 }
 
 export function verificationDeniedMessage(decision: NonNullable<VerificationEditDecision>): string {
-  return `${VERIFICATION_CONFIG_PROTECTED}: '${decision.path}' is verification configuration (${decision.class}, rule '${decision.rule}'). An edit needs an operator decision; none was given. Report it to the operator instead of changing how the work is verified. A headless project that must create or change such files needs fullAccess (--yes) or verificationPaths.mode \"record\" in .nexus-security.json.`;
+  return `${VERIFICATION_CONFIG_PROTECTED}: '${decision.path}' is verification configuration (${decision.class}, rule '${decision.rule}'). An edit needs an operator decision; none was given. Report it to the operator instead of changing how the work is verified. A headless project that must create or change such files needs fullAccess (--yes) or verificationPaths.mode \"record\" in .nexus-security.json.${decision.attribution ? ` ${decision.attribution}` : ""}`;
+}
+
+/** A host name no URL can have: it keeps an allowlist that admits nothing from reading as "no allowlist" to a consumer that treats an empty list that way. */
+const NO_HOST = " ";
+const DEFAULT_SOURCE: PolicySource = { tier: "default", key: "paths.protected" };
+
+export interface SecurityManagerOptions {
+  /** The policy in force in a workspace (its real path). Omitted: the process's managed policy with the workspace's project file. */
+  policyFor?: (workspace: string) => LoadedPolicy;
+  /** Where the policy's notices go. Omitted: stderr, each notice once per process. */
+  notify?: (notice: string) => void;
 }
 
 export class SecurityManager {
   private policy: SecurityPolicy;
   private workspace: string;
+  private loaded!: LoadedPolicy;
 
-  constructor(workspace: string) {
+  constructor(workspace: string, private readonly options: SecurityManagerOptions = {}) {
     this.workspace = path.resolve(workspace);
     this.policy = this.loadPolicy();
   }
@@ -351,40 +370,54 @@ export class SecurityManager {
     this.policy = this.loadPolicy();
   }
 
+  /**
+   * GV-1: the settings in force are the merge of the managed tiers and the project's `.nexus-security.json`, as the
+   * policy library computes it. The project file is read without following a link and within a size bound; what it
+   * tightens always applies, what it relaxes applies only when the workspace is trusted and the file is the approved
+   * one. A file that cannot be read or parsed leaves the built-in defaults and the managed tiers, and says so: every
+   * notice of the load reaches the operator.
+   */
   private loadPolicy(): SecurityPolicy {
-    const policyPath = path.join(this.workspace, ".nexus-security.json");
-    if (fs.existsSync(policyPath)) {
-      try {
-        const raw = fs.readFileSync(policyPath, "utf-8");
-        const parsed = JSON.parse(raw);
-        if (workspaceRelaxesEgress(parsed.egressInspector)) {
-          process.stderr.write("[nexus] .nexus-security.json asks to relax the egress inspector; ignored (a repository cannot relax it). Set NEXUS_EGRESS_POLICY in your own environment instead.\n");
-        }
-        return {
-          blockedCommands: [
-            ...DEFAULT_BLOCKED_COMMANDS,
-            ...(Array.isArray(parsed.blockedCommands) ? parsed.blockedCommands : []),
-          ],
-          protectedPaths: [
-            ...DEFAULT_PROTECTED_PATHS,
-            ...(Array.isArray(parsed.protectedPaths) ? parsed.protectedPaths : []),
-          ],
-          allowedDomains: Array.isArray(parsed.allowedDomains) ? parsed.allowedDomains : undefined,
-          verificationPaths: parseVerificationPolicy(parsed.verificationPaths, isWorkspaceTrusted(this.workspace)),
-          egressInspector: egressPolicyFromEnv(),
-        };
-      } catch {
-        // Fallback to defaults
-      }
-    }
+    const workspace = realWorkspace(this.workspace);
+    const loaded = this.options.policyFor
+      ? this.options.policyFor(workspace)
+      : processPolicyHost().forWorkspace(workspace, { workspaceTrusted: isWorkspaceListed(workspace), envTrustRequested: envTrustRequested() });
+    this.loaded = loaded;
+    const notify = this.options.notify ?? emitPolicyNotice;
+    const say = (notice: string): void => notify(notice.startsWith("nexus: ") ? notice : `nexus: ${notice}`);
+    for (const notice of loaded.notices) say(notice);
+    const hint = approvalHint(loaded);
+    if (hint) say(hint);
 
+    const effective = loaded.effective;
+    const relaxation = effective.verification.relaxation;
+    const extra = effective.verification.protected.values;
+    // The project's own host list keeps its existing matching in the fetch tool; a list that is set and empty admits nothing.
+    const projectDomains = loaded.project.tier?.document.egress?.allowed_domains;
+    const egress = egressPolicyFromEnv();
+    const inspector = clampEgressInspector(effective, egress.mode);
+    if (inspector.notice) say(inspector.notice);
     return {
-      blockedCommands: [...DEFAULT_BLOCKED_COMMANDS],
-      protectedPaths: [...DEFAULT_PROTECTED_PATHS],
-      allowedDomains: undefined,
-      verificationPaths: parseVerificationPolicy(undefined),
-      egressInspector: egressPolicyFromEnv(),
+      blockedCommands: [...DEFAULT_BLOCKED_COMMANDS, ...loaded.project.blockedCommandPatterns],
+      protectedPaths: [...DEFAULT_PROTECTED_PATHS, ...effective.paths.protected.values],
+      allowedDomains: projectDomains ? (projectDomains.length > 0 ? [...projectDomains] : [NO_HOST]) : undefined,
+      verificationPaths: {
+        mode: effectiveVerificationMode(effective).value,
+        extra: extra.length > 0 ? [...extra] : undefined,
+        allow: relaxation && relaxation.allow.length > 0 ? [...relaxation.allow] : undefined,
+      },
+      egressInspector: { ...egress, mode: inspector.mode },
     };
+  }
+
+  /** GV-1: the effective policy in this workspace (managed tiers and the project file), frozen. */
+  public getEffectivePolicy(): EffectivePolicy {
+    return this.loaded.effective;
+  }
+
+  /** The tier a protected-path pattern comes from, as shown beside a refusal. */
+  private protectedPathSource(pattern: string): string {
+    return describeSource(this.loaded.effective.paths.protected.items.find((item) => item.value === pattern)?.source ?? DEFAULT_SOURCE);
   }
 
   public isCommandBlocked(command: string): { blocked: boolean; reason?: string } {
@@ -396,6 +429,12 @@ export class SecurityManager {
       return { blocked: false };
     }
 
+    // 0. GV-1: a managed `forbid` prefix refuses the command wherever it is run from, in every mode.
+    const managed = decideManagedCommand(this.loaded.effective, splitSubcommands(trimmed));
+    if (managed.decision === "forbidden") {
+      return { blocked: true, reason: `Security Policy Violation: ${managed.message}` };
+    }
+
     // 1. Custom blocked commands from policy (outside the default tripwire set)
     const customPatterns = (this.policy.blockedCommands || []).filter(
       (p) => !DEFAULT_BLOCKED_COMMANDS.includes(p)
@@ -404,7 +443,7 @@ export class SecurityManager {
       if (pattern && trimmed.includes(pattern)) {
         return {
           blocked: true,
-          reason: `Destructive-command tripwire: Command matches blocked pattern '${pattern}'`,
+          reason: `Destructive-command tripwire: Command matches blocked pattern '${pattern}' ${describeSource({ tier: "project", file: this.loaded.project.file, key: "blockedCommands" })}`,
         };
       }
     }
@@ -585,7 +624,7 @@ export class SecurityManager {
           if (segments.some((seg) => seg.toLowerCase().startsWith(".env"))) {
             return {
               protected: true,
-              reason: `Security Policy Violation: Path '${targetPath}' matches protected pattern '${pattern}'`,
+              reason: `Security Policy Violation: Path '${targetPath}' matches protected pattern '${pattern}' ${this.protectedPathSource(pattern)}`,
             };
           }
         } else if (patLower.endsWith("*")) {
@@ -593,7 +632,7 @@ export class SecurityManager {
           if (segments.some((seg) => seg.toLowerCase().startsWith(prefix))) {
             return {
               protected: true,
-              reason: `Security Policy Violation: Path '${targetPath}' matches protected pattern '${pattern}'`,
+              reason: `Security Policy Violation: Path '${targetPath}' matches protected pattern '${pattern}' ${this.protectedPathSource(pattern)}`,
             };
           }
         } else {
@@ -605,7 +644,7 @@ export class SecurityManager {
           ) {
             return {
               protected: true,
-              reason: `Security Policy Violation: Path '${targetPath}' is protected under security policy`,
+              reason: `Security Policy Violation: Path '${targetPath}' is protected under security policy ${this.protectedPathSource(pattern)}`,
             };
           }
         }
@@ -853,7 +892,9 @@ export class SecurityManager {
     const mode: VerificationMode = found.class === "policy" && configured.mode !== "block" ? "approve" : configured.mode;
     if (mode === "off") return null;
     if (isConditionalConfig(rel) && !this.touchesConditionalConfig(toolName, args, abs, exists)) return null;
-    const base = { ...found, path: rel };
+    // The protection of the policy file itself is built in; every other mode is the effective policy's.
+    const decidedBy = found.class === "policy" && configured.mode !== "block" ? { tier: "default" as const, key: "verification.mode" } : effectiveVerificationMode(this.loaded.effective).source;
+    const base = { ...found, path: rel, attribution: describeSource(decidedBy) };
     if (mode === "approve" && ctx.role === "tester" && found.class === "test_file" && !directory && this.appendsToExistingTest(toolName, args, abs)) {
       return { ...base, action: "allow", label: "role-allowed" };
     }
