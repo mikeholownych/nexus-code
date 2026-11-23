@@ -631,7 +631,7 @@ export class AutonomousAgent {
     const reported = new Set(redTests.map(rel));
     if (reported.size === 0) return { ok: false, reason: "RED reported no test files" };
     const currentTests = snapshotTests(workspace);
-    if (!currentTests) return { ok: false, reason: "the current test set is too large to capture" };
+    if (!currentTests) return { ok: false, reason: "the current test set could not be captured completely" };
     const priorRedTests = baseline.tddRedTests ?? new Map<string, string>();
     const allowedRedTests = new Set([...priorRedTests.keys(), ...reported]);
     for (const [file, content] of baseline.tests) {

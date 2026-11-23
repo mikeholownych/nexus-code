@@ -71,8 +71,11 @@ test("verification refuses incomplete bounded test discovery", () => {
     fs.mkdirSync(path.join(linkRoot, "real-tests"));
     fs.writeFileSync(path.join(linkRoot, "real-tests", "hidden.test.js"), "");
     fs.symlinkSync("real-tests", path.join(linkRoot, "tests"), "dir");
-    assert.equal(discoverWorkspaceTestFiles(linkRoot).complete, false);
-    assert.equal(snapshotTests(linkRoot), null);
+    // An ordinary directory symlink is walked with a realpath cycle guard: it does not cost the tree its completeness.
+    const followed = discoverWorkspaceTestFiles(linkRoot);
+    assert.equal(followed.complete, true);
+    assert.equal(followed.files.length, 1);
+    assert.equal(snapshotTests(linkRoot)?.size, 1);
 
     fs.mkdirSync(path.join(testFileLinkRoot, "helpers"));
     fs.mkdirSync(path.join(testFileLinkRoot, "test"));

@@ -22,7 +22,7 @@ export interface ChangeBaseline {
   command: string;
   /** The verifier failed (or timed out) before the change. */
   failed: boolean;
-  /** Test files then (workspace-relative path → content); null when one was too large to keep. */
+  /** Test files then (workspace-relative path → content); null when discovery was incomplete or one was too large to keep. */
   tests: Map<string, string> | null;
   /** Verifier configuration and local runner scripts before the change; null means independence is unprovable. */
   verifier: Map<string, string> | null;
@@ -141,10 +141,10 @@ export function isInlineProgramVerifier(command: string): boolean {
   });
 }
 
-/** Test files of the workspace by relative path, or null when one exceeds the size kept for restoring. */
-export function snapshotTests(workspace: string): Map<string, string> | null {
+/** Test files of the workspace by relative path, or null when discovery is incomplete or one exceeds the size kept for restoring. */
+export function snapshotTests(workspace: string, limit?: number): Map<string, string> | null {
   const root = path.resolve(workspace);
-  const discovery = discoverWorkspaceTestFiles(root);
+  const discovery = discoverWorkspaceTestFiles(root, limit);
   if (!discovery.complete) return null;
   const tests = new Map<string, string>();
   for (const file of discovery.files) {
@@ -531,7 +531,7 @@ export function snapshotVerifierDefinition(
     // The accepted nested Node test runner used by the harness. Bind every
     // discovered test file; other wrappers remain unprovable and fail closed.
     const tests = snapshotTests(root);
-    if (!tests || tests.size === 0) { note("there are no existing test files to bind, or one is too large"); return null; }
+    if (!tests || tests.size === 0) { note("there are no existing test files to bind, or their set could not be captured completely"); return null; }
     // Test source is separately snapshotted in ChangeBaseline so changed tests
     // can be set aside and the original suite rerun against the code. The
     // verifier-definition boundary binds test membership, not mutable bodies.
@@ -776,7 +776,7 @@ export function judgeWithoutCopy(
     return {
       independent: false,
       detail:
-        "Nexus changed test files that were too large to set aside, so its own test edits cannot be excluded",
+        "Nexus could not capture the baseline test set completely (a file was too large or discovery was incomplete), so its own test edits cannot be excluded",
     };
   return "needs-copy";
 }

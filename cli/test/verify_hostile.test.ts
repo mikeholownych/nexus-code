@@ -21,7 +21,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { isSandboxAvailable } from "../src/sandbox.js";
-import { discoverWorkspaceTestFiles, MAX_TEST_FILES } from "../src/tester.js";
+import { discoverWorkspaceTestFiles } from "../src/tester.js";
 import { VERIFY_MAX_TREE_FILES, VERIFY_RECORDED_ENVIRONMENT, VerifyUsageError, renderVerifyText, verifyChange, type VerifyOperatorContext } from "../src/core/verify.js";
 import type { VerifyJsonResult } from "../src/verify_contract.js";
 import {
@@ -73,6 +73,18 @@ async function attempt(
 function notVerified(result: VerifyJsonResult): void {
   assert.notEqual(result.verdict, "VERIFIED", summary(result));
   assert.notEqual(result.exitCode, 0);
+}
+
+/** The verifier resolves strace at fixed system paths, never through a workspace-controlled PATH. */
+function hasSystemStrace(): boolean {
+  return ["/usr/bin/strace", "/bin/strace"].some((candidate) => {
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  });
 }
 
 /** Git plumbing with standard input, for trees that `git add` cannot build. */
@@ -236,7 +248,7 @@ test("the default sandbox detects product code reading the expected value from a
   assert.equal(result.verdict, "REGRESSION_FREE", summary(result));
   assert.equal(result.verification?.independent, false, summary(result));
   if (result.sandbox.engine === "bwrap") {
-    if (spawnSync("strace", ["--version"], { stdio: "ignore" }).status === 0) {
+    if (hasSystemStrace()) {
       assert.match(result.verification?.independenceDetail ?? "", /opened.*test-oracle/i);
       assert.deepEqual(result.runs.find((run) => run.phase === "head")?.testFixtureReads, ["test/math.test.mjs"]);
     } else {
@@ -267,7 +279,7 @@ test("the default sandbox detects a child process reading the baseline test orac
   assert.equal(result.verdict, "REGRESSION_FREE", summary(result));
   assert.equal(result.verification?.independent, false);
   assert.deepEqual(result.runs.map((run) => [run.phase, run.passed, run.executedTests]), [["base", false, true], ["head", true, true]]);
-  if (result.sandbox.engine === "bwrap" && spawnSync("strace", ["--version"], { stdio: "ignore" }).status === 0) {
+  if (result.sandbox.engine === "bwrap" && hasSystemStrace()) {
     assert.match(result.verification?.independenceDetail ?? "", /opened.*test-oracle/i);
     assert.deepEqual(result.runs.find((run) => run.phase === "head")?.testFixtureReads, ["test/math.test.mjs"]);
   } else {
@@ -278,7 +290,7 @@ test("the default sandbox detects a child process reading the baseline test orac
 test("the default sandbox still verifies an ordinary fix that does not read its test oracle", { timeout: 120_000 }, async () => {
   const result = await attempt(BASE_FILES, { "src/math.js": MATH_FIXED }, { approveDiscoveredVerifier: true, deliverables: ["src/math.js"] });
   if (result.reason === "SANDBOX_UNAVAILABLE") return;
-  if (result.sandbox.engine === "bwrap" && spawnSync("strace", ["--version"], { stdio: "ignore" }).status === 0) {
+  if (result.sandbox.engine === "bwrap" && hasSystemStrace()) {
     assert.equal(result.verdict, "VERIFIED", summary(result));
     assert.deepEqual(result.runs.find((run) => run.phase === "head")?.testFixtureReads, undefined);
   } else {
@@ -313,7 +325,7 @@ test("the default sandbox treats statically referenced test-support files as ora
   assert.equal(result.verdict, "REGRESSION_FREE", summary(result));
   assert.equal(result.verification?.independent, false);
   assert.deepEqual(result.runs.map((run) => [run.phase, run.passed, run.executedTests]), [["base", false, true], ["head", true, true]]);
-  if (result.sandbox.engine === "bwrap" && spawnSync("strace", ["--version"], { stdio: "ignore" }).status === 0) {
+  if (result.sandbox.engine === "bwrap" && hasSystemStrace()) {
     const headReads = result.runs.find((run) => run.phase === "head")?.testFixtureReads ?? [];
     assert.ok(headReads.includes("fixtures/expected.js") || /aggregate runtime tracing cannot separate baseline test reads/i.test(result.verification?.independenceDetail ?? ""), summary(result));
   } else {
@@ -347,7 +359,7 @@ test("the default sandbox catches a candidate-only read of a dynamically selecte
   if (result.reason === "SANDBOX_UNAVAILABLE") return;
   assert.equal(result.verdict, "REGRESSION_FREE", summary(result));
   assert.equal(result.verification?.independent, false);
-  if (result.sandbox.engine === "bwrap" && spawnSync("strace", ["--version"], { stdio: "ignore" }).status === 0) {
+  if (result.sandbox.engine === "bwrap" && hasSystemStrace()) {
     assert.ok(result.runs.find((run) => run.phase === "head")?.testFixtureReads?.includes("test/fixtures/expected.json"), summary(result));
   } else {
     assert.match(result.verification?.independenceDetail ?? "", /could not be established|Docker does not expose|strace is unavailable/i);
@@ -378,7 +390,7 @@ test("the default sandbox catches a candidate that derives the expected value fr
   if (result.reason === "SANDBOX_UNAVAILABLE") return;
   assert.equal(result.verdict, "REGRESSION_FREE", summary(result));
   assert.equal(result.verification?.independent, false, summary(result));
-  if (result.sandbox.engine === "bwrap" && spawnSync("strace", ["--version"], { stdio: "ignore" }).status === 0) {
+  if (result.sandbox.engine === "bwrap" && hasSystemStrace()) {
     assert.ok(result.runs.find((run) => run.phase === "head")?.testFixtureReads?.includes("test"), summary(result));
   } else {
     assert.match(result.verification?.independenceDetail ?? "", /could not be established|Docker does not expose|strace is unavailable/i);
@@ -407,7 +419,7 @@ test("the default sandbox catches metadata probes of escaped test-oracle paths",
   if (result.reason === "SANDBOX_UNAVAILABLE") return;
   assert.equal(result.verdict, "REGRESSION_FREE", summary(result));
   assert.equal(result.verification?.independent, false, summary(result));
-  if (result.sandbox.engine === "bwrap" && spawnSync("strace", ["--version"], { stdio: "ignore" }).status === 0) {
+  if (result.sandbox.engine === "bwrap" && hasSystemStrace()) {
     assert.ok(result.runs.find((run) => run.phase === "head")?.testFixtureReads?.includes("test/oracle-é,>5.test.mjs"), summary(result));
   } else {
     assert.match(result.verification?.independenceDetail ?? "", /could not be established|Docker does not expose|strace is unavailable/i);
@@ -439,7 +451,7 @@ test("the default sandbox resolves procfs cwd aliases back to workspace oracles"
   if (result.reason === "SANDBOX_UNAVAILABLE") return;
   assert.equal(result.verdict, "REGRESSION_FREE", summary(result));
   assert.equal(result.verification?.independent, false, summary(result));
-  if (result.sandbox.engine === "bwrap" && spawnSync("strace", ["--version"], { stdio: "ignore" }).status === 0) {
+  if (result.sandbox.engine === "bwrap" && hasSystemStrace()) {
     assert.ok(result.runs.find((run) => run.phase === "head")?.testFixtureReads?.includes("test/oracle-5.test.mjs"), summary(result));
   } else {
     assert.match(result.verification?.independenceDetail ?? "", /could not be established|Docker does not expose|strace is unavailable/i);
@@ -475,8 +487,8 @@ test("the default sandbox fails closed when a baseline oracle read could mask a 
   if (result.reason === "SANDBOX_UNAVAILABLE") return;
   assert.equal(result.verdict, "REGRESSION_FREE", summary(result));
   assert.equal(result.verification?.independent, false);
-  if (result.sandbox.engine === "bwrap" && spawnSync("strace", ["--version"], { stdio: "ignore" }).status === 0) {
-    assert.match(result.verification?.independenceDetail ?? "", /aggregate runtime tracing cannot separate baseline test reads.*package\.json/i);
+  if (result.sandbox.engine === "bwrap" && hasSystemStrace()) {
+    assert.match(result.verification?.independenceDetail ?? "", /opened test-oracle or candidate-only workspace file\(s\) more often.*package\.json/i);
   } else {
     assert.match(result.verification?.independenceDetail ?? "", /could not be established|Docker does not expose|strace is unavailable/i);
   }
@@ -510,24 +522,27 @@ test("the default sandbox catches balanced oracle reads through computed dynamic
   if (result.reason === "SANDBOX_UNAVAILABLE") return;
   assert.equal(result.verdict, "REGRESSION_FREE", summary(result));
   assert.equal(result.verification?.independent, false, summary(result));
-  if (result.sandbox.engine === "bwrap" && spawnSync("strace", ["--version"], { stdio: "ignore" }).status === 0) {
-    assert.match(result.verification?.independenceDetail ?? "", /aggregate runtime tracing cannot separate baseline test reads.*package\.json/i);
+  if (result.sandbox.engine === "bwrap" && hasSystemStrace()) {
+    assert.match(result.verification?.independenceDetail ?? "", /opened test-oracle or candidate-only workspace file\(s\) more often.*package\.json/i);
   } else {
     assert.match(result.verification?.independenceDetail ?? "", /could not be established|Docker does not expose|strace is unavailable/i);
   }
 });
 
 test("the default verifier does not certify a fix that reads an oracle omitted by the test-file limit", { timeout: 300_000 }, async () => {
+  // The product bound is 2,000 files; the operator-only override keeps this end-to-end case to a handful of files.
+  // The product bound itself is exercised by discoverWorkspaceTestFiles in test/independent_verification.test.ts.
+  const limit = 8;
   await withRepos([BASE_FILES], async (repo) => {
-    const base = commit(repo, Object.fromEntries(Array.from({ length: MAX_TEST_FILES }, (_, index) => {
+    const base = commit(repo, Object.fromEntries(Array.from({ length: limit }, (_, index) => {
       const name = `test/oracle-${String(index).padStart(4, "0")}.test.mjs`;
       return [name, 'import test from "node:test";\nimport assert from "node:assert/strict";\nimport { add } from "../src/math.js";\ntest("independent oracle", () => assert.equal(add(2, 3), 5));\n'];
     })));
-    const discovery = discoverWorkspaceTestFiles(repo);
-    assert.equal(discovery.files.length, MAX_TEST_FILES);
+    const discovery = discoverWorkspaceTestFiles(repo, limit);
+    assert.equal(discovery.files.length, limit);
     assert.equal(discovery.complete, false);
     const included = new Set(discovery.files.map((file) => path.relative(repo, file)));
-    const omitted = Array.from({ length: MAX_TEST_FILES }, (_, index) => `test/oracle-${String(index).padStart(4, "0")}.test.mjs`)
+    const omitted = Array.from({ length: limit }, (_, index) => `test/oracle-${String(index).padStart(4, "0")}.test.mjs`)
       .find((file) => !included.has(file));
     assert.ok(omitted, "the fixture includes a concrete test file outside the bounded snapshot");
 
@@ -538,11 +553,12 @@ test("the default verifier does not certify a fix that reads an oracle omitted b
       approveDiscoveredVerifier: true,
       deliverables: ["src/math.js"],
       sandbox: { engine: "auto" },
+      testFileLimit: limit,
     });
     assert.notEqual(result.result.verdict, "VERIFIED", summary(result.result));
     if (result.result.reason === "SANDBOX_UNAVAILABLE") return;
     assert.equal(result.result.baseline.testFiles, null, summary(result.result));
-    assert.match(result.result.verification?.independenceDetail ?? "", /test-file set could not be completely discovered/i);
+    assert.match(result.result.verification?.independenceDetail ?? "", /baseline test file set could not be completely discovered/i, summary(result.result));
     assert.deepEqual(result.leftovers, []);
   });
 });
@@ -1009,5 +1025,142 @@ test("a head whose tests print a forged verdict, a forged JSON document and term
     assert.match(text.stdout, /\n    \| .*nexus verify: VERIFIED/, "the forged line is shown behind the margin");
     assert.doesNotMatch(text.stdout, /[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/, "a control character reached the terminal");
     assert.doesNotMatch(text.stdout, /^\{/m, "a forged JSON document starts a line of the text output");
+  });
+});
+
+// ---------------------------------------------------------------- owner review findings on PR 732
+
+const TRACED_BWRAP = {
+  skip: isSandboxAvailable("bwrap") ? false : "Bubblewrap cannot confine a command on this host",
+  timeout: 120_000,
+};
+
+// PREVENTED: a checkout outside HOME and /tmp used to stay visible through the sandbox's read-only bind of /.
+test("WITH --sandbox bwrap product code cannot read the caller's checkout by absolute path from outside HOME and /tmp", TRACED_BWRAP, async () => {
+  if (!hasSystemStrace()) return;
+  let repo: string | undefined;
+  try {
+    repo = fs.mkdtempSync(path.join("/var/tmp", "nexus-verify-outside-"));
+  } catch {
+    return; // a host without a writable /var/tmp cannot host this shape
+  }
+  try {
+    writeFiles(repo, BASE_FILES);
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "t"], { cwd: repo });
+    execFileSync("git", ["config", "user.email", "t@t.invalid"], { cwd: repo });
+    execFileSync("git", ["add", "."], { cwd: repo });
+    execFileSync("git", ["commit", "-qm", "base"], { cwd: repo });
+    const base = head(repo);
+    const oraclePath = path.join(repo, TEST_FILE);
+    const cheating = [
+      'import { readFileSync } from "node:fs";',
+      `const expected = Number(/add\\(2, 3\\), (\\d+)/.exec(readFileSync(${JSON.stringify(oraclePath)}, "utf8"))[1]);`,
+      "export const add = () => expected;",
+      "export const double = (a) => a * 2;",
+      "",
+    ].join("\n");
+    writeFiles(repo, { "src/math.js": cheating });
+    execFileSync("git", ["add", "."], { cwd: repo });
+    execFileSync("git", ["commit", "-qm", "head"], { cwd: repo });
+    const candidate = head(repo);
+    const result = await verifyInProcess({ worktree: repo, base, head: candidate }, {
+      approveDiscoveredVerifier: true, deliverables: ["src/math.js"], sandbox: { engine: "bwrap" },
+    });
+    assert.deepEqual(result.leftovers, []);
+    notVerified(result.result);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+// LOWERED: linking the oracle before reading it does not hide the read.
+test("WITH --sandbox bwrap a hard link to a baseline test is traced back to its source and does not raise the verdict", TRACED_BWRAP, async () => {
+  if (!hasSystemStrace()) return;
+  const cheating = [
+    'import fs from "node:fs";',
+    "try { fs.unlinkSync(new URL(\"./.cache\", import.meta.url)); } catch {}",
+    'fs.linkSync(new URL("../test/math.test.mjs", import.meta.url), new URL("./.cache", import.meta.url));',
+    'const expected = Number(/add\\(2, 3\\), (\\d+)/.exec(fs.readFileSync(new URL("./.cache", import.meta.url), "utf8"))[1]);',
+    "export const add = () => expected;",
+    "export const double = (a) => a * 2;",
+    "",
+  ].join("\n");
+  const result = await attempt(BASE_FILES, { "src/math.js": cheating }, { ...OPERATOR, sandbox: { engine: "bwrap" } });
+  notVerified(result);
+  assert.equal(result.verification?.independent, false, summary(result));
+  assert.match(result.runs.find((run) => run.phase === "head")?.testFixtureReads?.join(",") ?? "", /test\/math\.test\.mjs/);
+});
+
+// LOWERED: no static regex over changed JS/TS files gates this — a computed builtin name and a computed directory are
+// enough to derive the answer from the test filename.
+test("WITH --sandbox bwrap a product that lists the test directory through process.getBuiltinModule does not raise the verdict", TRACED_BWRAP, async () => {
+  if (!hasSystemStrace()) return;
+  const cheating = [
+    'const fs = process.getBuiltinModule("f" + "s");',
+    'const names = fs.readdirSync(new URL("../test/", import.meta.url));',
+    "export const add = () => (names.length ? 5 : 0);",
+    "export const double = (a) => a * 2;",
+    "",
+  ].join("\n");
+  const result = await attempt(BASE_FILES, { "src/math.js": cheating }, { ...OPERATOR, sandbox: { engine: "bwrap" } });
+  notVerified(result);
+  assert.equal(result.verification?.independent, false, summary(result));
+});
+
+// LOWERED: the /proc/<pid>/task/<tid>/cwd spelling of the workspace is an alias of the oracle directory.
+test("WITH --sandbox bwrap a product that probes the oracle through /proc/self/task/<pid>/cwd does not raise the verdict", TRACED_BWRAP, async () => {
+  if (!hasSystemStrace()) return;
+  const cheating = [
+    'import fs from "node:fs";',
+    `const alias = "/proc/self/task/" + process.pid + "/cwd/${TEST_FILE}";`,
+    'const expected = Number(/add\\(2, 3\\), (\\d+)/.exec(fs.readFileSync(alias, "utf8"))[1]);',
+    "export const add = () => expected;",
+    "export const double = (a) => a * 2;",
+    "",
+  ].join("\n");
+  const result = await attempt(BASE_FILES, { "src/math.js": cheating }, { ...OPERATOR, sandbox: { engine: "bwrap" } });
+  notVerified(result);
+  assert.equal(result.verification?.independent, false, summary(result));
+});
+
+// NOT LOWERED: a test that imports node:fs without reading an oracle, and a fix whose new import makes Node look up an
+// extra package.json, must not lose VERIFIED to housekeeping or a broad test-side regex.
+test("WITH --sandbox bwrap a test that imports node:fs and a fix that adds an import still reach VERIFIED", TRACED_BWRAP, async () => {
+  if (!hasSystemStrace()) return;
+  const testWithFs = TEST_FULL.replace(
+    'import assert from "node:assert/strict";',
+    'import assert from "node:assert/strict";\nimport fs from "node:fs";',
+  ) + 'test("fs is available", () => assert.equal(typeof fs.readFileSync, "function"));\n';
+  const helper = "export const helper = 1;\n";
+  const fixedWithImport = `${MATH_FIXED}import { helper } from "./helper.js";\nexport const tagged = () => helper;\n`;
+  const result = await attempt(
+    { ...BASE_FILES, [TEST_FILE]: testWithFs, "src/helper.js": helper },
+    { "src/math.js": fixedWithImport },
+    { ...OPERATOR, sandbox: { engine: "bwrap" } },
+  );
+  assert.equal(result.verdict, "VERIFIED", summary(result));
+});
+
+// NOT LOWERED: an unrelated directory symlink must not make bounded discovery incomplete.
+test("WITH --sandbox bwrap an unrelated directory symlink leaves discovery complete and the honest fix VERIFIED", TRACED_BWRAP, async () => {
+  if (!hasSystemStrace()) return;
+  await withRepos([BASE_FILES], async (repo) => {
+    fs.mkdirSync(path.join(repo, "docs"));
+    fs.writeFileSync(path.join(repo, "docs", "readme.md"), "docs\n");
+    fs.symlinkSync("docs", path.join(repo, "documentation"), "dir");
+    // The symlink belongs to the base: only the product edit is the candidate change.
+    execFileSync("git", ["add", "-A"], { cwd: repo });
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t.invalid", "commit", "-qm", "symlink"], { cwd: repo });
+    const base = head(repo);
+    writeFiles(repo, { "src/math.js": MATH_FIXED });
+    execFileSync("git", ["add", "-A"], { cwd: repo });
+    execFileSync("git", ["commit", "-qm", "head"], { cwd: repo });
+    const candidate = head(repo);
+    const result = await verifyInProcess({ worktree: repo, base, head: candidate }, {
+      approveDiscoveredVerifier: true, deliverables: ["src/math.js"], sandbox: { engine: "bwrap" },
+    });
+    assert.deepEqual(result.leftovers, []);
+    assert.equal(result.result.verdict, "VERIFIED", summary(result.result));
   });
 });

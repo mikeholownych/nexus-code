@@ -974,14 +974,27 @@ export interface WorkspaceTestDiscovery {
  * incomplete so security-sensitive callers can refuse to treat a subset as the
  * complete test oracle set.
  */
-export function discoverWorkspaceTestFiles(root: string): WorkspaceTestDiscovery {
+export function discoverWorkspaceTestFiles(root: string, limit: number = MAX_TEST_FILES): WorkspaceTestDiscovery {
   const workspace = path.resolve(root);
   const found: string[] = [];
   let complete = true;
   let stopped = false;
   let visitedEntries = 0;
+  // A directory symlink is followed like any other directory, but not twice: a link cycle must not walk forever and a
+  // second link to the same directory cannot expose a test file the first visit missed.
+  const visitedRealDirectories = new Set<string>();
   const walk = (dir: string, depth: number, probeOnly = depth > 6) => {
     if (stopped) return;
+    let realDirectory: string;
+    try {
+      realDirectory = fs.realpathSync(dir);
+    } catch {
+      complete = false;
+      stopped = true;
+      return;
+    }
+    if (visitedRealDirectories.has(realDirectory)) return;
+    visitedRealDirectories.add(realDirectory);
     if (depth > MAX_TEST_DISCOVERY_PROBE_DEPTH) {
       complete = false;
       stopped = true;
@@ -1004,21 +1017,22 @@ export function discoverWorkspaceTestFiles(root: string): WorkspaceTestDiscovery
       const full = path.join(dir, entry.name);
       if ((entry.isDirectory() || entry.isSymbolicLink()) && SKIP_DIRS.has(entry.name)) continue;
       if (entry.isSymbolicLink()) {
-        // A non-test file symlink does not make test-file discovery incomplete.
-        // Test-file links, directory links (whose contents cannot be enumerated
-        // without following them), and links that escape the workspace still
-        // fail closed.
+        // A symlink to a non-test file is not a test file. A symlink to a directory is walked below, with a realpath
+        // cycle guard, so an ordinary `documentation -> docs` link does not cost a whole repo its complete discovery.
+        // Only a link to a test file, a link that escapes the workspace, or an unreadable target fails closed: those
+        // are the cases where a test could hide where the walk will not look.
         try {
           const target = fs.realpathSync(full);
           const relativeTarget = path.relative(workspace, target);
-          const targetStat = fs.statSync(full);
           const escapesWorkspace = relativeTarget === ".." || relativeTarget.startsWith(`..${path.sep}`) || path.isAbsolute(relativeTarget);
           const testLink = TEST_PATH.test(path.relative(workspace, full)) || TEST_PATH.test(relativeTarget);
-          if (escapesWorkspace || !targetStat.isFile() || testLink) {
+          if (escapesWorkspace || testLink) {
             complete = false;
             stopped = true;
             return;
           }
+          const targetStat = fs.statSync(full);
+          if (targetStat.isDirectory()) walk(full, depth + 1, probeOnly || depth >= 6);
         } catch {
           complete = false;
           stopped = true;
@@ -1034,7 +1048,7 @@ export function discoverWorkspaceTestFiles(root: string): WorkspaceTestDiscovery
           stopped = true;
           return;
         }
-        if (found.length >= MAX_TEST_FILES) {
+        if (found.length >= limit) {
           complete = false;
           stopped = true;
           return;
