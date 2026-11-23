@@ -10,6 +10,7 @@ import type { TypecheckBaselineRecord } from "./core/typecheck_evidence.js";
 import type { EvidenceOutcomeReason } from "./core/verification_outcome.js";
 import type { VerificationClass, VerificationMode } from "./security.js";
 import type { TypecheckMode } from "./tester.js";
+import type { SandboxDenialEvent } from "./sandbox_events.js";
 
 /**
  * Version of the document `nexus verify --json` prints. Adding an optional member keeps the version; removing or
@@ -314,6 +315,8 @@ export interface VerifyJsonResult {
   review: VerifyReview;
   /** Always written; absent only in a document from before `--sandbox` existed (nothing was sandboxed). */
   sandbox?: VerifySandbox;
+  /** Sandbox refusals encountered in this run. Present only when one happened; a denial is evidence, never an approval. */
+  sandboxEvents?: SandboxDenialEvent[];
   /** Dependency directories of the caller's checkout that were linked into both scratch trees. */
   linkedDependencyDirs: string[];
   limits: VerifyLimits;

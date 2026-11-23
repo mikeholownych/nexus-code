@@ -1698,6 +1698,7 @@ export class RustCoreBridge {
                 success: false,
                 output: "",
                 error: "Read-only mode violation: workspace identity changed before command execution.",
+                sandboxDenial: { kind: "violation", category: "filesystem", reason: "workspace identity changed before command execution" },
               };
             }
 
@@ -1707,6 +1708,7 @@ export class RustCoreBridge {
                 success: false,
                 output: "",
                 error: "Read-only mode violation: command operands escaped the pinned workspace.",
+                sandboxDenial: { kind: "violation", category: "filesystem", reason: "command operands escaped the pinned workspace" },
               };
             }
 
@@ -1722,6 +1724,7 @@ export class RustCoreBridge {
                 success: false,
                 output: "",
                 error: `Read-only mode violation: filesystem-isolated shell execution is unavailable. ${sandboxed.warning || "No supported sandbox engine is available."}`,
+                sandboxDenial: { kind: "unavailable", category: "engine", reason: sandboxed.warning || "No supported sandbox engine is available." },
               };
             }
 
@@ -1734,7 +1737,12 @@ export class RustCoreBridge {
               this.turnSignal,
             );
           } catch (err: any) {
-            return { success: false, output: "", error: `Read-only command confinement failed: ${err.message}` };
+            return {
+              success: false,
+              output: "",
+              error: `Read-only command confinement failed: ${err.message}`,
+              sandboxDenial: { kind: "unavailable", category: "engine", reason: `Read-only command confinement failed: ${String(err.message ?? err).slice(0, 300)}` },
+            };
           } finally {
             if (workspaceFd !== undefined) fs.closeSync(workspaceFd);
           }
@@ -1765,6 +1773,7 @@ export class RustCoreBridge {
             success: false,
             output: "",
             error: `${authority} violation: filesystem-isolated shell execution is unavailable. ${sandboxed.warning || "No supported sandbox engine is available."}`,
+            sandboxDenial: { kind: "unavailable", category: "engine", reason: sandboxed.warning || "No supported sandbox engine is available." },
           };
         }
         args.command = sandboxed.command;

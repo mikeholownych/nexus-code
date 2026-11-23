@@ -4,6 +4,67 @@
   "description": "Generated from VerifyJsonOutput in cli/src/verify_contract.ts by cli/scripts/gen_verify_result_schema.mjs. Do not edit by hand. The one JSON document `nexus verify --json` writes to stdout and `--receipt` writes to a file; `schema_version` is its first member.",
   "$ref": "#/$defs/VerifyJsonOutput",
   "$defs": {
+    "SandboxDenialEvent": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "category": {
+          "$ref": "#/$defs/SandboxEventCategory"
+        },
+        "engine": {
+          "$ref": "#/$defs/SandboxEventEngine"
+        },
+        "kind": {
+          "$ref": "#/$defs/SandboxEventKind"
+        },
+        "operation": {
+          "description": "Code-defined label for the refused operation: `verify`, a tool name, or a worker.",
+          "type": "string"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "reason": {
+          "description": "Short, control-character-free reason from the refusing code path.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "at",
+        "category",
+        "engine",
+        "kind",
+        "operation",
+        "profile",
+        "reason"
+      ]
+    },
+    "SandboxEventCategory": {
+      "enum": [
+        "engine",
+        "filesystem",
+        "network",
+        "policy"
+      ]
+    },
+    "SandboxEventEngine": {
+      "description": "VR-3: the profile-agnostic shape of a sandbox refusal. A denial is evidence for a receipt and a flight record; it is\nnever an approval and never raises a verdict. `profile` is `\"default\"` until SB-1 introduces named profiles, so the\nshape does not have to change when those names arrive.",
+      "enum": [
+        "auto",
+        "bwrap",
+        "docker",
+        "none"
+      ]
+    },
+    "SandboxEventKind": {
+      "enum": [
+        "denied",
+        "unavailable",
+        "violation"
+      ]
+    },
     "TypecheckBaselineRecord": {
       "type": "object",
       "properties": {
@@ -498,6 +559,13 @@
         "sandbox": {
           "description": "Always written; absent only in a document from before `--sandbox` existed (nothing was sandboxed).",
           "$ref": "#/$defs/VerifySandbox"
+        },
+        "sandboxEvents": {
+          "description": "Sandbox refusals encountered in this run. Present only when one happened; a denial is evidence, never an approval.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SandboxDenialEvent"
+          }
         },
         "schema_version": {
           "description": "Version of this document's schema. Always the first member.",

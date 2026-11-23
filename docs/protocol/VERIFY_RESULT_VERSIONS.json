@@ -28,5 +28,10 @@
     "schema_version": 3,
     "schemaSha256": "cfa5a79dd94baf06076f78a5f58408a43f083f982fcf74b4a617afd8434cdd8a",
     "note": "Combine the independent-reviewer review shape (fc7c244) with optional runs[].testFixtureReads (7e976e86) and the clarified definitionBound description: a single checked-in v3 schema after merging those slices. Additive; schema_version stays 3. Consumers that ignore unknown members and already accept either prior v3 document are unaffected."
+  },
+  {
+    "schema_version": 3,
+    "schemaSha256": "5b284ddc2abab71ab9f47176107fe1cc8f79c74bfa2d9a544dcac3acf726ac17",
+    "note": "Additive, schema_version stays 3 (VR-3 sandbox denial receipts). New optional sandboxEvents member on the result: typed refusals with kind, engine, profile, operation, category, reason and at. Older documents omit it; no member was removed, renamed, or changed type or meaning. A denial is evidence only: it never raises a verdict and the engine-unavailable reason still maps to BLOCKED."
   }
 ]

@@ -202,16 +202,28 @@ test("--sandbox with an engine that is not usable is BLOCKED (SANDBOX_UNAVAILABL
         assert.equal(run.result.exitCode, 3);
         assert.deepEqual(run.result.runs, [], "no verifier process was started");
         assert.deepEqual(run.result.sandbox, { requested: true, engine: "none", network: false });
+        // VR-3: the refusal is a typed receipt event, not just a string in `detail`.
+        assert.equal(run.result.sandboxEvents?.length, 1, `${engine}: ${JSON.stringify(run.result.sandboxEvents)}`);
+        const event = run.result.sandboxEvents![0];
+        assert.equal(event.kind, "unavailable");
+        assert.equal(event.engine, engine);
+        assert.equal(event.profile, "default");
+        assert.equal(event.operation, "verify");
+        assert.equal(event.category, "engine");
+        assert.match(event.reason, new RegExp(`--sandbox ${engine} was requested`));
+        assert.ok(!("verdict" in event), "a denial event cannot carry a verdict");
         assert.match(run.result.detail ?? "", new RegExp(`--sandbox ${engine} was requested`));
         assert.equal(fs.existsSync(marker), false, "the verifier ran although the sandbox it was to run in is unavailable");
         assert.deepEqual(run.leftovers, []);
         assert.match(renderVerifyText(run.result), /^nexus verify: BLOCKED \(SANDBOX_UNAVAILABLE\)\n/);
         assert.match(renderVerifyText(run.result), /\n  sandbox +requested, and nothing was run\n/);
+        assert.match(renderVerifyText(run.result), new RegExp(`\\n  sandbox denial ?unavailable \\(${engine}/default, engine\\) while verify:`));
       }
       // The explicit trusted-input opt-out runs unconfined and says so in its receipt.
       const plain = await verifyInProcess({ worktree: repo, base, head: fixed }, { verifierCommand: `touch '${marker}'; node --test`, deliverables: ["src/math.js"], sandbox: { engine: "none" } }, { env: { PATH: engines.PATH } });
       assert.equal(plain.result.verdict, "REGRESSION_FREE", plain.result.detail); // a compound command cannot be bound, so it never shows more than this
       assert.deepEqual(plain.result.sandbox, { requested: false, engine: "none", network: false });
+      assert.equal(plain.result.sandboxEvents, undefined, "no refusal means no denial events");
       assert.deepEqual(plain.result.runs.map((ran) => ran.sandboxed), [false, false]);
       assert.equal(fs.existsSync(marker), true);
       assert.match(renderVerifyText(plain.result), /\n  sandbox +none: repository code ran with your privileges/);
@@ -243,6 +255,9 @@ test("CLI: sandbox defaults to auto, --sandbox takes auto, bwrap, docker or none
       assert.equal(defaultBlocked.reason, "SANDBOX_UNAVAILABLE", "the default must not run verifier code without a sandbox");
       assert.deepEqual(defaultBlocked.sandbox, { requested: false, engine: "none", network: false }, "the result distinguishes implicit default confinement from an explicit flag");
       assert.match(defaultBlocked.detail, /default --sandbox auto was requested/);
+      assert.equal(defaultBlocked.sandboxEvents?.length, 1);
+      assert.equal(defaultBlocked.sandboxEvents![0].engine, "auto");
+      assert.match(defaultBlocked.sandboxEvents![0].reason, /default --sandbox auto was requested/);
       assert.deepEqual(defaultBlocked.runs, []);
       const blocked = consumeResult(refused);
       assert.equal(refused.code, 3);
