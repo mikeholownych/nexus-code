@@ -194,7 +194,7 @@ function markdownExport(session: SessionData, history: HistoryCompleteness, arch
   }
   if (contextInventory) {
     out.push("## Context inventory (source references; content omitted)", "", `Coverage: **${contextInventory.coverage}** · ${contextInventory.metrics.includedItems} item(s) · ${contextInventory.metrics.omittedItems} omitted · ${contextInventory.metrics.estimatedTokens} estimated tokens (${contextInventory.metrics.tokenSource})`, "");
-    for (const item of contextInventory.items) out.push(`- \`${item.id}\` ${item.sourceType} — ${item.sourceLocation}; scope=${item.scope}; observed=${item.observedAt}; freshness=${item.freshness}${item.freshnessRule ? ` (${item.freshnessRule})` : ""}; trust=${item.trust}; via=${item.retrievalMethod}${item.sourceRefs?.length ? `; refs=${item.sourceRefs.join(",")}` : ""}`);
+    for (const item of contextInventory.items) out.push(`- \`${item.id}\` ${item.sourceType} — ${item.sourceLocation}; scope=${item.scope}; observed=${item.observedAt}; freshness=${item.freshness}${item.freshnessRule ? ` (${item.freshnessRule})` : ""}${item.sourceVersion ? `; source-version=\`${encodeURIComponent(item.sourceVersion)}\`` : ""}; trust=${item.trust}; via=${item.retrievalMethod}${item.sourceRefs?.length ? `; refs=${item.sourceRefs.join(",")}` : ""}`);
     if (contextInventory.coverageGaps.length) out.push("", "Coverage gaps:", ...contextInventory.coverageGaps.map((gap) => `- ${gap}`));
     out.push("");
   }

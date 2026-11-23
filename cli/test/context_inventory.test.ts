@@ -404,6 +404,7 @@ test("context inspection and maturity execute without provider calls and emit pa
     getKnowledgeGraph: () => ({
       list: () => [{
         id: "memory-1",
+        updatedAt: "2026-11-23T10:00:00.000Z",
         category: "rule",
         key: "test rule",
         value: "remembered claim",
@@ -449,7 +450,8 @@ test("context inspection and maturity execute without provider calls and emit pa
   assert.equal(snapshot.items.some((item: any) => item.sourceRefs?.includes("request:message:0")), true);
   const memoryItem = snapshot.items.find((item: any) => item.sourceType === "durable_knowledge");
   assert.equal(memoryItem?.freshness, "unknown");
-  assert.match(memoryItem?.freshnessRule ?? "", /no stored content fingerprint/);
+  assert.match(memoryItem?.freshnessRule ?? "", /underlying memory sources are not fingerprinted/);
+  assert.equal(memoryItem?.sourceVersion, JSON.stringify(["2026-11-23T10:00:00.000Z", "operator_reviewed_unverified"]));
   assert.equal(memoryItem?.sourceRefs?.includes("operator-note:1"), true);
   const workspaceSkill = snapshot.items.find((item: any) => item.sourceLocation === "repository:skill:.agents/skills/workspace-guide/SKILL.md");
   const profileSkill = snapshot.items.find((item: any) => item.sourceLocation === "profile:skill:profile-guide");
@@ -501,6 +503,47 @@ test("context inspection and maturity execute without provider calls and emit pa
   assert.equal(changedSnapshot.workspaceState.comparison, "changed");
   assert.deepEqual(changedSnapshot.workspaceState.invalidatedRepositoryItemIds, previous.items.map((item) => item.id));
   assert.ok(changedSnapshot.coverageGaps.some((gap: string) => gap.includes("workspace state changed")));
+
+  const priorKnowledge = buildContextInventory({
+    sources: [{ name: "project_knowledge", status: "ok", durationMs: 1, items: [{
+      ...input("repository:knowledge:memory-1", "repository"),
+      sourceType: "durable_knowledge",
+      sourceVersion: JSON.stringify(["2026-11-20T10:00:00.000Z", "operator_reviewed_unverified"]),
+    }] }],
+  });
+  const changedKnowledgeHost = {
+    ...host,
+    app: {
+      ...host.app,
+      getAgent: () => ({ ...agent, getKnowledgeGraph: () => ({ list: () => [{
+        id: "memory-1", updatedAt: "2026-11-23T10:00:00.000Z", category: "rule", key: "test rule", value: "remembered claim",
+        validationStatus: "operator_reviewed_unverified", provenance: { sourceRefs: ["operator-note:1"] }, retention: { policy: "until_deleted" },
+      }] }) }),
+      getSessionManager: () => ({ loadSession: () => ({ contextInventory: priorKnowledge }) }),
+    },
+  };
+  const changedKnowledge = await routeSlash(changedKnowledgeHost, "context", "inspect --json", new AbortController().signal);
+  const changedKnowledgeSnapshot = JSON.parse(changedKnowledge.output);
+  const currentKnowledgeItem = changedKnowledgeSnapshot.items.find((item: any) => item.sourceType === "durable_knowledge");
+  assert.equal(currentKnowledgeItem?.freshness, "unknown", "record change detection cannot verify the underlying remembered claim");
+  assert.equal(currentKnowledgeItem?.sourceVersion, JSON.stringify(["2026-11-23T10:00:00.000Z", "operator_reviewed_unverified"]));
+  assert.ok(changedKnowledgeSnapshot.coverageGaps.some((gap: string) => gap.includes("project knowledge record changed since the previous capture")));
+
+  const changedValidationHost = {
+    ...host,
+    app: {
+      ...host.app,
+      getAgent: () => ({ ...agent, getKnowledgeGraph: () => ({ list: () => [{
+        id: "memory-1", updatedAt: "2026-11-20T10:00:00.000Z", category: "rule", key: "test rule", value: "remembered claim",
+        validationStatus: "legacy_unverified", provenance: { sourceRefs: ["operator-note:1"] }, retention: { policy: "until_deleted" },
+      }] }) }),
+      getSessionManager: () => ({ loadSession: () => ({ contextInventory: priorKnowledge }) }),
+    },
+  };
+  const changedValidation = await routeSlash(changedValidationHost, "context", "inspect --json", new AbortController().signal);
+  const changedValidationSnapshot = JSON.parse(changedValidation.output);
+  assert.equal(changedValidationSnapshot.items.find((item: any) => item.sourceType === "durable_knowledge")?.sourceVersion, JSON.stringify(["2026-11-20T10:00:00.000Z", "legacy_unverified"]));
+  assert.ok(changedValidationSnapshot.coverageGaps.some((gap: string) => gap.includes("project knowledge record changed since the previous capture")));
 
   const unavailableHost = {
     ...host,
@@ -566,16 +609,20 @@ test("session save, resume, compaction, and export retain source references with
         ...input("repository:status", "repository"),
         freshness: "current",
         freshnessRule: "live at capture; invalidate after workspace changes",
+        sourceVersion: JSON.stringify(["capture-1", "current"]),
       }] }],
     });
     manager.saveSession({ id: "ctx-live", workspace, messages: [], contextInventory: liveInventory } as any);
     const restoredLive = manager.loadSession("ctx-live")!;
     assert.equal(restoredLive.contextInventory?.items[0].freshness, "unknown");
     assert.match(restoredLive.contextInventory?.items[0].freshnessRule ?? "", /requires revalidation/);
+    assert.equal(restoredLive.contextInventory?.items[0].sourceVersion, JSON.stringify(["capture-1", "current"]));
     assert.equal(restoredLive.contextInventory?.workspaceState?.fingerprint, "a".repeat(64));
     assert.equal(compareWorkspaceState(restoredLive.contextInventory, "b".repeat(64)).comparison, "changed");
     const exportedLive = buildSessionExport(manager, restoredLive as any);
     assert.equal((exportedLive.json as any).contextInventory.workspaceState.fingerprint, "a".repeat(64));
+    assert.equal((exportedLive.json as any).contextInventory.items[0].sourceVersion, JSON.stringify(["capture-1", "current"]));
+    assert.match(exportedLive.markdown, /source-version=`%5B%22capture-1%22%2C%22current%22%5D`/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

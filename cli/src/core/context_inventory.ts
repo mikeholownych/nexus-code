@@ -23,6 +23,8 @@ export interface ContextInventoryItem {
   observedAt: string;
   freshness: ContextFreshness;
   freshnessRule?: string;
+  /** Content-free source version marker for comparing current records with saved inventories. */
+  sourceVersion?: string;
   trust: ContextTrust;
   retention: string;
   inclusionReason: string;
@@ -34,6 +36,8 @@ export interface ContextInventoryItem {
 export interface ContextSourceMeasurement {
   source: string;
   status: ContextSourceStatus;
+  /** False when an export reconstructed provenance without timing the source read. */
+  durationMeasured?: boolean;
   /** Additive detail keeps schema-1 readers compatible while distinguishing timeout and cancellation. */
   outcome?: ContextSourceOutcome;
   durationMs: number;
@@ -57,6 +61,8 @@ export interface ContextInventorySnapshot {
   sourceMeasurements: ContextSourceMeasurement[];
   metrics: {
     assemblyDurationMs: number;
+    /** False when this snapshot was reconstructed for export and no assembly timer was run. */
+    assemblyDurationMeasured?: boolean;
     includedItems: number;
     omittedItems: number;
     estimatedTokens: number;
@@ -205,6 +211,7 @@ export interface ContextSourceItemInput {
   retrievalMethod: string;
   freshness?: ContextFreshness;
   freshnessRule?: string;
+  sourceVersion?: string;
   sourceRefs?: string[];
 }
 
@@ -212,6 +219,8 @@ export interface ContextInventoryInput {
   capturedAt?: string;
   /** End-to-end time spent collecting and assembling inventory sources. */
   assemblyDurationMs?: number;
+  /** Defaults to true; false is used when reconstructing a stable export rather than measuring retrieval. */
+  durationsMeasured?: boolean;
   sessionId?: string;
   taskId?: string;
   workspace?: string;
@@ -269,6 +278,7 @@ export function buildContextInventory(input: ContextInventoryInput): ContextInve
         observedAt: capturedAt,
         freshness,
         ...(item.freshnessRule ? { freshnessRule: metadataText(item.freshnessRule) } : {}),
+        ...(item.sourceVersion ? { sourceVersion: metadataText(item.sourceVersion, 200) } : {}),
         trust: item.trust,
         retention: metadataText(item.retention, 120),
         inclusionReason: metadataText(item.inclusionReason),
@@ -281,7 +291,8 @@ export function buildContextInventory(input: ContextInventoryInput): ContextInve
       source: source.name,
       status: source.status,
       ...(source.outcome ? { outcome: source.outcome } : {}),
-      durationMs: boundedDuration(source.durationMs),
+      durationMs: input.durationsMeasured === false ? 0 : boundedDuration(source.durationMs),
+      ...(input.durationsMeasured === false ? { durationMeasured: false } : {}),
       itemCount: source.items.length + preOmitted,
       includedItemCount: included.length,
       omittedItemCount: source.items.length - included.length + preOmitted,
@@ -326,7 +337,8 @@ export function buildContextInventory(input: ContextInventoryInput): ContextInve
     items,
     sourceMeasurements,
     metrics: {
-      assemblyDurationMs: boundedDuration(input.assemblyDurationMs ?? (performance.now() - started)),
+      assemblyDurationMs: input.durationsMeasured === false ? 0 : boundedDuration(input.assemblyDurationMs ?? (performance.now() - started)),
+      ...(input.durationsMeasured === false ? { assemblyDurationMeasured: false } : {}),
       includedItems: items.length,
       omittedItems,
       estimatedTokens,
@@ -436,21 +448,21 @@ export function buildSessionContextInventory(session: {
   activePlan?: unknown[];
   compactionProvenance?: { recordId: string; predecessorIds: string[]; summaryContent?: string } | null;
   lastTurn?: { tokenAccounting?: { contextLimit: number; contextSource: string; lastRequest?: { promptTokens: number; source: string } } } | null;
-}, archived: { messages?: readonly any[]; unreadableLines?: number } = {}): ContextInventorySnapshot {
-  const capturedAt = new Date().toISOString();
-  const started = performance.now();
+}, archived: { messages?: readonly any[]; unreadableLines?: number } = {}, capturedAt = new Date().toISOString(), durationsMeasured = true): ContextInventorySnapshot {
+  const started = durationsMeasured ? performance.now() : 0;
   const activeItems = inventorySourcesFromMessages(session.messages ?? []);
   if (session.objective) activeItems.push({ sourceType: "objective_ledger", sourceLocation: "task:objective-ledger", scope: "task", content: safeJson(session.objective), trust: "persisted_unverified", retention: "task", inclusionReason: "durable task objective and requirements", retrievalMethod: "durable_task_state", sourceRefs: Array.isArray(session.objective.requirements) ? session.objective.requirements.map((requirement: any, index: number) => `requirement:${typeof requirement?.id === "string" ? requirement.id : index + 1}`) : undefined });
   if (session.durableNotes?.length) session.durableNotes.forEach((note, index) => activeItems.push({ sourceType: "durable_note", sourceLocation: `task:durable-note:${index}`, scope: "task", content: note, trust: "persisted_unverified", retention: "task", inclusionReason: "durable task note retained across compaction", retrievalMethod: "durable_task_state" }));
   if (session.activePlan?.length) activeItems.push({ sourceType: "active_plan", sourceLocation: "task:active-plan", scope: "task", content: safeJson(session.activePlan), trust: "persisted_unverified", retention: "task", inclusionReason: "current durable plan state", retrievalMethod: "durable_task_state" });
   if (session.compactionProvenance) activeItems.push({ sourceType: "compaction_provenance", sourceLocation: `task:compaction:${session.compactionProvenance.recordId}`, scope: "session", content: session.compactionProvenance.summaryContent ?? "compaction summary; content reference only", trust: "persisted_unverified", retention: "session_archive", inclusionReason: "summary links to predecessor records whose originals are retained in the history archive", retrievalMethod: "compaction_record", sourceRefs: [session.compactionProvenance.recordId, ...session.compactionProvenance.predecessorIds] });
-  const activeDurationMs = Math.max(0, performance.now() - started);
-  const archivedStarted = performance.now();
+  const activeDurationMs = durationsMeasured ? Math.max(0, performance.now() - started) : 0;
+  const archivedStarted = durationsMeasured ? performance.now() : 0;
   const archivedItems = inventorySourcesFromMessages(archived.messages ?? [], { archived: true, sourcePrefix: "archive" });
-  const archivedDurationMs = Math.max(0, performance.now() - archivedStarted);
+  const archivedDurationMs = durationsMeasured ? Math.max(0, performance.now() - archivedStarted) : 0;
   const tokenAccounting = session.lastTurn?.tokenAccounting;
   return buildContextInventory({
     capturedAt,
+    durationsMeasured,
     sessionId: session.sessionId ?? session.id,
     taskId: session.taskId ?? session.id,
     workspace: session.workspace ?? session.workspacePath,
@@ -543,9 +555,9 @@ export function isContextInventorySnapshot(value: unknown): value is ContextInve
     (snapshot.workspaceState === undefined || (snapshot.workspaceState && Object.keys(snapshot.workspaceState).every((key) => ["fingerprint", "comparison", "invalidatedRepositoryItemIds"].includes(key)) && (snapshot.workspaceState.fingerprint === undefined || /^[a-f0-9]{64}$/.test(snapshot.workspaceState.fingerprint)) && workspaceComparisons.includes(snapshot.workspaceState.comparison) && Array.isArray(snapshot.workspaceState.invalidatedRepositoryItemIds) && snapshot.workspaceState.invalidatedRepositoryItemIds.length <= DEFAULT_MAX_ITEMS && snapshot.workspaceState.invalidatedRepositoryItemIds.every((id) => safeText(id, 80)) && (snapshot.workspaceState.comparison === "unavailable" ? snapshot.workspaceState.fingerprint === undefined && snapshot.workspaceState.invalidatedRepositoryItemIds.length === 0 : Boolean(snapshot.workspaceState.fingerprint)) && (["unchanged", "no_previous_capture"].includes(snapshot.workspaceState.comparison) ? snapshot.workspaceState.invalidatedRepositoryItemIds.length === 0 : true))) &&
     (snapshot.coverage === "complete" || snapshot.coverage === "partial") &&
     Array.isArray(snapshot.coverageGaps) && snapshot.coverageGaps.length <= 100 && snapshot.coverageGaps.every((gap) => safeText(gap)) &&
-    Array.isArray(snapshot.items) && snapshot.items.length <= DEFAULT_MAX_ITEMS && snapshot.items.every((item) => item && safeText(item.id, 80) && safeText(item.sourceType, 80) && safeText(item.sourceLocation) && scopes.includes(item.scope) && safeText(item.observedAt, 80) && freshness.includes(item.freshness) && (item.freshnessRule === undefined || safeText(item.freshnessRule)) && (item.freshness === "unknown" || safeText(item.freshnessRule)) && trust.includes(item.trust) && safeText(item.retention) && safeText(item.inclusionReason) && safeText(item.retrievalMethod, 100) && Number.isFinite(item.estimatedTokens) && item.estimatedTokens >= 0 && (item.sourceRefs === undefined || (Array.isArray(item.sourceRefs) && item.sourceRefs.length <= 100 && item.sourceRefs.every((ref) => safeText(ref, 200))))) &&
-    Array.isArray(snapshot.sourceMeasurements) && snapshot.sourceMeasurements.length <= 100 && snapshot.sourceMeasurements.every((source) => source && safeText(source.source, 100) && ["ok", "partial", "failed"].includes(source.status) && (source.outcome === undefined || (source.status === "failed" && ["timed_out", "cancelled"].includes(source.outcome))) && Number.isFinite(source.durationMs) && source.durationMs >= 0 && Number.isFinite(source.itemCount) && source.itemCount >= 0 && Number.isFinite(source.includedItemCount) && source.includedItemCount >= 0 && Number.isFinite(source.omittedItemCount) && source.omittedItemCount >= 0 && Number.isFinite(source.estimatedTokens) && source.estimatedTokens >= 0 && (source.detail === undefined || safeText(source.detail, MAX_SOURCE_DETAIL))) &&
-    Boolean(snapshot.metrics && Number.isFinite(snapshot.metrics.assemblyDurationMs) && snapshot.metrics.assemblyDurationMs >= 0 && Number.isFinite(snapshot.metrics.estimatedTokens) && snapshot.metrics.estimatedTokens >= 0 && Number.isFinite(snapshot.metrics.includedItems) && snapshot.metrics.includedItems >= 0 && Number.isFinite(snapshot.metrics.omittedItems) && snapshot.metrics.omittedItems >= 0 && snapshot.metrics.tokenSource === "client_estimate" && ["within_budget", "over_budget", "unknown"].includes(snapshot.metrics.budgetStatus) && (snapshot.metrics.contextLimit === undefined || (Number.isFinite(snapshot.metrics.contextLimit) && snapshot.metrics.contextLimit > 0)) && (snapshot.metrics.lastRequestTokens === undefined || (Number.isFinite(snapshot.metrics.lastRequestTokens) && snapshot.metrics.lastRequestTokens >= 0)));
+    Array.isArray(snapshot.items) && snapshot.items.length <= DEFAULT_MAX_ITEMS && snapshot.items.every((item) => item && safeText(item.id, 80) && safeText(item.sourceType, 80) && safeText(item.sourceLocation) && scopes.includes(item.scope) && safeText(item.observedAt, 80) && freshness.includes(item.freshness) && (item.freshnessRule === undefined || safeText(item.freshnessRule)) && (item.freshness === "unknown" || safeText(item.freshnessRule)) && (item.sourceVersion === undefined || safeText(item.sourceVersion, 200)) && trust.includes(item.trust) && safeText(item.retention) && safeText(item.inclusionReason) && safeText(item.retrievalMethod, 100) && Number.isFinite(item.estimatedTokens) && item.estimatedTokens >= 0 && (item.sourceRefs === undefined || (Array.isArray(item.sourceRefs) && item.sourceRefs.length <= 100 && item.sourceRefs.every((ref) => safeText(ref, 200))))) &&
+    Array.isArray(snapshot.sourceMeasurements) && snapshot.sourceMeasurements.length <= 100 && snapshot.sourceMeasurements.every((source) => source && safeText(source.source, 100) && ["ok", "partial", "failed"].includes(source.status) && (source.durationMeasured === undefined || typeof source.durationMeasured === "boolean") && (source.outcome === undefined || (source.status === "failed" && ["timed_out", "cancelled"].includes(source.outcome))) && Number.isFinite(source.durationMs) && source.durationMs >= 0 && Number.isFinite(source.itemCount) && source.itemCount >= 0 && Number.isFinite(source.includedItemCount) && source.includedItemCount >= 0 && Number.isFinite(source.omittedItemCount) && source.omittedItemCount >= 0 && Number.isFinite(source.estimatedTokens) && source.estimatedTokens >= 0 && (source.detail === undefined || safeText(source.detail, MAX_SOURCE_DETAIL))) &&
+    Boolean(snapshot.metrics && (snapshot.metrics.assemblyDurationMeasured === undefined || typeof snapshot.metrics.assemblyDurationMeasured === "boolean") && Number.isFinite(snapshot.metrics.assemblyDurationMs) && snapshot.metrics.assemblyDurationMs >= 0 && Number.isFinite(snapshot.metrics.estimatedTokens) && snapshot.metrics.estimatedTokens >= 0 && Number.isFinite(snapshot.metrics.includedItems) && snapshot.metrics.includedItems >= 0 && Number.isFinite(snapshot.metrics.omittedItems) && snapshot.metrics.omittedItems >= 0 && snapshot.metrics.tokenSource === "client_estimate" && ["within_budget", "over_budget", "unknown"].includes(snapshot.metrics.budgetStatus) && (snapshot.metrics.contextLimit === undefined || (Number.isFinite(snapshot.metrics.contextLimit) && snapshot.metrics.contextLimit > 0)) && (snapshot.metrics.lastRequestTokens === undefined || (Number.isFinite(snapshot.metrics.lastRequestTokens) && snapshot.metrics.lastRequestTokens >= 0)));
 }
 
 export type ContextMaturityLevel = 1 | 2 | 3 | 4 | 5;
@@ -650,7 +662,7 @@ export function renderContextInventoryText(snapshot: ContextInventorySnapshot): 
     "",
     ...snapshot.sourceMeasurements.map((source) => `Source ${source.source}: ${source.status}${source.outcome ? ` (${source.outcome})` : ""}, ${source.includedItemCount}/${source.itemCount} item(s) included (${source.omittedItemCount} omitted), ${source.estimatedTokens} estimated tokens, ${source.durationMs} ms${source.detail ? ` — ${source.detail}` : ""}`),
     "",
-    ...snapshot.items.map((item) => `${item.id} ${item.sourceType} @ ${item.sourceLocation} [${item.scope}; ${item.freshness}${item.freshnessRule ? ` (${item.freshnessRule})` : ""}; ${item.trust}] ${item.estimatedTokens} est. tokens; via ${item.retrievalMethod}`),
+    ...snapshot.items.map((item) => `${item.id} ${item.sourceType} @ ${item.sourceLocation} [${item.scope}; ${item.freshness}${item.freshnessRule ? ` (${item.freshnessRule})` : ""}${item.sourceVersion ? `; source-version=${encodeURIComponent(item.sourceVersion)}` : ""}; ${item.trust}] ${item.estimatedTokens} est. tokens; via ${item.retrievalMethod}`),
     ...(snapshot.coverageGaps.length ? ["", "Coverage gaps:", ...snapshot.coverageGaps.map((gap) => `- ${gap}`)] : []),
   ];
   return lines.join("\n");

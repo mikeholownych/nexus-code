@@ -477,19 +477,30 @@ async function context({ host, args, signal }: SlashContext): Promise<SlashOutco
     });
     return items;
   }, "partial", "saved durable notes and compaction links only; full session messages are inventoried separately");
-  await measure("project_knowledge", () => agent.getKnowledgeGraph().list().map((entry, index) => ({
-    sourceType: "durable_knowledge",
-    sourceLocation: `repository:knowledge:${entry.id || index + 1}`,
-    scope: "repository" as const,
-    content: `${entry.category}\n${entry.key}\n${entry.value}`,
-    trust: "persisted_unverified" as const,
-    retention: entry.retention?.policy === "expires_at" ? `expires_at:${entry.retention.expiresAt}` : "until_deleted",
-    freshness: "unknown" as const,
-    freshnessRule: "memory source references have no stored content fingerprint and are not revalidated",
-    inclusionReason: `persistent project memory is available to the prompt builder; validation=${entry.validationStatus ?? "legacy_unverified"}; source freshness is unknown`,
-    retrievalMethod: "knowledge_graph",
-    sourceRefs: [`knowledge:${entry.id}`, ...(entry.provenance?.sourceRefs ?? [])],
-  })));
+  let changedKnowledgeCount = 0;
+  await measure("project_knowledge", () => agent.getKnowledgeGraph().list().map((entry, index) => {
+    const sourceLocation = `repository:knowledge:${entry.id || index + 1}`;
+    const validationStatus = entry.validationStatus ?? "legacy_unverified";
+    const sourceVersion = JSON.stringify([entry.updatedAt ?? null, validationStatus]);
+    const previous = previousInventory?.items.find((item) => item.sourceType === "durable_knowledge" && item.sourceLocation === sourceLocation);
+    const recordChanged = Boolean(previous?.sourceVersion && previous.sourceVersion !== sourceVersion);
+    if (recordChanged) changedKnowledgeCount++;
+    return {
+      sourceType: "durable_knowledge",
+      sourceLocation,
+      scope: "repository" as const,
+      content: `${entry.category}\n${entry.key}\n${entry.value}`,
+      trust: "persisted_unverified" as const,
+      retention: entry.retention?.policy === "expires_at" ? `expires_at:${entry.retention.expiresAt}` : "until_deleted",
+      freshness: "unknown" as const,
+      freshnessRule: "record version and validation metadata are compared with the prior capture; underlying memory sources are not fingerprinted or revalidated, so claim freshness remains unknown",
+      inclusionReason: `persistent project memory is available to the prompt builder; validation=${validationStatus}; source freshness is unknown${recordChanged ? "; the prior captured record changed and is invalidated" : ""}`,
+      retrievalMethod: "knowledge_graph",
+      sourceVersion,
+      sourceRefs: [`knowledge:${entry.id}`, ...(entry.provenance?.sourceRefs ?? [])],
+    };
+  }));
+  if (changedKnowledgeCount) gaps.push(`${changedKnowledgeCount} project knowledge record changed since the previous capture; the prior memory context is invalidated and the current claim remains unverified`);
   await measure("skills", () => agent.getSkillManager().listSkills().map((skill) => ({
     sourceType: "skill_catalog_entry",
     sourceLocation: skill.isWorkspaceSkill ? `repository:skill:${path.relative(config.workspace, skill.path)}` : `profile:skill:${skill.name}`,
