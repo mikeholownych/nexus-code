@@ -228,7 +228,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # let the changed-Rust-file rustfmt gate resolve the PR base
+          fetch-depth: 0
           persist-credentials: false
       - run: sudo apt-get update && sudo apt-get install --yes acl make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -296,27 +296,9 @@ jobs:
       - run: node scripts/sync-version.mjs --check
       - run: npm ci --prefix cli
       - run: npm --prefix cli run build
-      - name: Resolve the base of the changed-file gates
-        # A pull-request run checks out GitHub's merge commit, whose first parent is the base it was merged onto.
-        # The event's base SHA can be older than that parent, and then `base...HEAD` also lists files that changed
-        # on the base branch. Any other checkout keeps the event's SHA.
-        env:
-          EVENT_BASE: ${{ github.event.pull_request.base.sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before || '') }}
-        run: |
-          base="$EVENT_BASE"
-          if [ "$GITHUB_EVENT_NAME" = pull_request ] && git rev-parse --verify --quiet 'HEAD^2^{commit}' >/dev/null; then
-            base="$(git rev-parse --verify 'HEAD^1^{commit}')"
-          fi
-          echo "changed-file base: ${base:-<none>}"
-          echo "NEXUS_CHANGED_BASE=$base" >> "$GITHUB_ENV"
-      - name: Static gates (typecheck, clippy, changed-file rustfmt)
-        run: NEXUS_FMT_BASE="$NEXUS_CHANGED_BASE" make lint
-      - run: cargo test --locked --manifest-path core/Cargo.toml
-      - run: cargo build --locked --release --manifest-path core/Cargo.toml --bin harness-core --bin nexus-tui
-      - name: Run the CLI suite with a hang bound
-        # Keep release packaging parity with the release workflow and test-matrix jobs.
-        timeout-minutes: 45
-        run: npm --prefix cli test
+      # No lint, `cargo test` or CLI suite here: `test-gates` and `test-shard` run them on this commit, on Node 22 and
+      # 24, and `test-matrix` is required beside this check. This job proves that the commit packages, reproducibly,
+      # and that the package installs and starts. release.yml still runs the whole suite before it publishes.
       - run: bash scripts/security_gates.sh
       - run: node scripts/check_requirements.mjs
       - id: release-version
