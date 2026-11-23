@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01VH199ypuEAcVDjq7cDjvFz",
+  "agent_id": "af4432eefcdab333c",
+  "subagent_type": "general-purpose",
+  "task_description": "LS-2 LSP position encoding roots",
+  "token_usage": {
+    "input_tokens": 64,
+    "cache_creation_tokens": 509463,
+    "cache_read_tokens": 5730022,
+    "output_tokens": 86735,
+    "api_call_count": 32
+  },
+  "started_at": "2026-11-22T20:23:13.510636104Z",
+  "completed_at": "2026-11-22T20:47:40.866257463Z"
+}

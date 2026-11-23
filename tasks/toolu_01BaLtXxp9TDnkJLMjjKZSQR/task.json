@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01BaLtXxp9TDnkJLMjjKZSQR",
+  "agent_id": "aa3f5b7f6656bc634",
+  "subagent_type": "Plan",
+  "task_description": "AC-1 ACP adapter plan",
+  "token_usage": {
+    "input_tokens": 96,
+    "cache_creation_tokens": 270467,
+    "cache_read_tokens": 8156100,
+    "output_tokens": 58883,
+    "api_call_count": 48
+  },
+  "started_at": "2026-11-22T20:29:19.867430069Z",
+  "completed_at": "2026-11-22T20:47:41.53950875Z"
+}
