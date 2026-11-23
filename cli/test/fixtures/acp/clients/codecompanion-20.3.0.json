@@ -1,0 +1,215 @@
+{
+  "formatVersion": 1,
+  "client": {
+    "name": "CodeCompanion.nvim",
+    "version": "20.3.0",
+    "integration": "ACP chat buffer",
+    "sourceCommit": "0ba3b39a9c21ae1d6e93bb3e1c39aeaad3fadf12",
+    "dependencyCommit": "74b06c6c75e4eeb3108ec01852001636d85a932b",
+    "clientArchiveSha256": "474430d53e6264f6d6dd18db42d6dc9df3a1b56ca9e88a325bbf860e1a811d87"
+  },
+  "capture": {
+    "agentRevision": "2e84942207a79a697637ffcdd70ae7b9257417f3",
+    "rawExchangeSha256": "2ecbeddf82700a5a50118f48f78ac47d29afa9fea8bdeed9d42c495ed0fb4bfa",
+    "workspace": "disposable temporary workspace",
+    "inference": "loopback-only deterministic OpenAI-compatible mock; no hosted provider endpoint or API key configured",
+    "promptSubmitted": true,
+    "completedStopReason": "end_turn"
+  },
+  "exchange": [
+    {
+      "sequence": 1,
+      "direction": "client_to_agent",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "rpc_initialize",
+        "params": {
+          "protocolVersion": 1,
+          "clientInfo": {
+            "name": "CodeCompanion.nvim",
+            "version": "20.3.0"
+          },
+          "clientCapabilities": {
+            "fs": {
+              "readTextFile": true,
+              "writeTextFile": true
+            },
+            "subagents": {}
+          }
+        },
+        "method": "initialize"
+      }
+    },
+    {
+      "sequence": 2,
+      "direction": "agent_to_client",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "rpc_initialize",
+        "result": {
+          "protocolVersion": 1,
+          "agentInfo": {
+            "name": "nexus",
+            "title": "Nexus Code",
+            "version": "1.2.2 (2e84942207a7, codex/ac2-acp-conformance)"
+          },
+          "authMethods": [],
+          "agentCapabilities": {
+            "loadSession": true,
+            "promptCapabilities": {
+              "image": false,
+              "audio": false,
+              "embeddedContext": false
+            },
+            "mcpCapabilities": {
+              "http": false,
+              "sse": false
+            },
+            "_meta": {
+              "nexus/experimental": true,
+              "nexus/extensions": [
+                "_nexus/receipt/get"
+              ],
+              "nexus/sidecar_protocol": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "sequence": 3,
+      "direction": "client_to_agent",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "rpc_new",
+        "params": {
+          "mcpServers": [],
+          "cwd": "{{workspace}}"
+        },
+        "method": "session/new"
+      }
+    },
+    {
+      "sequence": 4,
+      "direction": "agent_to_client",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "rpc_new",
+        "result": {
+          "sessionId": "{{sessionId}}",
+          "_meta": {
+            "nexus/posture": {
+              "mode": "review",
+              "sandbox": "off",
+              "trusted": false,
+              "read_only": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "sequence": 5,
+      "direction": "client_to_agent",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "rpc_prompt",
+        "params": {
+          "sessionId": "{{sessionId}}",
+          "prompt": [
+            {
+              "type": "text",
+              "text": "Say exactly: AC2 client flow completed."
+            }
+          ]
+        },
+        "method": "session/prompt"
+      }
+    },
+    {
+      "sequence": 6,
+      "direction": "agent_to_client",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "{{sessionId}}",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "AC2 local fixture completed."
+            }
+          }
+        }
+      }
+    },
+    {
+      "sequence": 7,
+      "direction": "agent_to_client",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "{{sessionId}}",
+          "update": {
+            "sessionUpdate": "session_info_update",
+            "_meta": {
+              "nexus/verification": {
+                "receipt_id": "turn:{{sessionId}}:acp-rpc_prompt",
+                "turn_id": "acp-rpc_prompt",
+                "execution": "COMPLETED",
+                "outcome": "NOT_REQUIRED",
+                "unverified_changes_pending": false,
+                "verifier": null,
+                "verifier_runs": [],
+                "validation_receipt": null
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "sequence": 8,
+      "direction": "agent_to_client",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "{{sessionId}}",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "\n\nTURN ENDED - NO CHANGES TO VERIFY\nexecution=COMPLETED outcome=NOT_REQUIRED modelStop=FINAL_TEXT\n"
+            }
+          }
+        }
+      }
+    },
+    {
+      "sequence": 9,
+      "direction": "agent_to_client",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "rpc_prompt",
+        "result": {
+          "stopReason": "end_turn",
+          "_meta": {
+            "nexus/verification": {
+              "receipt_id": "turn:{{sessionId}}:acp-rpc_prompt",
+              "turn_id": "acp-rpc_prompt",
+              "execution": "COMPLETED",
+              "outcome": "NOT_REQUIRED",
+              "unverified_changes_pending": false,
+              "verifier": null,
+              "verifier_runs": [],
+              "validation_receipt": null
+            }
+          }
+        }
+      }
+    }
+  ]
+}
