@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01KnA2jbquo4wFMygedyPLgG",
+  "agent_id": "a516b89922afe2c9c",
+  "subagent_type": "reviewer",
+  "task_description": "Re-review PR #760 new head",
+  "token_usage": {
+    "input_tokens": 48,
+    "cache_creation_tokens": 46239,
+    "cache_read_tokens": 838536,
+    "output_tokens": 7950,
+    "api_call_count": 23
+  },
+  "started_at": "2026-11-23T22:36:06.494226818Z",
+  "completed_at": "2026-11-23T22:44:45.829822559Z"
+}

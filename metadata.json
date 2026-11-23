@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M85DF07T5JBREDAK36BW9BQD",
+  "strategy": "manual-commit",
+  "branch": "p762-fix",
+  "checkpoints_count": 10,
+  "files_touched": [
+    "cli/test/turn_deadline_abort.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 120,
+    "cache_creation_tokens": 62834,
+    "cache_read_tokens": 25258758,
+    "output_tokens": 35425,
+    "api_call_count": 50,
+    "subagent_tokens": {
+      "input_tokens": 138,
+      "cache_creation_tokens": 193604,
+      "cache_read_tokens": 2467105,
+      "output_tokens": 30457,
+      "api_call_count": 68
+    }
+  },
+  "redaction": {
+    "replacements": 1182,
+    "layers": {
+      "betterleaks": 2,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 43,
+      "credentialed_uri": 3,
+      "entropy": 1134,
+      "key_context": 0,
+      "provider_token": 2,
+      "shell_stdin": 0
+    }
+  }
+}

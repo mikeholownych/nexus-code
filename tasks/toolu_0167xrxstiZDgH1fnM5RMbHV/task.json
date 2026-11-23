@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_0167xrxstiZDgH1fnM5RMbHV",
+  "agent_id": "a7ff865090af4d524",
+  "subagent_type": "reviewer",
+  "task_description": "Review PR #761 flight log integrity",
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 47566,
+    "cache_read_tokens": 514414,
+    "output_tokens": 7461,
+    "api_call_count": 15
+  },
+  "started_at": "2026-11-23T23:17:44.689371452Z",
+  "completed_at": "2026-11-23T23:21:48.623311683Z"
+}

@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_018E5VP5zBeYJcoQgHV8TTpV",
+  "agent_id": "a3c546d665613d240",
+  "subagent_type": "reviewer",
+  "task_description": "Review PR #760 inference budget",
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 63790,
+    "cache_read_tokens": 631871,
+    "output_tokens": 7535,
+    "api_call_count": 15
+  },
+  "started_at": "2026-11-23T22:27:38.491186212Z",
+  "completed_at": "2026-11-23T22:32:41.759356595Z"
+}
