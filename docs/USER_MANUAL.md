@@ -120,6 +120,8 @@ To run it on pull requests, see [Using `nexus verify` in CI](VERIFY_IN_CI.md): t
 | `UNVERIFIED` | Nothing was established. `outcome` and `reason` in the result say why: the verifier or an enforced type-check failed or timed out, the verifier ran no test or does not exist, or base and head are the same tree. |
 | `BLOCKED` | A person must decide before anything is run or concluded: approve the verifier, or read and approve an edit to the verification itself. |
 
+Another harness can ask for the same verdict over MCP: `nexus serve-mcp` offers it as the tool `nexus_verify`, with the verifier, deliverables, base and sandbox fixed by whoever started the server (see [MCP_GUIDE.md](MCP_GUIDE.md), section 4).
+
 #### Exit codes of `nexus verify`
 | Code | Name | When |
 |---|---|---|
@@ -231,6 +233,8 @@ To expose Nexus Code's native Rust tools to external LLM clients (Claude Desktop
 nexus serve-mcp --workspace /path/to/project
 ```
 See [MCP_GUIDE.md](MCP_GUIDE.md) for full configuration details.
+
+The server also offers the tool `nexus_verify`: `nexus verify` for the client, on the working tree against the commit that was `HEAD` when the server started. The client passes no arguments. Only the verifier and deliverables you give at start are used (`nexus --authoritative-verifier "npm test" --deliverable-file src/parser.ts serve-mcp`); without `--authoritative-verifier` the tool runs no verifier and reports `BLOCKED` (or `UNVERIFIED` when the repository defines no verifier). The result carries a receipt id, and the receipt is read back at `nexus://verify-receipt/<id>` while the server runs. A client that can run commands as your user can still tamper outside the protocol (installed dependencies, your Git configuration); see [MCP_GUIDE.md](MCP_GUIDE.md).
 
 ### Upgrading Nexus Code (`nexus upgrade` & `/upgrade`)
 To check whether an update is available without making changes:

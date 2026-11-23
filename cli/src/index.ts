@@ -1195,10 +1195,24 @@ program
   .description("Run Nexus Code as a Model Context Protocol (MCP) server over stdio")
   .option("-w, --workspace <path>", "Workspace directory", process.cwd())
   .option("--shell <type>", "Linux shell to use", "bash")
-  .action(async (options: any) => {
+  .action(async (_options: any, cmd: Command) => {
+    const options = commandOptions(cmd);
     const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
+    // VR-2: nexus_verify runs only what the operator names here, so it is checked now, not at a caller's first request.
+    const verifierCommand = options.authoritativeVerifier === undefined ? undefined : String(options.authoritativeVerifier).trim();
+    let deliverables: string[];
+    try {
+      const { normalizeTrustedDeliverableFiles } = await import("./config.js");
+      if (verifierCommand === "") throw new Error("--authoritative-verifier needs a command");
+      deliverables = normalizeTrustedDeliverableFiles(ws, options.deliverableFile);
+    } catch (err: any) {
+      console.error(`error: ${err?.message ?? err}`);
+      exitAfterFlush(2);
+      return;
+    }
+    if (!verifierCommand) console.error("nexus serve-mcp: no --authoritative-verifier was given, so the nexus_verify tool runs no verifier (start with: nexus --authoritative-verifier <command> serve-mcp).");
     const { McpServer } = await import("./mcp.js");
-    const server = new McpServer(ws, options.shell);
+    const server = new McpServer(ws, options.shell, { verifierCommand, deliverables, readOnly: Boolean(options.readOnly) || options.mode === "read-only" });
     await server.startStdio();
   });
 

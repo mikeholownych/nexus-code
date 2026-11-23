@@ -369,7 +369,7 @@ function operatorChose(key: string): boolean {
 }
 
 /** Operator-declared workspace-relative task outputs; project files cannot populate this authority. */
-function normalizeTrustedDeliverableFiles(workspace: string, value: unknown): string[] {
+export function normalizeTrustedDeliverableFiles(workspace: string, value: unknown): string[] {
   if (value === undefined) return [];
   const entries = Array.isArray(value) ? value : [value];
   if (Array.isArray(value) && entries.length === 0) return [];
