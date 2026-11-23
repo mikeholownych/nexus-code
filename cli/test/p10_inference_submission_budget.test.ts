@@ -5,6 +5,7 @@ import { AutonomousAgent } from "../src/agent.js";
 import { continuationBudget, inferenceSubmissionLimit } from "../src/config.js";
 import { normalizeTracking } from "../src/core/execution_tracking.js";
 import { DEFAULT_CONTINUATION, DEFAULT_MAX_INFERENCE_SUBMISSIONS, type HarnessConfig } from "../src/types.js";
+import "./helpers/leak_guard.js";
 import { startGateway, makeRepo, type Reply } from "./helpers/fixtures.js";
 
 const quiet = (agent: AutonomousAgent) => {
