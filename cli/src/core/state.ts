@@ -30,7 +30,7 @@ import { withStateStoreGuard } from "./state_store_guard.js";
 import type { VerificationConfigAttempt } from "../security.js";
 import type { CommandRuleDecision } from "./command_rules.js";
 
-import { CURRENT_STATE_SCHEMA_VERSION, WORKTREE_BINDING_VERSION, normalizeWorktreeBinding } from "./state_schema.js";
+import { CURRENT_STATE_SCHEMA_VERSION, WORKTREE_BINDING_VERSION, durableLoopStateProblem, normalizeWorktreeBinding, type DurableLoopState } from "./state_schema.js";
 export { CURRENT_STATE_SCHEMA_VERSION, WORKTREE_BINDING_VERSION } from "./state_schema.js";
 
 interface StoredTaskRecord {
@@ -194,6 +194,9 @@ export interface DurableTaskState {
 
   // The operator's objective, acceptance requirements, steering and verifier attempts (core/objective.ts)
   objective?: ObjectiveLedger | null;
+
+  /** Bounded `/loop` controller state; child work remains in the existing operation records. */
+  loop?: DurableLoopState | null;
 
   // Full text of the findings the model recorded from inspected output (core/findings.ts); the durable record in
   // `messages` may show them only condensed or by id.
@@ -1257,6 +1260,10 @@ function taskLifecycleProblem(state: DurableTaskState): string | undefined {
         return `Task activePlan[${index}] has an invalid status (${String(phase?.status)})`;
       }
     }
+  }
+  if (state.loop !== undefined && state.loop !== null) {
+    const problem = durableLoopStateProblem(state.loop);
+    if (problem) return problem;
   }
   return undefined;
 }

@@ -11,8 +11,6 @@
 
 > **Status:** the latest stable release is [v1.2.2](https://github.com/mikeholownych/nexus-code/releases/tag/v1.2.2). It has no independent external qualification. Its live tool-call validity gate (G1.1-4) was measured once on the release candidate (`v1.2.2-rc.1`: `engineering/deep` and `engineering/lead-reasoning` 200/200 native valid, two of the gateway's aliases; see [`docs/evidence/v1.2.2/G1.1-4-rc.1.md`](docs/evidence/v1.2.2/G1.1-4-rc.1.md)) and was not repeated on the stable archive; see [`docs/releases/v1.2.2.md`](docs/releases/v1.2.2.md) for what is in the release, what is not, and the known limitations. Development plans and this README do not establish release readiness; see [GitHub Releases](https://github.com/mikeholownych/nexus-code/releases) and [`docs/releases/`](docs/releases/).
 >
-> The Cloudflare contest entry is historical: see [docs/CLOUDFLARE_CONTEST.md](docs/CLOUDFLARE_CONTEST.md).
-
 ---
 
 ## Table of Contents
