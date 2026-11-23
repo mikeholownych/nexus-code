@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_014FuEo6kq2S53QDDbR9y9ED",
+  "agent_id": "a37cbea1408444dd4",
+  "subagent_type": "general-purpose",
+  "task_description": "CI speedup shard fan-out",
+  "token_usage": {
+    "input_tokens": 76,
+    "cache_creation_tokens": 168898,
+    "cache_read_tokens": 5766912,
+    "output_tokens": 57776,
+    "api_call_count": 38
+  },
+  "started_at": "2026-11-23T01:42:55.376953226Z",
+  "completed_at": "2026-11-23T02:05:50.599503216Z"
+}

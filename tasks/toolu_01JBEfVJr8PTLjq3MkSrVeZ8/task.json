@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01JBEfVJr8PTLjq3MkSrVeZ8",
+  "agent_id": "a386896dc1c777108",
+  "subagent_type": "general-purpose",
+  "task_description": "Compare opencode CI to ours",
+  "token_usage": {
+    "input_tokens": 32,
+    "cache_creation_tokens": 199580,
+    "cache_read_tokens": 1999614,
+    "output_tokens": 26283,
+    "api_call_count": 16
+  },
+  "started_at": "2026-11-23T01:32:29.871781348Z",
+  "completed_at": "2026-11-23T01:38:04.03636335Z"
+}

@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_017ns8EauNu2TBFFbQpBPuUf",
+  "agent_id": "a12a0dfd49705595f",
+  "subagent_type": "general-purpose",
+  "task_description": "Review PR #737 review fixes",
+  "token_usage": {
+    "input_tokens": 154,
+    "cache_creation_tokens": 233605,
+    "cache_read_tokens": 13605605,
+    "output_tokens": 64086,
+    "api_call_count": 77
+  },
+  "started_at": "2026-11-23T01:25:17.337156506Z",
+  "completed_at": "2026-11-23T01:53:27.414531895Z"
+}
