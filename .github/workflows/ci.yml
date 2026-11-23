@@ -2,22 +2,35 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'release/**']
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# A new push to a pull request supersedes that pull request's older run. Every other run (a push to main or
+# release/**, a manual dispatch) is alone in a group named after its run id, so it is never cancelled.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# The required checks are `test-matrix (22)`, `test-matrix (24)` and `linux-x86_64`. `test-matrix` only aggregates:
+# the gates that are not the CLI suite run in `test-gates`, the CLI suite runs in four `test-shard` legs per Node
+# version, and all of them run side by side. cli/test/release_workflow_parity.test.ts pins this structure.
 jobs:
-  test-matrix:
+  test-gates:
     runs-on: ubuntu-22.04
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         node: [22, 24]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # let the changed-Rust-file rustfmt gate resolve the PR base
+          persist-credentials: false
       - run: sudo apt-get update && sudo apt-get install --yes acl make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
@@ -63,22 +76,87 @@ jobs:
         run: |
           for lockfile in \
             cli/package-lock.json \
-            demo/package-lock.json \
-            experiments/cloudflare-artifacts-vertical-slice/package-lock.json \
-            experiments/cloudflare-artifacts-vertical-slice/trusted-broker-bundle/package-lock.json \
             scripts/release-tools/package-lock.json; do
             node scripts/check_deprecated_lock.mjs "$lockfile"
           done
       - run: npm ci --prefix cli
       - run: npm --prefix cli run build
+      - name: Resolve the base of the changed-file gates
+        # A pull-request run checks out GitHub's merge commit, whose first parent is the base it was merged onto.
+        # The event's base SHA can be older than that parent, and then `base...HEAD` also lists files that changed
+        # on the base branch. Any other checkout keeps the event's SHA.
+        env:
+          EVENT_BASE: ${{ github.event.pull_request.base.sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before || '') }}
+        run: |
+          base="$EVENT_BASE"
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] && git rev-parse --verify --quiet 'HEAD^2^{commit}' >/dev/null; then
+            base="$(git rev-parse --verify 'HEAD^1^{commit}')"
+          fi
+          echo "changed-file base: ${base:-<none>}"
+          echo "NEXUS_CHANGED_BASE=$base" >> "$GITHUB_ENV"
       - name: Static gates (typecheck, clippy, changed-file rustfmt)
-        run: make lint
+        run: NEXUS_FMT_BASE="$NEXUS_CHANGED_BASE" make lint
       - run: cargo test --locked --manifest-path core/Cargo.toml
+      - name: Terminal scope gate (the second half of `npm --prefix cli test`)
+        run: npm --prefix cli run test:scope
+
+  test-shard:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false # a failing leg must not hide the failures of the others
+      matrix:
+        node: [22, 24]
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # full history, as the suite has always had
+          persist-credentials: false
+      - run: sudo apt-get update && sudo apt-get install --yes acl make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.22.12'
+      - name: Install pinned evaluator toolchains
+        run: bash scripts/install-evaluator-toolchains.sh
+      - run: bash scripts/ensure-ci-bubblewrap.sh
+      - run: bash scripts/ensure-ci-user-cgroups.sh
+      - name: Mount a dedicated capped tmpfs for evaluator resource fixtures
+        run: |
+          root=/mnt/nexus-eval-ci
+          sudo install -d -o "$USER" -g "$USER" -m 0711 "$root"
+          sudo mount -t tmpfs -o size=128m,mode=0711,uid="$(id -u)",gid="$(id -g)" nexus-eval-ci "$root"
+          echo "NEXUS_EVAL_TEST_WORKSPACE_ROOT=$root" >> "$GITHUB_ENV"
+          runtime_root=/opt/nexus-eval-ci-runtime
+          sudo install -d -o "$USER" -g "$USER" -m 0711 "$runtime_root"
+          echo "NEXUS_EVAL_TEST_RUNTIME_ROOT=$runtime_root" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - name: Install selected Node runtime for isolated evaluation commands
+        run: |
+          node_runtime="$(readlink -f "$(command -v node)")"
+          npm_cli="$(readlink -f "$(command -v npm)")"
+          npm_root="$(dirname "$(dirname "$npm_cli")")"
+          case "$npm_root" in */lib/node_modules/npm) ;; *) echo "Unexpected setup-node npm package path" >&2; exit 1 ;; esac
+          test -f "$npm_root/package.json"
+          sudo install -o root -g root -m 0755 "$node_runtime" /usr/bin/node
+          sudo install -d -o root -g root -m 0755 /usr/lib/nexus-ci/npm
+          sudo cp -a "$npm_root/." /usr/lib/nexus-ci/npm/
+          sudo chown -hR root:root /usr/lib/nexus-ci/npm
+          sudo chmod 0755 /usr/lib/nexus-ci/npm/bin/npm-cli.js
+          sudo ln -sfn /usr/lib/nexus-ci/npm/bin/npm-cli.js /usr/bin/npm
+          test "$(/usr/bin/node --version)" = "$(node --version)"
+          test "$(env PATH=/usr/bin:/bin /usr/bin/npm --version)" = "$(npm --version)"
+      - run: npm ci --prefix cli
+      - run: npm --prefix cli run build
       - run: cargo build --locked --release --manifest-path core/Cargo.toml --bin harness-core --bin nexus-tui
       # Keep the cache-key version list in sync with the pinned tool versions below.
       - name: Restore pinned security and SBOM tools
         id: test-cargo-tools
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cargo/bin
           key: cargo-tools-ci-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-audit-0.22.2-deny-0.20.2-cyclonedx-rust-0.5.9-cyclonedx-cli-0.33.1
@@ -98,35 +176,60 @@ jobs:
           mv "$RUNNER_TEMP/cargo-cyclonedx-x86_64-unknown-linux-musl/cargo-cyclonedx" "$CARGO_HOME/bin/"
           curl -fsSL https://github.com/CycloneDX/cyclonedx-cli/releases/download/v0.33.1/cyclonedx-linux-x64 -o "$CARGO_HOME/bin/cyclonedx"
           chmod +x "$CARGO_HOME/bin/cyclonedx"
-      - name: Run the CLI suite with a hang bound
-        # Recent runs take about 32-34 minutes; a hung test process must fail the job, not hold it for 6 hours.
-        timeout-minutes: 45
-        run: npm --prefix cli test
+      - name: Run one shard of the CLI suite with a hang bound
+        # The whole suite took 32-34 minutes in one job, so a quarter of it must not need 30; a hung test process
+        # must fail the leg, not hold it until the job timeout. The four shards are disjoint and together are every
+        # test file (cli/scripts/test_shards.mjs); inside the leg the files run in two processes, as they always did.
+        timeout-minutes: 30
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/test-shard"
+          export NEXUS_TEST_DURATIONS_OUT="$RUNNER_TEMP/test-shard/test-durations.json"
+          npm --prefix cli run test:cli -- --shard=${{ matrix.shard }}/4 2>&1 | tee "$RUNNER_TEMP/test-shard/suite.log"
+      # Measured seconds per test file (input of `make test-durations-merge`) and the full suite output of this leg.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: test-shard-node${{ matrix.node }}-${{ matrix.shard }}of4
+          path: ${{ runner.temp }}/test-shard/
+          if-no-files-found: ignore
+          retention-days: 14
+          overwrite: true
 
-  cloudflare-experiment:
+  # The required checks. `always()` makes this job run, and fail, even when a leg failed, was skipped or was cancelled:
+  # a skipped required check would count as passing. The result of a matrix job is `success` only when every one of its
+  # legs succeeded, so each of the two checks also fails when a leg of the other Node version fails.
+  test-matrix:
+    needs: [test-gates, test-shard]
+    if: ${{ always() }}
     runs-on: ubuntu-22.04
+    timeout-minutes: 5
     strategy:
       fail-fast: false
       matrix:
         node: [22, 24]
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: ${{ matrix.node }}
-          cache: npm
-          cache-dependency-path: experiments/cloudflare-artifacts-vertical-slice/package-lock.json
-      - run: npm ci --prefix experiments/cloudflare-artifacts-vertical-slice
-      - run: npm run typecheck --prefix experiments/cloudflare-artifacts-vertical-slice
-      - run: npm run build --prefix experiments/cloudflare-artifacts-vertical-slice
-      - run: npm run build --prefix experiments/cloudflare-artifacts-vertical-slice/agent-collab-fixture
+      - name: Require every gate and every CLI suite shard to have succeeded
+        env:
+          GATES_RESULT: ${{ needs.test-gates.result }}
+          SHARDS_RESULT: ${{ needs.test-shard.result }}
+        run: |
+          echo "test-gates: $GATES_RESULT"
+          echo "test-shard: $SHARDS_RESULT"
+          test "$GATES_RESULT" = success
+          test "$SHARDS_RESULT" = success
 
   linux-x86_64:
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
     env:
       NEXUS_BUILD_CONTAINER_IMAGE: rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - run: sudo apt-get update && sudo apt-get install --yes acl make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
@@ -167,7 +270,7 @@ jobs:
       # Keep the cache-key version list in sync with the pinned tool versions below.
       - name: Restore pinned security and SBOM tools
         id: release-cargo-tools
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cargo/bin
           key: cargo-tools-linux-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-audit-0.22.2-deny-0.20.2-about-0.9.2-cyclonedx-rust-0.5.9-cyclonedx-cli-0.33.1
@@ -193,14 +296,9 @@ jobs:
       - run: node scripts/sync-version.mjs --check
       - run: npm ci --prefix cli
       - run: npm --prefix cli run build
-      - name: Static gates (typecheck, clippy, changed-file rustfmt)
-        run: make lint
-      - run: cargo test --locked --manifest-path core/Cargo.toml
-      - run: cargo build --locked --release --manifest-path core/Cargo.toml --bin harness-core --bin nexus-tui
-      - name: Run the CLI suite with a hang bound
-        # Keep release packaging parity with the release workflow and test-matrix jobs.
-        timeout-minutes: 45
-        run: npm --prefix cli test
+      # No lint, `cargo test` or CLI suite here: `test-gates` and `test-shard` run them on this commit, on Node 22 and
+      # 24, and `test-matrix` is required beside this check. This job proves that the commit packages, reproducibly,
+      # and that the package installs and starts. release.yml still runs the whole suite before it publishes.
       - run: bash scripts/security_gates.sh
       - run: node scripts/check_requirements.mjs
       - id: release-version
@@ -226,10 +324,12 @@ jobs:
   diff-coverage:
     name: diff coverage (advisory)
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
@@ -241,8 +341,21 @@ jobs:
       - name: T0 coverage (unit tier)
         timeout-minutes: 15
         run: node cli/scripts/run_coverage.mjs --tier=unit --out cli/coverage/unit-lcov.info
+      - name: Resolve the base of the changed-file gates
+        # A pull-request run checks out GitHub's merge commit, whose first parent is the base it was merged onto.
+        # The event's base SHA can be older than that parent, and then `base...HEAD` also lists files that changed
+        # on the base branch. Any other checkout keeps the event's SHA.
+        env:
+          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          base="$EVENT_BASE"
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] && git rev-parse --verify --quiet 'HEAD^2^{commit}' >/dev/null; then
+            base="$(git rev-parse --verify 'HEAD^1^{commit}')"
+          fi
+          echo "changed-file base: ${base:-<none>}"
+          echo "NEXUS_CHANGED_BASE=$base" >> "$GITHUB_ENV"
       - name: Diff coverage report
-        run: node cli/scripts/diff_coverage.mjs --lcov cli/coverage/unit-lcov.info --base "${{ github.event.pull_request.base.sha || github.event.before }}" --min 0 --json diff-coverage.json
+        run: node cli/scripts/diff_coverage.mjs --lcov cli/coverage/unit-lcov.info --base "$NEXUS_CHANGED_BASE" --min 0 --json diff-coverage.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

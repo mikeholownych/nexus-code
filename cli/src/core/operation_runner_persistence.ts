@@ -79,6 +79,9 @@ export class OperationStore {
       status: LIFECYCLE[op.status],
       activePlan: op.units.map((u) => ({ name: u.title, status: u.status === "COMPLETE" ? "completed" : u.status === "RUNNING" ? "in_progress" : "pending", detail: u.status })),
       milestones: existing?.milestones ?? [],
+      // Goals keep their immutable objective and requirement ledger in this same durable task record.
+      // Operation transitions must not erase it when the operation snapshot is rewritten.
+      objective: existing?.objective ?? null,
       validationReceipts: [],
       messages: [],
       currentOperation: null,

@@ -25,7 +25,7 @@ test("every specialist contract is a role profile, read-only exactly as its cont
     assert.deepEqual(profile.recommendedTools, [...contract.permittedTools]);
     for (const tool of contract.permittedTools) assert.match(profile.systemPromptAddendum, new RegExp(tool));
     assert.equal(isReadOnlyRole(contract.role), contract.readOnly, contract.role);
-    assert.deepEqual([...roleToolAllowList(contract.role)!].sort(), [...new Set([...contract.permittedTools, "task_completed"])].sort());
+    assert.deepEqual([...roleToolAllowList(contract.role)!].sort(), [...new Set([...contract.permittedTools, "task_completed", "read_tool_output"])].sort());
   }
   assert.equal(roleToolAllowList("implementer"), undefined);
   assert.equal(roleToolAllowList("constructor"), undefined);

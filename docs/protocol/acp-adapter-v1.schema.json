@@ -1,0 +1,1699 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "nexus ACP adapter v1: Nexus's subset of the Agent Client Protocol",
+  "description": "Generated from AcpAdapterDocument in cli/src/acp/types.ts by cli/scripts/gen_acp_schema.mjs. Do not edit by hand. One line of an ACP connection to Nexus (newline-delimited JSON-RPC 2.0), in either direction: a message a client may send that Nexus acts on (AcpClientMessage), or a message Nexus sends (AcpAgentMessage). This is NOT the schema of the Agent Client Protocol: it describes only the subset of ACP version 1 that Nexus implements, plus Nexus's own extension method (`_nexus/receipt/get`) and its `_meta` members (`nexus/...`). A valid ACP message outside this subset is answered with an error or ignored. Experimental: names and fields may change.",
+  "$ref": "#/$defs/AcpAdapterDocument",
+  "$defs": {
+    "AcpAdapterDocument": {
+      "description": "One line of the connection, in either direction: the root of the published schema.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AcpCancelNotification"
+        },
+        {
+          "$ref": "#/$defs/AcpCancelRequestNotification"
+        },
+        {
+          "$ref": "#/$defs/AcpErrorResponse"
+        },
+        {
+          "$ref": "#/$defs/AcpInitializeRequest"
+        },
+        {
+          "$ref": "#/$defs/AcpLoadSessionRequest"
+        },
+        {
+          "$ref": "#/$defs/AcpNewSessionRequest"
+        },
+        {
+          "$ref": "#/$defs/AcpPermissionErrorResponse"
+        },
+        {
+          "$ref": "#/$defs/AcpPermissionRequest"
+        },
+        {
+          "$ref": "#/$defs/AcpPermissionResponse"
+        },
+        {
+          "$ref": "#/$defs/AcpPromptRequest"
+        },
+        {
+          "$ref": "#/$defs/AcpReceiptGetRequest"
+        },
+        {
+          "$ref": "#/$defs/AcpResultResponse"
+        },
+        {
+          "$ref": "#/$defs/AcpSessionUpdateNotification"
+        }
+      ]
+    },
+    "AcpAgentCapabilities": {
+      "description": "No `sessionCapabilities`: Nexus offers no session list, resume, fork, close or delete.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpAgentCapabilitiesMeta"
+        },
+        "loadSession": {
+          "const": true
+        },
+        "mcpCapabilities": {
+          "type": "object",
+          "properties": {
+            "http": {
+              "const": false
+            },
+            "sse": {
+              "const": false
+            }
+          },
+          "required": [
+            "http",
+            "sse"
+          ]
+        },
+        "promptCapabilities": {
+          "type": "object",
+          "properties": {
+            "audio": {
+              "const": false
+            },
+            "embeddedContext": {
+              "const": false
+            },
+            "image": {
+              "const": false
+            }
+          },
+          "required": [
+            "audio",
+            "embeddedContext",
+            "image"
+          ]
+        }
+      },
+      "required": [
+        "_meta",
+        "loadSession",
+        "mcpCapabilities",
+        "promptCapabilities"
+      ]
+    },
+    "AcpAgentCapabilitiesMeta": {
+      "type": "object",
+      "properties": {
+        "nexus/experimental": {
+          "const": true
+        },
+        "nexus/extensions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "nexus/sidecar_protocol": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "nexus/experimental",
+        "nexus/extensions",
+        "nexus/sidecar_protocol"
+      ]
+    },
+    "AcpAgentMessageChunk": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "$ref": "#/$defs/AcpTextContent"
+        },
+        "sessionUpdate": {
+          "const": "agent_message_chunk"
+        }
+      },
+      "required": [
+        "content",
+        "sessionUpdate"
+      ]
+    },
+    "AcpCancelNotification": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "session/cancel"
+        },
+        "params": {
+          "$ref": "#/$defs/AcpCancelParams"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "method",
+        "params"
+      ]
+    },
+    "AcpCancelParams": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ]
+    },
+    "AcpCancelRequestNotification": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "$/cancel_request"
+        },
+        "params": {
+          "$ref": "#/$defs/AcpCancelRequestParams"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "method",
+        "params"
+      ]
+    },
+    "AcpCancelRequestParams": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "requestId": {
+          "$ref": "#/$defs/AcpId"
+        }
+      },
+      "required": [
+        "requestId"
+      ]
+    },
+    "AcpClientError": {
+      "description": "The error member of a response a client sends to an agent request.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "number"
+        },
+        "data": {},
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "AcpDiffInfo": {
+      "description": "What Nexus knows about a diff beyond its text. `truncated`: the blocks come from a bounded preview or a cut diff.",
+      "type": "object",
+      "properties": {
+        "added": {
+          "type": "number"
+        },
+        "kind": {
+          "enum": [
+            "added",
+            "deleted",
+            "modified"
+          ]
+        },
+        "removed": {
+          "type": "number"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "added",
+        "kind",
+        "removed",
+        "truncated"
+      ]
+    },
+    "AcpError": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/AcpErrorCode"
+        },
+        "data": {
+          "$ref": "#/$defs/AcpErrorData"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "AcpErrorCode": {
+      "enum": [
+        -32000,
+        -32600,
+        -32601,
+        -32602,
+        -32603,
+        -32700,
+        -32800
+      ]
+    },
+    "AcpErrorData": {
+      "description": "Details of an error, in the standard `data` member (`_meta` is not allowed on a JSON-RPC error).",
+      "type": "object",
+      "properties": {
+        "exit_code": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "field": {
+          "description": "The parameter that failed validation (-32602).",
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "reason": {
+          "description": "A stable word for the cause, for example a sidecar error code or `sidecar_start_failed`.",
+          "type": "string"
+        }
+      }
+    },
+    "AcpErrorResponse": {
+      "description": "`id` is null when the request's id could not be read (not JSON, too deep, too long, a batch).",
+      "type": "object",
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/AcpError"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AcpId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "jsonrpc": {
+          "const": "2.0"
+        }
+      },
+      "required": [
+        "error",
+        "id",
+        "jsonrpc"
+      ]
+    },
+    "AcpHistoryExtent": {
+      "description": "Conversation entries replayed on load, and how many the session holds.",
+      "type": "object",
+      "properties": {
+        "sent": {
+          "type": "number"
+        },
+        "total": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "sent",
+        "total"
+      ]
+    },
+    "AcpId": {
+      "description": "A JSON-RPC request id: a string or an integer.",
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "AcpImplementationInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ]
+    },
+    "AcpInitializeParams": {
+      "description": "`clientCapabilities` is accepted and never consulted: Nexus calls no client method (`fs/*`, `terminal/*`) whatever it says.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "clientCapabilities": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "clientInfo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AcpImplementationInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "protocolVersion": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "protocolVersion"
+      ]
+    },
+    "AcpInitializeRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/AcpId"
+        },
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "initialize"
+        },
+        "params": {
+          "$ref": "#/$defs/AcpInitializeParams"
+        }
+      },
+      "required": [
+        "id",
+        "jsonrpc",
+        "method",
+        "params"
+      ]
+    },
+    "AcpInitializeResult": {
+      "type": "object",
+      "properties": {
+        "agentCapabilities": {
+          "$ref": "#/$defs/AcpAgentCapabilities"
+        },
+        "agentInfo": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "const": "nexus"
+            },
+            "title": {
+              "const": "Nexus Code"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "title",
+            "version"
+          ]
+        },
+        "authMethods": {
+          "description": "Always empty: Nexus has no authentication method over ACP.",
+          "type": "array",
+          "items": {}
+        },
+        "protocolVersion": {
+          "const": 1
+        }
+      },
+      "required": [
+        "agentCapabilities",
+        "agentInfo",
+        "authMethods",
+        "protocolVersion"
+      ]
+    },
+    "AcpLoadSessionParams": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "additionalDirectories": {
+          "description": "Accepted only when empty or null.",
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {}
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "mcpServers": {
+          "type": "array",
+          "items": {}
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cwd",
+        "mcpServers",
+        "sessionId"
+      ]
+    },
+    "AcpLoadSessionRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/AcpId"
+        },
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "session/load"
+        },
+        "params": {
+          "$ref": "#/$defs/AcpLoadSessionParams"
+        }
+      },
+      "required": [
+        "id",
+        "jsonrpc",
+        "method",
+        "params"
+      ]
+    },
+    "AcpLoadSessionResult": {
+      "description": "The specification's `session/load` response is an empty object; Nexus's own data is under `_meta`.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpSessionMeta"
+        }
+      }
+    },
+    "AcpMcpServersIgnored": {
+      "description": "Client-supplied MCP servers that were not connected: how many, and the sanitised names of the first of them.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "number"
+        },
+        "names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "count",
+        "names"
+      ]
+    },
+    "AcpMeta": {
+      "description": "Custom data. Never read for authority: no `_meta` member a client sends changes what a session may do.",
+      "type": "object",
+      "additionalProperties": {}
+    },
+    "AcpNewSessionParams": {
+      "description": "`mcpServers` is required by the specification and must be an array; its entries are not connected (see\nACP_DEVIATION_NO_CLIENT_MCP_SERVERS). `additionalDirectories` is accepted only when empty, and `systemPrompt` is\nrefused when present: Nexus supports neither.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "additionalDirectories": {
+          "description": "Accepted only when empty or null.",
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {}
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "mcpServers": {
+          "type": "array",
+          "items": {}
+        }
+      },
+      "required": [
+        "cwd",
+        "mcpServers"
+      ]
+    },
+    "AcpNewSessionRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/AcpId"
+        },
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "session/new"
+        },
+        "params": {
+          "$ref": "#/$defs/AcpNewSessionParams"
+        }
+      },
+      "required": [
+        "id",
+        "jsonrpc",
+        "method",
+        "params"
+      ]
+    },
+    "AcpNewSessionResult": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpSessionMeta"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ]
+    },
+    "AcpPermissionCancelled": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "outcome": {
+          "const": "cancelled"
+        }
+      },
+      "required": [
+        "outcome"
+      ]
+    },
+    "AcpPermissionErrorResponse": {
+      "description": "An error answer to `session/request_permission`: a denial.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/AcpClientError"
+        },
+        "id": {
+          "type": "number"
+        },
+        "jsonrpc": {
+          "const": "2.0"
+        }
+      },
+      "required": [
+        "error",
+        "id",
+        "jsonrpc"
+      ]
+    },
+    "AcpPermissionOption": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "allow_once",
+            "reject_once"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "optionId": {
+          "enum": [
+            "allow_once",
+            "reject_once"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "optionId"
+      ]
+    },
+    "AcpPermissionOutcome": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AcpPermissionCancelled"
+        },
+        {
+          "$ref": "#/$defs/AcpPermissionSelected"
+        }
+      ]
+    },
+    "AcpPermissionRequest": {
+      "description": "`id` is an integer from a random start, so a reply sent before the request exists matches nothing.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "number"
+        },
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "session/request_permission"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "options": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AcpPermissionOption"
+              }
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "toolCall": {
+              "$ref": "#/$defs/AcpPermissionToolCall"
+            }
+          },
+          "required": [
+            "options",
+            "sessionId",
+            "toolCall"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "jsonrpc",
+        "method",
+        "params"
+      ]
+    },
+    "AcpPermissionResponse": {
+      "description": "The client's answer to `session/request_permission`; `id` is the integer id of that request.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "number"
+        },
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "result": {
+          "$ref": "#/$defs/AcpPermissionResult"
+        }
+      },
+      "required": [
+        "id",
+        "jsonrpc",
+        "result"
+      ]
+    },
+    "AcpPermissionResult": {
+      "description": "Only `selected` with the allow-once option id approves; every other result, well-formed or not, denies.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "outcome": {
+          "$ref": "#/$defs/AcpPermissionOutcome"
+        }
+      },
+      "required": [
+        "outcome"
+      ]
+    },
+    "AcpPermissionSelected": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "optionId": {
+          "type": "string"
+        },
+        "outcome": {
+          "const": "selected"
+        }
+      },
+      "required": [
+        "optionId",
+        "outcome"
+      ]
+    },
+    "AcpPermissionToolCall": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpPermissionToolCallMeta"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AcpToolCallContent"
+          }
+        },
+        "kind": {
+          "$ref": "#/$defs/AcpToolKind"
+        },
+        "rawInput": {
+          "$ref": "#/$defs/AcpToolRawInput"
+        },
+        "status": {
+          "const": "pending"
+        },
+        "title": {
+          "type": "string"
+        },
+        "toolCallId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "_meta",
+        "content",
+        "kind",
+        "rawInput",
+        "status",
+        "title",
+        "toolCallId"
+      ]
+    },
+    "AcpPermissionToolCallMeta": {
+      "type": "object",
+      "properties": {
+        "nexus/approval_digest": {
+          "description": "SHA-256 of the canonical `{tool, subject, preview, review}` of the approval this request asks about.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "nexus/approval_digest"
+      ]
+    },
+    "AcpPosture": {
+      "description": "The session's posture as the operator's machine set it. Reported, never set, over ACP.",
+      "type": "object",
+      "properties": {
+        "mode": {
+          "enum": [
+            "auto",
+            "read-only",
+            "review"
+          ]
+        },
+        "read_only": {
+          "type": "boolean"
+        },
+        "sandbox": {
+          "type": "string"
+        },
+        "trusted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "mode",
+        "read_only",
+        "sandbox",
+        "trusted"
+      ]
+    },
+    "AcpPromptBlock": {
+      "description": "The baseline content blocks (published specification, content). `image`, `audio` and `resource` need capabilities Nexus does not declare, and are refused.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AcpResourceLinkBlock"
+        },
+        {
+          "$ref": "#/$defs/AcpTextBlock"
+        }
+      ]
+    },
+    "AcpPromptParams": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "prompt": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AcpPromptBlock"
+          }
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "prompt",
+        "sessionId"
+      ]
+    },
+    "AcpPromptRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/AcpId"
+        },
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "session/prompt"
+        },
+        "params": {
+          "$ref": "#/$defs/AcpPromptParams"
+        }
+      },
+      "required": [
+        "id",
+        "jsonrpc",
+        "method",
+        "params"
+      ]
+    },
+    "AcpPromptResult": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpVerificationMeta"
+        },
+        "stopReason": {
+          "$ref": "#/$defs/AcpStopReason"
+        }
+      },
+      "required": [
+        "stopReason"
+      ]
+    },
+    "AcpReceiptGetParams": {
+      "description": "Without `receiptId`: the latest receipt of the session.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "receiptId": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ]
+    },
+    "AcpReceiptGetRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/AcpId"
+        },
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "_nexus/receipt/get"
+        },
+        "params": {
+          "$ref": "#/$defs/AcpReceiptGetParams"
+        }
+      },
+      "required": [
+        "id",
+        "jsonrpc",
+        "method",
+        "params"
+      ]
+    },
+    "AcpResourceLinkBlock": {
+      "description": "Reduced to one reference line of the prompt; Nexus never reads or fetches the URI.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "annotations": {},
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mimeType": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "size": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": {
+          "const": "resource_link"
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "uri"
+      ]
+    },
+    "AcpResultResponse": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/AcpId"
+        },
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AcpInitializeResult"
+            },
+            {
+              "$ref": "#/$defs/AcpLoadSessionResult"
+            },
+            {
+              "$ref": "#/$defs/AcpNewSessionResult"
+            },
+            {
+              "$ref": "#/$defs/AcpPromptResult"
+            },
+            {
+              "$ref": "#/$defs/NexusReceipt"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "jsonrpc",
+        "result"
+      ]
+    },
+    "AcpSessionInfoUpdate": {
+      "description": "The verification carrier: no field of its own, the object under `_meta`.",
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpVerificationMeta"
+        },
+        "sessionUpdate": {
+          "const": "session_info_update"
+        }
+      },
+      "required": [
+        "_meta",
+        "sessionUpdate"
+      ]
+    },
+    "AcpSessionMeta": {
+      "type": "object",
+      "properties": {
+        "nexus/history": {
+          "$ref": "#/$defs/AcpHistoryExtent"
+        },
+        "nexus/mcp_servers_ignored": {
+          "$ref": "#/$defs/AcpMcpServersIgnored"
+        },
+        "nexus/posture": {
+          "$ref": "#/$defs/AcpPosture"
+        }
+      }
+    },
+    "AcpSessionUpdate": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AcpAgentMessageChunk"
+        },
+        {
+          "$ref": "#/$defs/AcpSessionInfoUpdate"
+        },
+        {
+          "$ref": "#/$defs/AcpToolCall"
+        },
+        {
+          "$ref": "#/$defs/AcpToolCallUpdate"
+        },
+        {
+          "$ref": "#/$defs/AcpUserMessageChunk"
+        }
+      ]
+    },
+    "AcpSessionUpdateNotification": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "session/update"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "sessionId": {
+              "type": "string"
+            },
+            "update": {
+              "$ref": "#/$defs/AcpSessionUpdate"
+            }
+          },
+          "required": [
+            "sessionId",
+            "update"
+          ]
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "method",
+        "params"
+      ]
+    },
+    "AcpStopReason": {
+      "description": "`refusal` exists in the specification and is never sent: a gate denial is a failed tool call inside a turn that continues.",
+      "enum": [
+        "cancelled",
+        "end_turn",
+        "max_tokens",
+        "max_turn_requests"
+      ]
+    },
+    "AcpTextBlock": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpMeta"
+        },
+        "annotations": {},
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "const": "text"
+        }
+      },
+      "required": [
+        "text",
+        "type"
+      ]
+    },
+    "AcpTextContent": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "const": "text"
+        }
+      },
+      "required": [
+        "text",
+        "type"
+      ]
+    },
+    "AcpToolCall": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/AcpToolKind"
+        },
+        "rawInput": {
+          "$ref": "#/$defs/AcpToolRawInput"
+        },
+        "sessionUpdate": {
+          "const": "tool_call"
+        },
+        "status": {
+          "$ref": "#/$defs/AcpToolStatus"
+        },
+        "title": {
+          "type": "string"
+        },
+        "toolCallId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "sessionUpdate",
+        "status",
+        "title",
+        "toolCallId"
+      ]
+    },
+    "AcpToolCallContent": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AcpToolDiffContent"
+        },
+        {
+          "$ref": "#/$defs/AcpToolTextContent"
+        }
+      ]
+    },
+    "AcpToolCallUpdate": {
+      "type": "object",
+      "properties": {
+        "_meta": {
+          "$ref": "#/$defs/AcpToolCallUpdateMeta"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AcpToolCallContent"
+          }
+        },
+        "rawOutput": {
+          "$ref": "#/$defs/AcpToolRawOutput"
+        },
+        "sessionUpdate": {
+          "const": "tool_call_update"
+        },
+        "status": {
+          "$ref": "#/$defs/AcpToolStatus"
+        },
+        "toolCallId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionUpdate",
+        "toolCallId"
+      ]
+    },
+    "AcpToolCallUpdateMeta": {
+      "type": "object",
+      "properties": {
+        "nexus/diff": {
+          "$ref": "#/$defs/AcpDiffInfo"
+        }
+      }
+    },
+    "AcpToolDiffContent": {
+      "description": "`path` is absolute. `oldText` is null for a new file. One block per hunk: the text is the hunk's lines, not the whole file.",
+      "type": "object",
+      "properties": {
+        "newText": {
+          "type": "string"
+        },
+        "oldText": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "type": {
+          "const": "diff"
+        }
+      },
+      "required": [
+        "newText",
+        "oldText",
+        "path",
+        "type"
+      ]
+    },
+    "AcpToolKind": {
+      "description": "The tool kinds of the specification that Nexus uses; `move` and `switch_mode` exist there and no Nexus tool is one.",
+      "enum": [
+        "delete",
+        "edit",
+        "execute",
+        "fetch",
+        "other",
+        "read",
+        "search",
+        "think"
+      ]
+    },
+    "AcpToolRawInput": {
+      "description": "The tool's name and subject as the sidecar reported them (already redacted and bounded).",
+      "type": "object",
+      "properties": {
+        "subject": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "subject",
+        "tool"
+      ]
+    },
+    "AcpToolRawOutput": {
+      "type": "object",
+      "properties": {
+        "denied": {
+          "description": "The operator declined the call at its approval prompt; it did not run.",
+          "type": "boolean"
+        },
+        "duration_ms": {
+          "type": "number"
+        },
+        "exit_code": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "timed_out": {
+          "type": "boolean"
+        }
+      }
+    },
+    "AcpToolStatus": {
+      "enum": [
+        "completed",
+        "failed",
+        "in_progress",
+        "pending"
+      ]
+    },
+    "AcpToolTextContent": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "$ref": "#/$defs/AcpTextContent"
+        },
+        "type": {
+          "const": "content"
+        }
+      },
+      "required": [
+        "content",
+        "type"
+      ]
+    },
+    "AcpUserMessageChunk": {
+      "description": "Sent only while replaying a loaded session.",
+      "type": "object",
+      "properties": {
+        "content": {
+          "$ref": "#/$defs/AcpTextContent"
+        },
+        "sessionUpdate": {
+          "const": "user_message_chunk"
+        }
+      },
+      "required": [
+        "content",
+        "sessionUpdate"
+      ]
+    },
+    "AcpValidationReceipt": {
+      "description": "The validation receipt of an authoritative verifier run, as the receipt's \"Validation receipt\" section shows it.",
+      "type": "object",
+      "properties": {
+        "candidate": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate",
+        "id",
+        "status"
+      ]
+    },
+    "AcpVerification": {
+      "description": "What Nexus can demonstrate about a turn. `end_turn` says nothing about verification; this object does.\n`receipt_id`: the validation receipt id when one is active, else `turn:<sessionId>:<turnId>`. `turn_id` is null only\nfor the last outcome of a loaded session, whose turn id the session record does not carry.",
+      "type": "object",
+      "properties": {
+        "execution": {
+          "$ref": "#/$defs/ExecutionState"
+        },
+        "outcome": {
+          "$ref": "#/$defs/EngineeringOutcome"
+        },
+        "reason": {
+          "$ref": "#/$defs/TurnReason"
+        },
+        "receipt_id": {
+          "type": "string"
+        },
+        "turn_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unverified_changes_pending": {
+          "type": "boolean"
+        },
+        "validation_receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AcpValidationReceipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "verifier": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AcpVerifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "verifier_runs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AcpVerifierRun"
+          }
+        }
+      },
+      "required": [
+        "execution",
+        "outcome",
+        "receipt_id",
+        "turn_id",
+        "unverified_changes_pending",
+        "validation_receipt",
+        "verifier",
+        "verifier_runs"
+      ]
+    },
+    "AcpVerificationMeta": {
+      "type": "object",
+      "properties": {
+        "nexus/verification": {
+          "$ref": "#/$defs/AcpVerification"
+        }
+      },
+      "required": [
+        "nexus/verification"
+      ]
+    },
+    "AcpVerifier": {
+      "type": "object",
+      "properties": {
+        "candidate": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        },
+        "exit_success": {
+          "type": "boolean"
+        },
+        "output_sha256": {
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "configured",
+            "discovered"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/VerificationStatus"
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "AcpVerifierRun": {
+      "description": "One verifier run of the turn.",
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "phase": {
+          "enum": [
+            "before_change",
+            "completion"
+          ]
+        }
+      },
+      "required": [
+        "command",
+        "passed",
+        "phase"
+      ]
+    },
+    "EngineeringOutcome": {
+      "description": "VERIFIED        - the verifier selected for this workspace ran and passed against the current changes\nUNVERIFIED      - work ended with a result that was not (or could not be) verified; see reason. Either changes\n                  no passing verifier covers, or an answer resting on tool output that context compaction removed\n                  during the turn and the model did not re-read (CONTEXT_EVIDENCE_NOT_RETAINED)\nNOT_ESTABLISHED - no engineering result was established (turn did not complete, or verifier failed)\nNOT_REQUIRED    - the turn made no workspace change and every tool output it relied on was still in context",
+      "enum": [
+        "NOT_ESTABLISHED",
+        "NOT_REQUIRED",
+        "REGRESSION_FREE",
+        "UNVERIFIED",
+        "VERIFIED"
+      ]
+    },
+    "ExecutionState": {
+      "enum": [
+        "BLOCKED",
+        "COMPLETED",
+        "FAILED",
+        "INTERRUPTED",
+        "LIMIT_REACHED"
+      ]
+    },
+    "NexusReceipt": {
+      "description": "Result of `_nexus/receipt/get`. Nexus's own type, not part of the specification. Kept in memory for the process only.",
+      "type": "object",
+      "properties": {
+        "receipt_id": {
+          "type": "string"
+        },
+        "sections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReceiptSection"
+          }
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "turn_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "verification": {
+          "$ref": "#/$defs/AcpVerification"
+        }
+      },
+      "required": [
+        "receipt_id",
+        "sections",
+        "session_id",
+        "turn_id",
+        "verification"
+      ]
+    },
+    "ReceiptRow": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "ReceiptSection": {
+      "type": "object",
+      "properties": {
+        "note": {
+          "description": "Why the section is empty, or a footnote.",
+          "type": "string"
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReceiptRow"
+          }
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rows",
+        "title"
+      ]
+    },
+    "TurnReason": {
+      "enum": [
+        "CONTEXT_CAPACITY_EXCEEDED",
+        "CONTEXT_EVIDENCE_NOT_RETAINED",
+        "INFERENCE_FAILED",
+        "NEEDS_INPUT",
+        "NO_APPLICABLE_VERIFIER",
+        "NO_TESTS_EXECUTED",
+        "OPERATOR_INTERRUPT",
+        "PERSISTENCE_FAILED",
+        "REGRESSION_FREE",
+        "REPOSITORY_STATE_CHANGED",
+        "REQUIREMENTS_INCOMPLETE",
+        "STAGNATION_DETECTED",
+        "STEP_BUDGET_EXHAUSTED",
+        "STEP_LIMIT_REACHED",
+        "STEP_PAUSED",
+        "TIME_BUDGET_EXHAUSTED",
+        "TOOL_CALL_LOOP",
+        "TOOL_INVOCATION_BUDGET_EXHAUSTED",
+        "UNHANDLED_ERROR",
+        "VERIFICATION_NOT_RUN",
+        "VERIFIER_FAILED",
+        "VERIFIER_NOT_CONVERGING",
+        "VERIFIER_TIMED_OUT"
+      ]
+    },
+    "VerificationStatus": {
+      "enum": [
+        "FAILED",
+        "NO_APPLICABLE_VERIFIER",
+        "PASSED",
+        "TIMED_OUT"
+      ]
+    }
+  }
+}

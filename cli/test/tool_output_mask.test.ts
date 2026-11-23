@@ -1,6 +1,6 @@
 /**
  * CX-4: old tool results above a token threshold are replaced, in the request only, by a marker carrying a content id;
- * the full output stays in the conversation and the archive and resolves with read_archive. Opt-in
+ * the full output stays in the conversation and the archive and resolves with read_tool_output. Opt-in
  * (NEXUS_TOOL_OUTPUT_MASK_TOKENS); the pinned ledger, findings and the independent reviewer's evidence are never masked.
  */
 import "./helpers/leak_guard.js";
@@ -15,7 +15,7 @@ import { AutonomousAgent } from "../src/agent.js";
 import { DEFAULT_CONTINUATION, HarnessConfig, type ChatMessage } from "../src/types.js";
 import { PINNED_LEDGER_PREFIX } from "../src/core/objective.js";
 import { buildReviewEvidencePackage } from "../src/core/independent_review.js";
-import { maskToolOutputs, maskedOutputId, resolveMaskedOutput, MASK_MARKER_PREFIX, maskThresholdFromEnv } from "../src/core/tool_output_mask.js";
+import { maskToolOutputs, maskedOutputId, resolveMaskedOutput, readToolOutput, MASK_MARKER_PREFIX, maskThresholdFromEnv } from "../src/core/tool_output_mask.js";
 import { startGateway, makeRepo, Reply } from "./helpers/fixtures.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -51,12 +51,20 @@ describe("maskToolOutputs", () => {
     assert.equal(maskToolOutputs(pending, 100), pending, "a result with no later assistant message is not masked");
     const small = [...turn("c1", "read_file", "tiny"), { role: "assistant", content: "ok" } as ChatMessage];
     assert.equal(maskToolOutputs(small, 100), small);
-    for (const name of ["read_archive", "read_findings", "read_objective"]) {
+    for (const name of ["read_archive", "read_tool_output", "read_findings", "read_objective"]) {
       const kept = [...turn("c1", name, big), { role: "assistant", content: "ok" } as ChatMessage];
       assert.equal(maskToolOutputs(kept, 100), kept, name);
     }
     const marker = [...turn("c1", "read_file", `${MASK_MARKER_PREFIX} already`.padEnd(5000, "x")), { role: "assistant", content: "ok" } as ChatMessage];
     assert.equal(maskToolOutputs(marker, 100), marker);
+  });
+
+  test("read_tool_output requires an exact id and resolves only retained tool output", () => {
+    const live = [...turn("c1", "read_file", big)];
+    const id = maskedOutputId(big);
+    assert.deepEqual(readToolOutput("bad", live, []), { ok: false, text: "read_tool_output needs the 12-character lowercase hexadecimal id from a tool-output marker." });
+    assert.deepEqual(readToolOutput("0".repeat(12), live, []), { ok: false, text: `No tool output is available for id ${"0".repeat(12)} in this conversation.` });
+    assert.deepEqual(readToolOutput(id, [], [live[1]]), { ok: true, text: big }, "works after compaction moved the result to the archive");
   });
 
   test("off at a missing, zero or invalid threshold", () => {
@@ -119,13 +127,23 @@ describe("through the agent", () => {
       if (n === 2) return read("small.txt");
       if (n === 3) {
         id = /tool-output:([0-9a-f]{12})/.exec(JSON.stringify(body.messages))?.[1] ?? "none";
-        return { kind: "tools", calls: [{ name: "read_archive", args: { query: `tool-output:${id}` } }] };
+        if (id === "none") return { kind: "text", content: "done" };
+        return { kind: "tools", calls: [{ name: "read_tool_output", args: { id } }] };
       }
       return { kind: "text", content: "done" };
     });
     const agent = new AutonomousAgent(cfg(gw.url, repo));
     (agent as any).ui = new Proxy({}, { get: () => () => {} });
     try {
+      const effectiveTools = agent.getEffectiveTools();
+      const offered = new Set(effectiveTools.map((tool) => tool.function.name));
+      assert.equal(offered.has("read_tool_output"), Boolean(mask), "id retrieval is offered only when masking is enabled");
+      assert.equal(Boolean(agent.getCapabilityRegistry().getByToolName("read_tool_output")), Boolean(mask), "the handler is registered only with its opt-in tool");
+      if (mask) {
+        const tool = effectiveTools.find((candidate) => candidate.function.name === "read_tool_output")!;
+        assert.deepEqual(tool.function.parameters.required, ["id"]);
+        assert.equal(tool.function.parameters.properties.id.type, "string");
+      }
       await agent.runTurn("1. Read big.txt\n2. Read small.txt\n3. Summarize");
       return gw.requests as any[];
     } finally {
@@ -145,7 +163,7 @@ describe("through the agent", () => {
     assert.ok(textOf(requests[1].messages.filter((m: any) => m.role === "tool")[0]).includes("line 399"), "a result the model has not acted on yet is sent whole");
     assert.ok(third.some((m) => m.role === "system" && textOf(m).startsWith(PINNED_LEDGER_PREFIX)), "the pinned ledger is not masked");
     const retrieved = (requests[3].messages as any[]).filter((m) => m.role === "tool").map(textOf).find((t) => t.includes("line 399"));
-    assert.ok(retrieved && retrieved.includes("line 0 of the big output"), "read_archive returned the full output by id");
+    assert.ok(retrieved && retrieved.includes("line 0 of the big output"), "read_tool_output returned the full output by id");
     assert.equal(textOf((requests[3].messages as any[]).filter((m) => m.role === "tool")[0]).startsWith(MASK_MARKER_PREFIX), true);
   });
 
@@ -153,5 +171,6 @@ describe("through the agent", () => {
     const requests = await run(undefined);
     for (const r of requests.slice(0, 3)) assert.ok(!JSON.stringify(r.messages).includes(MASK_MARKER_PREFIX));
     assert.ok(JSON.stringify(requests[2].messages).includes("line 399"));
+    assert.ok(!JSON.stringify(requests[2].tools).includes("read_tool_output"));
   });
 });

@@ -126,8 +126,8 @@ export function isReadOnlyRole(role: AgentRole | string | undefined): boolean {
  */
 export function roleToolAllowList(role: AgentRole | string | undefined): ReadonlySet<string> | undefined {
   if (role === undefined || !Object.hasOwn(ROLE_PROFILES, role)) return undefined;
-  if (Object.hasOwn(SPECIALIST_CONTRACTS, role)) return new Set([...SPECIALIST_CONTRACTS[role as SpecialistRole].permittedTools, "task_completed"]);
-  if (isReadOnlyRole(role)) return new Set([...ROLE_PROFILES[role as AgentRole].recommendedTools, "task_completed"]);
+  if (Object.hasOwn(SPECIALIST_CONTRACTS, role)) return new Set([...SPECIALIST_CONTRACTS[role as SpecialistRole].permittedTools, "task_completed", "read_tool_output"]);
+  if (isReadOnlyRole(role)) return new Set([...ROLE_PROFILES[role as AgentRole].recommendedTools, "task_completed", "read_tool_output"]);
   return undefined;
 }
 

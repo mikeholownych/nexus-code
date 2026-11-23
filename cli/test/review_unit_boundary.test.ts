@@ -536,6 +536,6 @@ test("an unbound dependency pass is surfaced to the reviewer even when a bound p
   const ctx = { objective: "Fix add", workspace: dir, startCommit: head(dir), dependencies: [{ id: "a", title: "A", summary: "s", verification: bound }, { id: "b", title: "B", summary: "s", verification: unbound }], observeSuccess() {} };
   const pkg = internals(executor).reviewEvidence(unit, ctx, dir);
   assert.equal(pkg.verifierCommand, "npm test");
-  assert.match(pkg.verifierOutput, /definition could not be bound/);
+  assert.match(pkg.verifierOutput, /definition or test inputs could not be bound/);
   assert.equal(pkg.verifierExitCode, 0);
 });

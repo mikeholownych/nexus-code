@@ -1,0 +1,18 @@
+{"client":{"name":"nexus-tui","version":"1.3.0"},"experimental":false,"id":"c1","protocol_max":1,"protocol_min":1,"type":"initialize","v":1}
+{"id":"c1","text":"fix\nit","type":"prompt.submit","v":1}
+{"id":"c1","text":"use tabs","type":"steer","v":1}
+{"type":"cancel","v":1}
+{"always":true,"id":"c1","type":"approve","v":1}
+{"id":"c1","type":"deny","v":1}
+{"choice":"retry","id":"c1","type":"checkpoint.choice","v":1}
+{"args":"","command":"diff","id":"c1","type":"slash","v":1}
+{"evidence":"e1","id":"c1","type":"tool.detail","v":1}
+{"id":"c1","type":"receipt","v":1}
+{"id":"c1","type":"models.list","v":1}
+{"id":"c1","model":"m","provider":"local","type":"model.select","v":1}
+{"id":"c1","method":"endpoint","provider":"local","type":"provider.connect","v":1}
+{"endpoint":"http://127.0.0.1:1/v1","id":"c1","key":"not-a-real-key","method":"api-key","provider":"local","type":"provider.connect","v":1}
+{"id":"c1","type":"provider.cancel","v":1}
+{"id":"c1","type":"provider.local-cancel","v":1}
+{"id":"c1","provider":"local","type":"provider.disconnect","v":1}
+{"type":"shutdown","v":1}

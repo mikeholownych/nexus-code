@@ -60,7 +60,9 @@ const readOnlyTurn = (n: number): Reply => n === 1
 describe("SidecarServer: session and turns", () => {
   test("start announces the protocol and an idle session", async () => {
     await withSidecar(readOnlyTurn, "auto", async ({ events, repo }) => {
-      assert.deepEqual(events[0], { v: 1, type: "hello", protocol: 1, pid: process.pid, commands: slashCatalog() });
+      // The negotiation fields are covered in sidecar_initialize.test.ts; the fields a first-published client reads are these.
+      const { protocol_min: _min, protocol_max: _max, capabilities: _capabilities, experimental: _experimental, ...hello } = events[0];
+      assert.deepEqual(hello, { v: 1, type: "hello", protocol: 1, pid: process.pid, commands: slashCatalog() });
       const state = events[1];
       assert.equal(state.type, "session.state");
       assert.equal(state.workspace, repo);
