@@ -457,8 +457,11 @@ export function runAcpStdio(options: AcpStdioOptions): AcpStdioServer {
   // The stdin listener keeps the process alive, so setting an exit code would leave it running after a signal.
   // close() waits for every session to stop. A session that never does must not keep a signalled process alive.
   const stop = (code: number) => {
-    setTimeout(() => process.exit(code), options.shutdownGraceMs ?? ACP_SHUTDOWN_GRACE_MS).unref();
-    void server.close().finally(() => process.exit(code));
+    const deadline = setTimeout(() => process.exit(code), options.shutdownGraceMs ?? ACP_SHUTDOWN_GRACE_MS);
+    void server.close().finally(() => {
+      clearTimeout(deadline);
+      process.exit(code);
+    });
   };
   process.once("SIGINT", () => stop(130));
   process.once("SIGTERM", () => stop(143));

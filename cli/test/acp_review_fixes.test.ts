@@ -248,3 +248,45 @@ runAcpStdio({
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("the shutdown grace timer keeps the signal exit alive after stdio handles are unreferenced", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-acp-unref-shutdown-"));
+  const script = path.join(dir, "unref.mts");
+  fs.writeFileSync(script, `
+import { runAcpStdio } from ${JSON.stringify(path.join(cli, "src/acp_stdio.ts"))};
+import { encodeEvent } from ${JSON.stringify(path.join(cli, "src/protocol.ts"))};
+runAcpStdio({
+  config: { endpoint: "http://127.0.0.1:1/v1", model: "m", workspace: "/tmp", shell: "bash" },
+  version: "test", shutdownGraceMs: 500,
+  createSidecar: (_config, _resume, write) => ({
+    start() { write(encodeEvent({ type: "session.state", session: ${JSON.stringify(SESSION)}, workspace: "/tmp", workspace_name: "tmp", model: "m", mode: "review", git: null, busy: false })); },
+    handleLine(line) { return JSON.parse(line).type === "shutdown" ? new Promise(() => {}) : Promise.resolve(); },
+  }),
+});
+// runAcpStdio's signal handler runs first; remove these otherwise-live handles after it schedules its deadline.
+process.once("SIGTERM", () => {
+  process.stdin.unref();
+  process.stdout.unref();
+  process.stderr.unref();
+});
+`);
+  const { home, env } = scratchHome();
+  const child = spawn(process.execPath, [entry[0], script], { cwd: dir, env, stdio: ["pipe", "pipe", "pipe"] });
+  let out = "";
+  child.stdout.on("data", (chunk) => { out += chunk; });
+  try {
+    child.stdin.write(encodeMessage({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 1, clientInfo: { name: "fixture", version: "1" }, clientCapabilities: {} } }));
+    child.stdin.write(encodeMessage({ jsonrpc: "2.0", id: 2, method: "session/new", params: { cwd: "/tmp", mcpServers: [] } }));
+    await until(() => out.includes('"id":2'), "the session", 60_000);
+    const exited = new Promise<number | null>((resolve) => child.once("exit", (code) => resolve(code)));
+    child.kill("SIGTERM");
+    let timer: NodeJS.Timeout | undefined;
+    const code = await Promise.race([exited, new Promise<string>((resolve) => { timer = setTimeout(() => resolve("still running"), 10_000); })]);
+    clearTimeout(timer);
+    assert.equal(code, 143);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
