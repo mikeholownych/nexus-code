@@ -311,7 +311,7 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
     // survives resumes; the active invocation also has a finite wall-clock limit. Without continuation
     // (`--no-continuation`), the first segment boundary ends the turn (LIMIT_REACHED, legacy).
     const turnDeadline = budget && Number.isFinite(budget.maxTurnMinutes) ? Date.now() + budget.maxTurnMinutes * 60_000 : Number.POSITIVE_INFINITY;
-    if (budget) {
+    if (budget && Number.isFinite(turnDeadline)) {
       deadlineTimer = setTimeout(() => {
         if (this.requestCancel("time budget")) timeBudgetExpired = true;
       }, Math.max(0, turnDeadline - Date.now()));
