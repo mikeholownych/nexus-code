@@ -1,0 +1,181 @@
+Implement a production-grade context maturity system in Nexus Code, grounded in the Redis “Context Engineering Maturity Model” (/home/mike/Redis_ePub_Ebook_ContextMaturityModel_260522.pdf) but adapted to Nexus’s actual architecture. Treat that document as a diagnostic framework, not a vendor blueprint. Do not assume Nexus should use Redis, MCP, a vector database, or any other specific product unless the existing code and measured requirements justify it.
+
+## Objective
+
+Make Nexus’s context capabilities explicit, inspectable, and incrementally improvable across four dimensions:
+
+1. Navigability: agents can find and relate relevant repository, task, session, and memory context.
+2. Retrieval speed: context assembly has measurable latency, budgets, and failure behavior.
+3. Freshness: the system can determine whether context reflects current repository and session state.
+4. Compounding value: useful knowledge can persist across turns and sessions under controlled scope, provenance, and retention rules.
+
+Use the model’s five maturity stages as descriptive assessment levels:
+
+1. Ad hoc
+2. Exploratory
+3. Standardizing
+4. Managed
+5. Competitive asset
+
+Do not collapse the four dimensions into a single maturity score. Assess each dimension separately, report the evidence and gaps behind each rating, and identify the next implementable improvement. Do not claim a stage based only on feature presence.
+
+## Operating constraints
+
+- First confirm that the active repository is Nexus Code. If it is not, stop without modifying files and report the repository identity.
+- Inspect the current implementation, docs, roadmap, session export format, memory/context mechanisms, agent profiles, command system, and test conventions before designing changes.
+- Preserve Nexus’s provider independence. The context system must work through existing provider interfaces and must not require provider-specific customization.
+- Preserve local inference as the preferred default and cloud fallback only when required by existing policy.
+- Keep context assembly in Nexus’s client/control plane. Do not make inference providers responsible for Nexus memory, state, or context policy.
+- Maintain Nexus’s priority order: accurate task completion first, useful evidence and observability second, presentation and UX third.
+- Treat repository files, prompts, model output, tool output, and stored memory as untrusted input unless validated.
+- “Memory is not evidence.” A model-generated summary or remembered claim must not become verified fact without source evidence.
+- Do not add Redis or another service dependency by default. Prefer the smallest architecture that meets demonstrated requirements.
+- Avoid broad rewrites. Preserve existing user data, session records, and backward compatibility where practical.
+- Do not overwrite unrelated working tree changes. Record the initial branch, commit, and worktree status; keep changes scoped to this task.
+- Make routine implementation decisions independently. Do not stop for approval unless blocked by a destructive or externally consequential operation.
+
+## Phase 1: Baseline and design
+
+1. Map the current context lifecycle:
+   - sources and source adapters
+   - context selection and assembly
+   - token budgeting and truncation
+   - session and cross-session persistence
+   - task/profile/path-scoped context
+   - retrieval and ranking
+   - provider request construction
+   - exported session evidence
+2. Identify existing guarantees and gaps against all four dimensions and five stages.
+3. Build a Nexus-specific capability matrix. Each rating must cite implementation evidence or explicitly say “not measured” / “not implemented.” Separate current behavior from planned behavior.
+4. Write a short design decision record before implementation, including:
+   - proposed data model and interfaces
+   - compatibility and migration approach
+   - security, privacy, retention, and failure considerations
+   - measurable acceptance criteria
+   - what is intentionally deferred and why
+
+Do not pause after producing the assessment. Continue into implementation unless the repository is not Nexus Code or a concrete blocker makes safe implementation impossible.
+
+## Phase 2: Implement the minimum coherent system
+
+Adapt the following capabilities to Nexus’s existing abstractions. Do not duplicate functionality that already exists; extend or connect existing components where possible.
+
+### A. Context inventory and provenance
+
+Represent assembled context as inspectable items with, as applicable:
+
+- stable item identifier
+- source type and source location
+- scope: turn, session, task, repository/worktree, profile, or user
+- content or content reference
+- created/observed/validated timestamps
+- freshness or invalidation rule
+- trust/verification state
+- retention or expiry rule
+- reason for inclusion and retrieval method
+
+Preserve source references in session records and exports. Avoid logging secrets or copying sensitive content into diagnostics.
+
+### B. Navigability
+
+Create or extend a common context retrieval interface that can combine relevant existing sources, such as:
+
+- current task and acceptance criteria
+- active session state and prior steps
+- repository status, changed files, and relevant code/docs
+- path-scoped rules and agent profile instructions
+- explicitly approved durable memories
+- prior evidence or decisions when relevant
+
+Use structured relationships and metadata where Nexus already has them. Do not expose raw database or filesystem access to a model when an existing controlled interface can answer the request. Make retrieval reasons inspectable.
+
+### C. Freshness and invalidation
+
+Define freshness separately for each context source. At minimum, handle:
+
+- changed repository/worktree state
+- changed files or rules
+- session transitions, resume, and compaction
+- stale cached retrieval results
+- memories whose source or validation status has changed
+
+Do not imply that a context item is current when Nexus cannot establish that. Surface unknown freshness as unknown. Ensure resume and compaction preserve source links and do not silently convert summaries into authoritative state.
+
+### D. Retrieval performance and budgets
+
+Add instrumentation for context assembly and retrieval, using existing telemetry conventions:
+
+- duration by source and overall
+- result count and omission count
+- token or size estimates where available
+- cache hit/miss and invalidation reason where applicable
+- timeout, partial-result, and error outcomes
+
+Define configurable budgets and deterministic behavior when budgets are exceeded. A timeout or failed source must be represented explicitly; do not silently treat incomplete context as complete. Avoid caching sensitive context across scopes or users.
+
+### E. Controlled durable memory
+
+Implement or extend memory only where the current architecture supports it safely. Distinguish:
+
+- ephemeral working context
+- session history and summaries
+- durable project/repository knowledge
+- user/profile preferences, if already supported
+
+For every durable memory item, retain provenance, scope, validation status, timestamp, and retention/expiry metadata. Provide a controlled promotion path from interaction to durable memory. Do not automatically promote model assertions, unverified tool output, credentials, secrets, or transient task details. Ensure retrieval respects scope and deletion/expiry rules.
+
+### F. Maturity assessment
+
+Provide a machine-readable and human-readable assessment of the four dimensions. Each assessment must include:
+
+- current level, or “insufficient evidence”
+- evidence references
+- unmet criteria
+- known limitations
+- next actionable improvement
+
+The assessment must be reproducible from system state and recorded evidence, not generated as an unsupported model opinion. If a CLI command, report, or UI view already exists for diagnostics, integrate there. Otherwise choose the smallest consistent interface and document it.
+
+## Phase 3: Validation and delivery
+
+Add focused tests for the new behavior and failure cases, following existing test patterns. Cover at least:
+
+- source provenance surviving context assembly, compaction, resume, and export
+- stale or invalidated context being detected or explicitly marked unknown
+- source timeout/failure producing an incomplete-context signal
+- scope isolation for memory and context
+- rejection or quarantine of unverified durable-memory promotion
+- deterministic token/size budget behavior
+- assessment output backed by evidence, including “insufficient evidence”
+- compatibility with more than one provider adapter, if the repository has multiple adapters
+
+Run the relevant targeted tests and required repository checks. Do not claim broader validation than was actually run. Do not change tests to hide regressions.
+
+At completion, report:
+
+1. initial and final branch/commit/worktree status
+2. implemented behavior and key files changed
+3. maturity assessment before and after, with evidence
+4. tests/checks run and exact results
+5. limitations, deferred work, migration concerns, and operational risks
+6. any remaining acceptance gaps
+
+Do not claim Nexus reached a maturity stage unless the evidence meets that stage’s criteria. The goal is a working, auditable context system with a defensible baseline and clear next steps, not a maturity label.
+
+---
+
+this should be targeting the release/v1.3.0 not main.
+
+---
+
+<send_user_message_question_reply>
+[{"questionItemId":"[\"request_user_input_async\",\"call_51d2d8915ff04ddb9fb1d8589d4a92c1\",0]","question":"The exact per-inference context manifest requires `cli/src/agent.ts`, which the active GV-1 slice owns. I recorded a bounded handoff request and did not edit it. Should I coordinate a handoff to finish request-time capture, or keep the boundary and report that integration as pending?","answer":"Coordinate a handoff"}]
+</send_user_message_question_reply>
+
+---
+
+claude agent is reviewing and merging PRs only from this point forward. you are clear to take over any stale claims
+
+---
+
+what specifically are you working on right now?
