@@ -1,0 +1,5 @@
+#732 requested changes have landed
+
+---
+
+proceed and continue iteratively until v1.3.0 release

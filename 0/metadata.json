@@ -1,0 +1,58 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M83FHKSMR0EK75Q9CV61TT8M",
+  "session_id": "510e321c-b22e-4b25-83f4-2659ff26b968",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-23T05:54:59.827928057Z",
+  "branch": "v1/review-fixes-02",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "cli/src/agent.ts",
+    "cli/src/core/independent_check.ts",
+    "cli/src/core/verify.ts",
+    "cli/src/tester.ts",
+    "cli/src/verify_contract.ts",
+    "cli/test/independent_verification.test.ts",
+    "cli/test/verify_command.test.ts",
+    "cli/test/verify_hostile.test.ts",
+    "cli/test/verify_sandbox.test.ts",
+    "docs/USER_MANUAL.md",
+    "docs/VERIFY_IN_CI.md",
+    "docs/evidence/VR1C_FIXES.md",
+    "docs/protocol/VERIFY_RESULT_VERSIONS.json",
+    "docs/protocol/verify-result-v2.schema.json",
+    "docs/protocol/verify-result-v3.schema.json"
+  ],
+  "agent": "Cursor",
+  "model": "default",
+  "turn_id": "7b20174eebb9",
+  "checkpoint_transcript_start": 46,
+  "transcript_lines_at_start": 46,
+  "compact_transcript_start": 13,
+  "token_usage": {
+    "input_tokens": 19272,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 1795200,
+    "output_tokens": 4716,
+    "api_call_count": 2
+  },
+  "redaction": {
+    "replacements": 0,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 8,
+    "context_tokens": 234479,
+    "context_window_size": 256000
+  }
+}
