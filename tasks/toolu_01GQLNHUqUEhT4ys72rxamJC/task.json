@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01GQLNHUqUEhT4ys72rxamJC",
+  "agent_id": "ad37acacd13535c08",
+  "subagent_type": "general-purpose",
+  "task_description": "Review PR #741 ACP adapter",
+  "token_usage": {
+    "input_tokens": 110,
+    "cache_creation_tokens": 472599,
+    "cache_read_tokens": 9606612,
+    "output_tokens": 58083,
+    "api_call_count": 55
+  },
+  "started_at": "2026-11-23T08:32:54.263959163Z",
+  "completed_at": "2026-11-23T14:24:10.429570665Z"
+}
