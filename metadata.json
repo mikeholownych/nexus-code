@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M84FBAV3DRP07NS5877NG9XH",
+  "strategy": "manual-commit",
+  "branch": "dep-719",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".github/workflows/ci.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 36,
+    "cache_creation_tokens": 12785,
+    "cache_read_tokens": 2596740,
+    "output_tokens": 7402,
+    "api_call_count": 16,
+    "subagent_tokens": {
+      "input_tokens": 10,
+      "cache_creation_tokens": 239107,
+      "cache_read_tokens": 947290,
+      "output_tokens": 3190,
+      "api_call_count": 5
+    }
+  },
+  "redaction": {
+    "replacements": 996,
+    "layers": {
+      "betterleaks": 2,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 43,
+      "credentialed_uri": 3,
+      "entropy": 948,
+      "key_context": 0,
+      "provider_token": 2,
+      "shell_stdin": 0
+    }
+  }
+}
