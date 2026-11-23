@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01584UgsxfYZ6QKZCV6J7Hh4",
+  "agent_id": "ae54a920ddb7b9a59",
+  "subagent_type": "reviewer",
+  "task_description": "Re-review PR #745 new head",
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 94857,
+    "cache_read_tokens": 501341,
+    "output_tokens": 5935,
+    "api_call_count": 15
+  },
+  "started_at": "2026-11-23T15:38:02.02842155Z",
+  "completed_at": "2026-11-23T15:47:44.900075326Z"
+}
