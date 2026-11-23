@@ -15,6 +15,7 @@ import { verifyChain } from "../src/core/hash_chain.js";
 import { DurableStateManager } from "../src/core/state.js";
 import { WorkspacePath } from "../src/core/workspace_path.js";
 import { FlightRecorder } from "../src/flight.js";
+import { sandboxDenialEvent } from "../src/sandbox_events.js";
 import {
   FIXED_NOW,
   bundleTexts,
@@ -57,7 +58,9 @@ const ATTEMPTS = "verification/config-attempts.jsonl";
 test("a saved task exports every artefact with its role, and the bundle verifies as intact by hash only", () => {
   const subject = savedSubject();
   const receipt = path.join(subject.root, "verify-receipt.json");
-  fs.writeFileSync(receipt, `${JSON.stringify({ schema_version: 1, verdict: "VERIFIED", exitCode: 0 }, null, 2)}\n`);
+  // VR-3: a named verify receipt carries typed sandbox denials. GV-2 copies it byte for byte, so they reach the bundle.
+  const sandboxEvents = [{ kind: "unavailable", engine: "bwrap", profile: "default", operation: "verify", category: "engine", reason: "Bubblewrap could not confine the run", at: FIXED_NOW().toISOString() }];
+  fs.writeFileSync(receipt, `${JSON.stringify({ schema_version: 2, verdict: "BLOCKED", exitCode: 3, sandboxEvents }, null, 2)}\n`);
   const exported = exportChecked(subject.request({ receiptFiles: [receipt] }));
   const manifest = readManifest(exported.written.dir);
 
@@ -93,6 +96,7 @@ test("a saved task exports every artefact with its role, and the bundle verifies
   assert.deepEqual(JSON.parse(files["evidence/provenance.json"]), [{ requirement: "R1", evidence: "npm test", source: "tool" }]);
   assert.deepEqual(JSON.parse(files["evidence/findings.json"]), ["src/thing.ts exports thing()"]);
   assert.equal(files["receipts/verify-1.json"], fs.readFileSync(receipt, "utf8"), "a named receipt is copied byte for byte");
+  assert.deepEqual(JSON.parse(files["receipts/verify-1.json"]).sandboxEvents, sandboxEvents, "VR-3 denials reach the audit bundle with their receipt");
   assert.deepEqual(exported.receipts, [{ path: "receipts/verify-1.json", source: receipt }]);
   assert.equal(files["evidence/diffs/op-1.diff"], fs.readFileSync(path.join(subject.storeDir, `${subject.id}.diffs`, "op-1.diff"), "utf8"));
   assert.equal(files[FLIGHT], fs.readFileSync(path.join(subject.workspace, ".nexus", "flights", "flight-in-window.flightlog"), "utf8"));
@@ -125,6 +129,33 @@ test("a saved task exports every artefact with its role, and the bundle verifies
     { schema_version: 1, result: "exported", exitCode: 0, bundle_dir: exported.written.dir, bundle_id: manifest.bundle_id, manifest_sha256: exported.written.manifestSha256, signed: false, redaction: "standard", at_rest: true, file_count: 11, file_bytes: 0, omitted: manifest.omitted, warnings: [] },
   );
   assert.equal(exported.document.file_bytes, manifest.files.reduce((sum, file) => sum + file.bytes, 0));
+});
+
+test("VR-3 sandbox denial flight events reach the bundle with the chained flight log", () => {
+  const subject = savedSubject({ flight: false });
+  const flight = new FlightRecorder(subject.workspace, "flight-vr3");
+  flight.startSession({ model: "m", endpoint: "http://127.0.0.1:1/v1", taskPrompt: "try to write outside" });
+  flight.recordSandboxDenial(1, sandboxDenialEvent({
+    kind: "violation",
+    engine: "bwrap",
+    operation: "run_command",
+    category: "filesystem",
+    reason: "command operands escaped the pinned workspace",
+  }));
+  flight.recordSessionEnd("blocked", false);
+
+  const exported = exportChecked(subject.request({ flights: ["flight-vr3"] }));
+  const files = bundleTexts(exported.written.dir);
+  const copied = files["flights/flight-vr3.flightlog"];
+  assert.match(copied, /"type":"sandbox_violation"/);
+  const denial = copied.trim().split("\n").map((line) => JSON.parse(line)).find((entry: any) => entry.type === "sandbox_violation");
+  assert.equal(denial.payload.engine, "bwrap");
+  assert.equal(denial.payload.profile, "default");
+  assert.equal(denial.payload.category, "filesystem");
+  assert.match(denial.payload.reason, /pinned workspace/);
+  assert.ok(!("verdict" in denial.payload), "a copied flight denial is evidence, never a verdict");
+  const manifest = readManifest(exported.written.dir);
+  assert.deepEqual(manifest.chained_logs.filter((log) => log.path.startsWith("flights/")).map((log) => [log.path, log.status]), [["flights/flight-vr3.flightlog", "intact"]]);
 });
 
 test("the chained logs' heads in the manifest are the heads of the logs, and the flight's source facts are the log's", () => {
