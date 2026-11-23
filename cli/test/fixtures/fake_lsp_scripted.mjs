@@ -22,8 +22,12 @@
 //   ignoreShutdown   true: never answer `shutdown`, ignore `exit`
 //   ignoreStdinEnd   true: keep running when stdin ends (it then ends by itself after 60 s)
 //   initialize       "never" (no answer), or the result object (default {capabilities: {}})
+//   positionEncoding "utf-8" | "utf-16" (default) | "utf-32": the unit this server counts `character` in, for what it
+//                    reads (hover, definition "fromText") and what it computes (the definition's range). It is NOT
+//                    announced by this key: put `capabilities.positionEncoding` in `initialize` for that, so a test can
+//                    make the two disagree.
 //   hover            "fromText": answer from the held text with contents = JSON {word, docs} where `word` is the
-//                    identifier at the position (character read as a UTF-16 offset) and `docs` maps basename -> held text;
+//                    identifier at the position (character read as an offset in `positionEncoding`) and `docs` maps basename -> held text;
 //                    or {"<basename>" | "*": <result>}: a scripted result per file (null = no hover, "never" = no reply)
 //   definition       "fromText": the Location of the first `def <word>` in any held document, else null;
 //                    or {"<basename>" | "*": <result>} ("never" = no reply)
@@ -42,7 +46,8 @@
 // In action params and scripted results a string is replaced when it is exactly "$uri" (the triggering document's URI),
 // "$realuri" (the same file with symlinks resolved), "$uri:lowerhex" (the same URI with lower-case percent escapes),
 // "$uri:unicode" (the same URI with its non-ASCII characters not percent-encoded), "$version" (its version, as a number),
-// "$text" (the text this server holds for it; "" once closed), or starts with "$root/" (the client's rootUri; also in object keys).
+// "$text" (the text this server holds for it; "" once closed), "$root" (the client's rootUri), or starts with "$root/"
+// (a URI below the rootUri; also in object keys).
 // The server exits when its stdin ends, so it cannot outlive a test process that died (`ignoreStdinEnd`: not by more than 60 s).
 import fs from "node:fs";
 import path from "node:path";
@@ -83,6 +88,7 @@ function fill(value, ctx) {
     if (value === "$uri:unicode") return ctx.uri.replace(/(?:%[89A-F][0-9A-F])+/g, (escapes) => decodeURIComponent(escapes));
     if (value === "$version") return ctx.version;
     if (value === "$text") return docs.get(ctx.uri) ?? "";
+    if (value === "$root") return rootUri;
     return value.startsWith("$root/") ? rootUri + value.slice(5) : value;
   }
   if (Array.isArray(value)) return value.map((v) => fill(v, ctx));
@@ -109,10 +115,31 @@ function run(trigger, ctx) {
 
 const base = (uri) => path.basename(fileURLToPath(uri));
 
+// Positions in this server's own unit. Written apart from the product's conversion on purpose (byte lengths from Buffer,
+// code points from the string iterator): a test compares the two.
+const ENCODING = S.positionEncoding ?? "utf-16";
+/** An offset in this server's unit to an index into the (UTF-16) string. */
+function toIndex(line, units) {
+  if (ENCODING === "utf-16") return units;
+  let index = 0;
+  for (let counted = 0; index < line.length && counted < units; ) {
+    const char = String.fromCodePoint(line.codePointAt(index));
+    counted += ENCODING === "utf-32" ? 1 : Buffer.byteLength(char);
+    index += char.length;
+  }
+  return index;
+}
+/** An index into the string to an offset in this server's unit. */
+function toUnits(line, index) {
+  if (ENCODING === "utf-16") return index;
+  const head = line.slice(0, index);
+  return ENCODING === "utf-32" ? [...head].length : Buffer.byteLength(head);
+}
+
 function wordAt(uri, position) {
   const line = (docs.get(uri) ?? "").split("\n")[position?.line] ?? "";
   const isWord = (i) => /[A-Za-z0-9_]/.test(line[i] ?? "");
-  let start = position?.character;
+  let start = toIndex(line, position?.character);
   if (!isWord(start)) return "";
   let end = start;
   while (isWord(start - 1)) start--;
@@ -137,8 +164,8 @@ function definitionFromText(_uri, word) {
     const lines = text.split("\n");
     const line = lines.findIndex((l) => word !== "" && l.includes(`def ${word}`));
     if (line < 0) continue;
-    const character = lines[line].indexOf(`def ${word}`) + 4;
-    return { uri, range: { start: { line, character }, end: { line, character: character + word.length } } };
+    const index = lines[line].indexOf(`def ${word}`) + 4;
+    return { uri, range: { start: { line, character: toUnits(lines[line], index) }, end: { line, character: toUnits(lines[line], index + word.length) } } };
   }
   return null;
 }
