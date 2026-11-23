@@ -557,8 +557,8 @@ export function nexusReceipt(sessionId: string, verification: AcpVerification, s
 /**
  * A loaded session's `history` as replay updates, oldest first: operator text (prompts and steering) as
  * `user_message_chunk`, the agent's text as `agent_message_chunk`, each tool as a completed `tool_call` (`hist-N`),
- * and the last outcome as the verification carrier followed by its verdict line. `extent`: conversation entries sent
- * of the total the session holds (the replay is partial: ACP_DEVIATION_PARTIAL_REPLAY).
+ * and the last outcome as the verification carrier followed by its verdict line. For paged history, callers combine
+ * the page updates and extents in page order before returning the session/load response.
  */
 export function historyToReplay(event: Event<"history">): { updates: AcpSessionUpdate[]; extent: AcpHistoryExtent } {
   const updates: AcpSessionUpdate[] = [];
@@ -577,7 +577,17 @@ export function historyToReplay(event: Event<"history">): { updates: AcpSessionU
         break;
       case "tool": {
         const tool = entry.tool ?? "tool";
-        updates.push({ sessionUpdate: "tool_call", toolCallId: `hist-${++tools}`, title: toolTitle(tool, entry.text), kind: toolKind(tool), status: "completed", rawInput: { tool, subject: entry.text } });
+        const toolCallId = entry.toolCallId ?? `hist-${++tools}`;
+        updates.push({ sessionUpdate: "tool_call", toolCallId, title: toolTitle(tool, entry.text), kind: toolKind(tool), status: entry.status ?? "completed", rawInput: { tool, subject: entry.text } });
+        break;
+      }
+      case "tool_result": {
+        updates.push({
+          sessionUpdate: "tool_call_update",
+          toolCallId: entry.toolCallId ?? `hist-${++tools}`,
+          status: entry.status ?? "completed",
+          ...(entry.text ? { content: [{ type: "content", content: { type: "text", text: entry.text } }] } : {}),
+        });
         break;
       }
       case "outcome":

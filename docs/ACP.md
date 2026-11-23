@@ -18,9 +18,8 @@ ten minutes.
 
 - Client-supplied MCP servers are ignored and reported in session metadata. Configured operator and project integrations
   remain governed by Nexus's existing policy.
-- `session/load` replays the history window emitted by SidecarServer, which is bounded to its most recent entries. ACP's
-  full-history replay requirement is not met for longer sessions; the adapter reports the sent and total counts. Do not
-  interpret `loadSession` support as full-history conformance.
+- `session/load` replays the complete retained transcript in bounded pages. Loads fail closed if committed compaction
+  history is missing, unreadable, corrupt, or exceeds 32 MiB, 1,024 pages, or 64 KiB per page; no partial replay is returned.
 - The receipt extension returns receipts retained by the current ACP connection. It is not a durable cross-connection
   receipt lookup API.
 - ACP conformance against external clients is tracked separately in v1.3 plan unit AC-2.
