@@ -323,6 +323,7 @@ export class InteractiveRepl {
       model: this.config.model,
       endpoint: persistableEndpoint(this.config.endpoint),
       messages,
+      ...(typeof this.agent.getInferenceContextManifests === "function" ? { inferenceContextManifests: this.agent.getInferenceContextManifests() } : {}),
       unverifiedChangesPending: this.agent.hasUnverifiedChanges(),
       tokenStats: this.agent.getTokenStats(),
       activePlan: this.agent.getActivePlan(),

@@ -308,6 +308,21 @@ function context({ host, args, signal }: SlashContext): SlashOutcome {
   };
 
   measure("session_messages", () => inventorySourcesFromMessages(agent.getMessages()));
+  if (typeof agent.getInferenceContextManifests === "function") {
+    measure("inference_request_manifests", () => agent.getInferenceContextManifests().map((manifest: any) => ({
+        sourceType: "inference_request_manifest",
+        sourceLocation: `task:inference-request:${manifest.id}`,
+        scope: "task" as const,
+        content: JSON.stringify({ sequence: manifest.sequence, capturedAt: manifest.capturedAt, status: manifest.status, coverage: manifest.coverage, messageCount: manifest.messages.length, toolCount: manifest.tools.count, requestEstimateTokens: manifest.budget.requestEstimateTokens }),
+        trust: "persisted_unverified" as const,
+        retention: "bounded_latest_24_session_records",
+        inclusionReason: "client-side record of message and tool-schema arrays handed to the adapter; dispatch status does not prove provider processing",
+        retrievalMethod: "agent_submit_wrapper",
+        sourceRefs: manifest.messages.slice(0, 100).map((item: any) => item.sourceRef),
+      })));
+  } else {
+    measure("inference_request_manifests", () => [], "partial", "request manifest history is unavailable from this agent instance");
+  }
   measure("task_ledger", () => {
     const objective = agent.getObjective();
     if (!objective) return [];

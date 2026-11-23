@@ -6,9 +6,12 @@ import { test } from "node:test";
 import {
   assessContextMaturity,
   buildContextInventory,
+  buildInferenceContextManifest,
   buildSessionContextInventory,
+  isInferenceContextManifest,
   isContextInventorySnapshot,
   inventorySourcesFromMessages,
+  markInterruptedInferenceManifestsUnknown,
   markPersistedContextFreshnessUnknown,
   mergeContextInventorySnapshots,
 } from "../src/core/context_inventory.js";
@@ -19,6 +22,7 @@ import { hasHandler, routeSlash } from "../src/slash/router.js";
 import { SLASH_COMMANDS } from "../src/slash/catalog.js";
 import { replReadOnlyAllowed } from "../src/repl.js";
 import { readOnlySlashAllowed } from "../src/sidecar.js";
+import { AutonomousAgent } from "../src/agent.js";
 
 const input = (sourceLocation: string, scope: "session" | "repository" = "session", content = "sensitive source text") => ({
   sourceType: "note", sourceLocation, scope, content, trust: "persisted_unverified" as const,
@@ -60,6 +64,75 @@ test("message provenance retains opaque tool-call references without exposing ra
   const snapshot = buildContextInventory({ sources: [{ name: "messages", status: "ok", durationMs: 1, items }] });
   assert.match(snapshot.items[0].sourceRefs?.[0] ?? "", /^tool-call:[a-f0-9]{16}$/);
   assert.equal(JSON.stringify(snapshot).includes(rawId), false);
+});
+
+test("inference request manifests capture the exact dispatch arrays without retaining content", async () => {
+  const agent: any = Object.create(AutonomousAgent.prototype);
+  const messages = [
+    { role: "system", content: "PRIVATE_PROMPT_SECRET" },
+    { role: "user", content: "task instructions" },
+  ];
+  const tools = [{ type: "function", function: { name: "private_tool_name", description: "PRIVATE_SCHEMA_SECRET", parameters: { type: "object" } } }];
+  const persistence: unknown[] = [];
+  Object.assign(agent, {
+    inferenceContextManifests: [], inferenceContextSequence: 0, currentTaskId: "ctx-task", workspacePathIdentity: { value: "/repo" },
+    config: {}, durable: true, capabilities: undefined, lastRequestCount: { step: 7, promptTokens: 33, source: "exact_admitted" },
+    recoveryClock: { now: (() => { let n = 0; return () => ++n; })() },
+    getEffectiveTools: () => tools,
+    effectiveLimits: () => ({ contextLimit: 2048 }),
+    getContextReserves: () => ({ completion: 128, toolResponse: 64 }),
+    persistProgress: (progress: unknown) => { persistence.push(progress); return true; },
+  });
+  let observedBeforeSend: any;
+  const result = await agent.submitGuardingLength({ step: 7, cutAfterMs: 0 }, messages, async (request: unknown[]) => {
+    observedBeforeSend = agent.getInferenceContextManifests()[0];
+    assert.deepEqual(request, messages);
+    return "received";
+  });
+  assert.equal(result, "received");
+  const manifest = agent.getInferenceContextManifests()[0];
+  assert.equal(observedBeforeSend.status, "dispatching", "manifest is persisted before provider dispatch");
+  assert.equal(manifest.status, "response_received");
+  assert.equal(manifest.messages.length, 2);
+  assert.equal(manifest.messages[0].sourceRef, "request:message:0");
+  assert.equal(manifest.tools.count, 1);
+  assert.deepEqual(manifest.tools.schemaRefs, ["request:tool-schema:0"]);
+  assert.equal("admission" in manifest.budget, false, "provider counts are reported separately and not attached to a request unless their exact arrays are bound");
+  assert.equal(isInferenceContextManifest(manifest), true);
+  assert.equal(JSON.stringify(manifest).includes("PRIVATE_PROMPT_SECRET"), false);
+  assert.equal(JSON.stringify(manifest).includes("PRIVATE_SCHEMA_SECRET"), false);
+  assert.equal(JSON.stringify(manifest).includes("private_tool_name"), false);
+  assert.equal(isInferenceContextManifest({ ...manifest, leakedPrompt: "PRIVATE_PROMPT_SECRET" }), false, "future or untrusted fields are rejected rather than exported");
+  assert.equal(persistence.length, 2, "dispatch and response states are durably checkpointed");
+});
+
+test("failed and interrupted inference manifest states remain unknown rather than successful", async () => {
+  const agent: any = Object.create(AutonomousAgent.prototype);
+  Object.assign(agent, {
+    inferenceContextManifests: [], inferenceContextSequence: 0, currentTaskId: "ctx-task", workspacePathIdentity: { value: "/repo" },
+    config: {}, durable: true, capabilities: undefined, recoveryClock: { now: (() => { let n = 0; return () => ++n; })() },
+    getEffectiveTools: () => [], effectiveLimits: () => ({ contextLimit: 1024 }), getContextReserves: () => ({ completion: 64, toolResponse: 32 }),
+    persistProgress: () => true,
+  });
+  await assert.rejects(agent.submitGuardingLength({ step: 1, cutAfterMs: 0 }, [{ role: "user", content: "task" }], async () => { throw new Error("connection dropped"); }));
+  assert.equal(agent.getInferenceContextManifests()[0].status, "unknown_effect");
+
+  const persistenceBlocked: any = Object.create(AutonomousAgent.prototype);
+  Object.assign(persistenceBlocked, {
+    inferenceContextManifests: [], inferenceContextSequence: 0, currentTaskId: "ctx-task", workspacePathIdentity: { value: "/repo" },
+    config: {}, durable: true, capabilities: undefined, recoveryClock: { now: () => 0 },
+    getEffectiveTools: () => [], effectiveLimits: () => ({ contextLimit: 1024 }), getContextReserves: () => ({ completion: 64, toolResponse: 32 }),
+    persistProgress: () => false,
+  });
+  let dispatched = false;
+  await assert.rejects(persistenceBlocked.submitGuardingLength({ step: 2, cutAfterMs: 0 }, [{ role: "user", content: "task" }], async () => { dispatched = true; }));
+  assert.equal(dispatched, false, "the provider is not called when a configured durable sink refuses the pre-dispatch manifest");
+  assert.equal(persistenceBlocked.getInferenceContextManifests()[0].status, "not_dispatched");
+
+  const interrupted = markInterruptedInferenceManifestsUnknown([{
+    ...buildInferenceContextManifest({ id: `ctxreq_${"a".repeat(8)}-${"b".repeat(4)}-${"c".repeat(4)}-${"d".repeat(4)}-${"e".repeat(12)}`, sequence: 1, messages: [{ role: "user", content: "task" }], tools: [], contextLimit: 1024, contextLimitSource: "operator", outputAllowance: 64, outputAllowanceSource: "operator", toolResponseReserve: 32 }),
+  }]);
+  assert.equal(interrupted[0].status, "unknown_effect");
 });
 
 test("source failures and deterministic inventory limits report incomplete context", () => {
@@ -185,18 +258,25 @@ test("session save, resume, compaction, and export retain source references with
   const manager = new SessionManager(path.join(root, "sessions"), () => WorkspacePath.fromSelectedWorkspace(workspace));
   try {
     const compactionProvenance = { recordId: "compact-1", predecessorIds: ["history-1", "history-2"], summaryContent: "summary claim" };
+    const pendingRequest = buildInferenceContextManifest({
+      id: "ctxreq_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", sequence: 1,
+      messages: [{ role: "user", content: "PRIVATE_RESUMED_REQUEST" }], tools: [],
+      contextLimit: 1024, contextLimitSource: "operator", outputAllowance: 64, outputAllowanceSource: "operator", toolResponseReserve: 32,
+    });
     manager.saveSession({
       id: "ctx-session", workspace, messages: [
         { role: "system", content: "[Structured Context Memory - durable task state] summary claim" },
         { role: "user", content: "original objective" },
       ],
       durableNotes: ["remembered but unverified"], compactionProvenance,
+      inferenceContextManifests: [pendingRequest],
     } as any);
     const resumed = manager.loadSession("ctx-session")!;
     assert.ok(isContextInventorySnapshot(resumed.contextInventory));
     const provenance = resumed.contextInventory!.items.find((item) => item.sourceType === "compaction_provenance");
     assert.deepEqual(provenance?.sourceRefs, ["compact-1", "history-1", "history-2"]);
     assert.equal(resumed.contextInventory!.items.find((item) => item.sourceType === "durable_note")?.trust, "persisted_unverified");
+    assert.equal(resumed.inferenceContextManifests?.[0].status, "unknown_effect", "a persisted dispatch without a response is reconciled as unknown on resume");
 
     const archiveMessages = [{ role: "assistant", content: "archived answer" }];
     const exported = buildSessionExport({ readArchivedHistory: () => ({ messages: archiveMessages, unreadableLines: 0 }) } as any, resumed as any);
@@ -204,7 +284,10 @@ test("session save, resume, compaction, and export retain source references with
     assert.ok(exportInventory.items.some((item: any) => item.sourceLocation.startsWith("archive:message:")));
     assert.ok(exportInventory.items.some((item: any) => item.sourceRefs?.includes("history-1")));
     assert.match(exported.markdown, /Context inventory \(source references; content omitted\)/);
+    assert.match(exported.markdown, /Inference context manifests \(content omitted\)/);
+    assert.match(exported.markdown, /status=unknown_effect/);
     assert.equal(JSON.stringify(exported.json.contextInventory).includes("remembered but unverified"), false);
+    assert.equal(JSON.stringify(exported.json.inferenceContextManifests).includes("PRIVATE_RESUMED_REQUEST"), false);
 
     const malformed = { ...exportInventory, schemaVersion: 999 };
     const merged = mergeContextInventorySnapshots(resumed.contextInventory!, malformed as any);

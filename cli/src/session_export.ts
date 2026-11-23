@@ -5,7 +5,7 @@
  * replaced by summaries (the replaced originals are included from the session's archive when it exists).
  */
 import type { SessionData, SessionManager } from "./session.js";
-import { buildSessionContextInventory, isContextInventorySnapshot, markPersistedContextFreshnessUnknown, mergeContextInventorySnapshots, type ContextInventorySnapshot } from "./core/context_inventory.js";
+import { buildSessionContextInventory, isContextInventorySnapshot, isInferenceContextManifest, markPersistedContextFreshnessUnknown, mergeContextInventorySnapshots, type ContextInventorySnapshot } from "./core/context_inventory.js";
 import { safeOperatorText } from "./protocol.js";
 import type { ChatMessage } from "./types.js";
 import { gatingRequirements, requirementDone } from "./core/objective.js";
@@ -78,11 +78,16 @@ export function buildSessionExport(manager: SessionManager, session: SessionData
   const contextInventory = savedInventory
     ? mergeContextInventorySnapshots(savedInventory, buildSessionContextInventory({ ...session, messages: [], objective: undefined, durableNotes: undefined, activePlan: [], compactionProvenance: null }, archived))
     : reconstructedInventory;
+  const inferenceContextManifests = Array.isArray(session.inferenceContextManifests) && session.inferenceContextManifests.length <= 24 && session.inferenceContextManifests.every(isInferenceContextManifest)
+    ? session.inferenceContextManifests
+    : [];
+  const exportSession = { ...session, inferenceContextManifests };
   const objective = session.objective ?? null;
   const lastTurn = session.lastTurn ?? null;
   const json: Record<string, unknown> = {
     ...session,
     contextInventory,
+    inferenceContextManifests,
     export: {
       format: EXPORT_FORMAT,
       exportedAt: new Date().toISOString(),
@@ -108,7 +113,7 @@ export function buildSessionExport(manager: SessionManager, session: SessionData
     },
     archivedHistory: archived.messages,
   };
-  return { json, markdown: markdownExport(session, history, archived.messages, contextInventory) };
+  return { json, markdown: markdownExport(exportSession, history, archived.messages, contextInventory) };
 }
 
 /**
@@ -191,6 +196,16 @@ function markdownExport(session: SessionData, history: HistoryCompleteness, arch
     out.push("## Context inventory (source references; content omitted)", "", `Coverage: **${contextInventory.coverage}** · ${contextInventory.metrics.includedItems} item(s) · ${contextInventory.metrics.omittedItems} omitted · ${contextInventory.metrics.estimatedTokens} estimated tokens (${contextInventory.metrics.tokenSource})`, "");
     for (const item of contextInventory.items) out.push(`- \`${item.id}\` ${item.sourceType} — ${item.sourceLocation}; scope=${item.scope}; observed=${item.observedAt}; freshness=${item.freshness}${item.freshnessRule ? ` (${item.freshnessRule})` : ""}; trust=${item.trust}; via=${item.retrievalMethod}${item.sourceRefs?.length ? `; refs=${item.sourceRefs.join(",")}` : ""}`);
     if (contextInventory.coverageGaps.length) out.push("", "Coverage gaps:", ...contextInventory.coverageGaps.map((gap) => `- ${gap}`));
+    out.push("");
+  }
+  if (session.inferenceContextManifests?.length) {
+    out.push("## Inference context manifests (content omitted)", "");
+    for (const manifest of session.inferenceContextManifests) {
+      out.push(`- \`${manifest.id}\` sequence=${manifest.sequence}; captured=${manifest.capturedAt}; status=${manifest.status}; coverage=${manifest.coverage}; messages=${manifest.messages.length}; tools=${manifest.tools.count}; request estimate=${manifest.budget.requestEstimateTokens} tokens; context limit=${manifest.budget.contextLimit} (${manifest.budget.contextLimitSource}); output allowance=${manifest.budget.outputAllowance} (${manifest.budget.outputAllowanceSource}); tool reserve=${manifest.budget.toolResponseReserve}`);
+      for (const item of manifest.messages) out.push(`  - ${item.sourceRef}; role=${item.role}; estimated=${item.estimatedTokens} tokens`);
+      for (const ref of manifest.tools.schemaRefs) out.push(`  - ${ref}; effective tool schema included`);
+      if (manifest.coverageGaps.length) out.push(`  - Coverage gaps: ${manifest.coverageGaps.join("; ")}`);
+    }
     out.push("");
   }
   out.push("---", "");

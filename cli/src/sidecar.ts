@@ -1183,6 +1183,7 @@ export class SidecarServer {
         model: config.model,
         endpoint: persistableEndpoint(config.endpoint),
         messages,
+        ...(typeof agent.getInferenceContextManifests === "function" ? { inferenceContextManifests: agent.getInferenceContextManifests() } : {}),
         unverifiedChangesPending: agent.hasUnverifiedChanges(),
         tokenStats: agent.getTokenStats(),
         // The authoritative task state, not only the conversation: plan, milestones, receipts, objective and history.

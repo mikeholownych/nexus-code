@@ -57,6 +57,122 @@ export interface ContextInventorySnapshot {
   };
 }
 
+/** Content-free record of the exact message and tool-schema arrays handed to a provider adapter. */
+export interface InferenceContextManifest {
+  schemaVersion: 1;
+  id: string;
+  capturedAt: string;
+  sessionId?: string;
+  taskId?: string;
+  workspace?: string;
+  sequence: number;
+  status: "dispatching" | "response_received" | "unknown_effect" | "not_dispatched";
+  coverage: "complete" | "partial";
+  coverageGaps: string[];
+  messages: Array<{ position: number; role: string; sourceRef: string; estimatedTokens: number }>;
+  tools: { count: number; estimatedTokens: number; schemaRefs: string[]; omitted: number };
+  budget: {
+    requestEstimateTokens: number;
+    tokenSource: "client_estimate";
+    contextLimit: number;
+    contextLimitSource: string;
+    outputAllowance: number;
+    outputAllowanceSource: string;
+    toolResponseReserve: number;
+  };
+}
+
+const MAX_INFERENCE_MANIFESTS = 24;
+const MAX_MANIFEST_MESSAGES = 4096;
+const MAX_MANIFEST_TOOL_REFS = 256;
+
+/** Create a bounded manifest from the arrays about to be sent; prompt and schema text are counted, never retained. */
+export function buildInferenceContextManifest(input: {
+  id: string;
+  capturedAt?: string;
+  taskId?: string;
+  workspace?: string;
+  sequence: number;
+  messages: readonly { role?: unknown; content?: unknown }[];
+  tools: readonly unknown[];
+  status?: InferenceContextManifest["status"];
+  contextLimit: number;
+  contextLimitSource: string;
+  outputAllowance: number;
+  outputAllowanceSource: string;
+  toolResponseReserve: number;
+  requestEstimateTokens?: number;
+}): InferenceContextManifest {
+  const capturedAt = input.capturedAt ?? new Date().toISOString();
+  const coverageGaps: string[] = [];
+  const messages = input.messages.slice(0, MAX_MANIFEST_MESSAGES).map((message, position) => {
+    const content = typeof message.content === "string" ? message.content : safeJson(message.content);
+    return {
+      position,
+      role: typeof message.role === "string" ? metadataText(message.role, 40) : "unknown",
+      sourceRef: `request:message:${position}`,
+      estimatedTokens: countTokens(content),
+    };
+  });
+  const schemaRefs = input.tools.slice(0, MAX_MANIFEST_TOOL_REFS).map((_, position) => `request:tool-schema:${position}`);
+  if (input.messages.length > messages.length) coverageGaps.push(`message references capped at ${MAX_MANIFEST_MESSAGES}`);
+  if (input.tools.length > schemaRefs.length) coverageGaps.push(`tool schema references capped at ${MAX_MANIFEST_TOOL_REFS}`);
+  const toolText = input.tools.map((tool) => safeJson(tool)).join("\n");
+  const toolEstimatedTokens = countTokens(toolText);
+  const requestEstimateTokens = input.requestEstimateTokens ?? (messages.reduce((sum, message) => sum + message.estimatedTokens, 0) + toolEstimatedTokens);
+  return {
+    schemaVersion: 1,
+    id: metadataText(input.id, 100),
+    capturedAt: metadataText(capturedAt, 80),
+    ...(input.taskId ? { taskId: metadataText(input.taskId, 200) } : {}),
+    ...(input.workspace ? { workspace: metadataText(input.workspace, 1000) } : {}),
+    sequence: Math.max(0, Math.floor(input.sequence)),
+    status: input.status ?? "dispatching",
+    coverage: coverageGaps.length ? "partial" : "complete",
+    coverageGaps,
+    messages,
+    tools: { count: input.tools.length, estimatedTokens: toolEstimatedTokens, schemaRefs, omitted: Math.max(0, input.tools.length - schemaRefs.length) },
+    budget: {
+      requestEstimateTokens,
+      tokenSource: "client_estimate",
+      contextLimit: input.contextLimit,
+      contextLimitSource: metadataText(input.contextLimitSource, 100),
+      outputAllowance: input.outputAllowance,
+      outputAllowanceSource: metadataText(input.outputAllowanceSource, 100),
+      toolResponseReserve: input.toolResponseReserve,
+    },
+  };
+}
+
+export function retainInferenceContextManifest(manifests: readonly InferenceContextManifest[], manifest: InferenceContextManifest): InferenceContextManifest[] {
+  return [...manifests.filter((item) => item.id !== manifest.id), manifest].slice(-MAX_INFERENCE_MANIFESTS);
+}
+
+/** A process restart during dispatch cannot prove whether the provider acted on the request. */
+export function markInterruptedInferenceManifestsUnknown(manifests: readonly InferenceContextManifest[]): InferenceContextManifest[] {
+  return manifests.map((manifest) => manifest.status === "dispatching" ? { ...manifest, status: "unknown_effect" } : manifest);
+}
+
+export function isInferenceContextManifest(value: unknown): value is InferenceContextManifest {
+  if (!value || typeof value !== "object") return false;
+  const manifest = value as InferenceContextManifest;
+  const safe = (text: unknown, max: number) => typeof text === "string" && text.length <= max && !/[\u0000-\u001f\u007f-\u009f]/.test(text);
+  const exactKeys = (object: object, required: string[], optional: string[] = []) => {
+    const keys = Object.keys(object);
+    return required.every((key) => keys.includes(key)) && keys.every((key) => required.includes(key) || optional.includes(key));
+  };
+  return exactKeys(manifest, ["schemaVersion", "id", "capturedAt", "sequence", "status", "coverage", "coverageGaps", "messages", "tools", "budget"], ["sessionId", "taskId", "workspace"]) &&
+    Boolean(manifest.tools && typeof manifest.tools === "object" && exactKeys(manifest.tools, ["count", "estimatedTokens", "schemaRefs", "omitted"])) &&
+    Boolean(manifest.budget && typeof manifest.budget === "object" && exactKeys(manifest.budget, ["requestEstimateTokens", "tokenSource", "contextLimit", "contextLimitSource", "outputAllowance", "outputAllowanceSource", "toolResponseReserve"])) &&
+    manifest.schemaVersion === 1 && /^ctxreq_[0-9a-f-]{36}$/.test(manifest.id) && safe(manifest.capturedAt, 80) &&
+    (manifest.sessionId === undefined || safe(manifest.sessionId, 200)) && (manifest.taskId === undefined || safe(manifest.taskId, 200)) && (manifest.workspace === undefined || safe(manifest.workspace, 1000)) &&
+    Number.isSafeInteger(manifest.sequence) && manifest.sequence >= 0 && ["dispatching", "response_received", "unknown_effect", "not_dispatched"].includes(manifest.status) &&
+    ["complete", "partial"].includes(manifest.coverage) && Array.isArray(manifest.coverageGaps) && manifest.coverageGaps.length <= 20 && manifest.coverageGaps.every((gap) => ["message references capped at 4096", "tool schema references capped at 256"].includes(gap)) && manifest.coverage === (manifest.coverageGaps.length ? "partial" : "complete") &&
+    Array.isArray(manifest.messages) && manifest.messages.length <= MAX_MANIFEST_MESSAGES && manifest.messages.every((item, index) => item && exactKeys(item, ["position", "role", "sourceRef", "estimatedTokens"]) && item.position === index && ["system", "user", "assistant", "tool"].includes(item.role) && item.sourceRef === `request:message:${index}` && Number.isFinite(item.estimatedTokens) && item.estimatedTokens >= 0) &&
+    Boolean(Number.isSafeInteger(manifest.tools.count) && manifest.tools.count >= 0 && Number.isFinite(manifest.tools.estimatedTokens) && manifest.tools.estimatedTokens >= 0 && Number.isSafeInteger(manifest.tools.omitted) && manifest.tools.omitted >= 0 && Array.isArray(manifest.tools.schemaRefs) && manifest.tools.schemaRefs.length <= MAX_MANIFEST_TOOL_REFS && manifest.tools.schemaRefs.length + manifest.tools.omitted === manifest.tools.count && manifest.tools.schemaRefs.every((ref, index) => ref === `request:tool-schema:${index}`)) &&
+    Boolean(manifest.budget && Number.isFinite(manifest.budget.requestEstimateTokens) && manifest.budget.requestEstimateTokens >= 0 && manifest.budget.tokenSource === "client_estimate" && Number.isFinite(manifest.budget.contextLimit) && manifest.budget.contextLimit > 0 && ["advertised", "operator", "operator_capped_by_advertised", "snapshot", "client_default", "client_default_or_unknown"].includes(manifest.budget.contextLimitSource) && Number.isFinite(manifest.budget.outputAllowance) && manifest.budget.outputAllowance >= 0 && ["advertised", "operator", "operator_capped_by_advertised", "snapshot", "client_default", "client_default_or_unknown"].includes(manifest.budget.outputAllowanceSource) && Number.isFinite(manifest.budget.toolResponseReserve) && manifest.budget.toolResponseReserve >= 0);
+}
+
 export interface ContextSourceItemInput {
   sourceType: string;
   sourceLocation: string;
@@ -391,6 +507,7 @@ const STAGES: Record<ContextMaturityLevel, string> = {
 /** Rule-based, per-dimension assessment; it does not use model judgment and has no aggregate score. */
 export function assessContextMaturity(snapshot: ContextInventorySnapshot, evidence: { hasDurableKnowledge: boolean; hasActiveSkills: boolean }): ContextMaturityAssessment {
   const inventoryExists = snapshot.items.length > 0;
+  const requestManifestCount = snapshot.items.filter((item) => item.sourceType === "inference_request_manifest").length;
   const allFreshnessKnown = inventoryExists && snapshot.items.every((item) => item.freshness !== "unknown");
   const hasMeasuredSourceLatency = snapshot.sourceMeasurements.some((source) => source.durationMs > 0);
   const carriedMemoryObserved = snapshot.items.some((item) => item.sourceType === "durable_note" || item.sourceType === "compaction_summary" || item.sourceType === "compaction_provenance");
@@ -404,12 +521,12 @@ export function assessContextMaturity(snapshot: ContextInventorySnapshot, eviden
         dimension: "navigability", level: inventoryExists ? 2 : null,
         evidence: [
           { reference: "cli/src/core/context_inventory.ts:inventorySourcesFromMessages", finding: `${snapshot.items.length} source-linked context item(s) are represented without storing their content.`, status: inventoryExists ? "observed" : "unknown" },
-          { reference: "cli/src/agent.ts:requestMessages", finding: "Conversation replay and pinned task context exist, but runtime prompt components are not yet captured as one complete inventory.", status: "observed" },
+          { reference: "cli/src/agent.ts:submitGuardingLength", finding: requestManifestCount ? `${requestManifestCount} content-free client-side inference-request manifest item(s) were observed; each records request message positions and effective tool-schema positions.` : "Conversation replay and pinned task context exist; no persisted request manifest was observed in this capture.", status: requestManifestCount ? "observed" : "unknown" },
           ...(evidence.hasActiveSkills ? [{ reference: "cli/src/skills.ts:SkillManager.getPromptSection", finding: "Path and trust metadata exist for skills; active prompt inclusion is not represented in the persisted message inventory.", status: "observed" as const }] : []),
         ],
-        unmetCriteria: ["Complete source-by-source provenance for all content included in each inference request.", "A unified retrieval graph connecting repository, task, session, profile, and memory items."],
+        unmetCriteria: ["Relationships from each request message to the repository, task, session, profile, or memory source that produced it.", "A unified retrieval graph connecting repository, task, session, profile, and memory items."],
         knownLimitations: snapshot.coverageGaps,
-        nextImprovement: "Capture this inventory at request construction and attach source relationships to each admitted item.",
+        nextImprovement: "Link request-position references to stable source records while preserving bounded, content-free session evidence.",
       }),
       dimension({
         dimension: "retrieval_speed", level: hasMeasuredSourceLatency ? 2 : null,

@@ -56,6 +56,7 @@ import { withDurableSync, type ArchiveRead } from "./core/durable_file.js";
 import { protectArchivedMessages } from "./core/persistence_protection.js";
 import { buildProbePrompt, describeRejection, parseProbeAnswer, PROBE_TIMEOUT_MS, type ProbeRequirement, type ProbeVerdict } from "./core/compaction_probe.js";
 import { buildCompactionRecord, type CompactionRecord } from "./core/compaction_record.js";
+import { buildInferenceContextManifest, isInferenceContextManifest, markInterruptedInferenceManifestsUnknown, retainInferenceContextManifest, type InferenceContextManifest } from "./core/context_inventory.js";
 import { advertisementChanged, describeCapabilities, resolveLimits, toolHeadroomPolicy, type AdmissionReport, type CountSource, type ProviderCapabilities, type RequestCount } from "./core/provider_capabilities.js";
 import { snapshotModel } from "./core/models_snapshot.js";
 import { ProviderRecoveryController, RecoveryCancelled, RecoveryClock, RecoveryHooks, RecoveryPolicy, realRecoveryClock, recoveryPolicyFromEnv, startupProblemWarning, startupEndpointProblems, type StartupEndpointProblem } from "./core/provider_recovery.js";
@@ -320,6 +321,8 @@ export class AutonomousAgent {
   private tokenCountingDetail?: string;
   private tokenCountingCooldownUntil = 0;
   private lastRequestCount?: RequestCount & { estimate: number; step: number; admitted?: AdmissionReport; workerDiffers?: boolean };
+  private inferenceContextManifests: InferenceContextManifest[] = [];
+  private inferenceContextSequence = 0;
   /** Why capabilities must be re-read before the next request (a capacity rejection or a changed admission), if so. */
   private capabilitiesStale?: string;
   /** Measured/estimated ratio of the last counted request: admission estimates are scaled by it (0.5..4). */
@@ -930,6 +933,7 @@ export class AutonomousAgent {
       candidateId: this.activeValidationReceipt?.candidateId || null,
       validationReceipts: this.activeValidationReceipt ? [this.activeValidationReceipt] : [],
       messages: this.messages,
+      inferenceContextManifests: this.inferenceContextManifests,
       unverifiedChangesPending: this.hasPendingModifications,
       verificationConfigAttempts: this.bridge.getSecurityManager().getVerificationAttempts(),
       commandRuleDecisions: this.commandRuleDecisions,
@@ -1420,6 +1424,16 @@ export class AutonomousAgent {
     return [...this.messages];
   }
 
+  public getInferenceContextManifests(): InferenceContextManifest[] {
+    return this.inferenceContextManifests.map((manifest) => ({
+      ...manifest,
+      coverageGaps: [...manifest.coverageGaps],
+      messages: manifest.messages.map((item) => ({ ...item })),
+      tools: { ...manifest.tools, schemaRefs: [...manifest.tools.schemaRefs] },
+      budget: { ...manifest.budget },
+    }));
+  }
+
   public setMessages(msgs: ChatMessage[]): void {
     this.messages = withHarnessProvenance(msgs);
   }
@@ -1457,7 +1471,7 @@ export class AutonomousAgent {
     unverifiedChangesPending?: boolean,
     objective?: ObjectiveLedger | null,
     findings?: readonly string[] | null,
-    recovery?: Pick<DurableTaskState, "providerRecovery" | "operation" | "changeBaseline">,
+    recovery?: Pick<DurableTaskState, "providerRecovery" | "operation" | "changeBaseline" | "inferenceContextManifests">,
   ): void {
     this.approvedEgressOrigins.clear();
     this.approvedVerifiers.clear();
@@ -1473,6 +1487,8 @@ export class AutonomousAgent {
     }
     this.settleUnrecordedToolCalls();
     this.activeProviderRecovery = recovery?.providerRecovery ?? null;
+    this.inferenceContextManifests = markInterruptedInferenceManifestsUnknown((recovery?.inferenceContextManifests ?? []).filter(isInferenceContextManifest).slice(-24));
+    this.inferenceContextSequence = this.inferenceContextManifests.reduce((max, manifest) => Math.max(max, manifest.sequence), 0);
     this.recoveredOperation = recovery?.operation;
     this.untrustedRecoveredBaseline = recovery?.changeBaseline ?? undefined;
     this.recheckOnResume();
@@ -1599,7 +1615,7 @@ export class AutonomousAgent {
   }
 
   /** Save mid-turn progress and report whether every configured persistence sink succeeded. */
-  private persistProgress(progress: { commandRuleDecisions?: boolean; verificationConfigAttempts?: boolean; messages?: boolean; unverifiedChangesPending?: boolean; changeBaseline?: ChangeBaseline | null }): boolean {
+  private persistProgress(progress: { commandRuleDecisions?: boolean; verificationConfigAttempts?: boolean; messages?: boolean; unverifiedChangesPending?: boolean; changeBaseline?: ChangeBaseline | null; inferenceContextManifests?: boolean }): boolean {
     if (!this.durable || this.restoringConversation) return true;
     let saved = true;
     try {
@@ -1630,6 +1646,7 @@ export class AutonomousAgent {
         ...(progress.unverifiedChangesPending !== undefined ? { unverifiedChangesPending: progress.unverifiedChangesPending } : {}),
         ...(progress.verificationConfigAttempts ? { verificationConfigAttempts: this.bridge.getSecurityManager().getVerificationAttempts() } : {}),
         ...(progress.commandRuleDecisions ? { commandRuleDecisions: this.commandRuleDecisions } : {}),
+        ...(progress.inferenceContextManifests ? { inferenceContextManifests: this.inferenceContextManifests } : {}),
         ...(progress.changeBaseline !== undefined ? {
           changeBaseline: progress.changeBaseline
             ? {
@@ -3312,7 +3329,7 @@ export class AutonomousAgent {
       ];
       let text = "";
       try {
-        const res = await this.submitGenAiRequest(client, () => client.chatCompletion(prompt, [], randomUUID(), signal));
+        const res = await this.submitGenAiRequest(client, () => this.submitGuardingLength({ step, cutAfterMs: 0 }, prompt, (request) => client.chatCompletion(request, [], randomUUID(), signal)));
         text = typeof res.content === "string" ? res.content.trim() : "";
         const reported = client.getProviderId?.() ? client.getLastUsage?.() : undefined;
         this.totalTokens.prompt += reported?.inputTokens ?? calculateContextBudget(prompt, [], contextLimit).totalActiveTokens;
@@ -3367,15 +3384,69 @@ export class AutonomousAgent {
   private async submitGuardingLength<T>(guard: { step: number; cutAfterMs: number }, messages: ChatMessage[], send: (messages: ChatMessage[]) => Promise<T>): Promise<T> {
     const seconds = Math.round(guard.cutAfterMs / 1000);
     const request = guard.cutAfterMs ? [...messages, { role: "user" as const, content: cutResponseNotice(guard.step, seconds) }] : messages;
+    const manifest = this.captureInferenceContextRequest(request, guard.step);
     const started = this.recoveryClock.now();
     try {
       const result = await send(request);
       if (guard.cutAfterMs) this.cutResponse = { step: guard.step, seconds };
+      this.settleInferenceContextRequest(manifest.id, "response_received");
       return result;
     } catch (err) {
       const ran = this.recoveryClock.now() - started;
       if (ran >= LONG_RESPONSE_MS && err instanceof InferenceError && err.toFailure().execution === "UNKNOWN") guard.cutAfterMs = Math.max(guard.cutAfterMs, ran);
+      this.settleInferenceContextRequest(manifest.id, "unknown_effect");
       throw err;
+    }
+  }
+
+  /** Record only source references and measurements for the exact arrays passed to an adapter. */
+  private captureInferenceContextRequest(messages: ChatMessage[], step: number): InferenceContextManifest {
+    const tools = this.getEffectiveTools();
+    const limits = this.effectiveLimits();
+    const reserves = this.getContextReserves();
+    const manifest = buildInferenceContextManifest({
+      id: `ctxreq_${randomUUID()}`,
+      taskId: this.currentTaskId,
+      workspace: this.workspacePathIdentity.value,
+      sequence: ++this.inferenceContextSequence,
+      messages,
+      tools,
+      requestEstimateTokens: calculateContextBudget(messages, tools, limits.contextLimit).totalActiveTokens,
+      contextLimit: limits.contextLimit,
+      contextLimitSource: this.capabilities?.contextSource ?? (this.config.contextLimit ? "operator" : "client_default_or_unknown"),
+      outputAllowance: reserves.completion,
+      outputAllowanceSource: this.capabilities?.outputSource ?? (this.config.completionReserveTokens ? "operator" : "client_default_or_unknown"),
+      toolResponseReserve: reserves.toolResponse,
+    });
+    this.inferenceContextManifests = retainInferenceContextManifest(this.inferenceContextManifests, manifest);
+    if (!this.persistInferenceContextManifests()) {
+      manifest.status = "not_dispatched";
+      this.persistInferenceContextManifests();
+      throw new Error("Inference context could not be recorded before dispatch; the request was not sent.");
+    }
+    return manifest;
+  }
+
+  private settleInferenceContextRequest(id: string, status: "response_received" | "unknown_effect"): void {
+    const manifest = this.inferenceContextManifests.find((item) => item.id === id);
+    if (!manifest || manifest.status !== "dispatching") return;
+    manifest.status = status;
+    this.persistInferenceContextManifests();
+  }
+
+  private persistInferenceContextManifests(): boolean {
+    if (this.durable) {
+      return this.persistProgress({ inferenceContextManifests: true });
+    }
+    try {
+      this.progressListener?.();
+      return true;
+    } catch (err: any) {
+      const text = `The inference context manifest could not be saved (${redactSecrets(String(err?.message ?? err)).slice(0, 200)}); a resume may not show this request.`;
+      this.turnPersistenceFailures.push(text);
+      if (this.observer?.onNotice) this.observer.onNotice(text);
+      else console.warn(pc.yellow(text));
+      return false;
     }
   }
 
@@ -3763,7 +3834,7 @@ export class AutonomousAgent {
     try {
       const requestId = randomUUID();
       const prompt = buildProbePrompt(requirements, summary);
-      const answer = await this.submitGenAiRequest(this.client, () => this.client.chatCompletion(prompt, [], requestId, probeSignal, "compaction"));
+      const answer = await this.submitGenAiRequest(this.client, () => this.submitGuardingLength({ step: 0, cutAfterMs: 0 }, prompt, (request) => this.client.chatCompletion(request, [], requestId, probeSignal, "compaction")));
       return parseProbeAnswer(answer.content, requirements);
     } catch (err: any) {
       if (signal?.aborted) throw err;
@@ -3802,7 +3873,7 @@ export class AutonomousAgent {
           this.messages = original;
           this.pendingCompaction = undefined;
         }
-        const res = await this.submitGenAiRequest(this.client, () => this.client.chatCompletion(admittedPrompt, [], requestId, signal, "compaction"));
+        const res = await this.submitGenAiRequest(this.client, () => this.submitGuardingLength({ step, cutAfterMs: 0 }, admittedPrompt, (request) => this.client.chatCompletion(request, [], requestId, signal, "compaction")));
         if (typeof res.content === "string" && res.content.trim()) {
           // CX-3: a second bounded call checks the model's summary against the gating requirements before it is used.
           const verdict = await this.probeCompactionSummary(res.content.trim(), signal);
