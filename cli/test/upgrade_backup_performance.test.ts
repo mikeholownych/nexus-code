@@ -26,9 +26,13 @@ describe("fast pre-migration backups", () => {
       const payload = Buffer.alloc(16 * 1024, 0x61);
       fs.writeFileSync(path.join(home, ".nexus", "tasks", "task.json"), payload, { mode: 0o600 });
       fs.writeFileSync(path.join(home, ".config", "nexus", "config.env"), "MODEL=test\n", { mode: 0o600 });
-      // Nested backup directories must be excluded just like the roots are.
+      // Nested backup directories must be excluded at any depth, including the
+      // context-checkpoint operation directory created during task runs.
       fs.mkdirSync(path.join(home, ".nexus", "tasks", "backups"), { mode: 0o700 });
       fs.writeFileSync(path.join(home, ".nexus", "tasks", "backups", "stale.json"), "stale", { mode: 0o600 });
+      const deepBackups = path.join(home, ".nexus", "tasks", "context-checkpoints", "op", "backups");
+      fs.mkdirSync(deepBackups, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(deepBackups, "checkpoint.json"), "stale", { mode: 0o600 });
 
       fsDefault.copyFileSync = ((source: any, destination: any, flag: any) => {
         flags.push(flag);
@@ -45,13 +49,16 @@ describe("fast pre-migration backups", () => {
       assert.deepEqual(fs.readFileSync(cloned), payload);
       assert.equal(fs.statSync(cloned).mode & 0o777, 0o600);
       assert.equal(fs.existsSync(path.join(backup.stateBackupDir!, "state", "tasks", "backups")), false);
+      assert.equal(fs.existsSync(path.join(backup.stateBackupDir!, "state", "tasks", "context-checkpoints", "op", "backups")), false);
 
       const manifest = JSON.parse(fs.readFileSync(path.join(backup.stateBackupDir!, "backup.json"), "utf8"));
       assert.equal(manifest.formatVersion, 1);
       assert.equal(manifest.files, flags.length);
       assert.equal(manifest.bytes, payload.length + Buffer.byteLength("MODEL=test\n") * 2);
       assert.deepEqual(manifest.entries.find((entry: any) => entry.path === "tasks/task.json"), { store: "state", path: "tasks/task.json", bytes: payload.length });
-      assert.ok(manifest.entries.some((entry: any) => entry.store === "config" && entry.path === "config.env"));
+      const configEntries = manifest.entries.filter((entry: any) => entry.store === "config" && entry.path === "config.env");
+      assert.equal(configEntries.length, 2, "both the standalone config backup and the config tree are recorded");
+      assert.equal(manifest.entries.length, manifest.files);
     } finally {
       fsDefault.copyFileSync = originalCopyFileSync;
       syncBuiltinESMExports();

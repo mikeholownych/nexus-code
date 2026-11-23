@@ -134,6 +134,23 @@ describe("receipt projection", () => {
     assert.match(text, /^Validation receipt\n  status        PASSED$/m);
   });
 
+  test("sandbox denials are their own receipt section and are never shown as a verifier result", () => {
+    const sections = receiptSections(null, null, undefined, [{
+      kind: "unavailable",
+      engine: "bwrap",
+      profile: "default",
+      operation: "run_command",
+      category: "engine",
+      reason: "Bubblewrap is not available",
+      at: "2026-11-23T04:00:00.000Z",
+    }]);
+    const denial = sections.at(-1)!;
+    assert.equal(denial.title, "Sandbox denials");
+    assert.deepEqual(denial.rows, [["unavailable", "bwrap/default · engine · run_command: Bubblewrap is not available"]]);
+    assert.match(denial.note ?? "", /not a verdict, approval or successful run/);
+    assert.equal(sections.some((s) => s.title === "Verifier"), true);
+  });
+
   test("a receipt read back from disk with missing fields drops those rows instead of sending null", () => {
     const partial = { status: "PASSED", exitCode: 0, timestamp: "\x1b[31m2026-10-04\x1b[0m" } as unknown as ValidationReceipt;
     const rows = receiptSections(null, partial)[2].rows;

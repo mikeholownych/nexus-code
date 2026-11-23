@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import { ChatMessage, DEFAULT_MAX_TOOL_INVOCATIONS, MAX_TOOL_INVOCATIONS, ToolCall } from "../types.js";
+import { ChatMessage, DEFAULT_MAX_INFERENCE_SUBMISSIONS, DEFAULT_MAX_TOOL_INVOCATIONS, MAX_INFERENCE_SUBMISSIONS, MAX_TOOL_INVOCATIONS, ToolCall } from "../types.js";
 import { ExecutionSpine, ExecutionReceipt } from "./spine.js";
 import { ExecutionTracker, REPEAT_THRESHOLD, actionKind, backoffMs, type ObservationVerdict } from "./execution_tracking.js";
 import { fileSignature, readCoverage, readRequests } from "./observation_identity.js";
@@ -14,7 +14,7 @@ import { snapshotTests } from "./independent_check.js";
 import { InferenceError } from "../client.js";
 import { TurnResult, InterruptionRecord, InferenceFailure, CapacityRecord, ModelStop, ProviderRecoveryRecord, assertTurnResultInvariants, deepFreezeTurn, summarizeTurn } from "./turn.js";
 import { withDurableSync } from "./durable_file.js";
-import { ProviderRecoveryController, RecoveryCancelled, recoveryPolicyFromEnv } from "./provider_recovery.js";
+import { ProviderRecoveryController, RecoveryCancelled, SubmissionAdmissionDenied, recoveryPolicyFromEnv } from "./provider_recovery.js";
 import { amendObjective, blockedRequirements, carryUnresolvedConflicts, createLedger, gatingRequirements, isNewObjective, openRequirements, supersededBy, trackingOf } from "./objective.js";
 import { snapshot } from "../file_diff.js";
 import { buildBlockedRequirementQuestion, buildSteeringConflictQuestion } from "./needs_input.js";
@@ -24,6 +24,9 @@ import { DEFAULT_REPEATED_CALL_HARD, DEFAULT_REPEATED_CALL_SOFT, judgeRepeatedCa
 import pc from "picocolors";
 import { ConfirmHandler, CompactionCommitError, ContextBudgetError, LedgerNotRetainedError, observationKey, recoveryDenialMessage, notExecutedMessage, observationPresence, unreacquiredRemovals, STEP_NOTICE, CUT_NOTICE, truncatedReplyNotice, harnessNoteMessage, READ_ONLY_TOOLS, foldVoluminousOutput, stepPosition, triggerNotification } from "./agent_support.js";
 import type { AutonomousAgent } from "../agent.js";
+
+class InferenceSubmissionBudgetExhausted extends Error {}
+class InferenceSubmissionPersistenceFailed extends Error {}
 
 export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean; tddRed?: boolean; step?: boolean }): Promise<TurnResult> {
   // The REPL calls runTurn directly. Route worktree-enabled turns through the
@@ -156,6 +159,9 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
   const maxTotalSteps = budget ? budget.maxTotalSteps : segmentSteps;
   let segment = 1;
   const tracker = this.objective && this.durable ? trackingOf(this.objective) : ExecutionTracker.fresh();
+  if (!Number.isSafeInteger(tracker.data.inferenceSubmissions) || tracker.data.inferenceSubmissions < 0) {
+    throw new Error("Persisted objective inference submission count is invalid; refusing to send inference requests.");
+  }
   const configuredToolLimit = this.config.maxToolInvocations ?? budget?.maxToolInvocations ?? DEFAULT_MAX_TOOL_INVOCATIONS;
   if (!Number.isSafeInteger(configuredToolLimit) || configuredToolLimit < 1 || configuredToolLimit > MAX_TOOL_INVOCATIONS) {
     throw new Error(`Invalid tool invocation budget: expected an integer from 1 to ${MAX_TOOL_INVOCATIONS}.`);
@@ -176,6 +182,17 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
     maximum: maxToolInvocations,
     persist: () => this.persistProgress({ messages: true }),
   };
+  const configuredInferenceLimit = this.config.maxInferenceSubmissions ?? budget?.maxInferenceSubmissions ?? DEFAULT_MAX_INFERENCE_SUBMISSIONS;
+  if (!Number.isSafeInteger(configuredInferenceLimit) || configuredInferenceLimit < 1 || configuredInferenceLimit > MAX_INFERENCE_SUBMISSIONS) {
+    throw new Error(`Invalid inference submission budget: expected an integer from 1 to ${MAX_INFERENCE_SUBMISSIONS}.`);
+  }
+  let maxInferenceSubmissions = configuredInferenceLimit;
+  const savedInferenceLimit = tracker.data.maxInferenceSubmissions ?? 0;
+  if (savedInferenceLimit !== 0 && (!Number.isSafeInteger(savedInferenceLimit) || savedInferenceLimit < 1 || savedInferenceLimit > MAX_INFERENCE_SUBMISSIONS)) {
+      throw new Error("Persisted objective inference submission budget is invalid; refusing to submit inference requests.");
+  }
+  maxInferenceSubmissions = savedInferenceLimit === 0 ? configuredInferenceLimit : Math.min(savedInferenceLimit, configuredInferenceLimit);
+  tracker.data.maxInferenceSubmissions = maxInferenceSubmissions;
 
   try {
     if (this.flightRecorder) {
@@ -243,6 +260,14 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
         return { admitted: 0, exhausted: false };
       }
       return { admitted, exhausted: admitted < requested };
+    };
+    const reserveInferenceSubmission = () => {
+      const admitted = tracker.admitInferenceSubmissions(1, maxInferenceSubmissions);
+      if (admitted !== 1) throw new InferenceSubmissionBudgetExhausted("Objective inference submission budget exhausted before request dispatch.");
+      if (!this.persistProgress({ messages: true })) {
+        persistenceFailure = "Inference submission budget could not be saved before dispatch; no request was sent.";
+        throw new InferenceSubmissionPersistenceFailed(persistenceFailure);
+      }
     };
     const stopForToolBudget = () => {
       stopReason = "TOOL_INVOCATION_BUDGET_EXHAUSTED";
@@ -681,8 +706,15 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
       };
       try {
         assistantMessage = await recovery.run(requestId, {
+          beforeSubmit: () => {
+            try {
+              reserveInferenceSubmission();
+            } catch (err) {
+              throw new SubmissionAdmissionDenied(err);
+            }
+          },
           submit: (s) => this.submitGenAiRequest(activeClient, () =>
-            this.submitGuardingLength(lengthGuard, this.requestMessages(this.messages), (request: any) =>
+              this.submitGuardingLength(lengthGuard, this.requestMessages(this.messages), (request: any) =>
                 activeClient.chatCompletionStream(
                   request,
                   this.getEffectiveTools(),
@@ -698,7 +730,7 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
                   s.requestId,
                   signal,
                 )),
-          ),
+            ),
           probe: (probeSignal, opts) =>
             typeof activeClient.probeAvailability === "function"
               ? activeClient.probeAvailability(probeSignal, { timeoutMs: policy.probeTimeoutMs, ...opts })
@@ -726,6 +758,23 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
           this.ui.stopSpinner(true);
         }
       } catch (err: any) {
+        if (err instanceof InferenceSubmissionBudgetExhausted) {
+          this.ui.stopSpinner(false, "Objective inference submission budget exhausted; no additional provider request was sent");
+          stopReason = "INFERENCE_SUBMISSION_BUDGET_EXHAUSTED";
+          const count = tracker.data.inferenceSubmissionHistoryComplete
+            ? `${tracker.data.inferenceSubmissions}/${maxInferenceSubmissions}`
+            : `at least ${tracker.data.inferenceSubmissions}/${maxInferenceSubmissions}; earlier request history is unknown`;
+          stopDetail = `inference submission budget exhausted (${count} inference submissions)`;
+          stepsUsed = currentStep;
+          endStep();
+          break;
+        }
+        if (err instanceof InferenceSubmissionPersistenceFailed) {
+          this.ui.stopSpinner(false, "Inference submission budget could not be saved; no provider request was sent");
+          stepsUsed = currentStep;
+          endStep();
+          break;
+        }
         if (err instanceof ContextBudgetError) {
           this.ui.stopSpinner(false, `Inference error: ${err.message}`);
           throw err;
@@ -1134,6 +1183,9 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
               toolInvocations: tracker.data.toolInvocations,
               maxToolInvocations,
               toolInvocationHistoryComplete: tracker.data.toolInvocationHistoryComplete,
+              inferenceSubmissions: tracker.data.inferenceSubmissions,
+              maxInferenceSubmissions,
+              inferenceSubmissionHistoryComplete: tracker.data.inferenceSubmissionHistoryComplete,
               ...(tracker.loops().length ? { repeated: tracker.loops().slice(0, 5).map((r) => ({ action: r.action, count: r.count, firstStep: r.firstStep, lastStep: r.lastStep })) } : {}),
               ...(this.stateIdentityUncertainty ? { stateUncertainty: this.stateIdentityUncertainty } : {}),
             },

@@ -1,0 +1,32 @@
+[
+  {
+    "protocol": 1,
+    "schemaSha256": "b2747ba8d5d56e8450df9c161b1c773b7beefd5c79ccd75fa07dfccda169b66a",
+    "note": "First published schema of protocol v1, generated from cli/src/protocol.ts as it stood on release/v1.3.0. No wire change."
+  },
+  {
+    "protocol": 1,
+    "schemaSha256": "9cf30b58fb0f720ef8ecbf5f1a3d8ad5015ca0f842fee9131b9f7b4d017bb4bc",
+    "note": "Add objective tool invocation budget exhaustion and accounting fields to turn results; additive protocol v1 change."
+  },
+  {
+    "protocol": 1,
+    "schemaSha256": "ec987e1083659ed595b68edea6f1707746fce82f6136ab7cc197d9dfa4d51037",
+    "note": "Capability negotiation, additive, so the version stays 1. hello gains the optional fields protocol_min, protocol_max, capabilities and experimental; the new command initialize is answered by the new event initialized; error codes UNSUPPORTED_PROTOCOL and EXPERIMENTAL_DISABLED are added. An older client ignores the new hello fields and never sends initialize, so it sees what it saw before; a newer client that finds no range in hello falls back to the exact-version check, and one that sends initialize to an older sidecar gets BAD_REQUEST (unknown message type) and carries on without negotiation. No existing field or message changed meaning."
+  },
+  {
+    "protocol": 1,
+    "schemaSha256": "8db364275bdc319ad41f8f6896a9e4f68a79555a8b3b1999194c3118d216c4b5",
+    "note": "Clarify verifier input binding in the protocol documentation. Description-only schema change; the wire shape and meaning are unchanged, so protocol stays 1."
+  },
+  {
+    "protocol": 1,
+    "schemaSha256": "2417ecafee1ba9f5a6d953caf063dac8b48ae6142d84a8260ad12c48f9540809",
+    "note": "Add additive history tool-result metadata for complete ACP session/load replay; protocol stays 1."
+  },
+  {
+    "protocol": 1,
+    "schemaSha256": "e0cf55a4d8c336fce2ec452aba1a14cfc167b8acc623c4792061f65a6a82c2fe",
+    "note": "Add the INFERENCE_SUBMISSION_BUDGET_EXHAUSTED turn reason and optional objective inference submission counts and history completeness; additive protocol v1 fields preserve existing meanings."
+  }
+]

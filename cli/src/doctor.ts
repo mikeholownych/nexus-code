@@ -42,7 +42,7 @@ import { SafePathError, ancestryProblem, chmodVerified, identityOf, mkdirVerifie
 import { isNexusDirPermissive } from "./core/durable_file.js";
 export { isNexusDirPermissive };
 import { DEFAULT_REPEATED_CALL_HARD, DEFAULT_REPEATED_CALL_SOFT } from "./core/repeated_calls.js";
-import { DEFAULT_CONVERGENCE_ATTEMPTS, type HarnessConfig } from "./types.js";
+import { DEFAULT_CONVERGENCE_ATTEMPTS, DEFAULT_MAX_INFERENCE_SUBMISSIONS, type HarnessConfig } from "./types.js";
 
 export const DOCTOR_SCHEMA_VERSION = 2;
 export type DoctorStatus = "pass" | "warn" | "fail" | "skip";
@@ -284,6 +284,7 @@ const CONFIG_KEYS: Array<{ key: string; flag?: string; field: keyof HarnessConfi
   { key: "workspace", flag: "workspace", field: "workspace" },
   { key: "max steps per segment", flag: "maxSteps", field: (c) => (c.continuation ? `${c.maxSteps} (checkpoint interval, not a limit)` : `${c.maxSteps} (turn limit: continuation off)`), fallback: "30" },
   { key: "NEXUS_MAX_TOTAL_STEPS", flag: "maxTotalSteps", field: (c) => (c.continuation ? (Number.isFinite(c.continuation.maxTotalSteps) ? String(c.continuation.maxTotalSteps) : "none") : "continuation off"), fallback: "none" },
+  { key: "NEXUS_MAX_INFERENCE_SUBMISSIONS", field: (c) => String(c.maxInferenceSubmissions ?? DEFAULT_MAX_INFERENCE_SUBMISSIONS), fallback: String(DEFAULT_MAX_INFERENCE_SUBMISSIONS) },
   { key: "NEXUS_MAX_TURN_MINUTES", flag: "maxTurnMinutes", field: (c) => (c.continuation ? (Number.isFinite(c.continuation.maxTurnMinutes) ? String(c.continuation.maxTurnMinutes) : "none") : "continuation off"), fallback: "none" },
   { key: "NEXUS_STAGNATION_STEPS", flag: "stagnationSteps", field: (c) => (c.continuation ? String(c.continuation.stagnationSteps) : "continuation off"), fallback: "12" },
   { key: "NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS", field: (c) => String(c.continuation?.verifierConvergenceAttempts ?? DEFAULT_CONVERGENCE_ATTEMPTS), fallback: "3" },
@@ -788,7 +789,19 @@ const stateDirCheck: Check = async (ctx) => {
   return out;
 };
 
-const statePermissionsCheck: Check = async (ctx) => {
+/** Entries one permissions scan of ~/.nexus examines before it stops and reports the rest as unchecked. */
+export const STATE_SCAN_MAX_ENTRIES = 200_000;
+/** The operator's own entry limit (NEXUS_DOCTOR_STATE_SCAN_ENTRIES, a positive whole number), else the default. */
+function stateScanMaxEntries(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = (env.NEXUS_DOCTOR_STATE_SCAN_ENTRIES ?? "").trim();
+  return /^[1-9]\d{0,8}$/.test(raw) ? Number(raw) : STATE_SCAN_MAX_ENTRIES;
+}
+/** The scan gives the event loop a turn this often, so the other checks keep running beside it. */
+const STATE_SCAN_YIELD_EVERY = 500;
+/** Share of the check's own time limit the scan may use, so it reports a partial result instead of timing out. */
+const STATE_SCAN_TIME_SHARE = 0.6;
+
+const statePermissionsCheck: Check = async (ctx, signal) => {
   const nexusDir = path.join(ctx.home, ".nexus");
   const historyFile = path.join(ctx.home, ".nexus_history");
   const out: Array<Omit<DoctorFinding, "durationMs">> = [];
@@ -804,32 +817,51 @@ const statePermissionsCheck: Check = async (ctx) => {
       }
     }
 
-    const scanDir = (dir: string, depth = 0) => {
-      if (depth > 6) return;
+    // The state tree can be very large (old upgrade backups under ~/.nexus/backups have been seen at 1.5 million
+    // files). Walking it in one synchronous pass held the event loop for minutes, so every other check's timer
+    // expired and a reachable endpoint was reported as not answering. The walk therefore yields to the event loop,
+    // stops at a budget and says what it did not look at; it never reports a tree it only partly read as private.
+    const started = Date.now();
+    const budgetMs = Math.max(250, Math.floor(ctx.timeoutMs * STATE_SCAN_TIME_SHARE));
+    const maxEntries = stateScanMaxEntries();
+    let examined = 0;
+    let stoppedIn: string | undefined;
+    // Depth-first with an explicit stack. Live state first, backups last: if the budget runs out, it runs out in copies.
+    const stack: Array<{ dir: string; depth: number }> = [{ dir: nexusDir, depth: 0 }];
+    scan: while (stack.length > 0) {
+      const { dir, depth } = stack.pop()!;
+      if (depth > 6) continue;
       let entries: fs.Dirent[];
       try {
         entries = fs.readdirSync(dir, { withFileTypes: true });
       } catch {
-        return;
+        continue;
       }
+      const later: Array<{ dir: string; depth: number }> = [];
       for (const entry of entries) {
+        if (examined >= maxEntries || Date.now() - started >= budgetMs || signal.aborted) {
+          stoppedIn = dir;
+          break scan;
+        }
+        if (++examined % STATE_SCAN_YIELD_EVERY === 0) await new Promise<void>((resolve) => setImmediate(resolve));
         const full = path.join(dir, entry.name);
-        const itemUnsafe = ancestryProblem(ctx.home, full);
         if (entry.isDirectory()) {
           if (entry.isSymbolicLink()) continue;
           const dirMode = modeOf(full);
           if (dirMode !== undefined && (dirMode & 0o077) !== 0) {
+            const itemUnsafe = ancestryProblem(ctx.home, full);
             if (itemUnsafe) {
               out.push(f("state.permissions", "state", "warn", `The ${path.relative(ctx.home, full)} directory is readable by other users (mode ${dirMode.toString(8)}), and its path is not safe to change automatically (${itemUnsafe}).`, [full], "Review the path and restrict the real directory yourself."));
             } else {
               out.push(f("state.permissions", "state", "warn", `The ${path.relative(ctx.home, full)} directory is readable by other users (mode ${dirMode.toString(8)}).`, [full], undefined, { id: "state.permissions", description: `chmod ${full} from ${dirMode.toString(8)} to 700`, expect: identityOf(full) }));
             }
           }
-          scanDir(full, depth + 1);
+          later.push({ dir: full, depth: depth + 1 });
         } else if (entry.isFile()) {
           if (entry.isSymbolicLink()) continue;
           const fileMode = modeOf(full);
           if (fileMode !== undefined && ((fileMode & 0o077) !== 0 || (fileMode & 0o111) !== 0)) {
+            const itemUnsafe = ancestryProblem(ctx.home, full);
             if (itemUnsafe) {
               out.push(f("state.permissions", "state", "warn", `The ${path.relative(ctx.home, full)} file is readable by other users (mode ${fileMode.toString(8)}), and its path is not safe to change automatically (${itemUnsafe}).`, [full], "Review the path and restrict the real file yourself."));
             } else {
@@ -838,8 +870,19 @@ const statePermissionsCheck: Check = async (ctx) => {
           }
         }
       }
-    };
-    scanDir(nexusDir);
+      // Pushed in reverse so the directories are taken in name order, except `backups`, which is taken after its siblings.
+      later.sort((x, y) => Number(path.basename(x.dir) === "backups") - Number(path.basename(y.dir) === "backups") || (x.dir < y.dir ? -1 : 1));
+      for (let i = later.length - 1; i >= 0; i--) stack.push(later[i]);
+    }
+    if (stoppedIn !== undefined) {
+      const why = signal.aborted ? "the check was cancelled" : examined >= maxEntries ? `the limit of ${maxEntries} entries was reached` : `its time budget of ${budgetMs} ms ran out`;
+      out.push(f(
+        "state.permissions", "state", "warn",
+        `Only part of ~/.nexus was checked for permissions: ${examined} entries were examined before ${why}. The rest was not checked.`,
+        [nexusDir, `stopped in ${path.relative(ctx.home, stoppedIn) || "."}`],
+        "A state directory this large is usually old upgrade backups under ~/.nexus/backups; remove the ones you no longer need. To look further, raise NEXUS_DOCTOR_STATE_SCAN_ENTRIES or pass a longer --timeout.",
+      ));
+    }
   }
 
   if (fs.existsSync(historyFile)) {

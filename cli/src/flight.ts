@@ -6,6 +6,8 @@ import { InformationFlowBoundary } from "./core/egress.js";
 import { ensurePrivateDir, appendPrivateFile } from "./core/durable_file.js";
 import { ensureGitExclude } from "./core/git_exclude.js";
 import { persistableEndpoint } from "./core/endpoint_identity.js";
+import { describeChain, linkRecord, verifyChain, type ChainLink, type ChainVerdict } from "./core/hash_chain.js";
+import type { SandboxDenialEvent } from "./sandbox_events.js";
 
 export type FlightEventType =
   | "session_start"
@@ -16,6 +18,9 @@ export type FlightEventType =
   | "durable_state"
   | "file_diff"
   | "middleware_rewrite"
+  | "sandbox_denial"
+  | "sandbox_violation"
+  | "sandbox_unavailable"
   | "turn_end"
   | "session_end";
 
@@ -25,6 +30,18 @@ export interface FlightEvent {
   type: FlightEventType;
   step?: number;
   payload: Record<string, any>;
+  /** Link to the record before this one (GV-3). Absent in flight logs written before v1.3.0. */
+  chain?: ChainLink;
+}
+
+/**
+ * Whether a flight log reads back as it was written. `chain` is the record chain's verdict. `closed` says whether the
+ * log ends with its `session_end` record: an intact chain that is not closed is still being recorded, belongs to a
+ * process that stopped early, or lost records from its end (a chain alone cannot tell those apart).
+ */
+export interface FlightIntegrity {
+  chain: ChainVerdict;
+  closed: boolean;
 }
 
 export interface FlightManifest {
@@ -45,6 +62,8 @@ export interface FlightManifest {
  * Deterministic Flight Recorder for Agentic Code Execution
  * Records prompts, thoughts, tool calls, diffs, and durable state transitions into
  * append-only .flightlog archives for exact post-mortem replay and audit.
+ * Each record is hash-chained to the one before it (core/hash_chain.ts), so a changed, removed or reordered
+ * record is found when the log is read (FlightPlayer.loadFlight).
  */
 export class FlightRecorder {
   private workspace: string;
@@ -52,6 +71,10 @@ export class FlightRecorder {
   private flightLogPath: string;
   private isRecording: boolean = false;
   private startTime: number = Date.now();
+  /** Link of the last record written; undefined before the first. */
+  private lastLink: ChainLink | undefined;
+  /** False when this recorder continues a log written before chaining: such a log stays unchained. */
+  private chained = true;
 
   constructor(workspace: string, flightId?: string) {
     this.workspace = path.resolve(workspace);
@@ -60,6 +83,24 @@ export class FlightRecorder {
     const flightsDir = path.join(this.workspace, ".nexus", "flights");
     ensurePrivateDir(flightsDir);
     this.flightLogPath = path.join(flightsDir, `${this.flightId}.flightlog`);
+    this.resumeChain();
+  }
+
+  /**
+   * Continue the chain of a log that already exists (a recorder given an earlier flight id). A log that is intact
+   * continues from its last link. One written before chaining stays unchained. A broken one is left as it is and new
+   * records are appended unchained after it, so the break stays visible and is not papered over by fresh links.
+   */
+  private resumeChain(): void {
+    let text: string;
+    try {
+      text = fs.readFileSync(this.flightLogPath, "utf-8");
+    } catch {
+      return;
+    }
+    const verdict = verifyChain(parseFlightLines(text));
+    if (verdict.status === "intact") this.lastLink = verdict.head;
+    else this.chained = false;
   }
 
   public getFlightId(): string {
@@ -85,6 +126,8 @@ export class FlightRecorder {
       sanitizedPayload = InformationFlowBoundary.getGlobalInstance().redactForTelemetry(payload);
     } catch {
       // Do not propagate classifier diagnostics that could echo inspected input.
+      // A later event must not make a log with this missing record look complete.
+      this.chained = false;
       return {
         eventId,
         timestamp,
@@ -93,17 +136,30 @@ export class FlightRecorder {
         payload: { recordingSkipped: true, reason: "sanitization_failed" },
       };
     }
-    const event: FlightEvent = {
+    const content: FlightEvent = {
       eventId,
       timestamp,
       type,
       step,
       payload: sanitizedPayload,
     };
+    // The link is computed over the sanitized record, the one that is stored.
+    const event: FlightEvent = this.chained ? linkRecord(content, this.lastLink) : content;
     try {
       appendPrivateFile(this.flightLogPath, JSON.stringify(event) + "\n");
+      // Advance only once the record is on disk: a failed write must not leave a gap in the sequence.
+      if (event.chain) this.lastLink = event.chain;
     } catch {
-      // Ignore flightlog append errors in restricted environments
+      // Flight recording is optional telemetry, so it must not block the authorized action. But continuing
+      // the chain after a skipped event would make a later successful write look like complete evidence.
+      this.chained = false;
+      return {
+        eventId,
+        timestamp,
+        type,
+        step,
+        payload: { recordingSkipped: true, reason: "append_failed" },
+      };
     }
     return event;
   }
@@ -187,6 +243,19 @@ export class FlightRecorder {
     });
   }
 
+  /**
+   * VR-3: a typed sandbox refusal. It is durable evidence for replay and export, never a verdict or an approval.
+   * The event is sanitized and chained by `appendEvent` like every other flight record.
+   */
+  public recordSandboxDenial(step: number, event: SandboxDenialEvent): FlightEvent {
+    const type: FlightEventType = event.kind === "violation"
+      ? "sandbox_violation"
+      : event.kind === "unavailable"
+        ? "sandbox_unavailable"
+        : "sandbox_denial";
+    return this.appendEvent(type, step, event);
+  }
+
   public recordDurableState(step: number, state: Record<string, any>): FlightEvent {
     return this.appendEvent("durable_state", step, { state });
   }
@@ -225,6 +294,21 @@ export class FlightRecorder {
   }
 }
 
+/** The records of a flight log in file order; `null` marks a non-empty line that is not a JSON object. */
+function parseFlightLines(text: string): Array<FlightEvent | null> {
+  const records: Array<FlightEvent | null> = [];
+  for (const line of text.split("\n")) {
+    if (line.trim().length === 0) continue;
+    try {
+      const parsed = JSON.parse(line);
+      records.push(parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as FlightEvent) : null);
+    } catch {
+      records.push(null);
+    }
+  }
+  return records;
+}
+
 /**
  * Replay player for deterministic flight logs.
  */
@@ -252,7 +336,7 @@ export class FlightPlayer {
     return manifests.sort((a, b) => b.recordedAt.localeCompare(a.recordedAt));
   }
 
-  public static loadFlight(workspace: string, flightIdOrPath: string): { manifest: FlightManifest; events: FlightEvent[] } {
+  public static loadFlight(workspace: string, flightIdOrPath: string): { manifest: FlightManifest; events: FlightEvent[]; integrity: FlightIntegrity } {
     let fullPath = flightIdOrPath;
     if (!fs.existsSync(fullPath)) {
       const candidate = path.join(path.resolve(workspace), ".nexus", "flights", flightIdOrPath.endsWith(".flightlog") ? flightIdOrPath : `${flightIdOrPath}.flightlog`);
@@ -263,19 +347,20 @@ export class FlightPlayer {
       }
     }
 
-    const lines = fs.readFileSync(fullPath, "utf-8").split("\n").filter((l) => l.trim().length > 0);
+    const records = parseFlightLines(fs.readFileSync(fullPath, "utf-8"));
     const events: FlightEvent[] = [];
     let manifest: FlightManifest | undefined;
 
-    for (const line of lines) {
-      try {
-        const ev = JSON.parse(line) as FlightEvent;
-        events.push(ev);
-        if (ev.type === "session_start" && !manifest) {
-          manifest = ev.payload as FlightManifest;
-        }
-      } catch {}
+    for (const ev of records) {
+      // An unreadable line is still left out of the replay, as before; the chain verdict reports it.
+      if (!ev) continue;
+      events.push(ev);
+      if (ev.type === "session_start" && !manifest) {
+        manifest = ev.payload as FlightManifest;
+      }
     }
+    const last = records[records.length - 1];
+    const integrity: FlightIntegrity = { chain: verifyChain(records), closed: Boolean(last && last.type === "session_end") };
 
     if (!manifest) {
       manifest = {
@@ -288,7 +373,16 @@ export class FlightPlayer {
       };
     }
 
-    return { manifest, events };
+    return { manifest, events, integrity };
+  }
+
+  /** One line for the operator: what reading the log back established about it. */
+  public static describeIntegrity(integrity: FlightIntegrity): string {
+    const chain = describeChain(integrity.chain);
+    if (integrity.chain.status !== "intact" || integrity.chain.records === 0) return chain;
+    return integrity.closed
+      ? `${chain}, closed by its session end`
+      : `${chain}, not closed: no session end (still recording, stopped early, or records are missing from the end)`;
   }
 
   public static async replay(

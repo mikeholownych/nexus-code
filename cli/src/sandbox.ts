@@ -18,12 +18,21 @@ export interface SandboxOptions {
   customBwrapArgs?: string[];
 }
 
+/** Structured reason a sandbox refused to confine a command. Evidence only; never an approval or verdict. */
+export interface SandboxDenialReason {
+  kind: "denied" | "unavailable" | "violation";
+  category: "filesystem" | "network" | "engine" | "policy";
+  reason: string;
+}
+
 export interface SandboxedCommandResult {
   command: string;
   argv?: string[];
   sandboxed: boolean;
   engine: "bwrap" | "docker" | "none";
   warning?: string;
+  /** Set when sandboxed is false because confinement was refused or unavailable. */
+  denial?: SandboxDenialReason;
 }
 
 /**
@@ -403,6 +412,7 @@ export interface SandboxedWorkerLaunch {
   sandboxed: boolean;
   engine: SandboxedCommandResult["engine"];
   warning?: string;
+  denial?: SandboxDenialReason;
 }
 
 export interface SandboxedWorkerOptions extends Pick<SandboxOptions, "network"> {
@@ -433,13 +443,15 @@ export function wrapSandboxedWorker(
     if (launch.sandboxed) return launch;
     if (launch.warning) warnings.push(launch.warning);
   }
-  return { sandboxed: false, engine: "none", warning: warnings.join(" ") || "No sandbox engine was requested for the worker." };
+  const warning = warnings.join(" ") || "No sandbox engine was requested for the worker.";
+  return { sandboxed: false, engine: "none", warning, denial: { kind: "unavailable", category: "engine", reason: warning } };
 }
 
 /** The worker's own directory is bound read-only because it may live under the masked $HOME (a checkout or a per-user install). */
 function wrapBwrapWorker(workerPath: string, workerArgs: readonly string[], workspace: string, options: SandboxedWorkerOptions): SandboxedWorkerLaunch {
   if (!isBwrapAvailable()) {
-    return { sandboxed: false, engine: "none", warning: "Bubblewrap (bwrap) is not available, so the worker cannot be isolated." };
+    const warning = "Bubblewrap (bwrap) is not available, so the worker cannot be isolated.";
+    return { sandboxed: false, engine: "none", warning, denial: { kind: "unavailable", category: "engine", reason: warning } };
   }
   const exec = `exec ${[workerPath, ...workerArgs].map(quoteForShell).join(" ")}`;
   const wrapped = wrapSandboxedCommand(exec, workspace, {
@@ -449,7 +461,8 @@ function wrapBwrapWorker(workerPath: string, workerArgs: readonly string[], work
     customBwrapArgs: ["--ro-bind", path.dirname(workerPath), path.dirname(workerPath)],
   });
   if (!wrapped.sandboxed || wrapped.engine !== "bwrap" || !wrapped.argv?.length) {
-    return { sandboxed: false, engine: wrapped.engine, warning: wrapped.warning ?? "The Bubblewrap profile could not be built for the worker." };
+    const warning = wrapped.warning ?? "The Bubblewrap profile could not be built for the worker.";
+    return { sandboxed: false, engine: wrapped.engine, warning, denial: wrapped.denial ?? { kind: "unavailable", category: "engine", reason: warning } };
   }
   return { command: wrapped.argv[0], args: wrapped.argv.slice(1), sandboxed: true, engine: "bwrap" };
 }
@@ -620,7 +633,7 @@ export function workerRuntimeFiles(workerPath: string): { loader?: string; libra
  * worker starts and forwards signals; the container ends when the worker does (its client closing stdin ends the worker).
  */
 function wrapDockerWorker(workerPath: string, workerArgs: readonly string[], workspace: string, options: SandboxedWorkerOptions): SandboxedWorkerLaunch {
-  const refuse = (warning: string): SandboxedWorkerLaunch => ({ sandboxed: false, engine: "none", warning });
+  const refuse = (warning: string, denial?: SandboxDenialReason): SandboxedWorkerLaunch => ({ sandboxed: false, engine: "none", warning, denial: denial ?? { kind: "unavailable", category: "engine", reason: warning } });
   if (process.platform !== "linux") return refuse("The worker can only run in a Docker container on a Linux host.");
   // The CLI being installed is not enough for a long-lived worker: with the daemon down the container would never start
   // and every tool would fail. Ask the daemon, so `auto` can fall back and an explicit `docker` refuses with the reason.
@@ -632,7 +645,7 @@ function wrapDockerWorker(workerPath: string, workerArgs: readonly string[], wor
   const placeholder = "true";
   const wrapped = wrapSandboxedCommand(placeholder, workspace, { mode: "docker", network: options.network });
   if (!wrapped.sandboxed || wrapped.engine !== "docker" || !wrapped.argv?.length) {
-    return refuse(wrapped.warning ?? "The Docker sandbox could not be built for the worker.");
+    return refuse(wrapped.warning ?? "The Docker sandbox could not be built for the worker.", wrapped.denial);
   }
   // The command form ends `-w <workspace> <image> sh -c <cmd>`; everything before the image is the hardened profile.
   const tail = wrapped.argv.slice(-6);
@@ -698,6 +711,7 @@ export function wrapSandboxedCommand(
         sandboxed: false,
         engine: "none",
         warning: "Bubblewrap (bwrap) is requested but not found in PATH.",
+        denial: { kind: "unavailable", category: "engine", reason: "Bubblewrap (bwrap) is requested but not found in PATH." },
       };
     }
 
@@ -712,6 +726,7 @@ export function wrapSandboxedCommand(
           sandboxed: false,
           engine: "none",
           warning: "Read-only Bubblewrap requires a pinned workspace directory descriptor.",
+          denial: { kind: "unavailable", category: "policy", reason: "Read-only Bubblewrap requires a pinned workspace directory descriptor." },
         };
       }
       // Do not expose the host root to read-only commands. A path admitted by the
@@ -724,6 +739,7 @@ export function wrapSandboxedCommand(
           sandboxed: false,
           engine: "none",
           warning: "Custom Bubblewrap mounts are incompatible with read-only host confinement.",
+          denial: { kind: "denied", category: "policy", reason: "Custom Bubblewrap mounts are incompatible with read-only host confinement." },
         };
       }
 
@@ -847,6 +863,7 @@ export function wrapSandboxedCommand(
         sandboxed: false,
         engine: "none",
         warning: "Read-only host confinement requires Bubblewrap with a pinned workspace descriptor; Docker path mounts are not supported.",
+        denial: { kind: "unavailable", category: "engine", reason: "Read-only host confinement requires Bubblewrap with a pinned workspace descriptor; Docker path mounts are not supported." },
       };
     }
     if (!isDockerAvailable() && mode === "docker") {
@@ -855,6 +872,7 @@ export function wrapSandboxedCommand(
         sandboxed: false,
         engine: "none",
         warning: "Docker is requested but not available or daemon is not running.",
+        denial: { kind: "unavailable", category: "engine", reason: "Docker is requested but not available or daemon is not running." },
       };
     }
 
@@ -865,6 +883,7 @@ export function wrapSandboxedCommand(
         sandboxed: false,
         engine: "none",
         warning: `${DOCKER_SANDBOX_IMAGE_SETTING} must name an image pinned by digest (name@sha256:<64 hex>); refusing to run an unpinned image.`,
+        denial: { kind: "unavailable", category: "policy", reason: `${DOCKER_SANDBOX_IMAGE_SETTING} must name an image pinned by digest (name@sha256:<64 hex>); refusing to run an unpinned image.` },
       };
     }
 
@@ -910,5 +929,6 @@ export function wrapSandboxedCommand(
     sandboxed: false,
     engine: "none",
     warning: "No sandboxing engine (bwrap or docker) available. Running directly on host.",
+    denial: { kind: "unavailable", category: "engine", reason: "No sandboxing engine (bwrap or docker) available. Running directly on host." },
   };
 }

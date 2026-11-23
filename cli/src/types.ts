@@ -74,6 +74,8 @@ export interface HarnessConfig {
   continuation?: ContinuationBudget;
   /** Maximum tool dispatches for one objective, including when automatic continuation is disabled. */
   maxToolInvocations?: number;
+  /** Maximum inference requests for one objective, including provider retries and resumes. */
+  maxInferenceSubmissions?: number;
   /** Identical-tool-call thresholds (soft: corrective note; hard: TOOL_CALL_LOOP for an observer, scaled for commands and polls). Independent of `continuation`. */
   repeatedCalls?: { soft: number; hard: number };
   temperature: number;       // Default 0.2 for precise coding
@@ -152,6 +154,12 @@ export interface ExecutionResult {
   outcomeUnknown?: boolean;
   /** Why the call was refused before it ran (a stable code, e.g. VERIFICATION_CONFIG_PROTECTED). */
   denialReason?: string;
+  /** Structured sandbox refusal from the confinement layer. Evidence only; never an approval or verdict. */
+  sandboxDenial?: {
+    kind: "denied" | "unavailable" | "violation";
+    category: "filesystem" | "network" | "engine" | "policy";
+    reason: string;
+  };
 }
 
 /**
@@ -164,6 +172,8 @@ export interface ContinuationBudget {
   maxTotalSteps: number;
   /** Maximum tool dispatches for one objective across turns and resumes. */
   maxToolInvocations?: number;
+  /** Maximum inference requests for one objective across turns and resumes. */
+  maxInferenceSubmissions?: number;
   /** Maximum wall-clock minutes for one invocation (TIME_BUDGET_EXHAUSTED). */
   maxTurnMinutes: number;
   /**
@@ -187,6 +197,8 @@ export const MAX_CONTINUATION_STEPS = 5_000;
 export const MAX_CONTINUATION_MINUTES = 4_320;
 export const DEFAULT_MAX_TOOL_INVOCATIONS = 1_000;
 export const MAX_TOOL_INVOCATIONS = 10_000;
+export const DEFAULT_MAX_INFERENCE_SUBMISSIONS = 1_000;
+export const MAX_INFERENCE_SUBMISSIONS = 10_000;
 
 export function assertValidContinuationBudget(budget: ContinuationBudget | undefined): void {
   if (!budget) return;
@@ -199,6 +211,9 @@ export function assertValidContinuationBudget(budget: ContinuationBudget | undef
   if (budget.maxToolInvocations !== undefined && (!Number.isSafeInteger(budget.maxToolInvocations) || budget.maxToolInvocations < 1 || budget.maxToolInvocations > MAX_TOOL_INVOCATIONS)) {
     throw new Error(`Invalid tool invocation budget: expected an integer from 1 to ${MAX_TOOL_INVOCATIONS}.`);
   }
+  if (budget.maxInferenceSubmissions !== undefined && (!Number.isSafeInteger(budget.maxInferenceSubmissions) || budget.maxInferenceSubmissions < 1 || budget.maxInferenceSubmissions > MAX_INFERENCE_SUBMISSIONS)) {
+    throw new Error(`Invalid inference submission budget: expected an integer from 1 to ${MAX_INFERENCE_SUBMISSIONS}.`);
+  }
 }
 
 /** Failed verifier attempts on changing candidates that show no convergence before the turn stops (see ContinuationBudget). */
@@ -207,6 +222,7 @@ export const DEFAULT_CONVERGENCE_ATTEMPTS = 3;
 export const DEFAULT_CONTINUATION: ContinuationBudget = {
   maxTotalSteps: 500,
   maxToolInvocations: DEFAULT_MAX_TOOL_INVOCATIONS,
+  maxInferenceSubmissions: DEFAULT_MAX_INFERENCE_SUBMISSIONS,
   maxTurnMinutes: 480,
   stagnationSteps: 12,
   maxRecoveries: 2,

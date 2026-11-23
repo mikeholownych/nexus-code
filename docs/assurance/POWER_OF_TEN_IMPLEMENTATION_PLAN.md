@@ -1,6 +1,6 @@
 # Power of Ten Remediation Implementation Specification
 
-**Planning baseline:** `origin/main` `a0329e72ea796a306ea138ab2870d15920e4af61`. This is an implementation handoff, not authorization to change production code. No dates are assigned.
+**Planning baseline:** `origin/main` `a0329e72ea796a306ea138ab2870d15920e4af61`. The owner approved this implementation plan on 2026-11-23. No dates are assigned.
 
 ## Design constraints
 
@@ -8,33 +8,27 @@ Reuse `ContinuationBudget`, `ExecutionTracker`, `ProviderRecoveryController`, `R
 
 ## WP-P10-01 — Protect the independent acceptance authority
 
-**Priority:** P0 · **Complexity:** S/M · **Dependencies:** none.
+**Priority:** Deferred (original risk is Critical) · **Complexity:** S/M · **Dependencies:** none.
 
-**Current operating constraint (2026-11-19):** This is a single-user repository; the nominated account is suspended and no second human reviewer is available. Keep the independent-approval acceptance criterion open and report it as unavailable. This does not block publishing PRs or progressing other work packages. Do not present self-approval, bot review, or green CI as independent human approval; any merge path that requires this gate remains subject to the repository's configured rules until the owner changes that policy.
+**Current operating constraint (2026-11-23):** This is a single-user FOSS repository; no second human reviewer is available, and the nominated account is suspended. The owner has decided not to seek paid infrastructure or another account, and has confirmed that the limitation must not block work or publication. Independent approval remains unavailable and must never be claimed. Do not add an approval or CODEOWNERS gate that prevents the sole maintainer from publishing. Keep the existing required CI checks and owner-controlled release authority. Reopen this package only if an independent maintainer becomes available or the owner changes this decision.
 
 **Gap/evidence:** A candidate can modify `.github/workflows/ci.yml` or verifier/test harness definitions while the live branch ruleset requires zero approvals. The active ruleset requires checks but does not bind their implementation to an independently protected version. Evidence: GitHub ruleset 25340146 (read 2026-11-18); `.github/workflows/ci.yml`; `cli/src/core/spine_handlers.ts:75-160`.
 
 **Affected surfaces:** repository ruleset, `.github/CODEOWNERS`, workflow/test/verifier paths, PR template and documented merge policy.
 
-**Design / reuse:** Use GitHub’s existing ruleset and CODEOWNERS; do not build an in-repo policy service. Require at least one independent approval, require code-owner review for workflow, verifier, security policy, and CI harness changes, dismiss approvals after relevant pushes, require latest commit approval, and enable strict status checks. If supported by owner policy, run required checks from a protected reusable workflow pinned to a protected ref.
+**Design / reuse:** Do not build a policy service or configure a second-approval/CODEOWNERS requirement while this is a single-user repository. Preserve mandatory status checks and exact-head evidence. If an independent maintainer later becomes available, revisit GitHub's existing ruleset and CODEOWNERS for acceptance-critical paths.
 
-**Implementation steps:**
+**Implementation steps:** Deferred under the owner decision above. Do not attempt to create a second reviewer account or add a merge gate that the owner cannot satisfy.
 
-1. Enumerate the paths that define acceptance (`.github/workflows/**`, test runner scripts, verifier discovery/oracle code, security gate scripts, lockfiles/build config).
-2. Add CODEOWNERS for those paths; add tests that assert the path list matches governance documentation.
-3. Update ruleset to require review/code-owner approval and strict check freshness. Keep bypass actors empty or explicitly owner-controlled.
-4. Add a canary PR/harness mutation that removes a required check or makes it unconditional and demonstrate merge is blocked by independent policy.
-5. Document emergency bypass ownership and audit record.
+**Required tests / acceptance:** Record the configured ruleset and required status checks at the exact revision; report independent approval as unavailable. This package is not a prerequisite for implementation, PR publication, or release work under the current owner decision.
 
-**Required tests / acceptance:** API readback confirms required approvals >=1, code-owner approval, strict status checks, no unapproved bypass actor. Seeded workflow change without approval cannot merge. A normal workflow change with independent approval and green required checks can merge. Exact SHA and ruleset JSON archived.
-
-**Migration / rollback:** Existing open PRs may require new approvals and reruns. Rollback is ruleset restoration only by repository owner; retain the last known ruleset export. Residual risk: repository administrators can alter rulesets outside source control.
+**Migration / rollback:** No repository policy change is proposed. Residual risk: a sole maintainer can change acceptance code and its checks; exact-head hosted CI and candid self-review do not provide independent review.
 
 ## WP-P10-02 — Durable task-level execution budgets
 
 **Priority:** P0 · **Complexity:** L · **Dependencies:** WP-P10-01 recommended first; can be implemented independently.
 
-**Gap/evidence:** Direct objective continuation already has finite total-step and per-invocation time ceilings (`cli/src/types.ts`, `cli/src/core/run_turn.ts`), but tool dispatches were not capped cumulatively. `runSubagent` uses its own loop (`cli/src/agent.ts`) and requires explicit sharing with the direct-turn tracker. Cumulative elapsed time, inference submissions, provider retries and tokens are also not tracked as one durable task budget.
+**Gap/evidence:** Direct objective continuation has finite total-step and per-invocation time ceilings (`cli/src/types.ts`, `cli/src/core/run_turn.ts`). Tool dispatches and primary-turn inference submissions are now capped cumulatively, including provider recovery retries. The shared inference budget still does not include transient `runSubagent` execution, durable operation work units, token consumption, cumulative elapsed time, per-tool deadlines or process-crash reconciliation.
 
 **Affected surfaces:** `types.ts`, `config.ts`, `run_turn.ts`, subagent execution in `agent.ts`, provider recovery, tool deadlines, durable objective/task state, operation runner and CLI/UI reporting.
 
@@ -54,25 +48,31 @@ Reuse `ContinuationBudget`, `ExecutionTracker`, `ProviderRecoveryController`, `R
 
 **Progress (2026-11-22):** The `runTurnImpl` path persists a per-objective tool invocation ceiling (default 1,000; hard maximum 10,000), admits calls before dispatch, and checkpoints the count before dispatcher effects. In-turn `runSubagent` children reserve from the same tracker and persist each reservation before dispatch; exhaustion and failed persistence both stop the child before another effect. A saved ceiling cannot be raised by a later invocation. Legacy execution records explicitly mark tool history incomplete, so migrated counts are not presented as exact. Tests cover bounded direct and delegated calls, resume without budget renewal, admission bounds, legacy lower-bound tracking, failed delegated persistence, and workspace-observer classification. This tranche does not yet cover durable work units, provider recovery/retries, inference or token accounting, cumulative elapsed limits, per-tool deadlines, or process-crash reconciliation.
 
+**Progress (2026-11-23, merged PR #760):** Primary objective turns reserve every inference request, including provider recovery retries, against a persisted objective ceiling (default 1,000; hard maximum 10,000). Persistence failure prevents dispatch; resume can lower but not raise the saved ceiling; legacy records expose earlier inference history as unknown. The feature test and all required exact-head checks passed at merge commit `51bf3db79fdadca26dbde6bbf752c9982c7793e3`; both post-merge CI runs also passed on that merge commit. The active `cli/src/agent.ts` ownership claim prevented adding shared accounting to `runSubagent` in that slice. Remaining scope: transient delegated execution, durable operation work units, tokens, cumulative elapsed limits, per-tool deadlines and process-crash reconciliation.
+
 ## WP-P10-03 — Acceptance evidence integrity and export
 
-**Priority:** P1 · **Complexity:** M · **Dependencies:** WP-P10-01 for independent policy identity.
+**Priority:** P1 · **Complexity:** M · **Dependencies:** none for local evidence integrity; independent policy identity remains unavailable under WP-P10-01.
 
-**Gap/evidence:** Flight events are append-only by convention, but append failures are ignored (`cli/src/flight.ts:77-108`); no chain/signature verification exists. `TurnResult` has `candidateId` and output SHA but not complete environment/policy identity (`cli/src/core/turn.ts:191-219`).
+**Existing capability:** `FlightRecorder` hash-chains persisted events and `FlightPlayer` reports altered, reordered, removed or unchained records (`cli/src/core/hash_chain.ts`, `cli/src/flight.ts`). GV-2 already exports bounded audit bundles with per-file SHA-256, a canonical manifest, hash-linked file entries, offline verification, and optional operator-key Ed25519 signatures (`cli/src/core/audit_bundle.ts`, `cli/src/audit_contract.ts`). `CandidateTracker` invalidates receipts on known mutations and recomputes the candidate identity before merge (`cli/src/core/candidate.ts`). These controls must be reused; this package does not need a second chain or evidence store.
+
+**Confirmed gap:** Before this slice, `FlightRecorder.appendEvent` silently returned an apparent event after a write or redaction failure while leaving later writes on the same chain (`cli/src/flight.ts`). A later complete chain could therefore omit a middle event without the on-disk chain indicating missing evidence. Flight logs are optional telemetry and must not block authorized work, but they must not continue to attest to an intact chain after a skipped event. The completion receipt also does not yet carry a complete, durable environment and acceptance-policy identity; distinguish that remaining work from the existing candidate binding and audit-bundle integrity.
 
 **Affected surfaces:** `flight.ts`, `evidence.ts`, completion oracle, durable state and audit commands.
 
-**Design / reuse:** Add an evidence manifest to existing receipt/event structures. Chain each event over prior digest; include candidate tree/commit identity, verifier definition/config digest, command, tool/runtime versions, exit code, timestamp, actor/model/provider identity and policy version. Use an operator-supplied signing key only if explicitly configured; unsigned bundles must say “integrity checked, not signed.” Required acceptance evidence write failure must produce a visible non-success result; optional telemetry remains best effort and explicitly marked.
+**Design / reuse:** Keep the GV-3 flight chain and GV-2 audit bundle. On any event omission, stop chaining subsequent events so the existing verifier reports a broken or unchained log; return an explicit `recordingSkipped` result without blocking the authorized action. For later work, extend the existing receipt/bundle only for missing candidate, verifier, environment and policy identity. Use operator-supplied signing only when explicitly configured; unsigned bundles remain clearly unsigned. Do not promote optional flight telemetry into a mandatory acceptance store.
 
 **Implementation steps:**
 
-1. Define canonical event encoding and versioned manifest.
-2. Chain existing records and add offline `verify` over an exported bundle; do not duplicate existing state storage.
-3. Bind verification receipt to exact candidate and current policy/workflow identity.
-4. Add redaction before hashing/export and retention controls.
-5. Distinguish required acceptance receipts from optional flight telemetry.
+1. Preserve the existing canonical hash-chain and versioned audit-bundle formats.
+2. Mark the current flight chain unverifiable when sanitization or append failure skips a record; retain the caller-visible failure result and keep telemetry non-blocking.
+3. Add missing environment and policy identity to acceptance evidence only after tracing existing receipt fields and migration needs.
+4. Keep redaction before hashing/export and retain current artifact limits and retention behavior.
+5. Keep acceptance-critical receipt persistence distinct from optional flight telemetry; write failures in mandatory acceptance evidence must remain non-success.
 
-**Required tests / acceptance:** Alter, delete, reorder, truncate or append an event; verification names the first broken sequence. Candidate mutation after verification invalidates receipt. Simulated disk-full/permission error prevents verified acceptance when the receipt is mandatory. Secret fixture remains absent from export. Exact manifest contains source revision, candidate digest, command, exit code and tool versions.
+**Progress (2026-11-23):** The flight recorder now returns `recordingSkipped` and disables further chaining after sanitization or append failure. A failure-injection test reproduces an `EISDIR` append failure and confirms the next persisted event makes the flight read as `CHAIN BROKEN`; a separate test covers sanitizer failure. This intentionally does not block tool execution.
+
+**Required tests / acceptance:** Existing tests cover altered, deleted, reordered and truncated events and candidate mutation invalidation. New failure injection confirms an omitted event cannot be followed by an apparently intact chain and sanitizer failure does not preserve that claim. Remaining acceptance work: simulated failure of mandatory receipt persistence prevents verified acceptance; exported evidence binds source revision, candidate digest, verifier definition/configuration, command, exit code, runtime and policy identity; secret fixtures remain absent from exports.
 
 **Migration / rollback:** Legacy logs remain readable but classify `integrity=unverified_legacy`; never silently “upgrade” them to verified. Keep old export path read-only during migration. Residual risk: same-user can delete both evidence and local chain unless an external signed/immutable copy is retained.
 
@@ -92,24 +92,26 @@ Reuse `ContinuationBudget`, `ExecutionTracker`, `ProviderRecoveryController`, `R
 
 ## WP-P10-05 — Compiler/static-analysis gate and hotspot metrics
 
-**Priority:** P2 · **Complexity:** S/M · **Dependencies:** WP-P10-01 for protection of CI.
+**Priority:** P2 · **Complexity:** S/M · **Dependencies:** none; independent protection of CI remains unavailable under WP-P10-01.
 
-**Gap/evidence:** Strict TS build and CodeQL JS/TS are present; Clippy passed on this audit machine but `.github/workflows/ci.yml` does not run it. No Rust CodeQL or targeted complexity gate was found. `runTurnImpl` remains a critical large function.
+**Gap/evidence:** Strict TS build, CodeQL JS/TS, Clippy, and diff-scoped rustfmt are present in CI. No Rust CodeQL or targeted complexity gate was found. `runTurnImpl` remains a critical large function.
 
 **Affected surfaces:** `.github/workflows/ci.yml`, `core/Cargo.toml`, TS configuration and targeted complexity documentation.
 
-**Design / reuse:** Add `cargo clippy --locked -- -D warnings` to the existing Linux CI job after a green pinned baseline. Keep Rust warnings scoped and justified rather than inventing a large analyzer bundle. Add a complexity report or thresholds only for critical high-change functions; avoid arbitrary whole-repository size caps.
+**Design / reuse:** Reuse the existing `make lint` gate for typecheck, Clippy, and changed-file rustfmt; do not add a duplicate CI job. Keep Rust warnings scoped and justified rather than inventing a large analyzer bundle. Add complexity reporting or thresholds only for critical high-change functions after measuring the baseline; avoid arbitrary whole-repository size caps.
 
-**Required tests / acceptance:** CI runs Clippy on exact PR merge head; seeded warning fails. TypeScript strict build is verified on Node 22 and 24. A changed critical function crossing an agreed CC/nesting threshold requires review or decomposition. Workflow is protected by WP-P10-01.
+**Progress (2026-11-23, `main` at `9156571f7d5fd8f8436c3105f0237628ab35e857`):** The Clippy CI gate proposed above is already implemented through `make lint` (`Makefile:24-27`), which runs CLI typecheck, Clippy with `-D warnings`, and diff-scoped rustfmt. CI calls this target in `test-matrix (22)`, `test-matrix (24)`, and `linux-x86_64` (`.github/workflows/ci.yml:74-75,196-197`). Workflow run `45047617708` completed successfully on that exact main SHA, including all three static-gate steps. Do not add a duplicate Clippy job. Remaining work in this package is a narrowly scoped, evidence-based complexity metric and its enforcement policy; the independent protection dependency from WP-P10-01 remains unavailable in this single-user repository.
+
+**Required tests / acceptance:** Existing exact-main CI evidence demonstrates the static gate passes on `9156571f7d5fd8f8436c3105f0237628ab35e857`; the same gate is required in the PR workflow. A changed critical function crossing an agreed, baseline-derived CC/nesting threshold fails a focused check. The verification policy remains exposed to single-user workflow changes until WP-P10-01 can be independently satisfied.
 
 **Migration / rollback:** If historical warnings appear on a new toolchain, baseline them narrowly with tracked expiry/owner; do not suppress globally. Rollback is removal of a specific analyzer job only with independent approval. Residual risk: static analysis cannot establish requirements correctness or provider behavior.
 
 ## Dependency-aware order
 
-1. **WP-P10-01** governance/acceptance authority (P0).
-2. **WP-P10-02** aggregate budgets across direct, delegated, retry and resume paths (P0).
-3. **WP-P10-03** durable evidence and candidate/policy binding (P1; can start schema design in parallel after WP-P10-01).
-4. **WP-P10-04** aggregate resource admission and cleanup (P1; budget counters feed this work).
-5. **WP-P10-05** static-analysis/complexity gate (P2; protected by WP-P10-01).
+1. **WP-P10-02** aggregate budgets across direct, delegated, retry and resume paths (P0).
+2. **WP-P10-03** durable evidence and candidate/policy binding (P1; implement local integrity controls and state the single-maintainer trust limit).
+3. **WP-P10-04** aggregate resource admission and cleanup (P1; budget counters feed this work).
+4. **WP-P10-05** static-analysis/complexity gate (P2; reuse existing CI gates and state the single-maintainer trust limit).
+5. **WP-P10-01** remains deferred until a second independent maintainer is available; it is not a prerequisite for the work above or publication.
 
-Each package lands independently with its own negative tests. CI green on a PR is not proof the implementation is correct; hosted checks must be tied to the exact candidate and accepted under the protected review policy.
+Each implementable package lands independently with its own negative tests. CI green on a PR is not proof the implementation is correct; hosted checks must be tied to the exact candidate and reported alongside the single-maintainer review limitation.

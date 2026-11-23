@@ -172,6 +172,12 @@ export interface ExecutionTracking {
   toolInvocations: number;
   /** False when the record predates tool invocation accounting or its counter was malformed. */
   toolInvocationHistoryComplete: boolean;
+  /** Inference submissions admitted since this field was introduced; lower bound for upgraded legacy tasks. */
+  inferenceSubmissions: number;
+  /** False when the record predates inference submission accounting or its counter was malformed. */
+  inferenceSubmissionHistoryComplete: boolean;
+  /** Fixed objective-wide ceiling; absent on legacy objectives until their first request is reserved. */
+  maxInferenceSubmissions?: number;
   turns: number;
   /** Consecutive steps without progress, across turns; operator input resets it. */
   stepsWithoutProgress: number;
@@ -203,6 +209,8 @@ export function createTracking(): ExecutionTracking {
     cumulativeSteps: 0,
     toolInvocations: 0,
     toolInvocationHistoryComplete: true,
+    inferenceSubmissions: 0,
+    inferenceSubmissionHistoryComplete: true,
     turns: 0,
     stepsWithoutProgress: 0,
     lastProgressStep: 0,
@@ -231,11 +239,16 @@ export function normalizeTracking(raw: unknown): ExecutionTracking {
   if (!raw || typeof raw !== "object") {
     const tracking = createTracking();
     tracking.toolInvocationHistoryComplete = false;
+    tracking.inferenceSubmissionHistoryComplete = false;
     return tracking;
   }
   const t = raw as Record<string, any>;
   const hasValidToolCount = Number.isSafeInteger(t.toolInvocations) && t.toolInvocations >= 0;
   const hasToolHistoryFlag = typeof t.toolInvocationHistoryComplete === "boolean";
+  const hasInferenceCountField = Object.hasOwn(t, "inferenceSubmissions");
+  const hasValidInferenceCount = Number.isSafeInteger(t.inferenceSubmissions) && t.inferenceSubmissions >= 0;
+  const hasInferenceHistoryFlag = typeof t.inferenceSubmissionHistoryComplete === "boolean";
+  const hasValidInferenceLimit = t.maxInferenceSubmissions === undefined || (Number.isSafeInteger(t.maxInferenceSubmissions) && t.maxInferenceSubmissions >= 1);
   const base = createTracking() as unknown as Record<string, any>;
   for (const [key, value] of Object.entries(base)) {
     if (Array.isArray(value)) {
@@ -263,6 +276,9 @@ export function normalizeTracking(raw: unknown): ExecutionTracking {
   }
   t.toolInvocations = hasValidToolCount ? t.toolInvocations : 0;
   t.toolInvocationHistoryComplete = hasValidToolCount && hasToolHistoryFlag ? t.toolInvocationHistoryComplete : false;
+  t.inferenceSubmissions = hasValidInferenceCount ? t.inferenceSubmissions : (hasInferenceCountField ? -1 : 0);
+  t.inferenceSubmissionHistoryComplete = hasValidInferenceCount && hasInferenceHistoryFlag ? t.inferenceSubmissionHistoryComplete : false;
+  t.maxInferenceSubmissions = hasValidInferenceLimit ? t.maxInferenceSubmissions : -1;
   return t as ExecutionTracking;
 }
 
@@ -511,6 +527,16 @@ export class ExecutionTracker {
     }
     const admitted = Math.min(requested, Math.max(0, maximum - this.data.toolInvocations));
     this.data.toolInvocations += admitted;
+    return admitted;
+  }
+
+  /** Reserve inference requests before sending them; the count includes retries, not availability probes. */
+  admitInferenceSubmissions(requested: number, maximum: number): number {
+    if (!Number.isSafeInteger(requested) || requested < 0 || !Number.isSafeInteger(maximum) || maximum < 0) {
+      throw new Error("Inference submission admission requires non-negative safe integer counts.");
+    }
+    const admitted = Math.min(requested, Math.max(0, maximum - this.data.inferenceSubmissions));
+    this.data.inferenceSubmissions += admitted;
     return admitted;
   }
 
