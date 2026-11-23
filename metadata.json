@@ -1,0 +1,80 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M830QCS4J15MS658ERQ3GAC6",
+  "strategy": "manual-commit",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "cli/src/agent.ts",
+    "cli/src/config.ts",
+    "cli/src/core/approval_policy.ts",
+    "cli/src/core/capability_definitions/lsp.ts",
+    "cli/src/core/dispatch_tool_call.ts",
+    "cli/src/core/managed_policy.ts",
+    "cli/src/core/managed_policy_inputs.ts",
+    "cli/src/core/managed_policy_load.ts",
+    "cli/src/core/policy_runtime.ts",
+    "cli/src/core/spine_handlers.ts",
+    "cli/src/index.ts",
+    "cli/src/lsp.ts",
+    "cli/src/security.ts",
+    "cli/src/tools.ts",
+    "cli/src/workspace_trust.ts",
+    "cli/test/cg3_diagnostics_evidence.test.ts",
+    "cli/test/fixtures/fake_lsp_scripted.mjs",
+    "cli/test/helpers/audit_fixture.ts",
+    "cli/test/helpers/lsp_exit_child.ts",
+    "cli/test/helpers/lsp_scripted.ts",
+    "cli/test/helpers/policy_enforcement.ts",
+    "cli/test/lsp_characterization.test.ts",
+    "cli/test/lsp_freshness.test.ts",
+    "cli/test/lsp_honesty.test.ts",
+    "cli/test/lsp_lifecycle.test.ts",
+    "cli/test/lsp_progress.test.ts",
+    "cli/test/lsp_readiness.test.ts",
+    "cli/test/lsp_real_servers.test.ts",
+    "cli/test/lsp_shape.test.ts",
+    "cli/test/lsp_trust.test.ts",
+    "cli/test/managed_policy_dispatch.test.ts",
+    "cli/test/managed_policy_enforcement.test.ts",
+    "cli/test/managed_policy_schema.test.ts",
+    "cli/test/managed_policy_startup.test.ts",
+    "docs/MANAGED_POLICY.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 52,
+    "cache_creation_tokens": 39146,
+    "cache_read_tokens": 8918868,
+    "output_tokens": 24994,
+    "api_call_count": 22,
+    "subagent_tokens": {
+      "input_tokens": 164,
+      "cache_creation_tokens": 717492,
+      "cache_read_tokens": 11012799,
+      "output_tokens": 94247,
+      "api_call_count": 82
+    }
+  },
+  "redaction": {
+    "replacements": 924,
+    "layers": {
+      "betterleaks": 2,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 43,
+      "credentialed_uri": 3,
+      "entropy": 876,
+      "key_context": 0,
+      "provider_token": 2,
+      "shell_stdin": 0
+    }
+  }
+}
