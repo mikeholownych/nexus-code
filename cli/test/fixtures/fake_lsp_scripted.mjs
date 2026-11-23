@@ -15,15 +15,20 @@
 //                    A `text` longer than 2000 characters is logged as {elidedChars: n}.
 //   stderrOnStart    text written to stderr at start
 //   exitOnStart      exit code: exit at once (after stderrOnStart), before reading anything
-//   spawnGrandchild  true: start a child process that idles (it ends by itself after 60 s) and log its pid
+//   spawnGrandchild  true: start a child process that idles (it ends by itself after 60 s) and log its pid;
+//                    "escaped": the same in a session of its own (outside this server's process group), holding this
+//                    server's stdout and stderr open, logged as {event:"escaped", pid}
 //   ignoreSigterm    true: catch SIGTERM and keep running
 //   ignoreShutdown   true: never answer `shutdown`, ignore `exit`
+//   ignoreStdinEnd   true: keep running when stdin ends (it then ends by itself after 60 s)
 //   initialize       "never" (no answer), or the result object (default {capabilities: {}})
 //   hover            "fromText": answer from the held text with contents = JSON {word, docs} where `word` is the
 //                    identifier at the position (character read as a UTF-16 offset) and `docs` maps basename -> held text;
-//                    or {"<basename>" | "*": <result>}: a scripted result per file (null = no hover)
+//                    or {"<basename>" | "*": <result>}: a scripted result per file (null = no hover, "never" = no reply)
 //   definition       "fromText": the Location of the first `def <word>` in any held document, else null;
-//                    or {"<basename>" | "*": <result>}
+//                    or {"<basename>" | "*": <result>} ("never" = no reply)
+//   loadedOn         a method ("test/release"): until it is received, hover and definition answer null, as a server
+//                    that has not loaded the project yet does
 //   diagnostic       how `textDocument/diagnostic` is answered (announce `diagnosticProvider` through `initialize`):
 //                    "fromText": a full report with one item whose message names the file and the text held for every
 //                    document (so a file's report depends on the others), with that message as resultId; or
@@ -33,11 +38,12 @@
 //                    "<method>#<basename>" for one file ("textDocument/didOpen#a.ts"). Actions run before the reply.
 //   action           {after?: ms, request?: true, method, params}: send a notification, or with `request` a server
 //                    request whose reply is logged. Without `after` it is sent synchronously, in order.
+//                    {raw: "<bytes>", times?: n}: write the string to stdout as it is, n times (a broken or oversized frame).
 // In action params and scripted results a string is replaced when it is exactly "$uri" (the triggering document's URI),
 // "$realuri" (the same file with symlinks resolved), "$uri:lowerhex" (the same URI with lower-case percent escapes),
 // "$uri:unicode" (the same URI with its non-ASCII characters not percent-encoded), "$version" (its version, as a number),
 // "$text" (the text this server holds for it; "" once closed), or starts with "$root/" (the client's rootUri; also in object keys).
-// The server exits when its stdin ends, so it cannot outlive a test process that died.
+// The server exits when its stdin ends, so it cannot outlive a test process that died (`ignoreStdinEnd`: not by more than 60 s).
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -48,6 +54,7 @@ const elide = (_k, v) => (_k === "text" && typeof v === "string" && v.length > 2
 const log = (entry) => fs.appendFileSync(S.log, `${JSON.stringify(entry, elide)}\n`);
 const docs = new Map(); // uri -> text
 const sent = new Map(); // server request id -> method
+let loaded = !S.loadedOn;
 let rootUri = "";
 let nextId = 1;
 let buf = Buffer.alloc(0);
@@ -55,9 +62,10 @@ let buf = Buffer.alloc(0);
 log({ event: "start", pid: process.pid });
 if (S.stderrOnStart) fs.writeSync(2, S.stderrOnStart);
 if (S.spawnGrandchild) {
-  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" });
+  const escaped = S.spawnGrandchild === "escaped";
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], escaped ? { stdio: ["ignore", "inherit", "inherit"], detached: true } : { stdio: "ignore" });
   child.unref();
-  log({ event: "grandchild", pid: child.pid });
+  log({ event: escaped ? "escaped" : "grandchild", pid: child.pid });
 }
 if (S.ignoreSigterm) process.on("SIGTERM", () => log({ event: "signal", signal: "SIGTERM" }));
 if (typeof S.exitOnStart === "number") process.exit(S.exitOnStart);
@@ -83,6 +91,7 @@ function fill(value, ctx) {
 }
 
 function act(action, ctx) {
+  if (typeof action.raw === "string") return void process.stdout.write(action.raw.repeat(action.times ?? 1));
   const msg = { method: action.method, params: fill(action.params, ctx) };
   if (action.request) {
     msg.id = `s${nextId++}`;
@@ -113,6 +122,7 @@ function wordAt(uri, position) {
 
 function answer(script, m, fromText) {
   const uri = m.params.textDocument.uri;
+  if (!loaded) return null;
   if (script === "fromText") return fromText(uri, wordAt(uri, m.params.position));
   const scripted = script?.[base(uri)] ?? script?.["*"] ?? null;
   return fill(scripted, { uri });
@@ -150,6 +160,7 @@ function handle(m) {
   }
   const doc = m.params?.textDocument;
   if (m.method === "initialize") rootUri = m.params.rootUri;
+  if (m.method === S.loadedOn) loaded = true;
   if (m.method === "textDocument/didOpen") docs.set(doc.uri, doc.text);
   if (m.method === "textDocument/didChange") docs.set(doc.uri, m.params.contentChanges.at(-1).text);
   if (m.method === "textDocument/didClose") docs.delete(doc.uri);
@@ -168,8 +179,10 @@ function handle(m) {
     if (S.initialize !== "never") send({ id: m.id, result: S.initialize ?? { capabilities: {} } });
   } else if (m.method === "shutdown") {
     if (!S.ignoreShutdown) send({ id: m.id, result: null });
-  } else if (m.method === "textDocument/hover") send({ id: m.id, result: answer(S.hover, m, hoverFromText) });
-  else if (m.method === "textDocument/definition") send({ id: m.id, result: answer(S.definition, m, definitionFromText) });
+  } else if (m.method === "textDocument/hover" || m.method === "textDocument/definition") {
+    const result = m.method === "textDocument/hover" ? answer(S.hover, m, hoverFromText) : answer(S.definition, m, definitionFromText);
+    if (result !== "never") send({ id: m.id, result });
+  }
   else if (m.method === "textDocument/diagnostic") {
     const scripted = diagnosticAnswer(m);
     if (scripted === "never") return;
@@ -180,7 +193,8 @@ function handle(m) {
   else send({ id: m.id, result: null });
 }
 
-process.stdin.on("end", () => process.exit(0));
+if (S.ignoreStdinEnd) setTimeout(() => process.exit(0), 60000);
+else process.stdin.on("end", () => process.exit(0));
 process.stdin.on("data", (chunk) => {
   buf = Buffer.concat([buf, chunk]);
   for (;;) {
