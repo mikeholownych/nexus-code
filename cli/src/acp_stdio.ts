@@ -31,6 +31,8 @@ type Session = {
   events: SidecarEvent[]; tools: SidecarEvent[]; pendingPrompt?: { rpcId: AcpId; commandId: string };
   pendingApproval?: { id: string; rpcId: number; toolCallId: string; timer: NodeJS.Timeout };
   pendingReceipt?: { commandId: string; resolve: (event: SidecarEvent | undefined) => void };
+  /** The prompt was answered early (cancelled request, refused checkpoint) and its turn is still winding down: no new prompt until the turn's result arrives, or that result would answer the new prompt. */
+  stopping?: boolean;
 };
 
 export interface AcpStdioOptions {
@@ -169,6 +171,10 @@ export class AcpStdioServer {
         if (id !== undefined) {
           for (const session of this.sessions.values()) if (session.pendingPrompt?.rpcId === id) {
             session.pendingPrompt = undefined;
+            session.stopping = true;
+            // The permission the cancelled prompt was waiting on dies with it; left in place it would silently deny
+            // the next prompt's first approval.
+            await this.dropPendingApproval(session, true);
             await this.sidecarCommand(session, { type: "cancel" });
             this.send(cancelledRequestError(id));
             this.pending.delete(this.requestKey(id));
@@ -298,6 +304,7 @@ export class AcpStdioServer {
     const parsed = validatePrompt(params, { workspace: session.cwd, fs: { realpath: (value) => fs.realpathSync(value), isDirectory: (value) => fs.statSync(value).isDirectory() } });
     if (!parsed.ok) { this.replyError(id, parsed.error); return; }
     if (session.pendingPrompt) { this.replyError(id, { code: ACP_ERROR.INTERNAL_ERROR, message: "this session already has a prompt in progress" }); return; }
+    if (session.stopping) { this.replyError(id, { code: ACP_ERROR.INTERNAL_ERROR, message: "the previous prompt of this session is still stopping; send the prompt again" }); return; }
     const commandId = `acp-${String(id).slice(0, 180)}`;
     session.pendingPrompt = { rpcId: id, commandId };
     await this.sidecarCommand(session, { type: "prompt.submit", id: commandId, text: parsed.value.text });
@@ -328,6 +335,7 @@ export class AcpStdioServer {
     else if (event.type === "file.diff") this.send(sessionUpdate(session.id, fileDiffToUpdate(event as any, session.cwd)));
     else if (event.type === "tool.end") this.send(sessionUpdate(session.id, toolEndToUpdate(event as any)));
     else if (event.type === "approval.request") this.permission(session, event as any);
+    else if (event.type === "checkpoint.choice.request") this.checkpointChoice(session, event);
     else if (event.type === "turn.result") void this.finishPrompt(session, event as any);
     else if (event.type === "error" && session.pendingPrompt && event.id === session.pendingPrompt.commandId) {
       this.replyError(session.pendingPrompt.rpcId, sidecarErrorToRpc(event as any));
@@ -337,7 +345,38 @@ export class AcpStdioServer {
     if (session.pendingReceipt && event.type === "receipt" && event.id === session.pendingReceipt.commandId) {
       const pending = session.pendingReceipt; session.pendingReceipt = undefined; pending.resolve(event);
     }
-    if (event.type === "session.state" && !session.id && event.session) session.id = event.session;
+    if (event.type === "session.state") {
+      if (!session.id && event.session) session.id = event.session;
+      // A pre-turn refusal (for example a cancelled checkpoint choice or provider-gate cancellation) ends with a
+      // terminal `error`, not `turn.result`. Keep the session blocked until Sidecar confirms its job is idle.
+      if (session.stopping && event.busy === false) session.stopping = false;
+    }
+  }
+
+  /** Forget the session's open permission request: stop its timer, stop accepting a reply, and (optionally) deny it. */
+  private async dropPendingApproval(session: Session, deny: boolean): Promise<void> {
+    const approval = session.pendingApproval;
+    if (!approval) return;
+    clearTimeout(approval.timer);
+    this.permissionRequests.abandon(approval.rpcId);
+    session.pendingApproval = undefined;
+    if (deny) await this.sidecarCommand(session, { type: "deny", id: approval.id });
+  }
+
+  /**
+   * A checkpoint that cannot be made asks the operator how to go on. No ACP client may answer that, and the adapter
+   * never picks read-only, no-checkpoint or allow-sensitive for the operator: it cancels, and the prompt fails with
+   * the sidecar's message.
+   */
+  private checkpointChoice(session: Session, event: Extract<SidecarEvent, { type: "checkpoint.choice.request" }>): void {
+    const prompt = session.pendingPrompt;
+    if (prompt) {
+      session.pendingPrompt = undefined;
+      session.stopping = true;
+      this.replyError(prompt.rpcId, { code: ACP_ERROR.INTERNAL_ERROR, message: formatSafeSidecarDiagnostic([event.message]) });
+      this.pending.delete(this.requestKey(prompt.rpcId));
+    }
+    void this.sidecarCommand(session, { type: "checkpoint.choice", id: event.id, choice: "cancel" });
   }
 
   private permission(session: Session, event: Extract<SidecarEvent, { type: "approval.request" }>): void {
@@ -358,10 +397,14 @@ export class AcpStdioServer {
 
   private async finishPrompt(session: Session, event: Extract<SidecarEvent, { type: "turn.result" }>): Promise<void> {
     const pending = session.pendingPrompt;
-    if (!pending) return;
-    if (session.pendingApproval) {
-      clearTimeout(session.pendingApproval.timer); this.permissionRequests.abandon(session.pendingApproval.rpcId); session.pendingApproval = undefined;
-    }
+    // The turn is over, so nothing can still be waiting on a permission, whether or not a prompt is waiting on the turn.
+    session.stopping = false;
+    await this.dropPendingApproval(session, false);
+    if (!pending) { session.tools = []; return; }
+    // From here the prompt is being answered. It stops being cancellable now, before the receipt is awaited: a
+    // $/cancel_request in that window would otherwise answer it a second time and wait for a turn that has ended.
+    session.pendingPrompt = undefined;
+    session.tools = [];
     const resultId = `acp-receipt-${pending.commandId}`;
     let sections: any[] = [];
     try {
@@ -383,9 +426,16 @@ export class AcpStdioServer {
     if ("error" in mapped) this.replyError(pending.rpcId, mapped.error);
     else this.send(resultResponse(pending.rpcId, promptResult(mapped.stopReason, verification)));
     this.pending.delete(this.requestKey(pending.rpcId));
-    session.pendingPrompt = undefined;
-    session.tools = [];
   }
+}
+
+/**
+ * Why `nexus acp` must not start with this configuration, or undefined. Only review and read-only are served: the
+ * client on the other end is untrusted, and auto approval would let every tool call through without asking it.
+ */
+export function acpStartupRefusal(config: Pick<HarnessConfig, "approvalMode" | "fullAccess">): string | undefined {
+  if (config.approvalMode !== "auto" && !config.fullAccess) return undefined;
+  return "nexus acp does not run with automatic approval (--yes, --mode auto or NEXUS_APPROVAL_MODE=auto). Start it in review mode (the default) or with --read-only.";
 }
 
 /** Attach the adapter to process stdio. Stdout is reserved for JSON-RPC messages. */
@@ -400,7 +450,9 @@ export function runAcpStdio(options: AcpStdioOptions): AcpStdioServer {
   const server = new AcpStdioServer({ ...options, write: options.write ?? ((line) => protocolWrite(line)) });
   process.stdin.on("data", (chunk: Buffer) => server.push(chunk));
   process.stdin.once("end", () => { void server.close(); });
-  process.once("SIGINT", () => { void server.close().then(() => { process.exitCode = 130; }); });
-  process.once("SIGTERM", () => { void server.close().then(() => { process.exitCode = 143; }); });
+  // The stdin listener keeps the process alive, so setting an exit code would leave it running after a signal.
+  const stop = (code: number) => { void server.close().finally(() => process.exit(code)); };
+  process.once("SIGINT", () => stop(130));
+  process.once("SIGTERM", () => stop(143));
   return server;
 }

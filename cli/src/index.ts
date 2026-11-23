@@ -41,7 +41,7 @@ import { streamEventSink, streamObserver } from "./stream_json.js";
 import { RUN_RESULT_SCHEMA_VERSION, resolveRunTask, runExitCode, runJsonResult } from "./run_contract.js";
 import { VERIFY_RESULT_SCHEMA_VERSION, verifyExitCode, type VerifyJsonError } from "./verify_contract.js";
 import { VerifyInterrupted, VerifyUsageError, renderVerifyText, verifyChange, type VerifySandboxRequest } from "./core/verify.js";
-import { runAcpStdio } from "./acp_stdio.js";
+import { acpStartupRefusal, runAcpStdio } from "./acp_stdio.js";
 
 function collectAnswer(value: string, previous: string[] = []): string[] {
   return [...previous, value];
@@ -1504,6 +1504,13 @@ program
   .description("Serve the Agent Client Protocol over stdio")
   .action(() => {
     const config = buildConfig(program.opts());
+    // D-AC-3: an ACP client is untrusted, and under auto approval no tool call would ask it or anyone else. Whatever
+    // selected auto (--yes, --mode auto, NEXUS_APPROVAL_MODE), the adapter does not start.
+    const refusal = acpStartupRefusal(config);
+    if (refusal) {
+      console.error(refusal);
+      process.exit(2);
+    }
     config.surface = "tui";
     runAcpStdio({ config, version: getBuildIdentity().string });
   });
