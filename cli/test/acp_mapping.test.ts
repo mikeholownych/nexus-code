@@ -535,7 +535,7 @@ test("initialize: protocol version 1, all three prompt capabilities false, no MC
       loadSession: true,
       promptCapabilities: { image: false, audio: false, embeddedContext: false },
       mcpCapabilities: { http: false, sse: false },
-      _meta: { "nexus/experimental": true, "nexus/extensions": ["_nexus/receipt/get"], "nexus/sidecar_protocol": 1 },
+      _meta: { "nexus/experimental": true, "nexus/extensions": ["_nexus/receipt/get", "_nexus/verify"], "nexus/sidecar_protocol": 1 },
     },
   });
 });
