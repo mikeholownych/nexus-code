@@ -5,6 +5,14 @@ export type ContextScope = "turn" | "session" | "task" | "repository" | "profile
 export type ContextFreshness = "current" | "stale" | "unknown";
 export type ContextTrust = "operator_input_untrusted" | "model_generated_unverified" | "tool_output_unverified" | "persisted_unverified" | "system_instruction" | "verified_evidence";
 export type ContextSourceStatus = "ok" | "partial" | "failed";
+export type WorkspaceStateComparison = "changed" | "unchanged" | "no_previous_capture" | "previous_capture_unversioned" | "unavailable";
+
+export interface WorkspaceStateEvidence {
+  /** Composite candidate identity; no source file contents or per-file hashes are retained. */
+  fingerprint?: string;
+  comparison: WorkspaceStateComparison;
+  invalidatedRepositoryItemIds: string[];
+}
 
 export interface ContextInventoryItem {
   id: string;
@@ -39,6 +47,7 @@ export interface ContextInventorySnapshot {
   sessionId?: string;
   taskId?: string;
   workspace?: string;
+  workspaceState?: WorkspaceStateEvidence;
   coverage: "complete" | "partial";
   coverageGaps: string[];
   items: ContextInventoryItem[];
@@ -192,6 +201,7 @@ export interface ContextInventoryInput {
   sessionId?: string;
   taskId?: string;
   workspace?: string;
+  workspaceState?: WorkspaceStateEvidence;
   sources: Array<{ name: string; status: ContextSourceStatus; durationMs: number; items: ContextSourceItemInput[]; detail?: string }>;
   coverageGaps?: string[];
   maxItems?: number;
@@ -268,6 +278,13 @@ export function buildContextInventory(input: ContextInventoryInput): ContextInve
   const items = candidates;
   const omittedItems = totalCandidateItems - items.length;
   const gaps = [...(input.coverageGaps ?? [])];
+  if (input.workspaceState?.comparison === "changed") {
+    gaps.push(`workspace state changed since the previous capture; ${input.workspaceState.invalidatedRepositoryItemIds.length} prior repository-scoped item(s) require revalidation`);
+  } else if (input.workspaceState?.comparison === "previous_capture_unversioned") {
+    gaps.push("the previous context capture has no workspace fingerprint; repository freshness remains unknown");
+  } else if (input.workspaceState?.comparison === "unavailable") {
+    gaps.push("current workspace state could not be fingerprinted; repository freshness remains unknown");
+  }
   if (omittedItems) gaps.push(`inventory item limit omitted ${omittedItems} item(s)`);
   if (sourceMeasurements.some((source) => source.status !== "ok")) gaps.push("one or more context sources were partial or unavailable");
   const estimatedTokens = items.reduce((sum, item) => sum + item.estimatedTokens, 0);
@@ -283,6 +300,11 @@ export function buildContextInventory(input: ContextInventoryInput): ContextInve
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(input.taskId ? { taskId: input.taskId } : {}),
     ...(input.workspace ? { workspace: input.workspace } : {}),
+    ...(input.workspaceState ? { workspaceState: {
+      ...(input.workspaceState.fingerprint ? { fingerprint: input.workspaceState.fingerprint } : {}),
+      comparison: input.workspaceState.comparison,
+      invalidatedRepositoryItemIds: input.workspaceState.invalidatedRepositoryItemIds.slice(0, DEFAULT_MAX_ITEMS),
+    } } : {}),
     coverage,
     coverageGaps: [...new Set(gaps)],
     items,
@@ -299,6 +321,21 @@ export function buildContextInventory(input: ContextInventoryInput): ContextInve
       ...(input.lastRequestTokenSource ? { lastRequestTokenSource: input.lastRequestTokenSource } : {}),
       budgetStatus,
     },
+  };
+}
+
+/** Compare one saved inventory with a bounded, current candidate identity. Missing evidence remains explicit. */
+export function compareWorkspaceState(previous: ContextInventorySnapshot | undefined, fingerprint: string | undefined): WorkspaceStateEvidence {
+  const invalidatedRepositoryItemIds = previous?.items.filter((item) => item.scope === "repository").map((item) => item.id).slice(0, DEFAULT_MAX_ITEMS) ?? [];
+  if (!fingerprint) return { comparison: "unavailable", invalidatedRepositoryItemIds: [] };
+  if (!previous) return { fingerprint, comparison: "no_previous_capture", invalidatedRepositoryItemIds: [] };
+  if (!previous.workspaceState?.fingerprint) {
+    return { fingerprint, comparison: "previous_capture_unversioned", invalidatedRepositoryItemIds };
+  }
+  return {
+    fingerprint,
+    comparison: previous.workspaceState.fingerprint === fingerprint ? "unchanged" : "changed",
+    invalidatedRepositoryItemIds: previous.workspaceState.fingerprint === fingerprint ? [] : invalidatedRepositoryItemIds,
   };
 }
 
@@ -465,11 +502,13 @@ export function isContextInventorySnapshot(value: unknown): value is ContextInve
   const scopes = ["turn", "session", "task", "repository", "profile", "user"];
   const freshness = ["current", "stale", "unknown"];
   const trust = ["operator_input_untrusted", "model_generated_unverified", "tool_output_unverified", "persisted_unverified", "system_instruction", "verified_evidence"];
+  const workspaceComparisons = ["changed", "unchanged", "no_previous_capture", "previous_capture_unversioned", "unavailable"];
   return snapshot.schemaVersion === 1 &&
     safeText(snapshot.capturedAt, 80) &&
     (snapshot.sessionId === undefined || safeText(snapshot.sessionId, 200)) &&
     (snapshot.taskId === undefined || safeText(snapshot.taskId, 200)) &&
     (snapshot.workspace === undefined || safeText(snapshot.workspace, 1000)) &&
+    (snapshot.workspaceState === undefined || (snapshot.workspaceState && Object.keys(snapshot.workspaceState).every((key) => ["fingerprint", "comparison", "invalidatedRepositoryItemIds"].includes(key)) && (snapshot.workspaceState.fingerprint === undefined || /^[a-f0-9]{64}$/.test(snapshot.workspaceState.fingerprint)) && workspaceComparisons.includes(snapshot.workspaceState.comparison) && Array.isArray(snapshot.workspaceState.invalidatedRepositoryItemIds) && snapshot.workspaceState.invalidatedRepositoryItemIds.length <= DEFAULT_MAX_ITEMS && snapshot.workspaceState.invalidatedRepositoryItemIds.every((id) => safeText(id, 80)) && (snapshot.workspaceState.comparison === "unavailable" ? snapshot.workspaceState.fingerprint === undefined && snapshot.workspaceState.invalidatedRepositoryItemIds.length === 0 : Boolean(snapshot.workspaceState.fingerprint)) && (["unchanged", "no_previous_capture"].includes(snapshot.workspaceState.comparison) ? snapshot.workspaceState.invalidatedRepositoryItemIds.length === 0 : true))) &&
     (snapshot.coverage === "complete" || snapshot.coverage === "partial") &&
     Array.isArray(snapshot.coverageGaps) && snapshot.coverageGaps.length <= 100 && snapshot.coverageGaps.every((gap) => safeText(gap)) &&
     Array.isArray(snapshot.items) && snapshot.items.length <= DEFAULT_MAX_ITEMS && snapshot.items.every((item) => item && safeText(item.id, 80) && safeText(item.sourceType, 80) && safeText(item.sourceLocation) && scopes.includes(item.scope) && safeText(item.observedAt, 80) && freshness.includes(item.freshness) && (item.freshnessRule === undefined || safeText(item.freshnessRule)) && (item.freshness === "unknown" || safeText(item.freshnessRule)) && trust.includes(item.trust) && safeText(item.retention) && safeText(item.inclusionReason) && safeText(item.retrievalMethod, 100) && Number.isFinite(item.estimatedTokens) && item.estimatedTokens >= 0 && (item.sourceRefs === undefined || (Array.isArray(item.sourceRefs) && item.sourceRefs.length <= 100 && item.sourceRefs.every((ref) => safeText(ref, 200))))) &&
@@ -542,11 +581,11 @@ export function assessContextMaturity(snapshot: ContextInventorySnapshot, eviden
         dimension: "freshness", level: inventoryExists ? allFreshnessKnown ? 2 : 1 : null,
         evidence: [
           { reference: "cli/src/core/context_inventory.ts:ContextFreshness", finding: `${snapshot.items.filter((item) => item.freshness === "unknown").length} item(s) have unknown freshness; no current-state claim is inferred from persistence.`, status: "observed" },
-          { reference: "cli/src/core/candidate.ts:CandidateTracker", finding: "Verification receipts have applicability invalidation, but ordinary context observations do not consistently carry the same workspace fingerprint.", status: "observed" },
+          { reference: "cli/src/core/context_inventory.ts:compareWorkspaceState", finding: snapshot.workspaceState ? `Workspace comparison is ${snapshot.workspaceState.comparison}; ${snapshot.workspaceState.invalidatedRepositoryItemIds.length} prior repository-scoped item(s) require revalidation.` : "No workspace fingerprint comparison was available in this inventory.", status: snapshot.workspaceState?.comparison === "unavailable" ? "unknown" : "observed" },
         ],
-        unmetCriteria: ["Per-source version/fingerprint and invalidation rules for repository-derived observations.", "A freshness objective backed by observed change-to-invalidation latency."],
-        knownLimitations: ["Session and archived history can describe prior workspace states; this inventory marks those facts unknown rather than current."],
-        nextImprovement: "Bind repository-derived context to a workspace fingerprint and invalidate or mark it historical when that identity changes.",
+        unmetCriteria: ["Per-source freshness identities for external inputs, tool policy, and individual memory provenance.", "A freshness objective backed by observed change-to-invalidation latency."],
+        knownLimitations: ["The bounded candidate fingerprint covers repository candidate state only; ignored files and provider-side context are not fingerprinted. Session and archive facts remain unknown unless independently revalidated."],
+        nextImprovement: "Measure change-to-invalidation latency and add source-specific freshness identities for context outside the repository candidate.",
       }),
       dimension({
         dimension: "compounding_value", level: carriedMemoryObserved ? 2 : inventoryExists ? 1 : null,
@@ -574,6 +613,7 @@ export function renderContextInventoryText(snapshot: ContextInventorySnapshot): 
     `Context inventory: ${snapshot.coverage} (${snapshot.metrics.includedItems} item(s), ${snapshot.metrics.omittedItems} omitted)`,
     `Captured: ${snapshot.capturedAt} · assembly ${snapshot.metrics.assemblyDurationMs} ms · ${snapshot.metrics.estimatedTokens} estimated tokens (${snapshot.metrics.tokenSource})`,
     `Prompt budget: ${snapshot.metrics.budgetStatus}${snapshot.metrics.contextLimit !== undefined ? ` (${snapshot.metrics.contextLimit} tokens, ${snapshot.metrics.contextLimitSource ?? "source unknown"})` : " (limit unknown)"}`,
+    ...(snapshot.workspaceState ? [`Workspace freshness: ${snapshot.workspaceState.comparison}; ${snapshot.workspaceState.invalidatedRepositoryItemIds.length} prior repository item(s) invalidated`] : []),
     ...(snapshot.metrics.lastRequestTokens !== undefined ? [`Last request: ${snapshot.metrics.lastRequestTokens} tokens (${snapshot.metrics.lastRequestTokenSource ?? "source unknown"})`] : []),
     "",
     ...snapshot.sourceMeasurements.map((source) => `Source ${source.source}: ${source.status}, ${source.includedItemCount}/${source.itemCount} item(s) included (${source.omittedItemCount} omitted), ${source.estimatedTokens} estimated tokens, ${source.durationMs} ms${source.detail ? ` — ${source.detail}` : ""}`),

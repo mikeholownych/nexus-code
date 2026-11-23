@@ -1849,6 +1849,16 @@ export class AutonomousAgent {
     return this.workspacePathIdentity;
   }
 
+  /** A bounded, content-free candidate identity for revalidating recorded repository context. */
+  public getWorkspaceContextFingerprint(): string | undefined {
+    try {
+      return computeCandidateIdentitySync(this.config.workspace, { maxEntries: 4096, maxTotalBytes: 16 * 1024 * 1024 }).candidateId;
+    } catch {
+      // Unknown is safer than presenting an old repository observation as current.
+      return undefined;
+    }
+  }
+
   /** Judges, once per workspace, whether the session STARTED in a linked worktree the agent had already worked in. */
   private judgeReceiptBaselineOnce(): void {
     if (this.receiptBaselineJudged) return;

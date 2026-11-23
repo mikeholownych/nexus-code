@@ -8,6 +8,7 @@ import {
   buildContextInventory,
   buildInferenceContextManifest,
   buildSessionContextInventory,
+  compareWorkspaceState,
   isInferenceContextManifest,
   isContextInventorySnapshot,
   inventorySourcesFromMessages,
@@ -56,6 +57,36 @@ test("freshness is asserted only with an invalidation rule and is demoted after 
   assert.equal(restored.items[0].freshness, "unknown");
   assert.match(restored.items[0].freshnessRule!, /requires revalidation/);
   assert.equal(restored.coverage, "partial");
+});
+
+test("workspace fingerprints detect changed repository state and retain only stale repository references", () => {
+  const prior = buildContextInventory({
+    workspaceState: { fingerprint: "a".repeat(64), comparison: "no_previous_capture", invalidatedRepositoryItemIds: [] },
+    sources: [{ name: "repository", status: "ok", durationMs: 1, items: [{ ...input("repository:doc", "repository"), freshness: "current", freshnessRule: "bound to captured workspace state" }] }],
+  });
+  const changed = compareWorkspaceState(prior, "b".repeat(64));
+  assert.equal(changed.comparison, "changed");
+  assert.deepEqual(changed.invalidatedRepositoryItemIds, [prior.items[0].id]);
+  const current = buildContextInventory({ workspaceState: changed, sources: [] });
+  assert.equal(current.workspaceState?.fingerprint, "b".repeat(64));
+  assert.match(current.coverageGaps.join("\n"), /workspace state changed/);
+  assert.equal(current.coverage, "partial");
+  assert.equal(isContextInventorySnapshot(current), true);
+  assert.equal(compareWorkspaceState(prior, "a".repeat(64)).comparison, "unchanged");
+  assert.equal(compareWorkspaceState(prior, undefined).comparison, "unavailable");
+  assert.equal(compareWorkspaceState(undefined, "c".repeat(64)).comparison, "no_previous_capture");
+  const legacy = buildContextInventory({ sources: [{ name: "repository", status: "ok", durationMs: 1, items: [input("repository:legacy", "repository")] }] });
+  const legacyComparison = compareWorkspaceState(legacy, "d".repeat(64));
+  assert.equal(legacyComparison.comparison, "previous_capture_unversioned");
+  assert.deepEqual(legacyComparison.invalidatedRepositoryItemIds, [legacy.items[0].id]);
+});
+
+test("agent workspace fingerprint is bounded by candidate limits and returns unknown on failure", () => {
+  const agent: any = Object.create(AutonomousAgent.prototype);
+  Object.assign(agent, { config: { workspace: path.resolve(process.cwd(), "..") } });
+  assert.match(agent.getWorkspaceContextFingerprint(), /^[a-f0-9]{64}$/);
+  agent.config.workspace = path.join(os.tmpdir(), `missing-context-workspace-${process.pid}`);
+  assert.equal(agent.getWorkspaceContextFingerprint(), undefined);
 });
 
 test("message provenance retains opaque tool-call references without exposing raw identifiers", () => {
@@ -215,6 +246,7 @@ test("context inspection and maturity execute without provider calls and emit pa
     getLastRequestCount: () => undefined,
     getContextBudget: () => ({ contextLimit: 2048 }),
     getTaskId: () => "ctx-task",
+    getWorkspaceContextFingerprint: () => "b".repeat(64),
     getInferenceContextManifests: () => [buildInferenceContextManifest({
       id: "ctxreq_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", sequence: 1,
       messages: [{ role: "user", content: "private request body" }], tools: [],
@@ -257,6 +289,36 @@ test("context inspection and maturity execute without provider calls and emit pa
   assert.ok(durableSnapshot.items.some((item: any) => item.sourceType === "durable_note"));
   assert.ok(durableSnapshot.items.some((item: any) => item.sourceRefs?.includes("history-3")));
   assert.equal(JSON.stringify(durableSnapshot).includes("VERY_SECRET_NOTE_CONTENT"), false);
+
+  const previous = buildContextInventory({
+    workspaceState: { fingerprint: "a".repeat(64), comparison: "no_previous_capture", invalidatedRepositoryItemIds: [] },
+    sources: [{ name: "repository", status: "ok", durationMs: 1, items: [input("repository:old", "repository")] }],
+  });
+  const changedHost = {
+    ...host,
+    app: {
+      ...host.app,
+      getSessionManager: () => ({ loadSession: () => ({ contextInventory: previous }) }),
+    },
+  };
+  const changed = await routeSlash(changedHost, "context", "inspect --json", new AbortController().signal);
+  const changedSnapshot = JSON.parse(changed.output);
+  assert.equal(changedSnapshot.workspaceState.comparison, "changed");
+  assert.deepEqual(changedSnapshot.workspaceState.invalidatedRepositoryItemIds, [previous.items[0].id]);
+  assert.ok(changedSnapshot.coverageGaps.some((gap: string) => gap.includes("workspace state changed")));
+
+  const unavailableHost = {
+    ...host,
+    app: {
+      ...host.app,
+      getAgent: () => ({ ...agent, getWorkspaceContextFingerprint: () => undefined }),
+    },
+  };
+  const unavailable = await routeSlash(unavailableHost, "context", "inspect --json", new AbortController().signal);
+  const unavailableSnapshot = JSON.parse(unavailable.output);
+  assert.equal(unavailableSnapshot.workspaceState.comparison, "unavailable");
+  assert.equal(unavailableSnapshot.sourceMeasurements.find((source: any) => source.source === "workspace_state_fingerprint").status, "failed");
+  assert.ok(unavailableSnapshot.coverageGaps.some((gap: string) => gap.includes("could not be fingerprinted")));
 });
 
 test("session save, resume, compaction, and export retain source references without promoting memory", () => {
@@ -304,6 +366,7 @@ test("session save, resume, compaction, and export retain source references with
     const liveInventory = buildContextInventory({
       sessionId: "ctx-live",
       workspace,
+      workspaceState: { fingerprint: "a".repeat(64), comparison: "no_previous_capture", invalidatedRepositoryItemIds: [] },
       sources: [{ name: "repository", status: "ok", durationMs: 1, items: [{
         ...input("repository:status", "repository"),
         freshness: "current",
@@ -314,6 +377,8 @@ test("session save, resume, compaction, and export retain source references with
     const restoredLive = manager.loadSession("ctx-live")!;
     assert.equal(restoredLive.contextInventory?.items[0].freshness, "unknown");
     assert.match(restoredLive.contextInventory?.items[0].freshnessRule ?? "", /requires revalidation/);
+    assert.equal(restoredLive.contextInventory?.workspaceState?.fingerprint, "a".repeat(64));
+    assert.equal(compareWorkspaceState(restoredLive.contextInventory, "b".repeat(64)).comparison, "changed");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

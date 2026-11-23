@@ -11,7 +11,7 @@ import { isWorkspaceTrusted } from "../workspace_trust.js";
 import { PolicyContext } from "../core/approval_policy.js";
 import { isLegacyWorktreeArgs, relocationAfter, runWorktreeCommandAsync, tokenizeWorktreeArgs } from "../worktrunk/command.js";
 import { providerCompleter } from "../worktrunk/provider.js";
-import { assessContextMaturity, buildContextInventory, inventorySourcesFromMessages, renderContextInventoryText, renderContextMaturityText, type ContextSourceItemInput } from "../core/context_inventory.js";
+import { assessContextMaturity, buildContextInventory, compareWorkspaceState, inventorySourcesFromMessages, isContextInventorySnapshot, renderContextInventoryText, renderContextMaturityText, type ContextSourceItemInput } from "../core/context_inventory.js";
 import { NOT_A_REPO, SlashContext, SlashHandler, SlashOutcome, errorText, reply } from "./catalog.js";
 import { MAX_PASTE } from "../protocol.js";
 
@@ -294,6 +294,9 @@ function context({ host, args, signal }: SlashContext): SlashOutcome {
 
   const agent = host.app.getAgent();
   const config = host.app.getConfig();
+  const sessionManager = host.app.getSessionManager();
+  const savedSession = sessionManager.loadSession(host.sessionId());
+  const previousInventory = isContextInventorySnapshot(savedSession?.contextInventory) ? savedSession.contextInventory : undefined;
   const sources: Array<{ name: string; status: "ok" | "partial" | "failed"; durationMs: number; items: ContextSourceItemInput[]; detail?: string }> = [];
   const gaps: string[] = ["The composite system prompt contains rules and other sources that are not yet split into per-item provenance."];
   if (typeof agent.getInferenceContextManifests !== "function") gaps.push("This agent instance does not expose persisted per-inference request manifests.");
@@ -309,6 +312,24 @@ function context({ host, args, signal }: SlashContext): SlashOutcome {
   };
 
   measure("session_messages", () => inventorySourcesFromMessages(agent.getMessages()));
+  let workspaceFingerprint: string | undefined;
+  measure("workspace_state_fingerprint", () => {
+    if (typeof agent.getWorkspaceContextFingerprint !== "function") throw new Error("workspace fingerprint API unavailable");
+    workspaceFingerprint = agent.getWorkspaceContextFingerprint();
+    if (!workspaceFingerprint) throw new Error("workspace fingerprint unavailable");
+    return [{
+      sourceType: "workspace_state_fingerprint",
+      sourceLocation: "repository:candidate-identity",
+      scope: "repository",
+      content: "bounded composite candidate identity",
+      trust: "tool_output_unverified",
+      retention: "session_context_inventory",
+      inclusionReason: "supports equality comparison with the previous recorded workspace state; it is not evidence that repository content is correct",
+      retrievalMethod: "candidate_identity",
+      freshness: "current",
+      freshnessRule: "computed at capture from current candidate identity; any workspace candidate change invalidates this observation",
+    }];
+  });
   if (typeof agent.getInferenceContextManifests === "function") {
     measure("inference_request_manifests", () => agent.getInferenceContextManifests().map((manifest: any) => ({
         sourceType: "inference_request_manifest",
@@ -334,10 +355,9 @@ function context({ host, args, signal }: SlashContext): SlashOutcome {
     return plan.length ? [{ sourceType: "active_plan", sourceLocation: "task:active-plan", scope: "task", content: JSON.stringify(plan), trust: "persisted_unverified", retention: "task", inclusionReason: "current task plan", retrievalMethod: "durable_task_state", freshness: "current", freshnessRule: "read from the live task plan at inspection time" }] : [];
   });
   measure("durable_session_state", () => {
-    const session = host.app.getSessionManager().loadSession(host.sessionId());
-    if (!session) return [];
+    if (!savedSession) return [];
     const items: ContextSourceItemInput[] = [];
-    session.durableNotes?.forEach((note, index) => items.push({
+    savedSession.durableNotes?.forEach((note, index) => items.push({
       sourceType: "durable_note",
       sourceLocation: `task:durable-note:${index}`,
       scope: "task",
@@ -347,16 +367,16 @@ function context({ host, args, signal }: SlashContext): SlashOutcome {
       inclusionReason: "durable task note retained in session state",
       retrievalMethod: "session_store",
     }));
-    if (session.compactionProvenance) items.push({
+    if (savedSession.compactionProvenance) items.push({
       sourceType: "compaction_provenance",
-      sourceLocation: `session:compaction:${session.compactionProvenance.recordId}`,
+      sourceLocation: `session:compaction:${savedSession.compactionProvenance.recordId}`,
       scope: "session",
-      content: session.compactionProvenance.summaryContent ?? "compaction summary; content reference only",
+      content: savedSession.compactionProvenance.summaryContent ?? "compaction summary; content reference only",
       trust: "persisted_unverified",
       retention: "session_archive",
       inclusionReason: "compaction record links the summary to archived predecessor messages",
       retrievalMethod: "session_store",
-      sourceRefs: [session.compactionProvenance.recordId, ...session.compactionProvenance.predecessorIds],
+      sourceRefs: [savedSession.compactionProvenance.recordId, ...savedSession.compactionProvenance.predecessorIds],
     });
     return items;
   }, "partial", "saved durable notes and compaction links only; full session messages are inventoried separately");
@@ -405,6 +425,7 @@ function context({ host, args, signal }: SlashContext): SlashOutcome {
   try { contextLimit = agent.getContextBudget().contextLimit; } catch { gaps.push("context budget could not be read"); }
   const snapshot = buildContextInventory({
     sessionId: host.sessionId(), taskId: agent.getTaskId(), workspace: config.workspace,
+    workspaceState: compareWorkspaceState(previousInventory, workspaceFingerprint),
     sources,
     coverageGaps: gaps,
     contextLimit,
@@ -413,10 +434,8 @@ function context({ host, args, signal }: SlashContext): SlashOutcome {
   });
 
   if (flags.includes("--record")) {
-    const manager = host.app.getSessionManager();
-    const session = manager.loadSession(host.sessionId());
-    if (!session) return reply("context", "No saved session exists to attach this inventory to. Run /save first, then /context inspect --record.", false);
-    manager.saveSession({ ...session, contextInventory: snapshot });
+    if (!savedSession) return reply("context", "No saved session exists to attach this inventory to. Run /save first, then /context inspect --record.", false);
+    sessionManager.saveSession({ ...savedSession, contextInventory: snapshot });
   }
 
   if (view === "inspect") {
