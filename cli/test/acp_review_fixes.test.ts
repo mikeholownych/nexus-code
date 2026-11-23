@@ -169,10 +169,44 @@ test("a checkpoint choice is answered with cancel and fails the prompt; no clien
     assert.deepEqual(choices.map((command) => [command.id, command.choice]), [["checkpoint-choice-1", "cancel"]]);
     assert.equal(messages(adapter.output).some((item) => item.method === "session/request_permission"), false, "the client is not asked to choose");
 
-    adapter.sidecarEvent(interrupted(1));
-    assert.equal(messages(adapter.output).filter((item) => item.id === 3).length, 1, "the turn's result does not answer the failed prompt a second time");
+    // The refused turn is still winding down: its result must not be able to answer a new prompt.
+    adapter.send({ jsonrpc: "2.0", id: 9, method: "session/prompt", params: { sessionId: SESSION, prompt: [{ type: "text", text: "too early" }] } });
+    const early = await until(() => messages(adapter.output).find((item) => item.id === 9), "the early prompt's refusal");
+    assert.match(early.error?.message ?? "", /still stopping/);
+
+    // The real sidecar's checkpoint-cancel path emits a terminal error and then an idle session.state; it does not
+    // emit turn.result because agent.runTurn never started. The adapter must release its stop latch on that sequence.
+    adapter.sidecarEvent({ type: "error", id: "acp-3", code: "INTERNAL", message: "This turn was cancelled before it started." });
+    adapter.sidecarEvent({ type: "session.state", session: SESSION, workspace: "/tmp", workspace_name: "tmp", model: "m", mode: "review", git: null, busy: false });
+    assert.equal(messages(adapter.output).filter((item) => item.id === 3).length, 1, "a terminal sidecar error does not answer the failed prompt a second time");
     adapter.send({ jsonrpc: "2.0", id: 4, method: "session/prompt", params: { sessionId: SESSION, prompt: [{ type: "text", text: "again" }] } });
     await until(() => messages(adapter.output).some((item) => item.method === "session/request_permission"), "the next prompt running normally");
+  } finally {
+    await adapter.server.close();
+  }
+});
+
+test("a prompt whose turn has ended is answered once, even when its cancellation arrives while the receipt is fetched", async () => {
+  // The fake sidecar never answers the receipt command, so the adapter waits its 2 s for it: the window under test.
+  const adapter = fakeAdapter(() => {});
+  try {
+    await adapter.open();
+    adapter.send({ jsonrpc: "2.0", id: 3, method: "session/prompt", params: { sessionId: SESSION, prompt: [{ type: "text", text: "do it" }] } });
+    await until(() => adapter.commands.some((command) => command.type === "prompt.submit"), "the prompt reaching the sidecar");
+    adapter.sidecarEvent(interrupted(1));
+    await until(() => adapter.commands.some((command) => command.type === "receipt"), "the receipt being fetched");
+    adapter.send({ jsonrpc: "2.0", method: "$/cancel_request", params: { requestId: 3 } });
+    await until(() => messages(adapter.output).some((item) => item.id === 3), "the prompt's answer", 10_000);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const answers = messages(adapter.output).filter((item) => item.id === 3);
+    assert.equal(answers.length, 1, JSON.stringify(answers));
+    assert.equal(answers[0].result?.stopReason, "cancelled");
+    assert.equal(adapter.commands.some((command) => command.type === "cancel"), false, "no cancel is sent for a turn that has ended");
+
+    // The session is still usable: nothing is left waiting for a turn result that will never come.
+    adapter.send({ jsonrpc: "2.0", id: 4, method: "session/prompt", params: { sessionId: SESSION, prompt: [{ type: "text", text: "again" }] } });
+    await until(() => adapter.commands.filter((command) => command.type === "prompt.submit").length === 2, "the next prompt reaching the sidecar");
+    assert.equal(messages(adapter.output).some((item) => item.id === 4 && item.error), false);
   } finally {
     await adapter.server.close();
   }

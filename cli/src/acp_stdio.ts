@@ -345,7 +345,12 @@ export class AcpStdioServer {
     if (session.pendingReceipt && event.type === "receipt" && event.id === session.pendingReceipt.commandId) {
       const pending = session.pendingReceipt; session.pendingReceipt = undefined; pending.resolve(event);
     }
-    if (event.type === "session.state" && !session.id && event.session) session.id = event.session;
+    if (event.type === "session.state") {
+      if (!session.id && event.session) session.id = event.session;
+      // A pre-turn refusal (for example a cancelled checkpoint choice or provider-gate cancellation) ends with a
+      // terminal `error`, not `turn.result`. Keep the session blocked until Sidecar confirms its job is idle.
+      if (session.stopping && event.busy === false) session.stopping = false;
+    }
   }
 
   /** Forget the session's open permission request: stop its timer, stop accepting a reply, and (optionally) deny it. */
@@ -396,6 +401,10 @@ export class AcpStdioServer {
     session.stopping = false;
     await this.dropPendingApproval(session, false);
     if (!pending) { session.tools = []; return; }
+    // From here the prompt is being answered. It stops being cancellable now, before the receipt is awaited: a
+    // $/cancel_request in that window would otherwise answer it a second time and wait for a turn that has ended.
+    session.pendingPrompt = undefined;
+    session.tools = [];
     const resultId = `acp-receipt-${pending.commandId}`;
     let sections: any[] = [];
     try {
@@ -417,8 +426,6 @@ export class AcpStdioServer {
     if ("error" in mapped) this.replyError(pending.rpcId, mapped.error);
     else this.send(resultResponse(pending.rpcId, promptResult(mapped.stopReason, verification)));
     this.pending.delete(this.requestKey(pending.rpcId));
-    session.pendingPrompt = undefined;
-    session.tools = [];
   }
 }
 
