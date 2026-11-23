@@ -33,7 +33,7 @@ test("a gated manager starts no server and every query says why", async () => {
     assert.match(g.error ?? "", /workspace not trusted/);
     assert.equal(fs.existsSync(pidfile), false);
   } finally {
-    mgr.shutdownAll();
+    await mgr.shutdownAll();
   }
 });
 
@@ -43,7 +43,7 @@ test("an ungated (trusted) manager starts the server", async () => {
     assert.equal((await mgr.diagnostics("a.ts", 3000)).status, "ok");
     assert.equal(fs.readFileSync(pidfile, "utf-8").trim().split("\n").length, 1);
   } finally {
-    mgr.shutdownAll();
+    await mgr.shutdownAll();
   }
 });
 
@@ -63,7 +63,7 @@ test("the lsp tools through the executor refuse in an untrusted workspace with s
       assert.match(res.error ?? "", /workspace not trusted; language server not started/, tool);
     }
   } finally {
-    bridge.shutdown();
+    await bridge.shutdown();
     if (saved.HOME === undefined) delete process.env.HOME; else process.env.HOME = saved.HOME;
     if (saved.T !== undefined) process.env.NEXUS_TRUST_WORKSPACE = saved.T;
   }
@@ -81,7 +81,7 @@ test("a read-only bridge refuses even when the workspace is trusted", async () =
     assert.equal(res.success, false);
     assert.match(res.error ?? "", /read-only mode; language server not started/);
   } finally {
-    bridge.shutdown();
+    await bridge.shutdown();
     if (saved === undefined) delete process.env.NEXUS_TRUST_WORKSPACE; else process.env.NEXUS_TRUST_WORKSPACE = saved;
   }
 });
@@ -98,7 +98,7 @@ test("a required sandbox refuses a trusted workspace rather than starting an uns
     assert.equal(res.success, false);
     assert.match(res.error ?? "", /sandbox/);
   } finally {
-    bridge.shutdown();
+    await bridge.shutdown();
     if (saved === undefined) delete process.env.NEXUS_TRUST_WORKSPACE; else process.env.NEXUS_TRUST_WORKSPACE = saved;
   }
 });
@@ -114,7 +114,7 @@ test("the server environment carries PATH but none of the process secrets", asyn
     for (const k of Object.keys(canaries)) assert.equal(env[k], undefined, k);
     assert.equal(Object.keys(env).filter((k) => /KEY|TOKEN|SECRET|PASSWORD|^NEXUS_|^LOCAL_LLM_/.test(k)).length, 0);
   } finally {
-    mgr.shutdownAll();
+    await mgr.shutdownAll();
     for (const k of Object.keys(canaries)) delete process.env[k];
   }
 });
@@ -181,7 +181,7 @@ test("non-ASCII bodies split across chunk boundaries are framed and decoded by b
     const res = await mgr.diagnostics("u.utf.ts", 5000);
     assert.equal(res.status === "ok" && res.diagnostics[0].message, "h\u00e9llo \u20ac \ud83d\ude00 \u00fc\u00f1");
   } finally {
-    mgr.shutdownAll();
+    await mgr.shutdownAll();
   }
 });
 
@@ -193,7 +193,7 @@ test("a message just under the 16 MB cap is accepted; a stream past it is droppe
     const over = await mgr.diagnostics("o.over.ts", 15000);
     assert.equal(over.status, "unavailable");
   } finally {
-    mgr.shutdownAll();
+    await mgr.shutdownAll();
   }
 });
 
@@ -211,7 +211,7 @@ test("revoking trust after a server started stops it and refuses the next query"
     allowed = true;
     assert.equal((await mgr.diagnostics("a.ts", 3000)).status, "ok");
   } finally {
-    mgr.shutdownAll();
+    await mgr.shutdownAll();
   }
 });
 
@@ -222,7 +222,7 @@ test("a stderr flood does not hang a query", async () => {
     assert.equal((await mgr.diagnostics("n.noisy.ts", 5000)).status, "ok");
     assert.ok(Date.now() - t0 < 4000);
   } finally {
-    mgr.shutdownAll();
+    await mgr.shutdownAll();
   }
 });
 
@@ -234,6 +234,6 @@ test("an oversized message drops the connection and the result is unavailable", 
     await new Promise((r) => setTimeout(r, 300));
     assert.deepEqual(mgr.serverPids().filter((p) => { try { process.kill(p, 0); return true; } catch { return false; } }), []);
   } finally {
-    mgr.shutdownAll();
+    await mgr.shutdownAll();
   }
 });

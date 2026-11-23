@@ -550,12 +550,22 @@ test("exact-RC qualification evidence rejects symlinked evidence files", () => {
 });
 
 test("CI runs the requirements ledger gate in enforce mode before anything is built (DH-6)", () => {
-  // Enforce mode needs a clean worktree, so it runs in test-matrix right after checkout. The later
-  // linux-x86_64 call follows a build and stays in report mode.
+  // Enforce mode needs a clean worktree, so it runs in test-gates (which the required test-matrix checks depend on)
+  // right after checkout. The later linux-x86_64 call follows a build and stays in report mode.
   const ci = fs.readFileSync(path.resolve(import.meta.dirname, "..", "..", ".github/workflows/ci.yml"), "utf8");
-  const start = ci.indexOf("\n  test-matrix:");
-  assert.notEqual(start, -1, "ci.yml defines the test-matrix job");
-  const nextJob = ci.slice(start + 1).search(/\n  [a-zA-Z0-9_-]+:/);
-  const matrix = nextJob === -1 ? ci.slice(start) : ci.slice(start, start + 1 + nextJob);
+  const section = (name: string) => {
+    const start = ci.indexOf(`\n  ${name}:`);
+    assert.notEqual(start, -1, `ci.yml defines the ${name} job`);
+    const nextJob = ci.slice(start + 1).search(/\n  [a-zA-Z0-9_-]+:/);
+    return nextJob === -1 ? ci.slice(start) : ci.slice(start, start + 1 + nextJob);
+  };
+  const matrix = section("test-gates");
+  const enforce = matrix.search(/^\s+- run: node scripts\/check_requirements\.mjs --enforce$/m);
+  for (const build of ["npm ci", "npm --prefix cli run build", "cargo "]) {
+    const at = matrix.indexOf(build);
+    assert.ok(at === -1 || enforce < at, `the enforce gate runs before ${build}`);
+  }
+  assert.match(matrix, /^ {8}node: \[22, 24\]$/m, "the gate runs for both Node versions");
+  assert.match(section("test-matrix"), /^ {4}needs: \[test-gates, test-shard\]$/m, "the required checks depend on the job that runs the gate");
   assert.match(matrix, /^\s+- run: node scripts\/check_requirements\.mjs --enforce$/m);
 });

@@ -1,7 +1,7 @@
 export PATH := $(HOME)/.cargo/bin:$(PATH)
 APPROVED_RUST_BUILD_IMAGE := rust:1.95.0-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb
 
-.PHONY: all setup build build-core build-cli check clean lint typecheck fmt-check test test-ci test-fixture-notice audit security-scan sbom verify-reproducibility
+.PHONY: all setup build build-core build-cli check clean lint typecheck fmt-check test test-ci test-fixture-notice test-durations-merge audit security-scan sbom verify-reproducibility
 
 all: build
 
@@ -85,3 +85,10 @@ test-fixture-notice:
 # scripts/install-evaluator-toolchains.sh, scripts/ensure-ci-bubblewrap.sh, scripts/ensure-ci-user-cgroups.sh.
 test-ci:
 	+@if [ -n "$(findstring n,$(firstword -$(MAKEFLAGS)))" ]; then echo 'dry run: would run scripts/with-ci-fixtures.sh -- make test'; else bash scripts/with-ci-fixtures.sh -- $(MAKE) test; fi
+
+# Rebalance the CI shards from measured run times. Download the `test-shard-*` artifacts of a green CI run on the
+# release branch into a directory (for example `gh run download <run-id> --pattern 'test-shard-*' --dir <dir>`),
+# then run this and commit cli/scripts/test_durations.json. Details: cli/scripts/merge_test_durations.mjs.
+test-durations-merge:
+	@test -n "$(DIR)" || { echo "usage: make test-durations-merge DIR=<directory of downloaded test-shard artifacts>" >&2; exit 64; }
+	node cli/scripts/merge_test_durations.mjs "$(DIR)"

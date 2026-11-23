@@ -1,7 +1,7 @@
 /**
  * GV-1: reading the policy tiers from disk. Every input is an argument: the two managed paths, the uids that may own
  * them, the workspace, the trust facts and the file-system functions. This file reads no environment variable and no
- * command-line argument, and nothing in Nexus calls it yet.
+ * command-line argument. Its one production caller is policy_runtime.ts.
  *
  * The two managed tiers fail closed. A managed file that exists and cannot be read, checked, parsed and validated
  * completely makes `loadManagedPolicy` throw `ManagedPolicyError`; it never returns a partial or default document in
@@ -367,14 +367,18 @@ export interface LoadedPolicy {
 
 const ownerName = (uid: number): string => (uid === 0 ? "root (uid 0)" : `uid ${uid}`);
 
-/**
- * Reads the tiers and merges them. Throws `ManagedPolicyError` for a managed tier that exists and cannot be used; the
- * system tier is checked first. Never asks anything: what an interactive caller should ask is in `project.approvalPending`.
- */
-export function loadManagedPolicy(input: LoadManagedPolicyInput): LoadedPolicy {
-  const { fs, trust } = input;
-  const notices: string[] = [];
+/** The two managed tiers as read. An absent file is an absent member. */
+export interface ManagedTiers {
+  system?: LoadedPolicyTier;
+  user?: LoadedPolicyTier;
+}
 
+/**
+ * Reads the two managed tiers and nothing else. Throws `ManagedPolicyError` for a tier that exists and cannot be used;
+ * the system tier is checked first.
+ */
+export function loadManagedTiers(input: Pick<LoadManagedPolicyInput, "systemPath" | "systemOwnerUid" | "userPath" | "userUid" | "fs">): ManagedTiers {
+  const { fs } = input;
   let system: LoadedPolicyTier | undefined;
   if (input.systemPath !== null) {
     const ownerText = ownerName(input.systemOwnerUid);
@@ -383,6 +387,25 @@ export function loadManagedPolicy(input: LoadManagedPolicyInput): LoadedPolicy {
     }
   }
   const user = loadManagedTier(fs, "user", input.userPath, input.userUid === null ? null : [input.userUid, 0], input.userUid === null ? "" : `you (uid ${input.userUid}) or root`);
+  return { ...(system ? { system } : {}), ...(user ? { user } : {}) };
+}
+
+/**
+ * Reads the tiers and merges them. Throws `ManagedPolicyError` for a managed tier that exists and cannot be used; the
+ * system tier is checked first. Never asks anything: what an interactive caller should ask is in `project.approvalPending`.
+ */
+export function loadManagedPolicy(input: LoadManagedPolicyInput): LoadedPolicy {
+  return loadProjectPolicy(loadManagedTiers(input), input);
+}
+
+/**
+ * Reads one workspace's project file and merges it under managed tiers that were already read, so a process that
+ * works in several workspaces (worktrees) reads the managed files once. Never throws for the project file.
+ */
+export function loadProjectPolicy(tiers: ManagedTiers, input: Pick<LoadManagedPolicyInput, "workspace" | "trust" | "fs">): LoadedPolicy {
+  const { fs, trust } = input;
+  const { system, user } = tiers;
+  const notices: string[] = [];
 
   const managed = mergePolicies(system, user);
   const disableEnvTrust = managed.workspace.disable_env_trust;

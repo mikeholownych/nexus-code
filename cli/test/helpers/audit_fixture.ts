@@ -379,10 +379,34 @@ export function bundleTexts(dir: string): Record<string, string> {
   return Object.fromEntries(Object.entries(snapshot(dir).files).map(([file, hex]) => [file, Buffer.from(hex, "hex").toString("utf8")]));
 }
 
+/** Newest modification time under a directory (0 when it does not exist). */
+function newestMtime(dir: string): number {
+  let newest = 0;
+  for (const entry of fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true, recursive: true }) : []) {
+    if (entry.isFile()) newest = Math.max(newest, fs.statSync(path.join(entry.parentPath, entry.name)).mtimeMs);
+  }
+  return newest;
+}
+
+let entry: string[] | undefined;
+/**
+ * How to start the CLI: the built entry (`dist/index.js`) when it is at least as new as every file under `src`,
+ * otherwise the source entry through tsx. The source entry loads the whole CLI through the TypeScript loader on every
+ * start (about 3 s here against 0.65 s for the build), which over this suite's process starts exceeded the 300 s
+ * per-file limit on a CI runner. CI builds before it tests; a checkout whose build is missing or older than its
+ * source runs the source, so a stale build is never what is tested.
+ */
+export function cliEntry(): string[] {
+  if (entry) return entry;
+  const built = path.join(CLI_DIR, "dist", "index.js");
+  const current = fs.existsSync(built) && fs.statSync(built).mtimeMs >= newestMtime(path.join(CLI_DIR, "src"));
+  return (entry = current ? [built] : ["--import", "tsx", "src/index.ts"]);
+}
+
 export interface AuditCliRun { code: number | null; stdout: string; stderr: string; leftovers: string[] }
 
 /**
- * Runs `nexus audit <args>` (the source entry) with a throwaway HOME, its own temp directory and no operator
+ * Runs `nexus audit <args>` (see `cliEntry`) with a throwaway HOME, its own temp directory and no operator
  * environment but `env`. `leftovers`: what the command left in that temp directory (the export's private copy would be one).
  */
 export function runAudit(args: string[], env: Record<string, string> = {}): Promise<AuditCliRun> {
@@ -391,7 +415,7 @@ export function runAudit(args: string[], env: Record<string, string> = {}): Prom
   const home = env.HOME ?? makeHome();
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-audit-test-tmp-"));
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--import", "tsx", "src/index.ts", "audit", ...args], {
+    const child = spawn(process.execPath, [...cliEntry(), "audit", ...args], {
       cwd: CLI_DIR,
       env: { ...base, HOME: home, TMPDIR: tmp, NO_COLOR: "1", XDG_CONFIG_HOME: path.join(home, ".config"), XDG_DATA_HOME: path.join(home, ".local", "share"), XDG_STATE_HOME: path.join(home, ".local", "state"), XDG_CACHE_HOME: path.join(home, ".cache"), ...env },
       stdio: ["ignore", "pipe", "pipe"],
