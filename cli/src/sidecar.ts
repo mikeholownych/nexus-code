@@ -1102,7 +1102,7 @@ export class SidecarServer {
   }
 
   private receipt(): ReceiptSection[] {
-    return receiptSections(this.lastTurn, this.app.getActiveValidationReceipt() ?? null, this.app.getAgent().getObjective());
+    return receiptSections(this.lastTurn, this.app.getActiveValidationReceipt() ?? null, this.app.getAgent().getObjective(), this.app.getAgent().getSandboxDenialEvents());
   }
 
   private setWorkspace(dir: string): void {

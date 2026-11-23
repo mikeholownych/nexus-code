@@ -8,7 +8,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { FlightPlayer, FlightRecorder } from "../src/flight.js";
-import { sandboxDenialEvent, sandboxDenialFromError, sandboxEngineLabel } from "../src/sandbox_events.js";
+import { sandboxDenialEvent, sandboxEngineLabel } from "../src/sandbox_events.js";
+import { dispatchToolCallImpl } from "../src/core/dispatch_tool_call.js";
+import { mergePolicies } from "../src/core/managed_policy.js";
+import { NO_COMMAND_RULES } from "../src/core/command_rules.js";
 
 const dirs: string[] = [];
 function workspace(): string {
@@ -27,24 +30,119 @@ test("the engine label is profile-agnostic and normalises the config forms", () 
   assert.equal(sandboxEngineLabel(undefined), "none");
 });
 
-test("only confinement refusals become typed events, with engine, profile and a category", () => {
-  const engine = sandboxEngineLabel("bwrap");
-  const unavailable = sandboxDenialFromError("Bubblewrap (bwrap) is not available, so the worker cannot be isolated.", engine, "run_command");
-  assert.ok(unavailable);
-  assert.deepEqual([unavailable.kind, unavailable.engine, unavailable.profile, unavailable.category, unavailable.operation], ["unavailable", "bwrap", "default", "engine", "run_command"]);
-  assert.match(unavailable.reason, /not available/);
-  assert.ok(!Number.isNaN(Date.parse(unavailable.at)));
+test("structured sandbox denials become typed receipt and flight events through dispatch", async () => {
+  const dir = workspace();
+  const flight = new FlightRecorder(dir, "vr3-dispatch");
+  flight.startSession({ model: "test-model", endpoint: "local-test", taskPrompt: "deny me" });
+  const recorded: any[] = [];
+  const agent: any = {
+    config: { workspace: dir, sandbox: "bwrap" },
+    flightRecorder: flight,
+    ui: { stopSpinner() {}, printToolCall() {}, startSpinner() {}, printToolResult() {} },
+    activity() {},
+    capabilityRegistry: { getByToolName() { return undefined; } },
+    getApprovalMode() { return "auto"; },
+    isReadOnly() { return false; },
+    trustedWorkspaceExtensions: false,
+    checkpointReadOnlyFallback: false,
+    commandRules: { decide() { return { decision: "allow" }; } },
+    managedPolicy: undefined,
+    skillManager: { getActive() { return []; } },
+    commandRules: NO_COMMAND_RULES,
+    commandRuleDecisions: [],
+    syncVerificationAttempts() {},
+    commandRulesNotice: undefined,
+    bridge: { getSecurityManager() { return { getEffectivePolicy() { return mergePolicies(); }, setShellChangeObserver() {}, verificationEditDecision() { return { allowed: true }; } }; } },
+    approvalPolicy: { requiresDecision() { return false; } },
+    pluginManager: { notifyToolCall() {}, notifyToolResult() {} },
+    mayWrite() { return true; },
+    captureChangeBaseline() {},
+    durable: false,
+    modifiedFiles: new Set<string>(),
+    hasPendingModifications: false,
+    objective: null,
+    getEffectiveTools() { return []; },
+    recordSandboxDenialEvent(event: any) { recorded.push(event); },
+  };
+  const receipt = {
+    success: false,
+    output: "",
+    error: "Read-only mode violation: filesystem-isolated shell execution is unavailable. No supported sandbox engine is available.",
+    durationMs: 1,
+    sandboxDenial: { kind: "unavailable", category: "engine", reason: "No supported sandbox engine is available." },
+  };
+  agent.spine = {
+    execute: async () => ({
+      invocationId: "c1", taskId: "t1", actor: "agent", executionDomain: "agent_orchestration",
+      capabilityId: "run_command", toolName: "run_command", targetResources: [],
+      success: false, output: "", error: receipt.error, durationMs: 1, candidateMutated: false,
+      status: "FAILED", timestamp: new Date().toISOString(), simulated: false,
+      sandboxEvents: [{ kind: "unavailable", engine: "bwrap", profile: "default", operation: "run_command", category: "engine", reason: "No supported sandbox engine is available.", at: new Date().toISOString() }],
+    }),
+  };
 
-  const violation = sandboxDenialFromError("Read-only mode violation: command operands escaped the pinned workspace.", "auto", "run_command");
-  assert.ok(violation);
-  assert.deepEqual([violation.kind, violation.category], ["violation", "filesystem"]);
+  const out = await dispatchToolCallImpl.call(agent, { id: "c1", type: "function", function: { name: "run_command", arguments: "{\"command\":\"echo hi\"}" } }, 1, "agent");
 
-  const network = sandboxDenialFromError("sandbox network access is refused by managed policy", "docker", "run_command");
-  assert.ok(network);
-  assert.deepEqual([network.kind, network.category], ["denied", "network"]);
+  assert.equal(out.receipt.success, false);
+  assert.equal(out.receipt.sandboxEvents?.length, 1);
+  assert.deepEqual([out.receipt.sandboxEvents![0].kind, out.receipt.sandboxEvents![0].engine, out.receipt.sandboxEvents![0].category, out.receipt.sandboxEvents![0].profile], ["unavailable", "bwrap", "engine", "default"]);
+  assert.equal(recorded.length, 1);
 
-  assert.equal(sandboxDenialFromError("Execution was rejected by the user.", engine, "run_command"), undefined);
-  assert.equal(sandboxDenialFromError(undefined, engine, "run_command"), undefined);
+  const replayed = FlightPlayer.loadFlight(dir, "vr3-dispatch");
+  const denial = replayed.events.find((entry) => entry.type === "sandbox_unavailable");
+  assert.ok(denial);
+  assert.equal(denial.payload.reason, "No supported sandbox engine is available.");
+});
+
+test("ordinary errors with sandbox-like text do not become sandbox denial events", async () => {
+  const dir = workspace();
+  const flight = new FlightRecorder(dir, "vr3-no-false-positive");
+  flight.startSession({ model: "test-model", endpoint: "local-test", taskPrompt: "no false positives" });
+  const recorded: any[] = [];
+  const agent: any = {
+    config: { workspace: dir, sandbox: "bwrap" },
+    flightRecorder: flight,
+    ui: { stopSpinner() {}, printToolCall() {}, startSpinner() {}, printToolResult() {} },
+    activity() {},
+    capabilityRegistry: { getByToolName() { return undefined; } },
+    getApprovalMode() { return "auto"; },
+    isReadOnly() { return false; },
+    trustedWorkspaceExtensions: false,
+    checkpointReadOnlyFallback: false,
+    commandRules: { decide() { return { decision: "allow" }; } },
+    managedPolicy: undefined,
+    skillManager: { getActive() { return []; } },
+    commandRules: NO_COMMAND_RULES,
+    commandRuleDecisions: [],
+    syncVerificationAttempts() {},
+    commandRulesNotice: undefined,
+    bridge: { getSecurityManager() { return { getEffectivePolicy() { return mergePolicies(); }, setShellChangeObserver() {}, verificationEditDecision() { return { allowed: true }; } }; } },
+    approvalPolicy: { requiresDecision() { return false; } },
+    pluginManager: { notifyToolCall() {}, notifyToolResult() {} },
+    mayWrite() { return true; },
+    captureChangeBaseline() {},
+    durable: false,
+    modifiedFiles: new Set<string>(),
+    hasPendingModifications: false,
+    objective: null,
+    getEffectiveTools() { return []; },
+    recordSandboxDenialEvent(event: any) { recorded.push(event); },
+  };
+  agent.spine = {
+    execute: async () => ({
+      invocationId: "c2", taskId: "t1", actor: "agent", executionDomain: "agent_orchestration",
+      capabilityId: "read_file", toolName: "read_file", targetResources: [],
+      success: false, output: "", error: "ENOENT: no such file or directory, open '/home/u/ws/Dockerfile'",
+      durationMs: 1, candidateMutated: false, status: "FAILED", timestamp: new Date().toISOString(), simulated: false,
+    }),
+  };
+
+  const out = await dispatchToolCallImpl.call(agent, { id: "c2", type: "function", function: { name: "read_file", arguments: "{\"path\":\"Dockerfile\"}" } }, 1, "agent");
+
+  assert.equal(out.receipt.sandboxEvents, undefined);
+  assert.deepEqual(recorded, []);
+  const replayed = FlightPlayer.loadFlight(dir, "vr3-no-false-positive");
+  assert.equal(replayed.events.some((entry) => String(entry.type).startsWith("sandbox_")), false);
 });
 
 test("an event is one line, bounded, and carries no verdict", () => {
@@ -59,7 +157,7 @@ test("the flight recorder writes a typed denial that replays with an intact chai
   const dir = workspace();
   const flight = new FlightRecorder(dir, "vr3-flight");
   flight.startSession({ model: "test-model", endpoint: "local-test", taskPrompt: "deny me" });
-  const event = sandboxDenialFromError("Docker is requested but not available or daemon is not running.", "docker", "run_command")!;
+  const event = sandboxDenialEvent({ kind: "unavailable", engine: "docker", operation: "run_command", category: "engine", reason: "Docker is requested but not available or daemon is not running." });
   const written = flight.recordSandboxDenial(1, event);
   flight.recordSessionEnd("blocked by sandbox", false);
 

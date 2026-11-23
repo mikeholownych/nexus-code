@@ -28,6 +28,7 @@ import { SecurityManager } from "./security.js";
 import { calculateContextBudget, countTokens, isContextAdmissible, isContextPressureHigh, TokenBudget } from "./tokens.js";
 import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
+import type { SandboxDenialEvent } from "./sandbox_events.js";
 import { WorktreeManager } from "./worktree.js";
 import { captureVerificationState } from "./worktrunk/verification.js";
 import { homeDir } from "./worktrunk/core.js";
@@ -245,6 +246,15 @@ export class AutonomousAgent {
     tddRed?: boolean;
   };
   private lastTurnResult?: TurnResult;
+  /** VR-3: structured sandbox refusals observed during this process; shown in receipt projections. */
+  private sandboxDenialEvents: SandboxDenialEvent[] = [];
+  recordSandboxDenialEvent(event: SandboxDenialEvent): void {
+    this.sandboxDenialEvents.push(event);
+    if (this.sandboxDenialEvents.length > 50) this.sandboxDenialEvents.splice(0, this.sandboxDenialEvents.length - 50);
+  }
+  getSandboxDenialEvents(): readonly SandboxDenialEvent[] {
+    return this.sandboxDenialEvents;
+  }
   private completionSummary?: { summary: string; notes?: string };
   private observer?: AgentObserver;
   private toolDispatchSeq = 0;

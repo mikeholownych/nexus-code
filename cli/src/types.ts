@@ -152,6 +152,12 @@ export interface ExecutionResult {
   outcomeUnknown?: boolean;
   /** Why the call was refused before it ran (a stable code, e.g. VERIFICATION_CONFIG_PROTECTED). */
   denialReason?: string;
+  /** Structured sandbox refusal from the confinement layer. Evidence only; never an approval or verdict. */
+  sandboxDenial?: {
+    kind: "denied" | "unavailable" | "violation";
+    category: "filesystem" | "network" | "engine" | "policy";
+    reason: string;
+  };
 }
 
 /**

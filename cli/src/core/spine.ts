@@ -13,7 +13,7 @@ import {
   changesWorkspace,
 } from "./capabilities.js";
 import type { SkillAttribution } from "./skill_activation.js";
-import type { SandboxDenialEvent } from "../sandbox_events.js";
+import { sandboxDenialEvent, sandboxEngineLabel, type SandboxDenialEvent } from "../sandbox_events.js";
 
 export interface InvocationRequest {
   /** Unique invocation identity (assigned if omitted) (EXEC-002) */
@@ -648,6 +648,15 @@ export class ExecutionSpine {
       }
     }
 
+    const sandboxDenial = result.sandboxDenial
+      ? sandboxDenialEvent({
+          kind: result.sandboxDenial.kind,
+          engine: sandboxEngineLabel((context.metadata as any)?.sandbox ?? (context as any)?.config?.sandbox),
+          operation: toolName,
+          category: result.sandboxDenial.category,
+          reason: result.sandboxDenial.reason,
+        })
+      : undefined;
     const receipt: ExecutionReceipt = {
       invocationId,
       taskId,
@@ -659,6 +668,7 @@ export class ExecutionSpine {
       success: result.success,
       output: result.output || "",
       error: reportedError,
+      ...(sandboxDenial ? { sandboxEvents: [sandboxDenial] } : {}),
       ...(outcomeUnknown ? { outcomeUnknown: true } : {}),
       durationMs,
       candidateMutated,
