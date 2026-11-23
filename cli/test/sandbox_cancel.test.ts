@@ -12,14 +12,22 @@ import "./helpers/leak_guard.js";
 // bwrap pids that exist after the run and did not exist before it.
 const SKIP = isBwrapAvailable() ? false : "bwrap is not installed on this host";
 
-function bwrapPids(): Set<number> {
+// Both searches cover the whole machine, and other test files run beside this one: leak_guard.test.ts starts a
+// `sleep 300` of its own, and many tests start bwrap. So each search is narrowed to what only this file can have
+// started: a sleep of a duration no other process uses, and bwrap processes whose arguments name this test's root.
+const NAP = 100_000 + process.pid;
+
+function bwrapPids(root: string): Set<number> {
   const out = spawnSync("pgrep", ["-x", "bwrap"], { encoding: "utf8" }).stdout;
-  return new Set(out.split("\n").filter(Boolean).map(Number));
+  const mine = out.split("\n").filter(Boolean).map(Number).filter((pid) => {
+    try { return fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").includes(root); } catch { return false; } // gone already
+  });
+  return new Set(mine);
 }
 
-/** `sleep 300` children of the write-mode command: in the worker's box no per-command sandbox process stands for them. */
+/** The backgrounded sleep of the write-mode command: in the worker's box no per-command sandbox process stands for it. */
 function sleepPids(): Set<number> {
-  const out = spawnSync("pgrep", ["-f", "^sleep 300$"], { encoding: "utf8" }).stdout;
+  const out = spawnSync("pgrep", ["-f", `^sleep ${NAP}$`], { encoding: "utf8" }).stdout;
   return new Set(out.split("\n").filter(Boolean).map(Number));
 }
 
@@ -34,10 +42,10 @@ async function sleepSurvivors(before: Set<number>): Promise<number[]> {
   return extra;
 }
 
-async function survivors(before: Set<number>): Promise<number[]> {
+async function survivors(before: Set<number>, root: string): Promise<number[]> {
   let extra: number[] = [];
   for (let i = 0; i < 50; i++) {
-    extra = [...bwrapPids()].filter((pid) => !before.has(pid));
+    extra = [...bwrapPids(root)].filter((pid) => !before.has(pid));
     if (!extra.length) return [];
     await new Promise((r) => setTimeout(r, 100));
   }
@@ -54,14 +62,17 @@ function scenario(readOnly: boolean): () => Promise<void> {
     const prevHome = process.env.HOME;
     process.env.HOME = home;
     // Read-only mode admits only inspection commands; write mode also gets a backgrounded child to be swept.
-    const CMD = readOnly ? "cat pending.fifo" : "(sleep 300 & cat pending.fifo)";
+    const CMD = readOnly ? "cat pending.fifo" : `(sleep ${NAP} & cat pending.fifo)`;
     const bridge = new RustCoreBridge(workspace, "bash", undefined, false, readOnly, readOnly ? undefined : "bwrap");
     try {
       assert.equal(spawnSync("mkfifo", [path.join(workspace, "pending.fifo")]).status, 0);
       // The worker itself runs in a sandbox now (CS-10) and starts on its first call: start it before the snapshot, so only
       // processes created by the cancelled or timed-out command can count as survivors.
       if (!readOnly) assert.equal((await bridge.executeTool("run_command", { command: "true" })).success, true);
-      const before = bwrapPids();
+      const before = bwrapPids(root);
+      // The worker's own box is a bwrap process that names this root. If the narrowed search could not see it, it
+      // could not see a survivor either, and the checks below would pass for nothing.
+      if (!readOnly) assert.ok(before.size > 0, "the search finds this test's sandbox processes");
       const sleepsBefore = sleepPids();
       for (let i = 0; i < 5; i++) {
         // Cancel while the command blocks in a read.
@@ -71,13 +82,13 @@ function scenario(readOnly: boolean): () => Promise<void> {
         setTimeout(() => controller.abort(), 300);
         const cancelled = await pending;
         assert.ok(cancelled.cancelled === true || /"cancelled": true/.test(cancelled.output ?? ""), `round ${i}: cancelled`);
-        assert.deepEqual(await survivors(before), [], `round ${i}: a sandbox process survived cancellation`);
+        assert.deepEqual(await survivors(before, root), [], `round ${i}: a sandbox process survived cancellation`);
         assert.deepEqual(await sleepSurvivors(sleepsBefore), [], `round ${i}: the command's background child survived cancellation`);
         // Deadline.
         bridge.setTurnSignal(undefined);
         const timedOut = await bridge.executeTool("run_command", { command: CMD, timeout_secs: 1 });
         assert.ok(timedOut.timedOut === true || /"timed_out": true/.test(timedOut.output ?? ""), `round ${i}: timed out`);
-        assert.deepEqual(await survivors(before), [], `round ${i}: a sandbox process survived the deadline`);
+        assert.deepEqual(await survivors(before, root), [], `round ${i}: a sandbox process survived the deadline`);
         assert.deepEqual(await sleepSurvivors(sleepsBefore), [], `round ${i}: the command's background child survived the deadline`);
       }
     } finally {

@@ -7,6 +7,7 @@ import type { TurnResult } from "./core/turn.js";
 import { capText, redactPlain } from "./protocol.js";
 import { redactSecrets, safeTerminal } from "./ui.js";
 import { type ObjectiveLedger, requirementRows } from "./core/objective.js";
+import type { SandboxDenialEvent } from "./sandbox_events.js";
 
 export const MAX_DETAIL = 64_000;
 /** Full diffs are kept larger than other detail: inspecting the complete change is their purpose. */
@@ -150,8 +151,17 @@ export interface LastTurn {
   turn: TurnResult;
 }
 
-export function receiptSections(last: LastTurn | null, receipt: ValidationReceipt | null, objective?: ObjectiveLedger): ReceiptSection[] {
-  return [turnSection(last), ...(objective ? [requirementSection(objective)] : []), verifierSection(last?.turn ?? null), validationSection(receipt)];
+export function receiptSections(last: LastTurn | null, receipt: ValidationReceipt | null, objective?: ObjectiveLedger, sandboxEvents: readonly SandboxDenialEvent[] = []): ReceiptSection[] {
+  return [turnSection(last), ...(objective ? [requirementSection(objective)] : []), verifierSection(last?.turn ?? null), validationSection(receipt), ...(sandboxEvents.length ? [sandboxSection(sandboxEvents)] : [])];
+}
+
+/** VR-3: sandbox refusals are shown as their own receipt rows, never as a verifier result. */
+function sandboxSection(events: readonly SandboxDenialEvent[]): ReceiptSection {
+  const rows: ReceiptRow[] = events.map((event) => [
+    event.kind,
+    `${event.engine}/${event.profile} · ${event.category} · ${event.operation}: ${event.reason}`,
+  ]);
+  return { title: "Sandbox denials", rows, note: "Evidence of a refusal; it is not a verdict, approval or successful run." };
 }
 
 /** Requirement-level state of the operator's objective; a completed plan phase never stands in for these rows. */

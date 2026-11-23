@@ -53,7 +53,6 @@ test("every job that runs the CLI suite prepares the same evaluator environment 
   const release = read("release.yml");
   const jobs = [
     ["CI shard leg", jobSection(ci, "test-shard"), "shard"],
-    ["CI Linux packaging", jobSection(ci, "linux-x86_64"), "whole"],
     ["release package", jobSection(release, "package"), "whole"],
   ] as const;
 
@@ -114,6 +113,45 @@ test("the CI shard legs and the gates job together run what `npm --prefix cli te
     "- run: cargo test --locked --manifest-path core/Cargo.toml",
   ]) assert.ok(gates.includes(gate), `the gates job still runs: ${gate}`);
   assert.ok(shard.includes("- run: cargo build --locked --release --manifest-path core/Cargo.toml --bin harness-core --bin nexus-tui"), "every leg builds the release core the suite drives");
+});
+
+test("the CI packaging job leaves the suite to the gates and shard legs, which the required test-matrix checks stand for", () => {
+  const ci = read("ci.yml");
+  const packaging = jobSection(ci, "linux-x86_64");
+  // The suite ran here a third time (24 of the job's 33 minutes) on the commit test-shard already covers on Node 22.
+  for (const repeated of [WHOLE_SUITE, "test:cli", "make lint", "cargo test"]) {
+    assert.ok(!packaging.includes(`${repeated}\n`) && !new RegExp(`run: .*${repeated}`).test(packaging), `linux-x86_64 does not repeat: ${repeated}`);
+  }
+  // What only this job establishes: dependency policy, a reproducible package, and a package that installs and starts.
+  for (const step of [
+    "- run: cargo deny --manifest-path core/Cargo.toml --config deny.toml check licenses advisories",
+    "- run: bash scripts/security_gates.sh",
+    '- run: bash scripts/package-linux.sh "v${{ steps.release-version.outputs.version }}" "$RUNNER_TEMP/dist"',
+    '- run: bash scripts/package-linux.sh "v${{ steps.release-version.outputs.version }}" "$RUNNER_TEMP/repro-check"',
+    "- run: cmp \"$RUNNER_TEMP/dist/SHA256SUMS\" \"$RUNNER_TEMP/repro-check/SHA256SUMS\"",
+    "- run: bash scripts/smoke-package.sh ",
+    "- run: bash scripts/installer-smoke.sh ",
+  ]) assert.ok(packaging.includes(step), `linux-x86_64 still runs: ${step}`);
+  assert.doesNotMatch(packaging, /continue-on-error|^ {4}if:/m, "the packaging job is never skipped and cannot fail softly");
+  // The release itself is still gated on the whole suite in the job that builds what is published.
+  assert.ok(jobSection(read("release.yml"), "package").includes(WHOLE_SUITE), "release.yml runs the whole suite before publishing");
+});
+
+test("the shard legs reuse a core build that only a push run can write, and still run the build command", () => {
+  const shard = jobSection(read("ci.yml"), "test-shard");
+  const build = shard.indexOf("- run: cargo build --locked --release --manifest-path core/Cargo.toml --bin harness-core --bin nexus-tui");
+  const restore = shard.indexOf("uses: actions/cache/restore@");
+  const save = shard.indexOf("uses: actions/cache/save@");
+  assert.ok(restore >= 0 && restore < build && build < save, "restore, then the locked build, then save");
+  // The build is never skipped on a cache hit: cargo decides what is reusable, not the workflow.
+  assert.doesNotMatch(shard.slice(build - 200, build), /if:/);
+  // A cache written by a pull-request run could be read by a later run of the same PR with different code.
+  const saveStep = shard.slice(shard.lastIndexOf("\n      - ", save), save);
+  assert.match(saveStep, /if: \$\{\{ github\.event_name == 'push' && /, "only push runs write the cache");
+  assert.match(shard, /key: core-release-\$\{\{ runner\.os \}\}-\$\{\{ hashFiles\('rust-toolchain\.toml'\) \}\}-\$\{\{ hashFiles\('core\/Cargo\.lock'\) \}\}\n/, "the key names the toolchain and the lockfile, with no fallback key");
+  assert.doesNotMatch(shard, /restore-keys/);
+  assert.doesNotMatch(jobSection(read("ci.yml"), "linux-x86_64"), /core\/target/, "the package is never built from cached artifacts");
+  assert.doesNotMatch(read("release.yml"), /core\/target\n|actions\/cache\/restore/, "nor is the published one");
 });
 
 test("the required test-matrix checks fail unless every gate and every shard leg succeeded", () => {

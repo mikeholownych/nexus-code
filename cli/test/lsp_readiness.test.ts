@@ -307,7 +307,7 @@ test("warmUp starts the file's server and opens that file, asks nothing, starts 
     await s.mgr.warmUp("a.ts");
     assert.equal(await s.mgr.warmUp("notes.txt"), null, "no server is configured for this file");
     assert.equal((await s.mgr.warmUp("missing.ts"))!.server, SERVER, "a file that is not there: the server runs, nothing is opened");
-    assert.deepEqual((await s.log()).filter((e) => e.event === "recv").map((e) => e.method).filter((m) => m !== "test/sync"), ["initialize", "initialized", "textDocument/didOpen"]);
+    assert.deepEqual((await s.log()).filter((e) => e.event === "recv").map((e) => e.method).filter((m) => m !== "test/sync"), ["initialize", "initialized", "workspace/didChangeConfiguration", "textDocument/didOpen"]); // the configuration push: real Pyright answers nothing without it once workspace folders are offered
     assert.deepEqual((await s.received("textDocument/didOpen")).map((e) => e.params.textDocument.uri), [s.uri("a.ts")]);
     assert.equal(starts(s).length, 1);
     const [res, elapsed] = await timed(() => s.mgr.diagnostics("a.ts"));

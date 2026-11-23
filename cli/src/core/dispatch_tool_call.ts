@@ -13,6 +13,7 @@ import { VERIFICATION_CONFIG_PROTECTED, splitSubcommands, type VerificationEditC
 import { decideManagedCommand, describeSource, permitsEgressHost, type EffectivePolicy } from "./managed_policy.js";
 import { approvalDecisionSource, clampApprovalSettings, humanRequirementForEffect, type HumanRequirement } from "./policy_runtime.js";
 import { sandboxNetworkNotice } from "../sandbox.js";
+import { sandboxDenialEvent, sandboxEngineLabel } from "../sandbox_events.js";
 import { hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand } from "../tester.js";
 import { toolGroupOf } from "./tool_groups.js";
 import { judgeWithoutCopy, trustedDeliverablesFromBaseline } from "./independent_check.js";
@@ -673,7 +674,7 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
     dryRun: this.config.dryRun,
     readOnly: this.isReadOnly(),
     bridge: this.bridge,
-    metadata: { actor, stepIndex: currentStep, verificationAuthority },
+    metadata: { actor, stepIndex: currentStep, verificationAuthority, sandbox: this.config.sandbox },
     defaultHandler: async (tName, tArgs) => {
       if (this.mcpManager.isMcpTool(tName)) {
         return await this.mcpManager.executeMcpTool(tName, tArgs);
@@ -869,6 +870,11 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
       }
     } catch {}
   }
+  // VR-3: a sandbox refusal is a typed receipt and flight record. Only structured denials from confinement code paths
+  // become events; text matching on arbitrary errors would mislabel ordinary failures as sandbox denials.
+  const sandboxEvent = receipt.sandboxEvents?.[0];
+  if (sandboxEvent) this.recordSandboxDenialEvent?.(sandboxEvent);
+
   this.ui.stopSpinner(receipt.success);
 
   logAudit({
@@ -890,6 +896,7 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
       receipt.durationMs,
       receipt.error
     );
+    if (sandboxEvent) this.flightRecorder.recordSandboxDenial(currentStep, sandboxEvent);
     if (toolName === "update_plan" && receipt.success) {
       this.flightRecorder.recordDurableState(currentStep, {
         plan: this.activePlan,
