@@ -11,7 +11,7 @@ import { syncBuiltinESMExports } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { LspBridgeManager, type LspClient, type LspLimits, type LspTimings } from "../../src/lsp.js";
+import { LspBridgeManager, type LspClient, type LspLimits, type LspServerSpec, type LspTimings } from "../../src/lsp.js";
 import { RustCoreBridge } from "../../src/tools.js";
 
 export const FAKE = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "fake_lsp_scripted.mjs");
@@ -78,6 +78,8 @@ export interface Opened {
    * deliberately unresponsive, already stopped), or inside a polling check.
    */
   rawLog: () => Entry[];
+  /** The servers that are running, least recently used first: the project root each runs for (as its status names it) and its pid. */
+  servers: () => Array<{ root: string; pid: number }>;
   /** The scenario the fake reads at its start: `node fake_lsp_scripted.mjs <scenarioFile>`. */
   scenarioFile: string;
   /** Sets the turn's abort signal on the bridge, as the agent does for the tool calls of a turn. */
@@ -94,7 +96,7 @@ export interface Opened {
 export function open(
   scenario: Record<string, unknown>,
   files: Record<string, string>,
-  opts: { awaitProgress?: boolean; cmd?: string; args?: string[]; viaSymlink?: boolean; wsName?: string; timings?: Partial<LspTimings> | "product"; limits?: Partial<LspLimits>; gate?: () => string | null } = {},
+  opts: { awaitProgress?: boolean; cmd?: string; args?: string[]; viaSymlink?: boolean; wsName?: string; timings?: Partial<LspTimings> | "product"; limits?: Partial<LspLimits>; gate?: () => string | null; spec?: Partial<LspServerSpec> } = {},
 ): Opened {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "nexus-lsp-char-")));
   const real = path.join(root, opts.wsName ?? "ws");
@@ -112,7 +114,7 @@ export function open(
   const scenarioFile = path.join(root, "scenario.json");
   fs.writeFileSync(scenarioFile, JSON.stringify({ ...scenario, log: logFile }));
   const mgr = new LspBridgeManager(ws, {
-    servers: { ".ts": { cmd: opts.cmd ?? process.execPath, args: opts.args ?? (opts.cmd ? [] : [FAKE, scenarioFile]), languageId: "typescript", awaitProgress: opts.awaitProgress === true } },
+    servers: { ".ts": { cmd: opts.cmd ?? process.execPath, args: opts.args ?? (opts.cmd ? [] : [FAKE, scenarioFile]), languageId: "typescript", awaitProgress: opts.awaitProgress === true, ...opts.spec } },
     ...(opts.timings === "product" ? {} : { timings: opts.timings ?? { coldStartMs: 0 } }),
     ...(opts.limits ? { limits: opts.limits } : {}),
     ...(opts.gate ? { gate: opts.gate } : {}),
@@ -152,6 +154,7 @@ export function open(
       await (await client()).sendRequest("test/sync", {});
     },
     rawLog,
+    servers: () => [...((mgr as any).clients as Map<string, LspClient>).values()].map((c) => ({ root: c.status().root!, pid: c.pid()! })),
     scenarioFile,
     turnSignal: (signal) => bridge.setTurnSignal(signal),
     close: async () => {
