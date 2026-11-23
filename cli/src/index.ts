@@ -61,6 +61,7 @@ function buildConfig(options: any): HarnessConfig {
   }
 }
 import { registerOperationCommands } from "./operation_cli.js";
+import { requireManagedPolicyAtStartup } from "./core/policy_runtime.js";
 import { registerAuditCommands } from "./audit_cli.js";
 import pc from "picocolors";
 
@@ -1514,6 +1515,11 @@ program.hook("preAction", async (_thisCommand, actionCommand) => {
     topLevelCommand = topLevelCommand.parent;
   }
   const name = topLevelCommand === program ? program.name() : topLevelCommand.name();
+
+  // GV-1: the managed policy is read here, once, before any command acts. A policy file that exists and cannot be used
+  // ends the process (exit 2). `doctor` and `check` still run so the problem can be diagnosed; --version and --help
+  // never reach this hook.
+  if (name !== "doctor" && name !== "check") requireManagedPolicyAtStartup();
 
   if (operatorConfigStartupError && name !== "doctor" && name !== "check") {
     console.error(pc.red(`Configuration error: ${formatDiagnosticForOutput(operatorConfigStartupError)}`));

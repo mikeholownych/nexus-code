@@ -1,5 +1,5 @@
 /**
- * GV-1: the production inputs of `loadManagedPolicy`, computed in one place. Nothing calls this yet.
+ * GV-1: the production inputs of the policy loader, computed in one place. Its one caller is policy_runtime.ts.
  *
  * The system path is the constant of managed_policy_load.ts and the owner is root; neither can be changed from the
  * environment or the command line. The user file and the approval store sit in the operator's Nexus configuration

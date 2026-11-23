@@ -1,7 +1,7 @@
 /**
- * GV-1 and GV-5: managed policy as a pure library. Nothing here reads a file, the environment or the clock, and
- * nothing in Nexus calls it yet: this module only defines what a policy document is, how the tiers combine, and what
- * a combined policy says about a request. The loader is managed_policy_load.ts; the text format is
+ * GV-1 and GV-5: managed policy as a pure library. Nothing here reads a file, the environment or the clock: this
+ * module only defines what a policy document is, how the tiers combine, and what a combined policy says about a
+ * request. The callers that act on the answers are named in policy_runtime.ts. The loader is managed_policy_load.ts; the text format is
  * managed_policy_toml.ts; the administrator's description is docs/MANAGED_POLICY.md.
  *
  * Restrict-only, in two places:
@@ -677,8 +677,7 @@ export function describeSource(source: PolicySource): string {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Clamp helpers. Each one decides and does nothing else: no I/O, no state. The callers that will act on the answers
-// do not exist yet.
+// Clamp helpers. Each one decides and does nothing else: no I/O, no state.
 
 /** An answer with the tier it comes from. A refusal's `message` ends with `describeSource(source)`. */
 export type PolicyDecision<T> = { allowed: true; value: T; source: PolicySource; notice?: string } | { allowed: false; message: string; source: PolicySource };
