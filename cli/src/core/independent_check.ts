@@ -14,7 +14,7 @@ import {
   MAX_TEST_BYTES,
   SKIP_DIRS,
   workspaceRuntimeFiles,
-  workspaceTestFiles,
+  discoverWorkspaceTestFiles,
 } from "../tester.js";
 
 /** The workspace's verifier run and test files right before the first edit of the current unverified change. */
@@ -22,7 +22,7 @@ export interface ChangeBaseline {
   command: string;
   /** The verifier failed (or timed out) before the change. */
   failed: boolean;
-  /** Test files then (workspace-relative path → content); null when one was too large to keep. */
+  /** Test files then (workspace-relative path → content); null when discovery was incomplete or one was too large to keep. */
   tests: Map<string, string> | null;
   /** Verifier configuration and local runner scripts before the change; null means independence is unprovable. */
   verifier: Map<string, string> | null;
@@ -92,9 +92,10 @@ export function snapshotVerifierDefinitionWithReason(
   workspace: string,
   command: string,
   trustedDeliverables: readonly string[] = [],
+  testSupportFiles?: Set<string>,
 ): { verifier: Map<string, string> } | { verifier: null; reason: string } {
   const why: { reason?: string } = {};
-  const verifier = snapshotVerifierDefinition(workspace, command, trustedDeliverables, why);
+  const verifier = snapshotVerifierDefinition(workspace, command, trustedDeliverables, why, testSupportFiles);
   return verifier ? { verifier } : { verifier: null, reason: why.reason ?? "it has too many or unsupported references" };
 }
 
@@ -140,11 +141,13 @@ export function isInlineProgramVerifier(command: string): boolean {
   });
 }
 
-/** Test files of the workspace by relative path, or null when one exceeds the size kept for restoring. */
-export function snapshotTests(workspace: string): Map<string, string> | null {
+/** Test files of the workspace by relative path, or null when discovery is incomplete or one exceeds the size kept for restoring. */
+export function snapshotTests(workspace: string, limit?: number): Map<string, string> | null {
   const root = path.resolve(workspace);
+  const discovery = discoverWorkspaceTestFiles(root, limit);
+  if (!discovery.complete) return null;
   const tests = new Map<string, string>();
-  for (const file of workspaceTestFiles(root)) {
+  for (const file of discovery.files) {
     const stat = fs.statSync(file);
     if (stat.size > MAX_TEST_BYTES) return null;
     tests.set(path.relative(root, file), fs.readFileSync(file, "utf8"));
@@ -185,6 +188,7 @@ export function snapshotVerifierDefinition(
   command: string,
   trustedDeliverables: readonly string[] = [],
   why?: { reason?: string },
+  testSupportFiles?: Set<string>,
 ): Map<string, string> | null {
   const root = path.resolve(workspace);
   const note = (reason: string): false => {
@@ -225,8 +229,10 @@ export function snapshotVerifierDefinition(
   };
   const addScriptReferences = (text: string, base = root) => {
     const pending: string[] = [];
+    const discovery = discoverWorkspaceTestFiles(root);
+    if (!discovery.complete) return note("the workspace test-file set could not be completely discovered");
     const baselineTestFiles = new Set(
-      workspaceTestFiles(root).map((file) =>
+      discovery.files.map((file) =>
         path.relative(root, file).replace(/\\/g, "/"),
       ),
     );
@@ -354,6 +360,7 @@ export function snapshotVerifierDefinition(
           ? trustedSet.has(normalizedDependency)
           : baselineProductFiles.has(normalizedDependency)) continue;
         if (!add(relative)) return false;
+        testSupportFiles?.add(normalizedDependency);
         pending.push(dependency);
       }
     }
@@ -524,7 +531,7 @@ export function snapshotVerifierDefinition(
     // The accepted nested Node test runner used by the harness. Bind every
     // discovered test file; other wrappers remain unprovable and fail closed.
     const tests = snapshotTests(root);
-    if (!tests || tests.size === 0) { note("there are no existing test files to bind, or one is too large"); return null; }
+    if (!tests || tests.size === 0) { note("there are no existing test files to bind, or their set could not be captured completely"); return null; }
     // Test source is separately snapshotted in ChangeBaseline so changed tests
     // can be set aside and the original suite rerun against the code. The
     // verifier-definition boundary binds test membership, not mutable bodies.
@@ -572,7 +579,12 @@ export function snapshotVerifierDefinition(
   // includes dual-use assertion modules even when runtime-reachable; only the
   // operator-declared output paths are allowed to change without invalidating
   // the test oracle boundary.
-  for (const testFile of workspaceTestFiles(root)) {
+  const testDiscovery = discoverWorkspaceTestFiles(root);
+  if (!testDiscovery.complete) {
+    note("the workspace test-file set could not be completely discovered");
+    return null;
+  }
+  for (const testFile of testDiscovery.files) {
     if (!addTestSupportDependencies(testFile)) return null;
   }
 
@@ -764,7 +776,7 @@ export function judgeWithoutCopy(
     return {
       independent: false,
       detail:
-        "Nexus changed test files that were too large to set aside, so its own test edits cannot be excluded",
+        "Nexus could not capture the baseline test set completely (a file was too large or discovery was incomplete), so its own test edits cannot be excluded",
     };
   return "needs-copy";
 }
@@ -833,7 +845,12 @@ export function prepareBaselineTestsCopy(
       fs.rmSync(dir, { recursive: true, force: true });
       return null;
     }
-    for (const file of workspaceTestFiles(dir)) {
+    const copiedTestDiscovery = discoverWorkspaceTestFiles(dir);
+    if (!copiedTestDiscovery.complete) {
+      fs.rmSync(dir, { recursive: true, force: true });
+      return null;
+    }
+    for (const file of copiedTestDiscovery.files) {
       if (!tests.has(path.relative(dir, file)))
         fs.rmSync(file, { force: true });
     }
