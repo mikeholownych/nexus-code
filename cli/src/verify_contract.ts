@@ -2,7 +2,7 @@
  * VR-1: the machine contract of `nexus verify`: the verdicts, the process exit codes and the JSON document `--json`
  * prints (the same document `--receipt <file>` writes). docs/USER_MANUAL.md documents the exit codes from the table
  * below and test/verify_command.test.ts fails when the manual falls behind. The published schema
- * (docs/protocol/verify-result-v2.schema.json) is generated from the types here by scripts/gen_verify_result_schema.mjs,
+ * (docs/protocol/verify-result-v3.schema.json) is generated from the types here by scripts/gen_verify_result_schema.mjs,
  * so they are plain data (no functions, no index signatures); test/verify_schema.test.ts fails when it falls behind.
  */
 import type { EngineeringOutcome, TypecheckEvidence, VerificationEvidence } from "./core/turn.js";
@@ -16,7 +16,7 @@ import type { TypecheckMode } from "./tester.js";
  * renaming a member, or changing a member's type or meaning, bumps it. Every change is recorded in
  * docs/protocol/VERIFY_RESULT_VERSIONS.json.
  */
-export const VERIFY_RESULT_SCHEMA_VERSION = 2;
+export const VERIFY_RESULT_SCHEMA_VERSION = 3;
 
 /**
  * VERIFIED: evidence independent of the change shows it. REGRESSION_FREE: the tests pass, which shows only that nothing
@@ -56,6 +56,8 @@ export type VerifyReason =
   | "UNSUPPORTED_TREE"
   /** `--sandbox` was requested and the engine cannot confine a command here (or could not build the box for a run). */
   | "SANDBOX_UNAVAILABLE"
+  /** The independent reviewer found a contradiction in the evidence, so the pass cannot be promoted to VERIFIED. */
+  | "REVIEW_REJECTED"
   /** `nexus verify` itself failed; nothing was established. */
   | "INTERNAL_ERROR";
 
@@ -78,7 +80,7 @@ export const VERIFY_EXIT_CODES = [
   { code: 1, name: "option_parse", when: "The command line could not be parsed: an unknown option or an option without its value (the option parser exits before the command runs; no JSON document)." },
   { code: 2, name: "unverified", when: "`REGRESSION_FREE` (the tests pass without showing the change), or `UNVERIFIED` because there is no verifier, no test executed, base and head are the same tree, or an enforced type-check project of the base has no counterpart in the head." },
   { code: 2, name: "usage", when: "A usage error: not a Git working tree, a base or head that does not name a commit, or an invalid option value or combination." },
-  { code: 3, name: "blocked", when: "`BLOCKED`: a person must decide. The discovered verifier is not approved, the change edits verification files or weakens a test without approval, the changed files could not all be classified, the checkout is not trusted, a tree exceeds the limits or holds something that is not materialised (a submodule), or the default/selected sandbox engine is not usable." },
+  { code: 3, name: "blocked", when: "`BLOCKED`: a person must decide. The discovered verifier is not approved, the change edits verification files or weakens a test without approval, the changed files could not all be classified, the checkout is not trusted, a tree exceeds the limits or holds something that is not materialised (a submodule), or the default/selected sandbox engine is not usable, or the independent reviewer rejected contradictory evidence." },
   { code: 130, name: "interrupted", when: "Interrupted (SIGINT or SIGTERM). The signal is acted on when the running verifier process ends; a second signal exits at once and may leave no JSON document." },
 ] as const satisfies readonly VerifyExitCode[];
 
@@ -111,6 +113,7 @@ export const VERIFY_REASONS: Record<VerifyReason, { verdict: Exclude<VerifyVerdi
   TREE_LIMIT_EXCEEDED: { verdict: "BLOCKED", exit: "blocked" },
   UNSUPPORTED_TREE: { verdict: "BLOCKED", exit: "blocked" },
   SANDBOX_UNAVAILABLE: { verdict: "BLOCKED", exit: "blocked" },
+  REVIEW_REJECTED: { verdict: "BLOCKED", exit: "blocked" },
 };
 
 /** The verdict for a reason; no reason is VERIFIED. */
@@ -170,6 +173,8 @@ export interface VerifyRunRecord {
   phase: "base" | "head" | "base_tests_on_head";
   /** The process ran inside the sandbox named in `sandbox.engine`. Always written; absent only in a document from before `--sandbox` existed (the run was not sandboxed). */
   sandboxed?: boolean;
+  /** Test-oracle files or candidate-only workspace paths opened/observed more often than by the base run. Such a pass is not independent; paths can include test-support data, not only test files. */
+  testFixtureReads?: string[];
   passed: boolean;
   timedOut: boolean;
   /** Null when the process was killed or never started. */
@@ -201,6 +206,27 @@ export interface VerifyIngredient {
   status: "NOT_RUN";
   detail?: string;
 }
+
+/**
+ * The independent reviewer's result. `NOT_RUN` is honest when no head verifier ran, so nothing was reviewed;
+ * `COMPLETE` publishes only the members this reviewer writes, using the vocabulary of the project's existing
+ * `IndependentReviewVerdict` (ACCEPT/REJECT, observations, defects, unproven criteria and scope violations). Internal
+ * members such as `boundaryReport`, `changeAssessment` and a defect's optional line are deliberately not published.
+ * A REJECT can withhold VERIFIED but never raise a verdict: deterministic verifier evidence stays the authority for a
+ * passing result.
+ */
+export type VerifyReview =
+  | VerifyIngredient
+  | {
+      status: "COMPLETE";
+      detail?: string;
+      verdict: "ACCEPT" | "REJECT";
+      verifiedObservations: string[];
+      suspectedDefects: Array<{ path: string; description: string }>;
+      unprovenCriteria: string[];
+      scopeViolations: string[];
+      reviewerConfidenceNote: string;
+    };
 
 /**
  * The project type-checks. The evidence of every project (tool, configuration, status, counts, tool hash) is in
@@ -285,7 +311,7 @@ export interface VerifyJsonResult {
   verification?: VerificationEvidence;
   typecheck: VerifyTypecheck;
   guard: VerifyGuard;
-  review: VerifyIngredient;
+  review: VerifyReview;
   /** Always written; absent only in a document from before `--sandbox` existed (nothing was sandboxed). */
   sandbox?: VerifySandbox;
   /** Dependency directories of the caller's checkout that were linked into both scratch trees. */

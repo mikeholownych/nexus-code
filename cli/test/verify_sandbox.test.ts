@@ -92,6 +92,34 @@ test("bwrap composition: only the run's own tree is writable, the scratch direct
   }
 });
 
+test("bwrap composition: the caller's checkout and Git common dir are covered before dependencies are bound back, even outside HOME and /tmp", () => {
+  const engines = fakeEngines({ bwrap: "records" });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-verify-box-"));
+  try {
+    const scratch = path.join(root, "scratch");
+    const directory = path.join(scratch, "head");
+    const checkout = path.join(root, "builds", "checkout"); // deliberately outside HOME and /tmp
+    const commonDir = path.join(checkout, ".git");
+    const dependency = path.join(checkout, "node_modules");
+    fs.mkdirSync(directory, { recursive: true });
+    fs.mkdirSync(dependency, { recursive: true });
+    const box: VerifySandboxBox = { engine: "bwrap", network: false, scratch, readOnlyDirs: [dependency], maskDirs: [checkout, commonDir] };
+    const built = withPath(engines.PATH, () => sandboxedVerifierCommand("npm test", directory, box, { environment: { PATH: "/usr/bin:/bin" } }));
+    assert.ok("argv" in built, JSON.stringify(built));
+    const argv = built.argv;
+    const checkoutCover = argv.findIndex((arg, index) => arg === "--tmpfs" && argv[index + 1] === checkout);
+    const commonCover = argv.findIndex((arg, index) => arg === "--tmpfs" && argv[index + 1] === commonDir);
+    const last = (flag: string, target: string) => argv.map((arg, index) => arg === flag && argv[index + 1] === target).lastIndexOf(true);
+    const directoryBind = last("--bind", directory);
+    const dependencyBind = last("--ro-bind", dependency);
+    assert.ok(checkoutCover >= 0 && commonCover >= 0, "both caller-owned directories are covered");
+    assert.ok(checkoutCover < commonCover && commonCover < directoryBind && commonCover < dependencyBind, "covering comes before binding anything back");
+    assert.deepEqual(flagged(argv, "--tmpfs", 1).map(([target]) => target).filter((target) => target === checkout || target === commonDir), [checkout, commonDir]);
+  } finally {
+    for (const dir of [root, engines.dir]) fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("docker composition: the wrapper's hardened profile with only the run's own tree mounted, dependency directories mounted read-only, the verifier's environment in place of the wrapper's, and a name to remove the container by", () => {
   const engines = fakeEngines({ docker: "records" });
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-verify-box-"));
