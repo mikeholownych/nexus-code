@@ -13,6 +13,8 @@ import { validateBranchName } from "./worktrunk/paths.js";
 import { validateBaseUrl } from "./provider_safety.js";
 import { DEFAULT_OPERATION_POLICY } from "./core/operation.js";
 import { setSandboxNetworkFlag } from "./sandbox_network.js";
+import { clampApprovalRequest, clampSandbox, clampSandboxNetwork, type EffectivePolicy } from "./core/managed_policy.js";
+import { managedPolicy } from "./core/policy_runtime.js";
 import { readSmallFile } from "./core/checkout_trust.js";
 import { resolveRepeatedCallSettings } from "./core/repeated_calls.js";
 import { ContinuationBudget, DEFAULT_CONTINUATION, DEFAULT_CONVERGENCE_ATTEMPTS, DEFAULT_MAX_TOOL_INVOCATIONS, MAX_CONTINUATION_MINUTES, MAX_CONTINUATION_STEPS, MAX_TOOL_INVOCATIONS, HarnessConfig, ApprovalMode } from "./types.js";
@@ -409,7 +411,20 @@ function normalizeTrustedDeliverableFiles(workspace: string, value: unknown): st
   return [...new Set(normalized)].sort();
 }
 
+/**
+ * The configuration for these options, under the managed policy of this process (GV-1). A managed policy file that
+ * exists and cannot be used throws `ManagedPolicyError`: nothing is configured without it.
+ */
 export function buildConfig(options: any): HarnessConfig {
+  return buildConfigWithPolicy(options, managedPolicy());
+}
+
+/**
+ * `buildConfig` with the effective policy as an explicit argument. The policy is applied after the operator's own
+ * precedence (flags, environment, settings files), so nothing the operator or a project sets outranks it: what the
+ * policy disables is refused when it was asked for explicitly, and what it requires is switched on.
+ */
+export function buildConfigWithPolicy(options: any, policy: EffectivePolicy): HarnessConfig {
   if (operatorJsonOperationPolicyError) throw operatorJsonOperationPolicyError;
   // `appliance: true` resolves the appliance connection regardless of any provider selection (the model picker's
   // appliance entry).
@@ -445,6 +460,9 @@ export function buildConfig(options: any): HarnessConfig {
 
   let approvalMode: ApprovalMode;
   let fullAccess = Boolean(options.fullAccess);
+  // What asked for the mode and for full access, as the operator wrote it: a refusal by managed policy names it.
+  let modeOrigin = "the full-access setting";
+  let fullAccessOrigin = "the full-access setting";
 
   if (readOnly || modeOption === "read-only") {
     // An explicit read-only request wins over --yes, --approve and --full-access on the same command line.
@@ -457,17 +475,40 @@ export function buildConfig(options: any): HarnessConfig {
     approvalMode = "review";
   } else if (modeOption === "auto" || modeOption === "review" || modeOption === "read-only") {
     approvalMode = modeOption as ApprovalMode;
+    modeOrigin = `--mode ${modeOption}`;
     if (approvalMode === "auto" && options.yes) fullAccess = true;
   } else if (envMode === "auto" || envMode === "review" || envMode === "read-only") {
     approvalMode = envMode as ApprovalMode;
-    if (approvalMode === "auto") fullAccess = true;
+    modeOrigin = `NEXUS_APPROVAL_MODE=${envMode}`;
+    if (approvalMode === "auto") {
+      fullAccess = true;
+      fullAccessOrigin = modeOrigin;
+    }
   } else {
     // Folder trust controls project instructions and integrations, not tool authority.
     // Use an explicit full-access setting when present; otherwise default to review.
     approvalMode = fullAccess ? "auto" : "review";
   }
 
-  const sandbox = options.sandbox ? (typeof options.sandbox === "string" ? options.sandbox : true) : undefined;
+  // GV-1: managed policy is applied to the result of the precedence above. An explicit --yes is refused even when
+  // --read-only would have overridden it: the flag itself is what the policy disables.
+  const approval = clampApprovalRequest(policy, { mode: approvalMode, modeOrigin, yes, ...(fullAccess && !yes ? { fullAccessOrigin } : {}) });
+  if (!approval.allowed) throw new Error(approval.message);
+
+  let sandbox = options.sandbox ? (typeof options.sandbox === "string" ? options.sandbox : true) : undefined;
+  // GV-1: under `sandbox.required` an explicit opt-out is refused and an unset sandbox becomes `auto`, which the tool
+  // executor treats as a configured sandbox: a command is refused when no sandbox engine can run it.
+  const sandboxAsked = typeof sandbox === "string" ? (sandbox.trim().toLowerCase() === "none" ? "none" : sandbox) : sandbox ? "auto" : undefined;
+  const sandboxDecision = clampSandbox(policy, { mode: sandboxAsked, origin: `--sandbox ${String(sandbox)}` });
+  if (!sandboxDecision.allowed) throw new Error(sandboxDecision.message);
+  if (sandboxDecision.notice) warnOnce(sandboxDecision.notice);
+  if (sandbox === undefined && sandboxDecision.value.mode !== undefined) sandbox = sandboxDecision.value.mode;
+  // GV-1: `sandbox.forbid_network` refuses both ways of asking for network in the sandbox. The variable is read as
+  // sandbox.ts reads it (`sandboxNetworkEnabled`).
+  for (const [asked, origin] of [[Boolean(options.sandboxNetwork), "--sandbox-network"], [/^(1|true|yes|on)$/i.test((operatorSetting("NEXUS_SANDBOX_NETWORK") ?? "").trim()), "NEXUS_SANDBOX_NETWORK"]] as const) {
+    const network = clampSandboxNetwork(policy, asked, origin);
+    if (!network.allowed) throw new Error(network.message);
+  }
   // Network inside --sandbox is an explicit operator choice; --yes never implies it.
   if (options.sandboxNetwork) {
     if (sandbox) setSandboxNetworkFlag(true);
