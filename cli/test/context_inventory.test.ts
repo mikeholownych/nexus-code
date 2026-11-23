@@ -26,6 +26,7 @@ import { SLASH_COMMANDS } from "../src/slash/catalog.js";
 import { replReadOnlyAllowed } from "../src/repl.js";
 import { readOnlySlashAllowed } from "../src/sidecar.js";
 import { AutonomousAgent } from "../src/agent.js";
+import { calculateContextBudget } from "../src/tokens.js";
 
 const input = (sourceLocation: string, scope: "session" | "repository" = "session", content = "sensitive source text") => ({
   sourceType: "note", sourceLocation, scope, content, trust: "persisted_unverified" as const,
@@ -125,6 +126,7 @@ test("inference request manifests capture the exact dispatch arrays without reta
   const messages = [
     { role: "system", content: "PRIVATE_PROMPT_SECRET" },
     { role: "user", content: "task instructions" },
+    { role: "assistant", content: "", tool_calls: [{ id: "call-1", type: "function", function: { name: "private_tool_name", arguments: "{}" } }] },
   ];
   const tools = [{ type: "function", function: { name: "private_tool_name", description: "PRIVATE_SCHEMA_SECRET", parameters: { type: "object" } } }];
   const persistence: unknown[] = [];
@@ -147,9 +149,10 @@ test("inference request manifests capture the exact dispatch arrays without reta
   const manifest = agent.getInferenceContextManifests()[0];
   assert.equal(observedBeforeSend.status, "dispatching", "manifest is persisted before provider dispatch");
   assert.equal(manifest.status, "response_received");
-  assert.equal(manifest.messages.length, 2);
+  assert.equal(manifest.messages.length, 3);
   assert.equal(manifest.messages[0].sourceRef, "request:message:0");
   assert.equal(manifest.tools.count, 1);
+  assert.equal(manifest.budget.requestEstimateTokens, calculateContextBudget(messages as any, tools as any, 2048).totalActiveTokens);
   assert.deepEqual(manifest.tools.schemaRefs, ["request:tool-schema:0"]);
   assert.equal("admission" in manifest.budget, false, "provider counts are reported separately and not attached to a request unless their exact arrays are bound");
   assert.equal(isInferenceContextManifest(manifest), true);
@@ -158,6 +161,25 @@ test("inference request manifests capture the exact dispatch arrays without reta
   assert.equal(JSON.stringify(manifest).includes("private_tool_name"), false);
   assert.equal(isInferenceContextManifest({ ...manifest, leakedPrompt: "PRIVATE_PROMPT_SECRET" }), false, "future or untrusted fields are rejected rather than exported");
   assert.equal(persistence.length, 2, "dispatch and response states are durably checkpointed");
+});
+
+test("manifest estimates include all request messages even when source references are capped", () => {
+  const messages = Array.from({ length: 4097 }, (_, position) => ({ role: "user", content: `message ${position}` }));
+  const tools: unknown[] = [];
+  const manifest = buildInferenceContextManifest({
+    id: "ctxreq_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    sequence: 1,
+    messages,
+    tools,
+    contextLimit: 65536,
+    contextLimitSource: "client_default",
+    outputAllowance: 4096,
+    outputAllowanceSource: "client_default",
+    toolResponseReserve: 4096,
+  });
+  assert.equal(manifest.messages.length, 4096);
+  assert.equal(manifest.coverage, "partial");
+  assert.equal(manifest.budget.requestEstimateTokens, calculateContextBudget(messages as any, tools as any, 65536).totalActiveTokens);
 });
 
 test("active system-prompt inventory slices current bytes and refuses stale offsets", () => {

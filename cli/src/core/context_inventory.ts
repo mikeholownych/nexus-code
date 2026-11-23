@@ -105,7 +105,7 @@ export function buildInferenceContextManifest(input: {
   taskId?: string;
   workspace?: string;
   sequence: number;
-  messages: readonly { role?: unknown; content?: unknown }[];
+  messages: readonly { role?: unknown; content?: unknown; tool_calls?: unknown }[];
   tools: readonly unknown[];
   status?: InferenceContextManifest["status"];
   contextLimit: number;
@@ -117,21 +117,30 @@ export function buildInferenceContextManifest(input: {
 }): InferenceContextManifest {
   const capturedAt = input.capturedAt ?? new Date().toISOString();
   const coverageGaps: string[] = [];
-  const messages = input.messages.slice(0, MAX_MANIFEST_MESSAGES).map((message, position) => {
+  const messages: InferenceContextManifest["messages"] = [];
+  let estimatedMessageTokens = 0;
+  for (const [position, message] of input.messages.entries()) {
     const content = typeof message.content === "string" ? message.content : safeJson(message.content);
-    return {
-      position,
-      role: typeof message.role === "string" ? metadataText(message.role, 40) : "unknown",
-      sourceRef: `request:message:${position}`,
-      estimatedTokens: countTokens(content),
-    };
-  });
+    const contentTokens = countTokens(content);
+    const role = typeof message.role === "string" ? message.role : "unknown";
+    if (role === "system" || role === "user" || role === "assistant" || role === "tool") {
+      const toolCallText = message.tool_calls ? safeJson(message.tool_calls) : "";
+      estimatedMessageTokens += contentTokens + countTokens(toolCallText) + 4;
+    }
+    if (position < MAX_MANIFEST_MESSAGES) {
+      messages.push({
+        position,
+        role: metadataText(role, 40),
+        sourceRef: `request:message:${position}`,
+        estimatedTokens: contentTokens,
+      });
+    }
+  }
   const schemaRefs = input.tools.slice(0, MAX_MANIFEST_TOOL_REFS).map((_, position) => `request:tool-schema:${position}`);
-  if (input.messages.length > messages.length) coverageGaps.push(`message references capped at ${MAX_MANIFEST_MESSAGES}`);
+  if (input.messages.length > MAX_MANIFEST_MESSAGES) coverageGaps.push(`message references capped at ${MAX_MANIFEST_MESSAGES}`);
   if (input.tools.length > schemaRefs.length) coverageGaps.push(`tool schema references capped at ${MAX_MANIFEST_TOOL_REFS}`);
-  const toolText = input.tools.map((tool) => safeJson(tool)).join("\n");
-  const toolEstimatedTokens = countTokens(toolText);
-  const requestEstimateTokens = input.requestEstimateTokens ?? (messages.reduce((sum, message) => sum + message.estimatedTokens, 0) + toolEstimatedTokens);
+  const toolEstimatedTokens = countTokens(JSON.stringify(input.tools));
+  const requestEstimateTokens = input.requestEstimateTokens ?? (estimatedMessageTokens + toolEstimatedTokens);
   return {
     schemaVersion: 1,
     id: metadataText(input.id, 100),

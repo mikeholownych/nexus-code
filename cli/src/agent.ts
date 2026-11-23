@@ -3454,7 +3454,6 @@ export class AutonomousAgent {
       sequence: ++this.inferenceContextSequence,
       messages,
       tools,
-      requestEstimateTokens: calculateContextBudget(messages, tools, limits.contextLimit).totalActiveTokens,
       contextLimit: limits.contextLimit,
       contextLimitSource: this.capabilities?.contextSource ?? (this.config.contextLimit ? "operator" : "client_default_or_unknown"),
       outputAllowance: reserves.completion,
