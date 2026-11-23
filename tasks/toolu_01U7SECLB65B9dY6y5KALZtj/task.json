@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01U7SECLB65B9dY6y5KALZtj",
+  "agent_id": "a233fdd7d719e0d12",
+  "subagent_type": "reviewer",
+  "task_description": "Review VR-2 ACP half and follow-ups",
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 65023,
+    "cache_read_tokens": 652401,
+    "output_tokens": 10224,
+    "api_call_count": 15
+  },
+  "started_at": "2026-11-23T20:44:38.599183983Z",
+  "completed_at": "2026-11-23T20:51:12.808793968Z"
+}

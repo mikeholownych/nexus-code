@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01MZrzGt2KY6dn8zqFRuWvow",
+  "agent_id": "ab967e62105976eab",
+  "subagent_type": "reviewer",
+  "task_description": "Review PR #758 PA-3 goals",
+  "token_usage": {
+    "input_tokens": 28,
+    "cache_creation_tokens": 46042,
+    "cache_read_tokens": 470824,
+    "output_tokens": 6203,
+    "api_call_count": 14
+  },
+  "started_at": "2026-11-23T22:02:41.992026077Z",
+  "completed_at": "2026-11-23T22:08:23.654157161Z"
+}
