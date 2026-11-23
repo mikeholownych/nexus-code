@@ -130,7 +130,7 @@ export const ACP_MAX_DIFF_BLOCKS = 64;
 export const ACP_MAX_ERROR_MESSAGE_CHARS = 2_000;
 
 // ---------------------------------------------------------------------------------------------------------------------
-// NOT verified against the published specification as of this slice: see AC1_PLAN.md NV list.
+// Not verified against the published specification as of this slice: see the v1.3 plan's AC-1 review notes.
 // Every value below rests on a summary of the specification's schema page or on Nexus's own choice. Correct them here.
 // ---------------------------------------------------------------------------------------------------------------------
 /** `protocolVersion` range accepted in `initialize`: uint16 per a summary of the schema, not its verbatim text. */
