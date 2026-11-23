@@ -1,0 +1,42 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M83313H8JWZSH3N4Q2R2FG0G",
+  "strategy": "manual-commit",
+  "branch": "codex/context-maturity-v130",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "cli/src/slash/workspace_commands.ts",
+    "cli/test/context_inventory.test.ts",
+    "docs/research/context-engineering/CONTEXT-MATURITY-SYSTEM.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 64902,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 4333312,
+    "output_tokens": 14660,
+    "api_call_count": 31
+  },
+  "redaction": {
+    "replacements": 1933,
+    "layers": {
+      "betterleaks": 580,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 101,
+      "credentialed_uri": 82,
+      "entropy": 1454,
+      "key_context": 0,
+      "provider_token": 25,
+      "shell_stdin": 0
+    }
+  }
+}
