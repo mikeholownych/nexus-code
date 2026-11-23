@@ -46,6 +46,7 @@ import {
   snapshotVerifierDefinitionWithReason, testsChangedSince, verifierDefinitionChangedSince, type ChangeBaseline, type Independence,
 } from "./independent_check.js";
 import { classifyTestEdit } from "./regression_obligations.js";
+import { NOT_RUN_REVIEW, reviewEvidence, type CompletedReview } from "./verify_review.js";
 import type { TypecheckEvidence, VerificationEvidence } from "./turn.js";
 import { captureTypecheckBaseline, collectTypecheckEvidence, typecheckNotApplicable, typecheckProjectKey, worstTypecheckBlock } from "./typecheck_evidence.js";
 import { outcomeFromEvidence } from "./verification_outcome.js";
@@ -715,12 +716,18 @@ export function sandboxedVerifierCommand(
   return { command: argv.map(quoteForShell).join(" "), argv };
 }
 
+/** Internal seams, never operator options: the CLI supplies none of them. */
+export interface VerifyDependencies {
+  /** Lets a test, or a future model-backed reviewer, supply the reviewer without changing the operator contract. */
+  reviewEvidence?: typeof reviewEvidence;
+}
+
 /**
  * The verdict on the change from `request.base` to `request.head` (or to the working tree). Returns a result for every
  * ending that has a verdict, including a refusal and an internal error; throws VerifyUsageError for a request that
  * cannot be acted on and VerifyInterrupted when the signal aborted. Scratch directories are removed on every path.
  */
-export async function verifyChange(request: VerifyRequest, operator: VerifyOperatorContext = {}): Promise<VerifyJsonResult> {
+export async function verifyChange(request: VerifyRequest, operator: VerifyOperatorContext = {}, deps: VerifyDependencies = {}): Promise<VerifyJsonResult> {
   const started = Date.now();
   const timeoutSecs = verifierTimeoutSecs(operator.timeoutSecs);
   const deliverables = [...new Set((operator.deliverables ?? []).map((file) => normaliseTreePath("--deliverable-file", file)))];
@@ -740,7 +747,7 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
     runs: [],
     typecheck: { status: "NOT_RUN", detail: "verification ended before a type-check was due" },
     guard: { status: "NOT_RUN", findings: [], complete: false, detail: "verification ended before the change was read" },
-    review: { status: "NOT_RUN", detail: "this version of nexus verify has no reviewer" },
+    review: { ...NOT_RUN_REVIEW },
     sandbox: { requested: operator.sandbox !== undefined && operator.sandbox.engine !== "none", engine: "none", network: false } as VerifySandbox,
     linkedDependencyDirs: [],
     limits: { timeoutSecs, maxTreeFiles: VERIFY_MAX_TREE_FILES, maxTreeBytes: VERIFY_MAX_TREE_BYTES },
@@ -769,7 +776,27 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
    * decision, or an incomplete scan, is BLOCKED whatever the tests showed. An approved finding never blocks and never
    * leaves the change VERIFIED: what was approved is the report, not the weakening.
    */
+  let completedReview: CompletedReview | undefined;
   const conclude = (outcome: VerifyJsonResult["outcome"], reason: VerifyReason | undefined, detail: string | undefined): VerifyJsonResult => {
+    // No head run means there is no pass to review. Leaving `review` NOT_RUN is honest; an ACCEPT beside an
+    // UNVERIFIED/BLOCKED nothing-ran exit would claim a read that never happened.
+    const headRan = doc.runs.some((run) => run.phase === "head");
+    if (!completedReview && headRan) {
+      // The reviewer sees only the recorded evidence package, never the change's narrative. It runs once, after the
+      // guard and the verifier have written their receipts, and before any verdict is published.
+      completedReview = (deps.reviewEvidence ?? reviewEvidence)({
+        changedFiles: doc.changedFiles,
+        deliverables: doc.deliverables,
+        guard: doc.guard,
+        runs: doc.runs,
+        verification: doc.verification,
+        typecheck: doc.typecheck,
+        verifier: doc.verifier,
+        baseline: doc.baseline,
+      });
+      doc.review = completedReview;
+    }
+    const review = completedReview;
     const guard = doc.guard;
     const needing = guard.findings.filter((finding) => finding.requiresApproval);
     if (guard.status === "BLOCKED" && reason !== "VERIFIER_NOT_APPROVED" && !(reason && HEAD_RUN_FAILURES.includes(reason))) {
@@ -783,6 +810,12 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
     }
     if (outcome === "VERIFIED" && needing.length) {
       return finish("REGRESSION_FREE", "REGRESSION_FREE", `Tests pass, but the change edits how it is verified (${needing.slice(0, 5).map(describeFinding).join("; ")}${needing.length > 5 ? `; and ${needing.length - 5} more` : ""}). The approval given with --approve-verification-edit lets the result be reported; it does not make the change verified.`);
+    }
+    // A REJECT can withhold VERIFIED but never raise a lower verdict: the deterministic gates keep authority over
+    // every passing result, and an already-blocked or already-failed change keeps its own, more specific reason.
+    if (reason === undefined && review?.verdict === "REJECT") {
+      const problems = [...review.suspectedDefects.map((d) => d.description), ...review.scopeViolations].slice(0, 5);
+      return finish("UNVERIFIED", "REVIEW_REJECTED", `the independent reviewer rejected the evidence: ${problems.join("; ")}. A person must resolve the finding before this pass can be reported as VERIFIED.`);
     }
     return finish(outcome, reason, detail);
   };
@@ -1428,8 +1461,13 @@ export function renderVerifyText(result: VerifyJsonResult): string {
     }
     if (result.guard.findings.length > 20) row("", `and ${result.guard.findings.length - 20} more (see --json)`);
   }
-  const notRun = [result.typecheck.status === "NOT_RUN" ? "type-check" : "", result.guard.status === "NOT_RUN" ? "verification-file guard" : "", "review"].filter(Boolean);
-  row("not run", notRun.join(", "));
+  if (result.review.status !== "NOT_RUN") {
+    row("review", `${result.review.verdict ?? "UNKNOWN"}: ${result.review.suspectedDefects.length} suspected defect(s), ${result.review.scopeViolations.length} scope violation(s), ${result.review.unprovenCriteria.length} unproven criterion/criteria`);
+    for (const finding of result.review.suspectedDefects.slice(0, 5)) row("", `${finding.path ? `${finding.path}: ` : ""}${finding.description}`);
+    for (const unproven of result.review.unprovenCriteria.slice(0, 5)) row("", `unproven: ${unproven}`);
+  }
+  const notRun = [result.typecheck.status === "NOT_RUN" ? "type-check" : "", result.guard.status === "NOT_RUN" ? "verification-file guard" : "", result.review.status === "NOT_RUN" ? "review" : ""].filter(Boolean);
+  if (notRun.length) row("not run", notRun.join(", "));
   if (result.environment.length) row("environment", `set: ${result.environment.join(", ")}`);
   const failed = [...result.runs].reverse().find((ran) => ran.phase === "head" && !ran.passed);
   if (failed?.outputTail) lines.push("  head output (end; untrusted repository output):", ...failed.outputTail.trimEnd().split("\n").slice(-30).map((line) => `    | ${line}`));

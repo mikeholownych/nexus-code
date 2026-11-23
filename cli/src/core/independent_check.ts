@@ -11,10 +11,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
+  discoverWorkspaceTestFiles,
   MAX_TEST_BYTES,
   SKIP_DIRS,
   workspaceRuntimeFiles,
-  discoverWorkspaceTestFiles,
 } from "../tester.js";
 
 /** The workspace's verifier run and test files right before the first edit of the current unverified change. */
@@ -141,17 +141,37 @@ export function isInlineProgramVerifier(command: string): boolean {
   });
 }
 
-/** Test files of the workspace by relative path, or null when discovery is incomplete or one exceeds the size kept for restoring. */
-export function snapshotTests(workspace: string, limit?: number): Map<string, string> | null {
+/** A test-file snapshot and the reason it could not be taken, if any. Bytes stay raw so callers can hash them exactly. */
+export interface WorkspaceTestSnapshot {
+  files: Map<string, Buffer> | null;
+  problem?: string;
+}
+
+/**
+ * Read the discoverable test files as raw bytes. Discovery that cannot cover the workspace, an oversized file and an
+ * unreadable file all fail closed with a named reason: callers deciding VERIFIED must not treat a subset as the oracle.
+ */
+export function readWorkspaceTestSnapshot(workspace: string, limit?: number): WorkspaceTestSnapshot {
   const root = path.resolve(workspace);
   const discovery = discoverWorkspaceTestFiles(root, limit);
-  if (!discovery.complete) return null;
-  const tests = new Map<string, string>();
-  for (const file of discovery.files) {
-    const stat = fs.statSync(file);
-    if (stat.size > MAX_TEST_BYTES) return null;
-    tests.set(path.relative(root, file), fs.readFileSync(file, "utf8"));
+  if (!discovery.complete) return { files: null, problem: "workspace test files could not be completely discovered, so the test oracle boundary is unknown" };
+  const files = new Map<string, Buffer>();
+  try {
+    for (const file of discovery.files) {
+      if (fs.statSync(file).size > MAX_TEST_BYTES) return { files: null, problem: "a workspace test file could not be hashed because it is larger than the snapshot limit" };
+      files.set(path.relative(root, file), fs.readFileSync(file));
+    }
+  } catch {
+    return { files: null, problem: "workspace test files could not be read to compute a digest" };
   }
+  return { files };
+}
+
+export function snapshotTests(workspace: string, limit?: number): Map<string, string> | null {
+  const snapshot = readWorkspaceTestSnapshot(workspace, limit);
+  if (!snapshot.files) return null;
+  const tests = new Map<string, string>();
+  for (const [file, bytes] of snapshot.files) tests.set(file, bytes.toString("utf8"));
   return tests;
 }
 
