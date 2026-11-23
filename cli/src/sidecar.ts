@@ -1247,7 +1247,9 @@ export class SidecarServer {
           } catch {}
           const toolCallId = `hist-${++toolSequence}`;
           historyToolIds.set(call.id, toolCallId);
-          entries.push({ role: "tool", tool: call.function.name, toolCallId, status: complete ? "pending" : "completed", text: toolSubject(args, call.function.name) });
+          const entry: HistoryEntry = { role: "tool", tool: call.function.name, text: toolSubject(args, call.function.name) };
+          if (complete) Object.assign(entry, { toolCallId, status: "pending" as const });
+          entries.push(entry);
         }
       } else if (m.role === "tool" && complete) {
         const toolCallId = typeof m.tool_call_id === "string" ? historyToolIds.get(m.tool_call_id) : undefined;
