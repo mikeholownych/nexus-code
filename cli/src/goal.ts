@@ -55,18 +55,32 @@ function deterministicVerificationPassed(operation: DurableOperationState): bool
   return tester?.status === "COMPLETE" && tester.result?.verification?.status === "PASSED" && tester.result.verification.hasExecutedTests && tester.result.verification.definitionBound !== false;
 }
 
-function staleBootReason(operation: DurableOperationState, bootId = currentBootId()): string | undefined {
-  if (!bootId) return undefined;
+import * as os from "node:os";
+
+function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (err: any) { return err?.code === "EPERM"; }
+}
+
+function staleDriverReason(operation: DurableOperationState, bootId = currentBootId()): string | undefined {
   if (!["RUNNING", "WAITING", "BLOCKED"].includes(operation.status)) return undefined;
-  if (!operation.activeBootId || operation.activeBootId === bootId) return undefined;
+  const reasons: string[] = [];
+  if (bootId && operation.activeBootId && operation.activeBootId !== bootId) reasons.push(`earlier host boot (${operation.activeBootId.slice(0, 12)})`);
+  if (operation.activePid !== undefined && operation.activeHost === os.hostname() && !processAlive(operation.activePid)) {
+    reasons.push(`earlier process (pid ${operation.activePid}) is no longer running`);
+  }
+  if (reasons.length === 0 && operation.activePid === undefined && operation.activeBootId === undefined) {
+    reasons.push("an earlier process left it active without driver identity metadata");
+  }
+  if (reasons.length === 0) return undefined;
   return operation.pauseReason?.startsWith("Paused on resume:")
     ? operation.pauseReason
-    : `Paused on resume: this goal was active in an earlier process boot (${operation.activeBootId.slice(0, 12)}) and was not cleanly paused before this process started. Resume it explicitly after inspecting its state.`;
+    : `Paused on resume: this goal was left active by ${reasons.join("; ")}. It was not cleanly paused before this process started. Resume it explicitly after inspecting its state.`;
 }
 
 export function goalStatus(operation: DurableOperationState, ledger?: ObjectiveLedger, bootId = currentBootId()): { status: GoalStatus; reason?: string } {
   if (operation.status === "CANCELLED") return { status: "CANCELLED" };
-  const stale = staleBootReason(operation, bootId);
+  const stale = staleDriverReason(operation, bootId);
   if (operation.status === "PAUSED" || stale) return { status: "PAUSED", ...(operation.pauseReason || stale ? { reason: operation.pauseReason ?? stale } : {}) };
   if (operation.status === "WAITING") return { status: "WAITING" };
   if (operation.status === "RUNNING") return { status: "RUNNING" };
@@ -266,6 +280,8 @@ export class GoalOrchestrator {
     const operation = team.plan("full", text);
     const bootId = currentBootId();
     if (bootId) operation.activeBootId = bootId;
+    operation.activePid = process.pid;
+    operation.activeHost = os.hostname();
     const reviewer = operation.units.find((unit) => unit.id === "review");
     if (!reviewer || !operation.units.some((unit) => unit.id === "verify")) throw new Error("goal workflow is missing its verification or independent review unit");
     // Independent acceptance review must inspect the post-verification candidate, including any test changes.
@@ -333,7 +349,7 @@ export class GoalOrchestrator {
     let unchanged = false;
     try {
       operation = this.store.load(selected.id);
-      const stale = staleBootReason(operation);
+      const stale = staleDriverReason(operation);
       if (stale) {
         operation.status = "PAUSED";
         operation.pauseReason = stale;

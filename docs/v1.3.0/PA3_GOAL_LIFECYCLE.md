@@ -37,9 +37,10 @@ Pause and cancellation refuse to overwrite a running unit. The operator resumes 
 reconcile any unknown effect. A cancelled goal is terminal. The existing operation/task store persists the graph,
 work-unit task ids, objective ledger and receipts.
 
-A goal left `RUNNING`/`WAITING`/`BLOCKED` from an earlier host boot is surfaced as `PAUSED` with a visible reason on
-the next load/resume path (`activeBootId` recorded in the durable operation). Resume is explicit; the stale-boot pause
-is cleared only when the operator resumes and the operation is driven again.
+A goal left `RUNNING`/`WAITING`/`BLOCKED` by an earlier driver is surfaced as `PAUSED` with a visible reason on the
+next load/resume path. Driver identity is recorded in durable operation metadata (`activeBootId`, `activePid`,
+`activeHost`). Same-host process death and host-boot changes are detected; a live lock holder is never treated as stale.
+Resume is explicit; the stale-driver pause is cleared only when the operator resumes and the operation is driven again.
 
 The command handler is shared by the REPL and sidecar router; the TUI receives it from the sidecar catalogue. The REPL
 marks status/list/show/requirements/evidence as read-only inspection and keeps execution, pause, resume, cancel and

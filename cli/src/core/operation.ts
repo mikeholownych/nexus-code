@@ -401,6 +401,10 @@ export interface DurableOperationState {
   messageSeq?: number;
   /** Host boot identity of the process last driving this operation; a different boot means an earlier process left it active. */
   activeBootId?: string;
+  /** PID of the process last driving this operation on activeHost; used to detect same-boot process restarts. */
+  activePid?: number;
+  /** Hostname of the process last driving this operation. */
+  activeHost?: string;
   /** Operator-visible reason the operation was paused (stale recovery, explicit pause, etc.). */
   pauseReason?: string;
 }

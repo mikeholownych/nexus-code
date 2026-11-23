@@ -6,6 +6,7 @@
 import { credentialStorageHome, storedCredentialFor } from "../client.js";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import type { HarnessConfig } from "../types.js";
 import { realRecoveryClock, type RecoveryClock } from "./provider_recovery.js";
 import { ConvergenceScheduler, type Assignment, type Decision, type DurableOperationState, type OperationEvent, type OperationMessage, type UnitRunResult, type WorkUnit } from "./operation.js";
@@ -722,16 +723,37 @@ export function currentBootId(): string | undefined {
   catch { return undefined; }
 }
 
-function pauseForStaleBoot(state: DurableOperationState, bootId: string): string | undefined {
+function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (err: any) { return err?.code === "EPERM"; }
+}
+
+function pauseForStaleDriver(state: DurableOperationState, bootId: string | undefined, store: OperationStore): string | undefined {
   if (!["RUNNING", "WAITING", "BLOCKED"].includes(state.status)) return undefined;
-  if (!state.activeBootId || state.activeBootId === bootId) return undefined;
-  const reason = `Paused on resume: this operation was active in an earlier process boot (${state.activeBootId.slice(0, 12)}) and was not cleanly paused before this process started. Resume it explicitly after inspecting its state.`;
+  const host = os.hostname();
+  const liveLock = store.activeLock(state.id);
+  if (liveLock) return undefined; // another live driver owns it; caller should not drive concurrently
+
+  const reasons: string[] = [];
+  if (bootId && state.activeBootId && state.activeBootId !== bootId) {
+    reasons.push(`earlier host boot (${state.activeBootId.slice(0, 12)})`);
+  }
+  if (state.activePid !== undefined && state.activeHost === host && !processAlive(state.activePid)) {
+    reasons.push(`earlier process (pid ${state.activePid}) is no longer running`);
+  }
+  // Missing driver identity on an active operation written before this metadata existed is treated as stale.
+  if (reasons.length === 0 && state.activePid === undefined && state.activeBootId === undefined) {
+    reasons.push("an earlier process left it active without driver identity metadata");
+  }
+  if (reasons.length === 0) return undefined;
+
+  const reason = `Paused on resume: this operation was left active by ${reasons.join("; ")}. It was not cleanly paused before this process started. Resume it explicitly after inspecting its state.`;
   state.status = "PAUSED";
   state.pauseReason = reason;
   delete state.wait;
   delete state.blocked;
   state.updatedAt = new Date().toISOString();
-  state.events.push({ type: "OPERATION_PAUSED", at: state.updatedAt, message: reason, detail: { reason: "stale_boot", previousBootId: state.activeBootId } });
+  state.events.push({ type: "OPERATION_PAUSED", at: state.updatedAt, message: reason, detail: { reason: "stale_driver", previousBootId: state.activeBootId, previousPid: state.activePid, previousHost: state.activeHost } });
   if (state.events.length > 300) state.events.splice(0, state.events.length - 300);
   return reason;
 }
@@ -746,25 +768,28 @@ export async function driveOperation(state: DurableOperationState, opts: DriveOp
       state = store.load(state.id);
     }
     const bootId = currentBootId();
-    if (entry === "existing" && bootId) {
-      const staleReason = pauseForStaleBoot(state, bootId);
-      if (staleReason) {
-        store.save(state);
-        // Don't return yet if caller is explicitly resuming (prepare will clear pause). 
-      }
+    if (entry === "existing") {
+      pauseForStaleDriver(state, bootId, store);
     }
     prepare?.(state);
-    if (bootId) {
-      if (state.status === "PAUSED" && state.pauseReason?.startsWith("Paused on resume:")) {
-        store.save(state);
-        return state;
-      }
-      if (state.status !== "COMPLETE" && state.status !== "CANCELLED") state.activeBootId = bootId;
-      else delete (state as any).activeBootId;
+    if (state.status === "PAUSED" && state.pauseReason?.startsWith("Paused on resume:")) {
+      store.save(state);
+      return state;
+    }
+    if (state.status !== "COMPLETE" && state.status !== "CANCELLED") {
+      if (bootId) state.activeBootId = bootId;
+      state.activePid = process.pid;
+      state.activeHost = os.hostname();
+    } else {
+      delete (state as any).activeBootId;
+      delete (state as any).activePid;
+      delete (state as any).activeHost;
     }
     const result = await new OperationRunner(state, { ...runnerOpts, persist: (s) => store.save(s) }).run(signal);
-    if (bootId && (result.status === "COMPLETE" || result.status === "CANCELLED" || result.status === "PAUSED")) {
+    if (result.status === "COMPLETE" || result.status === "CANCELLED" || result.status === "PAUSED") {
       delete (result as any).activeBootId;
+      delete (result as any).activePid;
+      delete (result as any).activeHost;
       store.save(result);
     }
     return result;
