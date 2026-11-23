@@ -908,6 +908,10 @@ export class LspClient {
 
       // 2. Initialized notification
       this.sendNotification("initialized", {});
+      // A client that offers workspace folders is expected to push its configuration next. Pyright holds every
+      // request for a workspace until that arrives: with the capability offered and no push, it answers nothing and
+      // publishes nothing. Nothing is configured on a server's behalf here, so the settings are empty.
+      this.sendNotification("workspace/didChangeConfiguration", { settings: {} });
       this.initializedAt = this.busySince = Date.now();
       this.setLifecycle("running");
     } catch (err: any) {
