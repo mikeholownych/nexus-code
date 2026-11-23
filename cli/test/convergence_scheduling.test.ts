@@ -474,7 +474,7 @@ describe("replay safety and non-temporary conditions", () => {
     assert.match(out.blocked!.decisions[0].question, /need operator action/);
   });
 
-  test("27. simultaneous conditions are tracked independently", () => {
+  test("27a. simultaneous conditions are tracked independently", () => {
     const e1 = { endpoint: "https://e1.test/v1", provider: "https://e1.test" };
     const { reg, clock } = registry([res("a", e1), res("b", { endpoint: "https://e2.test/v1", provider: "https://e2.test" }), res("c", { endpoint: "https://e3.test/v1", provider: "https://e3.test" })]);
     reg.observeFailure(reg.get("a")!, f429({ retryAfterMs: 60_000 }));

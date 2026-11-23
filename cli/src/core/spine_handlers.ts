@@ -11,7 +11,7 @@ import { formatDiagnosticHints } from "../diagnostics.js";
 import { captureVerificationState, recordVerificationIfEligible } from "../worktrunk/verification.js";
 import { runTestSuiteWithExecutor, discoverVerifier, hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand } from "../tester.js";
 import { TOOL_GROUPS } from "./tool_groups.js";
-import { snapshotVerifierDefinitionWithReason, requiresWorkspaceVerifierDefinitionBinding, trustedDeliverablesFromBaseline, snapshotTests, testsChangedSince, verifierDefinitionChangedSince, verifierDefinitionMatchesSnapshot, tddRedTestsMatchSnapshot, type Independence } from "./independent_check.js";
+import { readWorkspaceTestSnapshot, snapshotVerifierDefinitionWithReason, requiresWorkspaceVerifierDefinitionBinding, trustedDeliverablesFromBaseline, testsChangedSince, verifierDefinitionChangedSince, verifierDefinitionMatchesSnapshot, tddRedTestsMatchSnapshot, type Independence } from "./independent_check.js";
 import { VerificationEvidence } from "./turn.js";
 import { createHash } from "node:crypto";
 import { unmetObligationsMessage } from "./regression_obligations.js";
@@ -31,23 +31,28 @@ function sha256Digest(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 }
 
+export interface TestSnapshotDigest {
+  digest: string | null;
+  /** The honest reason a digest could not be taken, distinct from a digest that changed between two reads. */
+  problem?: string;
+}
+
 /**
- * A digest of every test file as it stands at one moment. The verifier binding below compares the digest taken
- * before the verifier with one taken after it, so a test that rewrites itself while it runs - even one restored
- * to its base content before exit - cannot be judged on its post-run content. Null means "cannot be bound".
+ * A digest of every discoverable test file as it stands at one moment, hashed as raw bytes. The verifier binding below
+ * compares the digest taken before the verifier with one taken after it, so a test that rewrites itself while it runs
+ * - even one restored to its base content before exit - cannot be judged on its post-run content. An incomplete
+ * discovery or unreadable file fails closed with the reason why, not a claim that the files changed.
  */
-function testSnapshotDigest(workspace: string): string | null {
-  try {
-    const tests = snapshotTests(workspace);
-    if (!tests) return null;
-    const hash = createHash("sha256");
-    for (const [file, content] of [...tests].sort(([a], [b]) => a.localeCompare(b))) {
-      hash.update(file).update("\0").update(content).update("\0");
-    }
-    return hash.digest("hex");
-  } catch {
-    return null;
+export function testSnapshotDigest(workspace: string): TestSnapshotDigest {
+  const snapshot = readWorkspaceTestSnapshot(workspace);
+  if (!snapshot.files) return { digest: null, problem: snapshot.problem };
+  const hash = createHash("sha256");
+  const length = Buffer.alloc(4);
+  for (const [file, bytes] of [...snapshot.files].sort(([a], [b]) => a.localeCompare(b))) {
+    length.writeUInt32BE(bytes.length);
+    hash.update(file).update("\0").update(length).update(bytes);
   }
+  return { digest: hash.digest("hex") };
 }
 
 export function setupSpineHandlersImpl(this: any): void {
@@ -251,10 +256,18 @@ export function setupSpineHandlersImpl(this: any): void {
             verifierCommand
           );
           const testsAfterVerifier = testSnapshotDigest(this.config.workspace);
-          const testsMutatedDuringVerifier = testsBeforeVerifier === null || testsAfterVerifier === null || testsBeforeVerifier !== testsAfterVerifier;
-          const inputMutationDetail = testsMutatedDuringVerifier
-            ? "test files changed while the verifier ran (including a test that restored itself before exit), so its pass cannot be bound to the tree that was committed"
-            : undefined;
+          const snapshotProblem = testsBeforeVerifier.problem ?? testsAfterVerifier.problem;
+          const testsMutatedDuringVerifier = testsBeforeVerifier.digest !== null && testsAfterVerifier.digest !== null && testsBeforeVerifier.digest !== testsAfterVerifier.digest;
+          // A command that can outlive the call may write after the second digest too. Fail closed rather than
+          // pretending that two digests bracket the whole interval in which the oracle could have been changed.
+          const backgroundCommands = this.turnBackgroundCommands > 0;
+          const verifierInputUnbound = snapshotProblem !== undefined || testsMutatedDuringVerifier || backgroundCommands;
+          const inputMutationDetail = snapshotProblem
+            ?? (backgroundCommands
+              ? "a command in this turn can outlive the call and change workspace files while the verifier runs, so its pass cannot be bound to the tree that was committed"
+              : testsMutatedDuringVerifier
+                ? "test files changed while the verifier ran (including a test that restored itself before exit), so its pass cannot be bound to the tree that was committed"
+                : undefined);
           // Configured or discovered, a verifier is evidence about the change only when its run shows tests that
           // executed and cover the changed files.
           hasExecuted = hasExecutedTests(testRes.rawOutput || "");
@@ -264,7 +277,7 @@ export function setupSpineHandlersImpl(this: any): void {
           // candidate-controlled tests. Only a verifier definition and test snapshot captured
           // before the current task's edits can bind workspace changes.
           const configuredTestsStable = source !== "configured" || !baselineTestsChanged;
-          isDeliverableBound = (!this.verificationBaselineInvalidated && !testsMutatedDuringVerifier && hasExecuted && configuredTestsStable && isVerifierDeliverableBound(
+          isDeliverableBound = (!this.verificationBaselineInvalidated && !verifierInputUnbound && hasExecuted && configuredTestsStable && isVerifierDeliverableBound(
             this.config.workspace,
             Array.from(this.modifiedFiles),
             verifierCommand,

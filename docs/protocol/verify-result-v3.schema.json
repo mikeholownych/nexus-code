@@ -4,186 +4,6 @@
   "description": "Generated from VerifyJsonOutput in cli/src/verify_contract.ts by cli/scripts/gen_verify_result_schema.mjs. Do not edit by hand. The one JSON document `nexus verify --json` writes to stdout and `--receipt` writes to a file; `schema_version` is its first member.",
   "$ref": "#/$defs/VerifyJsonOutput",
   "$defs": {
-    "BoundaryFinding": {
-      "type": "object",
-      "properties": {
-        "detail": {
-          "type": "string"
-        },
-        "path": {
-          "type": "string"
-        },
-        "rule": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "detail",
-        "path",
-        "rule"
-      ]
-    },
-    "BoundaryReport": {
-      "type": "object",
-      "properties": {
-        "advisories": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/BoundaryFinding"
-          }
-        },
-        "classifications": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ChangeClassification"
-          }
-        },
-        "coverage": {
-          "type": "object",
-          "properties": {
-            "analysed": {
-              "type": "number"
-            },
-            "filesInDiff": {
-              "type": "number"
-            },
-            "limits": {
-              "description": "Standing limits plus anything specific to this diff (omitted sections, computed imports).",
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "skipped": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "path": {
-                    "type": "string"
-                  },
-                  "reason": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "path",
-                  "reason"
-                ]
-              }
-            }
-          },
-          "required": [
-            "analysed",
-            "filesInDiff",
-            "limits",
-            "skipped"
-          ]
-        },
-        "violations": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/BoundaryFinding"
-          }
-        }
-      },
-      "required": [
-        "advisories",
-        "classifications",
-        "coverage",
-        "violations"
-      ]
-    },
-    "ChangeAssessment": {
-      "type": "object",
-      "properties": {
-        "boundaryImpact": {
-          "type": "string"
-        },
-        "evidence": {
-          "type": "string"
-        },
-        "failureBehaviour": {
-          "type": "string"
-        },
-        "invariantImpact": {
-          "type": "string"
-        },
-        "maintainabilityImpact": {
-          "type": "string"
-        },
-        "purpose": {
-          "type": "string"
-        },
-        "residualRisk": {
-          "type": "string"
-        },
-        "validation": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "boundaryImpact",
-        "evidence",
-        "failureBehaviour",
-        "invariantImpact",
-        "maintainabilityImpact",
-        "purpose",
-        "residualRisk",
-        "validation"
-      ]
-    },
-    "ChangeClass": {
-      "enum": [
-        "compatible",
-        "potentially_breaking",
-        "unknown"
-      ]
-    },
-    "ChangeClassification": {
-      "type": "object",
-      "properties": {
-        "class": {
-          "$ref": "#/$defs/ChangeClass"
-        },
-        "kind": {
-          "enum": [
-            "interface",
-            "schema"
-          ]
-        },
-        "path": {
-          "type": "string"
-        },
-        "reason": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "class",
-        "kind",
-        "path",
-        "reason"
-      ]
-    },
-    "ReviewDefect": {
-      "type": "object",
-      "properties": {
-        "description": {
-          "type": "string"
-        },
-        "line": {
-          "type": "number"
-        },
-        "path": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "description",
-        "path"
-      ]
-    },
     "TypecheckBaselineRecord": {
       "type": "object",
       "properties": {
@@ -770,7 +590,7 @@
       ]
     },
     "VerifyReview": {
-      "description": "The independent reviewer's result. `NOT_RUN` is honest when verification ended before the evidence was read;\n`COMPLETE` carries the project's existing structured `IndependentReviewVerdict` (ACCEPT/REJECT, observations,\ndefects, unproven criteria and scope violations). A REJECT can withhold VERIFIED but never raise a verdict:\ndeterministic verifier evidence stays the sole authority for a passing result.",
+      "description": "The independent reviewer's result. `NOT_RUN` is honest when no head verifier ran, so nothing was reviewed;\n`COMPLETE` publishes only the members this reviewer writes, using the vocabulary of the project's existing\n`IndependentReviewVerdict` (ACCEPT/REJECT, observations, defects, unproven criteria and scope violations). Internal\nmembers such as `boundaryReport`, `changeAssessment` and a defect's optional line are deliberately not published.\nA REJECT can withhold VERIFIED but never raise a verdict: deterministic verifier evidence stays the authority for a\npassing result.",
       "anyOf": [
         {
           "$ref": "#/$defs/VerifyIngredient"
@@ -778,14 +598,6 @@
         {
           "type": "object",
           "properties": {
-            "boundaryReport": {
-              "description": "SI-5: the boundary check's report when the package declared rules (violations force REJECT; advisories and coverage are information).",
-              "$ref": "#/$defs/BoundaryReport"
-            },
-            "changeAssessment": {
-              "description": "Evidence supplied by the reviewer; it cannot override deterministic rejection gates.",
-              "$ref": "#/$defs/ChangeAssessment"
-            },
             "detail": {
               "type": "string"
             },
@@ -804,7 +616,19 @@
             "suspectedDefects": {
               "type": "array",
               "items": {
-                "$ref": "#/$defs/ReviewDefect"
+                "type": "object",
+                "properties": {
+                  "description": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "description",
+                  "path"
+                ]
               }
             },
             "unprovenCriteria": {

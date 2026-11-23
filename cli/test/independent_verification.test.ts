@@ -22,7 +22,8 @@ import {
 } from "../src/core/independent_check.js";
 import { DEFAULT_CONTINUATION, HarnessConfig } from "../src/types.js";
 import { startGateway, Reply } from "./helpers/fixtures.js";
-import { isWorkspaceTestSupportFile } from "../src/tester.js";
+import { discoverWorkspaceTestFiles, isWorkspaceTestSupportFile, MAX_TEST_BYTES, MAX_TEST_FILES } from "../src/tester.js";
+import { testSnapshotDigest } from "../src/core/spine_handlers.js";
 
 const quiet = (agent: AutonomousAgent): AutonomousAgent => {
   (agent as any).ui = new Proxy({}, { get: () => () => {} });
@@ -108,10 +109,11 @@ async function run(
   objective: string,
   extra: Partial<HarnessConfig> = {},
   beforeTurn?: (agent: AutonomousAgent, root: string) => void,
+  replyScript?: (n: number, body?: any) => Reply,
 ) {
   const root = repo(files);
   const gw = await startGateway(
-    (n) => steps[n - 1] ?? { kind: "text", content: "done" },
+    replyScript ?? ((n) => steps[n - 1] ?? { kind: "text", content: "done" }),
   );
   const agent = quiet(new AutonomousAgent(cfg(gw.url, root, extra)));
   try {
@@ -131,6 +133,60 @@ async function run(
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
+
+test("test discovery fails closed when the oracle set is bounded, deep or linked", () => {
+  const deepRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-deep-test-discovery-"));
+  const manyRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-wide-test-discovery-"));
+  const linkRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-linked-test-discovery-"));
+  const testFileLinkRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-linked-test-file-discovery-"));
+  try {
+    const deepTest = path.join(deepRoot, "a", "b", "c", "d", "e", "f", "g", "hidden.test.js");
+    fs.mkdirSync(path.dirname(deepTest), { recursive: true });
+    fs.writeFileSync(deepTest, "test('hidden oracle', () => {});\n");
+    assert.equal(discoverWorkspaceTestFiles(deepRoot).complete, false);
+    assert.equal(snapshotTests(deepRoot), null);
+
+    fs.mkdirSync(path.join(linkRoot, "real-tests"));
+    fs.writeFileSync(path.join(linkRoot, "real-tests", "hidden.test.js"), "");
+    fs.symlinkSync("real-tests", path.join(linkRoot, "tests"), "dir");
+    assert.equal(discoverWorkspaceTestFiles(linkRoot).complete, false);
+    assert.equal(snapshotTests(linkRoot), null);
+
+    fs.mkdirSync(path.join(testFileLinkRoot, "helpers"));
+    fs.mkdirSync(path.join(testFileLinkRoot, "test"));
+    fs.writeFileSync(path.join(testFileLinkRoot, "helpers", "hidden.js"), "test('hidden oracle', () => {});\n");
+    fs.symlinkSync(path.join(testFileLinkRoot, "helpers", "hidden.js"), path.join(testFileLinkRoot, "test", "hidden.test.js"));
+    assert.equal(discoverWorkspaceTestFiles(testFileLinkRoot).complete, false);
+    assert.equal(snapshotTests(testFileLinkRoot), null);
+
+    for (let index = 0; index <= MAX_TEST_FILES; index++) {
+      fs.writeFileSync(path.join(manyRoot, `case-${String(index).padStart(4, "0")}.test.js`), "");
+    }
+    const many = discoverWorkspaceTestFiles(manyRoot);
+    assert.equal(many.files.length, MAX_TEST_FILES);
+    assert.equal(many.complete, false);
+    assert.equal(snapshotTests(manyRoot), null);
+  } finally {
+    fs.rmSync(deepRoot, { recursive: true, force: true });
+    fs.rmSync(manyRoot, { recursive: true, force: true });
+    fs.rmSync(linkRoot, { recursive: true, force: true });
+    fs.rmSync(testFileLinkRoot, { recursive: true, force: true });
+  }
+});
+
+test("an unhashable test snapshot reports why, not that the tests changed", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-snapshot-"));
+  try {
+    fs.mkdirSync(path.join(root, "test"));
+    fs.writeFileSync(path.join(root, "test", "big.test.js"), "x".repeat(MAX_TEST_BYTES + 1));
+    const snapshot = testSnapshotDigest(root);
+    assert.equal(snapshot.digest, null);
+    assert.match(snapshot.problem ?? "", /larger than the snapshot limit/);
+    assert.doesNotMatch(snapshot.problem ?? "", /test files changed/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 describe("VERIFIED needs evidence Nexus did not write", () => {
   test("only explicit test execution supports current-task regression evidence", async () => {
@@ -344,6 +400,43 @@ describe("VERIFIED needs evidence Nexus did not write", () => {
         turn.verification?.independenceDetail ?? "",
         /test files changed while the verifier ran/,
         "the pass is explicitly unbound because the verifier ran against different tests",
+      );
+    },
+  );
+
+  test(
+    "a background command in the turn leaves the verifier pass unbound (detached-swap variant)",
+    { timeout: 60_000 },
+    async () => {
+      // A command that can outlive its call can change the tests after the second digest too. Two digests cannot
+      // bracket that interval, so even a benign background command makes the pass regression evidence only.
+      const changeAndBackground: Reply = {
+        kind: "tools",
+        calls: [
+          { name: "write_file", args: { path: "math.js", content: ADD_FIXED, overwrite: true } },
+          { name: "run_command", args: { command: "sleep 0.2; true", background: true } },
+        ],
+      };
+      // Key the reply off tool results, not the request number: a busy host can make the mock gateway see extra polls,
+      // and an index-based script would then answer `done` before the change was made.
+      const { turn } = await run(
+        {
+          "package.json": PKG,
+          "math.js": ADD_BUGGY,
+          "test/math.test.js": ADD_TEST,
+        },
+        [changeAndBackground],
+        "npm test fails; fix it.",
+        { trustedDeliverableFiles: ["math.js"] },
+        undefined,
+        (_n, body) => (body?.messages ?? []).some((message: any) => message.role === "tool") ? done : changeAndBackground,
+      );
+      assert.equal(turn.verification?.status, "PASSED", `${turn.outcome}/${turn.reason}: ${turn.detail}`);
+      assert.notEqual(turn.outcome, "VERIFIED", `${turn.outcome}: ${turn.detail}`);
+      assert.match(
+        turn.verification?.independenceDetail ?? "",
+        /command in this turn can outlive the call/,
+        "the pass is unbound because a process can still write after the second digest",
       );
     },
   );

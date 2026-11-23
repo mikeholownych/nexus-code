@@ -16,7 +16,7 @@
   },
   {
     "schema_version": 3,
-    "schemaSha256": "7b1373ee94d4ca95ffb8b54be510beae36d362b94248de277f3833ae55c81403",
-    "note": "Bump schema_version: the review member changes meaning from 'not run in this version' (a VerifyIngredient with status NOT_RUN only) to a structured IndependentReviewVerdict when the independent reviewer read the evidence (status COMPLETE, ACCEPT/REJECT, verifiedObservations, suspectedDefects, unprovenCriteria, scopeViolations and reviewerConfidenceNote), with NOT_RUN retained for early exits. New reason REVIEW_REJECTED (BLOCKED, exit 3) lets a REJECT withhold VERIFIED; it never raises a lower verdict. Consumers that treated review as always NOT_RUN must reject version 3 until they read the new shape."
+    "schemaSha256": "fc7c244dc06ee35679862821d864441677ce8f4f0ba07d8de065186f71e32ef9",
+    "note": "Bump schema_version: the review member changes meaning from 'not run in this version' (a VerifyIngredient with status NOT_RUN only) to a structured reviewer result when the independent reviewer read the evidence (status COMPLETE, ACCEPT/REJECT, verifiedObservations, suspectedDefects, unprovenCriteria, scopeViolations and reviewerConfidenceNote), with NOT_RUN retained when no head verifier ran. The published shape publishes only members this reviewer writes; internal IndependentReviewVerdict members such as boundaryReport, changeAssessment and a defect's optional line are not published. New reason REVIEW_REJECTED (BLOCKED, exit 3) lets a REJECT withhold VERIFIED; it never raises a lower verdict. Consumers that treated review as always NOT_RUN must reject version 3 until they read the new shape."
   }
 ]

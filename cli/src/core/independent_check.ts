@@ -11,6 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
+  discoverWorkspaceTestFiles,
   MAX_TEST_BYTES,
   SKIP_DIRS,
   workspaceRuntimeFiles,
@@ -141,14 +142,37 @@ export function isInlineProgramVerifier(command: string): boolean {
 }
 
 /** Test files of the workspace by relative path, or null when one exceeds the size kept for restoring. */
-export function snapshotTests(workspace: string): Map<string, string> | null {
+/** A test-file snapshot and the reason it could not be taken, if any. Bytes stay raw so callers can hash them exactly. */
+export interface WorkspaceTestSnapshot {
+  files: Map<string, Buffer> | null;
+  problem?: string;
+}
+
+/**
+ * Read the discoverable test files as raw bytes. Discovery that cannot cover the workspace, an oversized file and an
+ * unreadable file all fail closed with a named reason: callers deciding VERIFIED must not treat a subset as the oracle.
+ */
+export function readWorkspaceTestSnapshot(workspace: string): WorkspaceTestSnapshot {
   const root = path.resolve(workspace);
-  const tests = new Map<string, string>();
-  for (const file of workspaceTestFiles(root)) {
-    const stat = fs.statSync(file);
-    if (stat.size > MAX_TEST_BYTES) return null;
-    tests.set(path.relative(root, file), fs.readFileSync(file, "utf8"));
+  const discovery = discoverWorkspaceTestFiles(root);
+  if (!discovery.complete) return { files: null, problem: "workspace test files could not be completely discovered, so the test oracle boundary is unknown" };
+  const files = new Map<string, Buffer>();
+  try {
+    for (const file of discovery.files) {
+      if (fs.statSync(file).size > MAX_TEST_BYTES) return { files: null, problem: "a workspace test file could not be hashed because it is larger than the snapshot limit" };
+      files.set(path.relative(root, file), fs.readFileSync(file));
+    }
+  } catch {
+    return { files: null, problem: "workspace test files could not be read to compute a digest" };
   }
+  return { files };
+}
+
+export function snapshotTests(workspace: string): Map<string, string> | null {
+  const snapshot = readWorkspaceTestSnapshot(workspace);
+  if (!snapshot.files) return null;
+  const tests = new Map<string, string>();
+  for (const [file, bytes] of snapshot.files) tests.set(file, bytes.toString("utf8"));
   return tests;
 }
 

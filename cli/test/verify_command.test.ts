@@ -216,6 +216,7 @@ test("the head cannot choose its own verifier: a rewritten scripts.test is not r
     assert.equal(second.code, verifyExitCode("unverified"));
     assert.equal("verifier" in none, false);
     assert.deepEqual(none.runs, [], "nothing the head defines was run");
+    assert.equal(none.review.status, "NOT_RUN", "no head run means there was nothing to review");
     assert.match(none.detail, /the head defines npm test, but the head is the change under test/);
   });
 });
@@ -271,6 +272,7 @@ test("a discovered verifier needs approval: BLOCKED (exit 3) with the command an
     assert.equal(blocked.reason, "VERIFIER_NOT_APPROVED");
     assert.equal(json.code, verifyExitCode("blocked"));
     assert.deepEqual(blocked.runs, [], "nothing was run");
+    assert.equal(blocked.review.status, "NOT_RUN", "an unapproved verifier ran nothing, so nothing was reviewed");
     assert.equal(blocked.verifier.approval, "none");
     assert.equal(blocked.verifier.digest, BASE_VERIFIER_DIGEST);
 

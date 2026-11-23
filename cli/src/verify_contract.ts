@@ -5,7 +5,6 @@
  * (docs/protocol/verify-result-v3.schema.json) is generated from the types here by scripts/gen_verify_result_schema.mjs,
  * so they are plain data (no functions, no index signatures); test/verify_schema.test.ts fails when it falls behind.
  */
-import type { IndependentReviewVerdict } from "./core/independent_review.js";
 import type { EngineeringOutcome, TypecheckEvidence, VerificationEvidence } from "./core/turn.js";
 import type { TypecheckBaselineRecord } from "./core/typecheck_evidence.js";
 import type { EvidenceOutcomeReason } from "./core/verification_outcome.js";
@@ -207,14 +206,25 @@ export interface VerifyIngredient {
 }
 
 /**
- * The independent reviewer's result. `NOT_RUN` is honest when verification ended before the evidence was read;
- * `COMPLETE` carries the project's existing structured `IndependentReviewVerdict` (ACCEPT/REJECT, observations,
- * defects, unproven criteria and scope violations). A REJECT can withhold VERIFIED but never raise a verdict:
- * deterministic verifier evidence stays the sole authority for a passing result.
+ * The independent reviewer's result. `NOT_RUN` is honest when no head verifier ran, so nothing was reviewed;
+ * `COMPLETE` publishes only the members this reviewer writes, using the vocabulary of the project's existing
+ * `IndependentReviewVerdict` (ACCEPT/REJECT, observations, defects, unproven criteria and scope violations). Internal
+ * members such as `boundaryReport`, `changeAssessment` and a defect's optional line are deliberately not published.
+ * A REJECT can withhold VERIFIED but never raise a verdict: deterministic verifier evidence stays the authority for a
+ * passing result.
  */
 export type VerifyReview =
   | VerifyIngredient
-  | (IndependentReviewVerdict & { status: "COMPLETE"; detail?: string });
+  | {
+      status: "COMPLETE";
+      detail?: string;
+      verdict: "ACCEPT" | "REJECT";
+      verifiedObservations: string[];
+      suspectedDefects: Array<{ path: string; description: string }>;
+      unprovenCriteria: string[];
+      scopeViolations: string[];
+      reviewerConfidenceNote: string;
+    };
 
 /**
  * The project type-checks. The evidence of every project (tool, configuration, status, counts, tool hash) is in

@@ -404,12 +404,18 @@ export function sandboxedVerifierCommand(
   return { command: argv.map(quoteForShell).join(" "), argv };
 }
 
+/** Internal seams, never operator options: the CLI supplies none of them. */
+export interface VerifyDependencies {
+  /** Lets a test, or a future model-backed reviewer, supply the reviewer without changing the operator contract. */
+  reviewEvidence?: typeof reviewEvidence;
+}
+
 /**
  * The verdict on the change from `request.base` to `request.head` (or to the working tree). Returns a result for every
  * ending that has a verdict, including a refusal and an internal error; throws VerifyUsageError for a request that
  * cannot be acted on and VerifyInterrupted when the signal aborted. Scratch directories are removed on every path.
  */
-export async function verifyChange(request: VerifyRequest, operator: VerifyOperatorContext = {}): Promise<VerifyJsonResult> {
+export async function verifyChange(request: VerifyRequest, operator: VerifyOperatorContext = {}, deps: VerifyDependencies = {}): Promise<VerifyJsonResult> {
   const started = Date.now();
   const timeoutSecs = verifierTimeoutSecs(operator.timeoutSecs);
   const deliverables = [...new Set((operator.deliverables ?? []).map((file) => normaliseTreePath("--deliverable-file", file)))];
@@ -460,10 +466,13 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
    */
   let completedReview: CompletedReview | undefined;
   const conclude = (outcome: VerifyJsonResult["outcome"], reason: VerifyReason | undefined, detail: string | undefined): VerifyJsonResult => {
-    if (!completedReview) {
+    // No head run means there is no pass to review. Leaving `review` NOT_RUN is honest; an ACCEPT beside an
+    // UNVERIFIED/BLOCKED nothing-ran exit would claim a read that never happened.
+    const headRan = doc.runs.some((run) => run.phase === "head");
+    if (!completedReview && headRan) {
       // The reviewer sees only the recorded evidence package, never the change's narrative. It runs once, after the
       // guard and the verifier have written their receipts, and before any verdict is published.
-      completedReview = reviewEvidence({
+      completedReview = (deps.reviewEvidence ?? reviewEvidence)({
         changedFiles: doc.changedFiles,
         deliverables: doc.deliverables,
         guard: doc.guard,
@@ -475,7 +484,7 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
       });
       doc.review = completedReview;
     }
-    const review = completedReview!;
+    const review = completedReview;
     const guard = doc.guard;
     const needing = guard.findings.filter((finding) => finding.requiresApproval);
     if (guard.status === "BLOCKED" && reason !== "VERIFIER_NOT_APPROVED" && !(reason && HEAD_RUN_FAILURES.includes(reason))) {
@@ -492,7 +501,7 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
     }
     // A REJECT can withhold VERIFIED but never raise a lower verdict: the deterministic gates keep authority over
     // every passing result, and an already-blocked or already-failed change keeps its own, more specific reason.
-    if (reason === undefined && review.verdict === "REJECT") {
+    if (reason === undefined && review?.verdict === "REJECT") {
       const problems = [...review.suspectedDefects.map((d) => d.description), ...review.scopeViolations].slice(0, 5);
       return finish("UNVERIFIED", "REVIEW_REJECTED", `the independent reviewer rejected the evidence: ${problems.join("; ")}. A person must resolve the finding before this pass can be reported as VERIFIED.`);
     }

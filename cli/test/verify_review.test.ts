@@ -4,8 +4,8 @@
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { NOT_RUN_REVIEW, reviewEvidence, type ReviewEvidence } from "../src/core/verify_review.js";
-import { verifyExitCode, verifyExitNameFor, verifyVerdictFor } from "../src/verify_contract.js";
+import { NOT_RUN_REVIEW, reviewEvidence, type CompletedReview, type ReviewEvidence } from "../src/core/verify_review.js";
+import { BASE_FILES, GOOD, commit, head, verifyInProcess, withRepos } from "./helpers/verify_fixture.js";
 
 const evidence = (over: Partial<ReviewEvidence> = {}): ReviewEvidence => ({
   changedFiles: ["math.js"],
@@ -96,14 +96,39 @@ describe("nexus verify independent reviewer", () => {
     assert.ok(review.unprovenCriteria.some((line) => line.includes("fail-before")));
   });
 
-  test("before the evidence is read the receipt says NOT_RUN", () => {
+  test("the initial receipt is honest about a review that has not run", () => {
     assert.equal(NOT_RUN_REVIEW.status, "NOT_RUN");
-    assert.equal(NOT_RUN_REVIEW.verdict, undefined);
+    assert.ok(!("verdict" in NOT_RUN_REVIEW));
   });
 
-  test("a rejected review withholds VERIFIED through the published contract (BLOCKED, exit 3)", () => {
-    assert.equal(verifyVerdictFor("REVIEW_REJECTED"), "BLOCKED");
-    assert.equal(verifyExitNameFor("REVIEW_REJECTED"), "blocked");
-    assert.equal(verifyExitCode("blocked"), 3);
+  test("verifyChange withholds VERIFIED when the reviewer rejects otherwise clean evidence", async () => {
+    await withRepos([BASE_FILES], async (repo) => {
+      const base = head(repo);
+      const fixed = commit(repo, GOOD);
+      const { result } = await verifyInProcess(
+        { worktree: repo, base, head: fixed },
+        { approveDiscoveredVerifier: true, deliverables: ["src/math.js"], sandbox: { engine: "none" } },
+        {
+          deps: {
+            reviewEvidence: (): CompletedReview => ({
+              status: "COMPLETE",
+              verdict: "REJECT",
+              detail: "REJECT: 1 contradiction, 0 scope violations, 0 unproven criteria",
+              verifiedObservations: ["injected for the test"],
+              suspectedDefects: [{ path: "src/math.js", description: "injected reviewer defect" }],
+              unprovenCriteria: [],
+              scopeViolations: [],
+              reviewerConfidenceNote: "test reviewer",
+            }),
+          },
+        },
+      );
+      assert.equal(result.verdict, "BLOCKED");
+      assert.equal(result.reason, "REVIEW_REJECTED");
+      assert.equal(result.exitCode, 3);
+      assert.equal(result.review.status, "COMPLETE");
+      assert.equal(result.review.verdict, "REJECT");
+      assert.match(result.detail ?? "", /injected reviewer defect/);
+    });
   });
 });
