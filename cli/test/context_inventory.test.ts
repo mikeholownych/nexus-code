@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -87,6 +88,27 @@ test("agent workspace fingerprint is bounded by candidate limits and returns unk
   assert.match(agent.getWorkspaceContextFingerprint(), /^[a-f0-9]{64}$/);
   agent.config.workspace = path.join(os.tmpdir(), `missing-context-workspace-${process.pid}`);
   assert.equal(agent.getWorkspaceContextFingerprint(), undefined);
+});
+
+test("workspace candidate fingerprint changes when tracked repository content changes", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-context-fingerprint-"));
+  try {
+    execFileSync("git", ["init", "-q", root]);
+    execFileSync("git", ["-C", root, "config", "user.email", "context-test@example.invalid"]);
+    execFileSync("git", ["-C", root, "config", "user.name", "Context Test"]);
+    fs.writeFileSync(path.join(root, "README.md"), "before\n");
+    execFileSync("git", ["-C", root, "add", "README.md"]);
+    execFileSync("git", ["-C", root, "commit", "-q", "-m", "baseline"]);
+    const agent: any = Object.create(AutonomousAgent.prototype);
+    Object.assign(agent, { config: { workspace: root } });
+    const before = agent.getWorkspaceContextFingerprint();
+    assert.match(before, /^[a-f0-9]{64}$/);
+    assert.equal(agent.getWorkspaceContextFingerprint(), before);
+    fs.writeFileSync(path.join(root, "README.md"), "after\n");
+    assert.notEqual(agent.getWorkspaceContextFingerprint(), before);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("message provenance retains opaque tool-call references without exposing raw identifiers", () => {
@@ -379,6 +401,8 @@ test("session save, resume, compaction, and export retain source references with
     assert.match(restoredLive.contextInventory?.items[0].freshnessRule ?? "", /requires revalidation/);
     assert.equal(restoredLive.contextInventory?.workspaceState?.fingerprint, "a".repeat(64));
     assert.equal(compareWorkspaceState(restoredLive.contextInventory, "b".repeat(64)).comparison, "changed");
+    const exportedLive = buildSessionExport(manager, restoredLive as any);
+    assert.equal((exportedLive.json as any).contextInventory.workspaceState.fingerprint, "a".repeat(64));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

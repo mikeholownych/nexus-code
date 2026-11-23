@@ -76,7 +76,7 @@ XERJ retrieval on `nexus-cli` located the existing context admission/token-accou
 
 ## Verification evidence
 
-Implementation worktree: `codex/context-maturity-v130`, based on current `origin/release/v1.3.0` at `ab7af749b9dd2b6547bd265142d946848d938856`, with two local implementation commits and a clean working tree at report time. The branch is ahead of the release ref by two commits; no push or PR publication has occurred.
+Implementation worktree: `codex/context-maturity-v130`. The feature branch began from `origin/release/v1.3.0` at `ab7af749b9dd2b6547bd265142d946848d938856` and was rebased after PR #739 onto `cebb31ac62752e8b1260f35cd5f19e507e8db7eb`; changes remain local, with no push or PR publication.
 
 | Check | Result | Scope |
 |---|---|---|
@@ -90,10 +90,12 @@ Implementation worktree: `codex/context-maturity-v130`, based on current `origin
 | `node --import tsx --test test/harness.test.ts` | 90 passed, 0 failed | Agent execution, context budgeting/compaction, provider recovery fixtures, workspace behavior, cancellation, and worktree isolation. This is one test file, not the full repository suite. |
 | `node --import tsx --test test/provider_wire_matrix.test.ts` | 90 passed, 0 failed | Local mock wire fixtures across OpenAI-compatible, Anthropic-compatible, and other adapters; no live inference or provider modification. |
 | Focused re-audit (`npm run build`; `node --import tsx --test test/context_inventory.test.ts`) | Build passed; 11 passed, 0 failed | Rechecked command inspection against persisted inference manifests and removed the obsolete claim that per-inference capture was unavailable. |
-| Workspace freshness invalidation (`npm run build`; `node --import tsx --test test/context_inventory.test.ts`) | Build passed; 13 passed, 0 failed | Bounded agent candidate identity, changed-state comparison, invalidated repository references, unavailable-state fallback, and session persistence are covered. |
+| Workspace freshness invalidation (`npm run build`; `node --import tsx --test test/context_inventory.test.ts`) | Build passed; 14 passed, 0 failed | Bounded agent candidate identity changes when tracked content changes; changed-state comparison, invalidated repository references, unavailable-state fallback, legacy snapshots, and session persistence are covered. |
 | `git diff --check` | Passed after documentation and implementation changes | Whitespace/error check on the implementation worktree. |
 
 All TypeScript test commands used Node 24.11.1, one file at a time, with isolated `HOME` and `XDG_CONFIG_HOME`. The full repository suite was not run. No inference provider was modified or contacted by this feature.
+
+After rebasing onto PR #739, focused checks passed on the rebased source: context inventory 14/14, provider wire matrix 90/90, agent harness 90/90, slash router 39/39, knowledge controls 3/3, session durable fields 4/4, and persistence protection 27/27. The CLI build passed. The full repository suite remains unrun.
 
 ### Remaining acceptance gaps
 
