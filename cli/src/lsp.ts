@@ -7,6 +7,8 @@ import { buildMcpEnvironment } from "./mcp.js";
 import { MAX_DIAGNOSTIC_MESSAGE, MAX_DIAGNOSTIC_RECORDS, UNTRUSTED_FENCE_END, UNTRUSTED_FENCE_START, fenceUntrusted, sanitizeDiagnosticMessage } from "./diagnostics.js";
 import { MAX_SNAPSHOT_BYTES } from "./file_diff.js";
 import { redactPlain } from "./protocol.js";
+import { OFFERED_POSITION_ENCODINGS, DEFAULT_POSITION_ENCODING, TextLines, negotiatedEncoding, rangeToModel, toEncoded, type PositionEncoding } from "./lsp_positions.js";
+import { findProjectRoot, rootLabel, type RootRule } from "./lsp_roots.js";
 
 const LSP_TOOLCHAIN_VARS = ["RUSTUP_HOME", "CARGO_HOME", "RUSTUP_TOOLCHAIN", "GOPATH", "GOROOT", "GOCACHE", "GOMODCACHE"];
 /**
@@ -70,12 +72,22 @@ const LSP_MAX_PROGRESS_TOKENS = 256;
 const LSP_MAX_REGISTRATIONS = 256;
 const LSP_SERVER_MESSAGE_RING = 20;
 
+/**
+ * Language servers one manager keeps running: one per server command and project root, so a monorepo's packages each
+ * get their own. Starting one more first stops the least recently used one that is not answering a query, and waits
+ * for its process to end. 8 is room for the six languages planned (the four here, clangd, jdtls) at one root and two
+ * more, or for a few packages in two languages; each is a process that holds a project in memory (hundreds of
+ * megabytes for a real one), so the number is what bounds a session's memory, not a count of packages. A judgement.
+ */
+export const LSP_MAX_SERVERS = 8;
+
 /** Limits a test may lower; the product runs with LSP_LIMITS. */
 export interface LspLimits {
   fileBytes: number;
   messageBytes: number;
+  servers: number;
 }
-export const LSP_LIMITS: Readonly<LspLimits> = Object.freeze({ fileBytes: LSP_MAX_FILE_BYTES, messageBytes: LSP_MAX_MESSAGE_BYTES });
+export const LSP_LIMITS: Readonly<LspLimits> = Object.freeze({ fileBytes: LSP_MAX_FILE_BYTES, messageBytes: LSP_MAX_MESSAGE_BYTES, servers: LSP_MAX_SERVERS });
 
 /*
  * WORST-CASE MEMORY one client retains between queries (bytes; a JavaScript string costs up to 2 bytes per character):
@@ -92,7 +104,8 @@ export const LSP_LIMITS: Readonly<LspLimits> = Object.freeze({ fileBytes: LSP_MA
  * With the product's values: 32 x (4 MiB + 280 KB + 2 KB) + 16 MiB + ... = about 153 MiB, of which 128 MiB is the text
  * of 32 files that are each at the size limit and not ASCII. Nothing is kept per query: a request and a waiter live
  * as long as the call that made them. Closing a document (eviction, deletion, growth past the limit) drops all of the
- * first term for it: `documents` and `opened` are the only references to an OpenDocument.
+ * first term for it: `documents` and `opened` are the only references to an OpenDocument. A manager runs at most
+ * LSP_MAX_SERVERS clients. Converting positions keeps nothing: the line table of a text lives as long as one conversion.
  */
 
 // ---------------------------------------------------------------------------------------------------------- timings
@@ -226,6 +239,8 @@ export interface LspFailure {
 
 export interface LspServerStatus {
   server: string;
+  /** The project root the server is (or would be) started for: relative to the workspace, "/"-separated, "." for the workspace itself. */
+  root?: string;
   state: LspServerState;
   /** How long it has been in this state. */
   forMs: number;
@@ -319,12 +334,13 @@ interface DiagnosticList {
   omitted: number;
 }
 
-function toDiagnostics(items: any[]): DiagnosticList {
+/** `toModel`: a range as the server counts it, to the model's unit (`LspClient.incoming`). */
+function toDiagnostics(items: any[], toModel: (range: LspRange) => LspRange): DiagnosticList {
   const rank = (d: any): number => (d?.severity >= 1 && d?.severity <= 4 ? d.severity - 1 : SEVERITIES.indexOf(LSP_DEFAULT_SEVERITY));
   // Over the bound, the most severe are the ones kept (in the server's order among equals): the first fifty hints must not hide the error after them.
   const kept = items.length > LSP_MAX_DIAGNOSTICS ? [...items].sort((a, b) => rank(a) - rank(b)).slice(0, LSP_MAX_DIAGNOSTICS) : items;
   const list = kept.map((d: any): LspDiagnostic => ({
-    range: toRange(d?.range) ?? NO_RANGE,
+    range: toModel(toRange(d?.range) ?? NO_RANGE),
     severity: SEVERITIES[d?.severity - 1] ?? LSP_DEFAULT_SEVERITY,
     message: String(d?.message ?? "").slice(0, LSP_MAX_DIAGNOSTIC_TEXT),
     source: typeof d?.source === "string" ? d.source.slice(0, LSP_MAX_LABEL) : undefined,
@@ -371,6 +387,7 @@ function positiveInteger(value: unknown): number | null {
 }
 
 const POSITION_FORM = "line and character must be positive integers, counted from 1 (the first line is 1, the first character of a line is 1)";
+const pastEnd = (filePath: string, line: number, shown: number): Error => new Error(`Line ${line} is past the end of ${filePath}, which has ${shown} line${shown === 1 ? "" : "s"}; the language server was not asked.`);
 const PATH_FORM = "path must be a non-empty string naming a file inside the workspace";
 
 const SYSTEM_BIN_DIRS = ["/usr/bin", "/bin", "/usr/local/bin", "/sbin", "/usr/sbin"];
@@ -503,6 +520,11 @@ interface OpenDocument extends FileState {
   waiting: number;
 }
 
+/**
+ * A position as the protocol shapes it: line and character from 0. Inside this client and in everything it returns
+ * (`LspDiagnostic.range`), `character` counts Unicode code points, the model-facing unit (lsp_positions.ts); only
+ * `LspClient.outgoing` and `LspClient.incoming` see a server's own encoding.
+ */
 export interface LspPosition {
   line: number;
   character: number;
@@ -528,6 +550,12 @@ export interface LspTarget {
   column: number;
   endLine: number;
   endColumn: number;
+  /**
+   * The columns are the server's own offsets plus one, as if every character before them were ASCII: the server does
+   * not count in code points and the text of the target's line could not be had to convert with (a file outside the
+   * workspace, over the size limit, gone or changed, or not a file). The line is exact.
+   */
+  approximate?: true;
 }
 
 export interface LspServerSpec {
@@ -546,6 +574,8 @@ export interface LspServerSpec {
   timings?: Partial<LspTimings>;
   /** One line: how to install it. Shown when it is not found. */
   installHint?: string;
+  /** The marker files that make a directory this language's project root (lsp_roots.ts). Without it: the workspace. */
+  root?: RootRule;
 }
 
 export interface LspDiagnostic {
@@ -627,6 +657,12 @@ export class LspClient {
   /** Progress cycles that have ended. Nothing resets it or `lastProgressAt`: a query compares them with its own document's change, so syncing another document cannot take a waiting query's evidence away. */
   private progressEnded = 0;
   private lastProgressAt = 0;
+  /** What the server counts `character` in: negotiated at `initialize`; UTF-16 until then and when it names none. */
+  public positionEncoding: PositionEncoding = DEFAULT_POSITION_ENCODING;
+  /** Set when the server named an encoding that was not offered: said in `status()`. */
+  private encodingNotice?: string;
+  /** The workspace the tools' paths are relative to; `rootPath` is the project root inside it that the server is started for. */
+  public workspacePath: string;
 
   constructor(
     serverCmd: string,
@@ -636,11 +672,13 @@ export class LspClient {
     private awaitProgress: boolean = false,
     private t: LspTimings = LSP_TIMINGS,
     private installHint?: string,
-    private limits: LspLimits = LSP_LIMITS,
+    private limits: Pick<LspLimits, "fileBytes" | "messageBytes"> = LSP_LIMITS,
+    workspacePath: string = rootPath,
   ) {
     this.serverCmd = serverCmd;
     this.serverArgs = serverArgs;
     this.rootPath = path.resolve(rootPath);
+    this.workspacePath = path.resolve(workspacePath);
   }
 
   private setLifecycle(next: LspClient["lifecycle"]): void {
@@ -683,11 +721,13 @@ export class LspClient {
   /** The server's state now. For `nexus doctor`, telemetry, and every result that is not an answer. */
   public status(now: number = Date.now()): LspServerStatus {
     const said = this.serverMessages.length > 0 ? { serverMessages: [...this.serverMessages] } : {};
+    const root = rootLabel(this.workspacePath, this.rootPath);
     if (this.lifecycle !== "running") {
-      return { server: this.serverCmd, state: this.lifecycle, forMs: now - (this.failure?.at ?? this.lifecycleSince), ...(this.failure ? { detail: this.failure.message, cause: this.failure } : {}), ...said };
+      return { server: this.serverCmd, root, state: this.lifecycle, forMs: now - (this.failure?.at ?? this.lifecycleSince), ...(this.failure ? { detail: this.failure.message, cause: this.failure } : {}), ...said };
     }
     const r = this.readiness(now);
-    return { server: this.serverCmd, state: r.ready ? "ready" : "indexing", forMs: now - (r.ready ? Math.max(r.at ?? 0, this.initializedAt) : this.busySince), detail: r.detail, ...said };
+    const detail = this.encodingNotice ? `${r.detail}; ${this.encodingNotice}` : r.detail;
+    return { server: this.serverCmd, root, state: r.ready ? "ready" : "indexing", forMs: now - (r.ready ? Math.max(r.at ?? 0, this.initializedAt) : this.busySince), detail, ...said };
   }
 
   /** What the server registered dynamically and has not unregistered. */
@@ -744,8 +784,10 @@ export class LspClient {
    * there, the process cannot be executed, it exits first, or it does not answer in time (it is then killed).
    */
   public async start(): Promise<void> {
+    if (this.stopping) throw this.notRunning(); // stopped before it was started (the manager was closed while this start waited its turn)
     this.setLifecycle("starting");
-    const env = { ...buildLspEnvironment(this.rootPath), ...this.extraEnv };
+    // PATH is cleaned against the whole workspace, not only this project: no directory of the workspace supplies the binary.
+    const env = { ...buildLspEnvironment(this.workspacePath), ...this.extraEnv };
     // Looked up where the server's own environment would find it, before anything is spawned.
     const where = /[\\/]/.test(this.serverCmd) ? "" : " on PATH";
     const notInstalled = `Language server not installed: ${this.serverCmd} was not found${where}.${this.installHint ? ` Install it with: ${this.installHint}` : ""}`;
@@ -825,7 +867,9 @@ export class LspClient {
       const initRes = await this.sendRequest("initialize", {
         processId: process.pid,
         rootUri,
+        workspaceFolders: [{ uri: rootUri, name: path.basename(this.rootPath) }],
         capabilities: {
+          general: { positionEncodings: [...OFFERED_POSITION_ENCODINGS] },
           textDocument: {
             hover: { contentFormat: ["markdown", "plaintext"] },
             definition: { dynamicRegistration: true },
@@ -836,7 +880,7 @@ export class LspClient {
             // a pull would return one of them.
             ...(this.awaitProgress ? {} : { diagnostic: { dynamicRegistration: false, relatedDocumentSupport: false } }),
           },
-          ...(this.awaitProgress ? {} : { workspace: { diagnostics: { refreshSupport: true } } }),
+          workspace: { workspaceFolders: true, ...(this.awaitProgress ? {} : { diagnostics: { refreshSupport: true } }) },
           // Declared so that servers which report progress (rust-analyzer) send $/progress, which diagnostics wait on.
           window: { workDoneProgress: true },
         },
@@ -847,6 +891,11 @@ export class LspClient {
       const sync = initRes.capabilities?.textDocumentSync;
       if (typeof sync === "object" && sync?.save) {
         this.saveOptions = typeof sync.save === "object" ? sync.save : {};
+      }
+      const negotiated = negotiatedEncoding(initRes.capabilities?.positionEncoding);
+      this.positionEncoding = negotiated.encoding;
+      if (negotiated.rejected !== undefined) {
+        this.encodingNotice = `it named the position encoding ${sanitizeDiagnosticMessage(negotiated.rejected)}, which was not offered: its positions are read as ${DEFAULT_POSITION_ENCODING.toUpperCase()}`;
       }
       const provider = initRes.capabilities?.diagnosticProvider;
       if (!this.awaitProgress && provider && typeof provider === "object") {
@@ -980,7 +1029,7 @@ export class LspClient {
               // about a document as this client sent it (a "cleared" list after a close, arriving after the reopen).
               continue;
             }
-            current.diagnostics = { ...toDiagnostics(params.diagnostics), seq: this.seq };
+            current.diagnostics = { ...toDiagnostics(params.diagnostics, this.incoming(current.text)), seq: this.seq };
             if (!this.awaitProgress) this.answered = true;
             this.wake(current.key);
           }
@@ -1198,7 +1247,7 @@ export class LspClient {
     // Resolve symlinks before the containment check: a link inside the workspace must not read a file outside it.
     const realRoot = realOrNull(this.rootPath);
     this.resync(realRoot);
-    const key = realRoot === null ? null : realOrNull(path.resolve(this.rootPath, filePath));
+    const key = realRoot === null ? null : realOrNull(path.resolve(this.workspacePath, filePath));
     if (realRoot === null || key === null || outsideRoot(realRoot, key)) throw unreadable(filePath);
     let doc = this.documents.get(key);
     if (doc) {
@@ -1357,7 +1406,7 @@ export class LspClient {
         return unavailable(`${err.message}.`);
       }
       if (report?.kind === "full" && Array.isArray(report.items)) {
-        doc.pulled = { ...toDiagnostics(report.items), ...(keepable(report.resultId) ? { resultId: report.resultId } : {}) };
+        doc.pulled = { ...toDiagnostics(report.items, this.incoming(doc.text)), ...(keepable(report.resultId) ? { resultId: report.resultId } : {}) };
         this.answered = true;
         return okAnswer(doc.pulled);
       }
@@ -1417,9 +1466,10 @@ export class LspClient {
    */
   private async ask(method: string, filePath: string, languageId: string, line: number, character: number, empty: (result: any) => boolean, signal?: AbortSignal): Promise<{ result: any; notReady: LspServerStatus | null }> {
     const doc = this.open(filePath, languageId);
-    const params = { textDocument: { uri: doc.uri }, position: { line: Math.max(0, line - 1), character: Math.max(0, character - 1) } };
     const deadline = this.deadline(Date.now());
     for (let pause = this.t.retryMs; ; pause = Math.min(pause * 2, READINESS_RETRY_CAP_MS)) {
+      // Converted for each request: the document may have been re-synced (its text changed) while this call waited.
+      const params = { textDocument: { uri: doc.uri }, position: this.outgoing(doc, filePath, line, character) };
       let result: any = null;
       let failed: unknown;
       try {
@@ -1441,26 +1491,79 @@ export class LspClient {
     }
   }
 
+  /**
+   * THE ONE PLACE A POSITION LEAVES FOR THE SERVER. `line` and `character` as the tools take them (from 1, `character`
+   * in code points) to the protocol's position in the server's encoding, from the text the server holds for the
+   * document. A column past the end of the line is the end of the line. Throws for a line the document does not have.
+   */
+  private outgoing(doc: OpenDocument, filePath: string, line: number, character: number): LspPosition {
+    const lines = new TextLines(doc.text);
+    const text = lines.line(line - 1);
+    if (text === undefined) throw pastEnd(filePath, line, lines.shown);
+    return { line: line - 1, character: toEncoded(text, character - 1, this.positionEncoding) };
+  }
+
+  /**
+   * THE ONE PLACE A POSITION COMES IN FROM THE SERVER: a converter for the ranges of one text (a document's
+   * diagnostics, one definition target), built once per batch so the text is divided into lines once. `text` null: it
+   * could not be had; the converter then reports through `approximate` (see `rangeToModel`).
+   */
+  private incoming(text: string): (range: LspRange) => LspRange;
+  private incoming(text: string | null, approximate: () => void): (range: LspRange) => LspRange;
+  private incoming(text: string | null, approximate?: () => void): (range: LspRange) => LspRange {
+    let lines: TextLines | null | undefined;
+    return (range) => {
+      if (lines === undefined) lines = text === null ? null : new TextLines(text);
+      const converted = rangeToModel(lines, range, this.positionEncoding);
+      if (converted.approximate) approximate?.();
+      return converted.range;
+    };
+  }
+
   /** `text` null with `notReady` null: the server answered and has nothing at this position. The text is cleaned and capped (`sanitizeHoverText`), not fenced. */
   public async getHover(filePath: string, languageId: string, line: number, character: number, signal?: AbortSignal): Promise<{ text: string | null; notReady: LspServerStatus | null }> {
     const { result, notReady } = await this.ask("textDocument/hover", filePath, languageId, line, character, (res) => hoverContents(res?.contents).trim() === "", signal);
     return { text: sanitizeHoverText(hoverContents(result?.contents)) || null, notReady };
   }
 
-  /** Where the server's `uri` is, as a query's input would name it. */
-  private place(uri: string, realRoot: string | null): Pick<LspTarget, "file" | "external" | "uri"> {
+  /**
+   * Where the server's `uri` is, as a query's input would name it (relative to the workspace, not to this server's
+   * project root), and `inside`: its real path, when it is a file inside the workspace that exists.
+   */
+  private place(uri: string, realWorkspace: string | null): { where: Pick<LspTarget, "file" | "external" | "uri">; inside?: string } {
     let named: string;
     try {
       named = fileURLToPath(uri);
     } catch {
-      return { uri: sanitizeDiagnosticMessage(uri) }; // not a file
+      return { where: { uri: sanitizeDiagnosticMessage(uri) } }; // not a file
     }
     // Compared by canonical path, as published diagnostics are: a server may name the file through a symlink or by its real path.
-    const real = realOrNull(named) ?? comparablePath(named);
-    for (const root of [realRoot, this.rootPath]) {
-      if (root !== null && real !== root && isInside(root, real)) return { file: sanitizeDiagnosticMessage(path.relative(root, real).split(path.sep).join("/")) };
+    const resolved = realOrNull(named);
+    const real = resolved ?? comparablePath(named);
+    for (const root of [realWorkspace, this.workspacePath]) {
+      if (root !== null && real !== root && isInside(root, real)) {
+        return { where: { file: sanitizeDiagnosticMessage(path.relative(root, real).split(path.sep).join("/")) }, ...(resolved !== null && root === realWorkspace ? { inside: resolved } : {}) };
+      }
     }
-    return { file: sanitizeDiagnosticMessage(real), external: true };
+    return { where: { file: sanitizeDiagnosticMessage(real), external: true } };
+  }
+
+  /**
+   * The text a definition target's columns are converted with, or null when there is none to be had: what the server
+   * holds for a document that is open; else the file, when it is inside the workspace and within the size limit, read
+   * once per query and file (`cache`) and not opened on the server. A file outside the workspace is not read. Nothing
+   * is read when the server counts in code points (UTF-32), or when no column of the range is past the first.
+   */
+  private targetText(uri: string, range: LspRange, inside: string | undefined, cache: Map<string, string | null>): string | null {
+    if (this.positionEncoding === "utf-32" || (range.start.character === 0 && range.end.character === 0)) return null;
+    const open = this.documentForUri(uri);
+    if (open) return open.text;
+    if (inside === undefined) return null;
+    if (!cache.has(inside)) {
+      const read = readRegularFile(inside, this.limits.fileBytes);
+      cache.set(inside, read && !("tooLarge" in read) ? read.text : null);
+    }
+    return cache.get(inside)!;
   }
 
   /**
@@ -1476,10 +1579,14 @@ export class LspClient {
       const range = toRange(link ? (item.targetSelectionRange ?? item.targetRange) : item?.range);
       if (typeof uri === "string" && range) distinct.set(JSON.stringify([uri, range]), { uri, range });
     }
-    const realRoot = realOrNull(this.rootPath);
+    const realWorkspace = realOrNull(this.workspacePath);
+    const texts = new Map<string, string | null>();
     const list = new Map<string, LspTarget>();
-    for (const { uri, range } of [...distinct.values()].slice(0, LSP_MAX_DEFINITION_TARGETS)) {
-      const target: LspTarget = { ...this.place(uri, realRoot), line: range.start.line + 1, column: range.start.character + 1, endLine: range.end.line + 1, endColumn: range.end.character + 1 };
+    for (const { uri, range: sent } of [...distinct.values()].slice(0, LSP_MAX_DEFINITION_TARGETS)) {
+      const { where, inside } = this.place(uri, realWorkspace);
+      let approximate = false;
+      const range = this.incoming(this.targetText(uri, sent, inside, texts), () => (approximate = true))(sent);
+      const target: LspTarget = { ...where, line: range.start.line + 1, column: range.start.character + 1, endLine: range.end.line + 1, endColumn: range.end.character + 1, ...(approximate ? { approximate: true } : {}) };
       list.set(JSON.stringify(target), target); // two spellings of one file are one target
     }
     return { list: [...list.values()], omitted: Math.max(0, distinct.size - LSP_MAX_DEFINITION_TARGETS) };
@@ -1569,6 +1676,23 @@ export interface LspDefinitionResult {
 }
 
 /**
+ * The marker files of each built-in language (see `RootRule`). typescript-language-server and pyright: the nearest
+ * directory with a project or package file. rust-analyzer: the nearest Cargo.toml, or the Cargo workspace it belongs
+ * to. gopls: a go.work above the file, else the nearest go.mod.
+ */
+const TYPESCRIPT_ROOT: RootRule = { markers: [["tsconfig.json", "jsconfig.json", "package.json"]] };
+const PYTHON_ROOT: RootRule = { markers: [["pyproject.toml", "setup.py", "setup.cfg", "pyrightconfig.json"]] };
+const RUST_ROOT: RootRule = { markers: [["Cargo.toml"]], enclosing: { file: "Cargo.toml", declares: /^[ \t]*\[workspace[\].]/m } };
+const GO_ROOT: RootRule = { markers: [["go.work"], ["go.mod"]] };
+
+/** A file's server: its spec, the project root it runs for, and the key of that pair. */
+interface Route {
+  info: LspServerSpec;
+  root: string;
+  key: string;
+}
+
+/**
  * Manager to auto-route LSP queries based on file extension
  */
 export class LspBridgeManager {
@@ -1576,7 +1700,10 @@ export class LspBridgeManager {
   private static exitHookInstalled = false;
 
   private workspace: string;
+  /** Running clients by server and project root, least recently used first. */
   private clients: Map<string, LspClient> = new Map();
+  /** Queries each client is answering: one that has any is not stopped to make room for another server. */
+  private inUse: Map<LspClient, number> = new Map();
   private starting: Map<string, Promise<LspClient | null>> = new Map();
   /** The client of a start in flight, so that its state can be reported. */
   private launching: Map<string, LspClient> = new Map();
@@ -1660,19 +1787,19 @@ export class LspBridgeManager {
     const ext = path.extname(filePath).toLowerCase();
     if (this.servers[ext]) return this.servers[ext];
     if (ext === ".rs") {
-      return { cmd: "rust-analyzer", languageId: "rust", awaitProgress: true, timings: { coldStartMs: RUST_ANALYZER_COLD_START_ALLOWANCE_MS }, installHint: "rustup component add rust-analyzer" };
+      return { cmd: "rust-analyzer", languageId: "rust", awaitProgress: true, timings: { coldStartMs: RUST_ANALYZER_COLD_START_ALLOWANCE_MS }, installHint: "rustup component add rust-analyzer", root: RUST_ROOT };
     }
     if (ext === ".ts" || ext === ".tsx") {
-      return { cmd: "typescript-language-server", args: ["--stdio"], languageId: "typescript", installHint: "npm install -g typescript typescript-language-server" };
+      return { cmd: "typescript-language-server", args: ["--stdio"], languageId: "typescript", installHint: "npm install -g typescript typescript-language-server", root: TYPESCRIPT_ROOT };
     }
     if (ext === ".js" || ext === ".jsx") {
-      return { cmd: "typescript-language-server", args: ["--stdio"], languageId: "javascript", installHint: "npm install -g typescript typescript-language-server" };
+      return { cmd: "typescript-language-server", args: ["--stdio"], languageId: "javascript", installHint: "npm install -g typescript typescript-language-server", root: TYPESCRIPT_ROOT };
     }
     if (ext === ".py") {
-      return { cmd: "pyright-langserver", args: ["--stdio"], languageId: "python", installHint: "npm install -g pyright" };
+      return { cmd: "pyright-langserver", args: ["--stdio"], languageId: "python", installHint: "npm install -g pyright", root: PYTHON_ROOT };
     }
     if (ext === ".go") {
-      return { cmd: "gopls", languageId: "go", installHint: "go install golang.org/x/tools/gopls@latest" };
+      return { cmd: "gopls", languageId: "go", installHint: "go install golang.org/x/tools/gopls@latest", root: GO_ROOT };
     }
     return null;
   }
@@ -1682,47 +1809,84 @@ export class LspBridgeManager {
     return { ...LSP_TIMINGS, ...this.getServerForFile(filePath)?.timings, ...this.timingOverrides };
   }
 
-  private static keyOf(info: LspServerSpec): string {
-    return `${info.cmd}\0${(info.args ?? []).join("\0")}`;
+  /**
+   * The server for a file and the project root it runs for (`findProjectRoot`: the nearest directory inside the
+   * workspace with a marker of the server's language, else the workspace), or null when no server is configured.
+   * One server process per pair: two packages of a monorepo are two servers.
+   */
+  private route(filePath: string): Route | null {
+    const info = this.getServerForFile(filePath);
+    if (!info) return null;
+    const root = findProjectRoot(this.workspace, filePath, info.root);
+    return { info, root, key: `${info.cmd}\0${(info.args ?? []).join("\0")}\0${root}` };
   }
 
-  private known(info: LspServerSpec, known: KnownFailure): NoAnswer {
-    return noAnswer(known.cause.message, { server: info.cmd, state: "failed", forMs: Date.now() - known.cause.at, detail: known.cause.message, cause: known.cause, crashes: this.crashes.get(LspBridgeManager.keyOf(info)) ?? 0 });
+  /** The project root a server for `filePath` runs for, as `status()` names it; null when no server is configured for it. */
+  public rootFor(filePath: string): string | null {
+    const route = this.route(filePath);
+    return route ? rootLabel(this.workspace, route.root) : null;
+  }
+
+  private known({ info, root, key }: Route, known: KnownFailure): NoAnswer {
+    return noAnswer(known.cause.message, { server: info.cmd, root: rootLabel(this.workspace, root), state: "failed", forMs: Date.now() - known.cause.at, detail: known.cause.message, cause: known.cause, crashes: this.crashes.get(key) ?? 0 });
+  }
+
+  /** Counts a query on `client`; `done` ends it. */
+  private hold(client: LspClient, info: LspServerSpec): { client: LspClient; info: LspServerSpec; done: () => void } {
+    this.inUse.set(client, (this.inUse.get(client) ?? 0) + 1);
+    let ended = false;
+    return {
+      client,
+      info,
+      done: () => {
+        if (ended) return;
+        ended = true;
+        const left = (this.inUse.get(client) ?? 1) - 1;
+        if (left > 0) this.inUse.set(client, left);
+        else this.inUse.delete(client);
+      },
+    };
   }
 
   /**
    * The running client for the file's server, started if need be, or why there is none. A start that failed is not
    * tried again on every call (LSP_START_FAILURE_RECHECK_MS, or a changed PATH); a server that crashed is started again,
-   * after a pause that doubles, up to LSP_MAX_RESTARTS times.
+   * after a pause that doubles, up to LSP_MAX_RESTARTS times. The client comes held (`hold`): the caller calls `done`
+   * when its query has ended.
    */
-  private async acquire(filePath: string): Promise<{ client: LspClient; info: LspServerSpec } | NoAnswer> {
+  private async acquire(filePath: string): Promise<{ client: LspClient; info: LspServerSpec; done: () => void } | NoAnswer> {
     if (typeof filePath !== "string" || filePath.trim() === "" || filePath.includes("\0")) return { reason: `${PATH_FORM}.` };
-    const info = this.getServerForFile(filePath);
-    if (!info) return { reason: `No LSP server configured for ${filePath}.` };
+    const route = this.route(filePath);
+    if (!route) return { reason: `No LSP server configured for ${filePath}.` };
     const refused = this.refusal();
     if (refused) return { reason: refused };
     this.closed = false;
     LspBridgeManager.live.add(this);
-    const key = LspBridgeManager.keyOf(info);
+    const { info, key } = route;
     const t = this.timingsFor(filePath);
     const pathNow = process.env.PATH ?? "";
 
     const known = this.failures.get(key);
     if (known) {
-      if (known.path === pathNow && Date.now() < known.recheckAt) return this.known(info, known);
+      if (known.path === pathNow && Date.now() < known.recheckAt) return this.known(route, known);
       this.failures.delete(key);
       if (known.path !== pathNow) this.crashes.delete(key); // the environment changed (an install, a repair): start over
     }
+    const afterStart = (client: LspClient | null) => {
+      if (client) return this.hold(client, info);
+      const failed = this.failures.get(key);
+      return failed ? this.known(route, failed) : { reason: `Language server '${info.cmd}' was stopped before it had started.` };
+    };
 
     const existing = this.clients.get(key);
-    if (existing?.initialized) return { client: existing, info };
-    const inFlight = this.starting.get(key);
-    if (inFlight) {
-      const client = await inFlight;
-      if (client) return { client, info };
-      const failed = this.failures.get(key);
-      return failed ? this.known(info, failed) : { reason: `Language server '${info.cmd}' was stopped before it had started.` };
+    if (existing?.initialized) {
+      // Most recently used: last in the order the cap evicts in.
+      this.clients.delete(key);
+      this.clients.set(key, existing);
+      return this.hold(existing, info);
     }
+    const inFlight = this.starting.get(key);
+    if (inFlight) return afterStart(await inFlight);
 
     if (existing) {
       // It ran and is gone.
@@ -1742,7 +1906,7 @@ export class LspBridgeManager {
         }
         if (failure) {
           this.failures.set(key, failure);
-          return this.known(info, failure);
+          return this.known(route, failure);
         }
       }
     }
@@ -1750,10 +1914,20 @@ export class LspBridgeManager {
     // No server is started for a file it could not be asked about (the client checks again, for every query).
     if (!this.askable(filePath)) return { reason: unreadable(filePath).message };
 
-    const client = new LspClient(info.cmd, this.workspace, info.args ?? [], info.env, info.awaitProgress === true, t, info.installHint, this.limits);
+    // The cap on live servers: at the limit, the least recently used one that is answering nothing is stopped first,
+    // and the new one starts when that process is gone, so there are never more than the limit. Decided here, in one
+    // turn with the bookkeeping below, so two calls cannot both take the last place.
+    let room: Promise<void> | undefined;
+    if (this.clients.size + this.launching.size >= this.limits.servers) {
+      const idle = [...this.clients].find(([, c]) => !this.inUse.has(c));
+      if (!idle) return { reason: `The limit of ${this.limits.servers} running language servers is reached and each is answering a query or starting; ask again when one has finished.` };
+      this.clients.delete(idle[0]);
+      room = this.stop(idle[1]);
+    }
+
+    const client = new LspClient(info.cmd, route.root, info.args ?? [], info.env, info.awaitProgress === true, t, info.installHint, this.limits, this.workspace);
     this.launching.set(key, client);
-    const startup = client
-      .start()
+    const startup = (room ? room.then(() => client.start()) : client.start())
       .then(
         () => {
           if (this.closed) {
@@ -1775,33 +1949,34 @@ export class LspBridgeManager {
         this.release();
       });
     this.starting.set(key, startup);
-    const started = await startup;
-    if (started) return { client: started, info };
-    const failed = this.failures.get(key);
-    return failed ? this.known(info, failed) : { reason: `Language server '${info.cmd}' was stopped before it had started.` };
+    return afterStart(await startup);
   }
 
   public async getClientForFile(filePath: string): Promise<LspClient | null> {
     const got = await this.acquire(filePath);
-    return "client" in got ? got.client : null;
+    if (!("client" in got)) return null;
+    got.done();
+    return got.client;
   }
 
   /**
    * The state of the file's server, without starting or stopping anything; null when no server is configured for it.
-   * A gate's refusal is reported as `not_started` with the refusal as the detail.
+   * A gate's refusal is reported as `not_started` with the refusal as the detail. `root`: the project root the server
+   * runs for, or would.
    */
   public serverStatus(filePath: string): LspServerStatus | null {
-    const info = this.getServerForFile(filePath);
-    if (!info) return null;
+    const route = this.route(filePath);
+    if (!route) return null;
+    const { info, key } = route;
+    const root = rootLabel(this.workspace, route.root);
     const refused = this.gate?.() ?? null;
-    if (refused) return { server: info.cmd, state: "not_started", forMs: 0, detail: refused };
-    const key = LspBridgeManager.keyOf(info);
+    if (refused) return { server: info.cmd, root, state: "not_started", forMs: 0, detail: refused };
     const crashes = this.crashes.get(key) ?? 0;
     const known = this.failures.get(key);
-    if (known) return { ...this.known(info, known).state!, crashes };
+    if (known) return { ...this.known(route, known).state!, crashes };
     const client = this.clients.get(key) ?? this.launching.get(key);
     if (client) return { ...client.status(), crashes };
-    return { server: info.cmd, state: this.closed ? "stopped" : "not_started", forMs: 0, crashes };
+    return { server: info.cmd, root, state: this.closed ? "stopped" : "not_started", forMs: 0, crashes };
   }
 
   /**
@@ -1812,7 +1987,10 @@ export class LspBridgeManager {
    */
   public async warmUp(filePath: string): Promise<LspServerStatus | null> {
     const got = await this.acquire(filePath);
-    if ("client" in got) got.client.prepare(filePath, got.info.languageId);
+    if ("client" in got) {
+      got.client.prepare(filePath, got.info.languageId);
+      got.done();
+    }
     return this.serverStatus(filePath);
   }
 
@@ -1828,6 +2006,8 @@ export class LspBridgeManager {
       return await got.client.waitForDiagnostics(filePath, got.info.languageId, timeoutMs, signal);
     } catch (err: any) {
       return { status: "unavailable", reason: err.message };
+    } finally {
+      got.done();
     }
   }
 
@@ -1864,6 +2044,8 @@ export class LspBridgeManager {
       return { found: false, error: reason, ...rest };
     } catch (err: any) {
       return { found: false, error: err.message };
+    } finally {
+      got.done();
     }
   }
 
@@ -1883,6 +2065,8 @@ export class LspBridgeManager {
       return { found: false, error: reason, ...rest };
     } catch (err: any) {
       return { found: false, error: err.message };
+    } finally {
+      got.done();
     }
   }
 

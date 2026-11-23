@@ -385,7 +385,7 @@ test("pull: a full report, then 'unchanged' for the kept list; after another fil
     assert.deepEqual(client.diagnosticProvider, { interFileDependencies: true, workspaceDiagnostics: false }, "recorded as announced");
     const declared = (await s.received("initialize"))[0].params.capabilities;
     assert.deepEqual(declared.textDocument.diagnostic, { dynamicRegistration: false, relatedDocumentSupport: false });
-    assert.deepEqual(declared.workspace, { diagnostics: { refreshSupport: true } });
+    assert.deepEqual(declared.workspace, { workspaceFolders: true, diagnostics: { refreshSupport: true } });
     // Any wait on a publish or a quiet period goes through nextPublish: count its uses.
     let waits = 0;
     const nextPublish = client.nextPublish.bind(client);

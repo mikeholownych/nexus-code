@@ -51,7 +51,7 @@ async function withPath<T>(value: string, run: () => Promise<T>): Promise<T> {
 test("state: not started, starting, initializing, then failed with its cause when initialize is never answered", async () => {
   const s = open({ initialize: "never" }, { "a.ts": "x\n" }, { timings: { ...FAST, startMs: 400 } });
   try {
-    assert.deepEqual(state(s), { server: SERVER, state: "not_started", forMs: 0, crashes: 0 });
+    assert.deepEqual(state(s), { server: SERVER, root: ".", state: "not_started", forMs: 0, crashes: 0 });
     const warming = s.mgr.warmUp("a.ts");
     assert.equal(state(s).state, "starting", "spawned in the same turn as the call");
     assert.ok(await eventually(() => state(s).state === "initializing"), "the process exists and has been sent initialize");
@@ -322,14 +322,14 @@ test("warmUp goes through the gate: a refused session starts no server, and a re
   let refusal: string | null = "workspace not trusted; language server not started";
   const s = open({}, { "a.ts": "x\n" }, { gate: () => refusal });
   try {
-    assert.deepEqual(await s.mgr.warmUp("a.ts"), { server: SERVER, state: "not_started", forMs: 0, detail: refusal });
+    assert.deepEqual(await s.mgr.warmUp("a.ts"), { server: SERVER, root: ".", state: "not_started", forMs: 0, detail: refusal });
     assert.deepEqual(s.mgr.serverPids(), []);
     assert.deepEqual(s.rawLog(), [], "no process was started"); // raw: there is no server
     refusal = null;
     assert.equal((await s.mgr.warmUp("a.ts"))!.state, "ready");
     const [pid] = s.mgr.serverPids();
     refusal = "read-only mode; language server not started";
-    assert.deepEqual(await s.mgr.warmUp("a.ts"), { server: SERVER, state: "not_started", forMs: 0, detail: refusal });
+    assert.deepEqual(await s.mgr.warmUp("a.ts"), { server: SERVER, root: ".", state: "not_started", forMs: 0, detail: refusal });
     assert.ok(await eventually(() => !alive(pid)), "the running server was stopped");
     assert.equal(starts(s).length, 1);
   } finally {

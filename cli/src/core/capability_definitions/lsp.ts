@@ -22,11 +22,11 @@ export const lspHoverCapability: CanonicalCapability = {
           },
           "line": {
             "type": "number",
-            "description": "Positive integer, 1-based line."
+            "description": "Positive 1-based line."
           },
           "character": {
             "type": "number",
-            "description": "Positive integer, 1-based character."
+            "description": "Positive code-point column, 1-based."
           }
         },
         "required": [
@@ -51,7 +51,7 @@ export const lspDefinitionCapability: CanonicalCapability = {
     "type": "function",
     "function": {
       "name": "lsp_definition",
-      "description": "LSP definition of the symbol at a position: JSON [{file, line, column, endLine, endColumn}], 1-based; file is workspace-relative (external: true outside it).",
+      "description": "LSP definition: JSON [{file, line, column, endLine, endColumn}], 1-based code-point columns; workspace-relative files (external: true outside); approximate: true = columns may be off.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -61,11 +61,11 @@ export const lspDefinitionCapability: CanonicalCapability = {
           },
           "line": {
             "type": "number",
-            "description": "Positive integer, 1-based line."
+            "description": "Positive 1-based line."
           },
           "character": {
             "type": "number",
-            "description": "Positive integer, 1-based character."
+            "description": "Positive code-point column, 1-based."
           }
         },
         "required": [

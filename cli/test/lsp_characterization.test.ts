@@ -7,8 +7,8 @@
  * Fixed so far (each `FIXED (defect N)` test asserts the former todo's target): slice S2, freshness: 1, 2, 6 and the
  * open-document bound of 12 (more cases in lsp_freshness.test.ts); slice S3, timeouts, readiness and start failures:
  * 3, 9, 10, 14 (more cases in lsp_readiness.test.ts); slice S4, lifecycle and bounds: 7, 8, 11, 12 (more cases in
- * lsp_lifecycle.test.ts); slice S5, output and input shape: 5, 18, 22, 23 (more cases in lsp_shape.test.ts).
- * Still CURRENT: 4 and 15 (position units and roots, unit LS-2).
+ * lsp_lifecycle.test.ts); slice S5, output and input shape: 5, 18, 22, 23 (more cases in lsp_shape.test.ts); unit LS-2,
+ * position units and roots: 4, 15 (more cases in lsp_positions.test.ts and lsp_roots.test.ts). Nothing is CURRENT any more.
  *
  * The tools are driven through the real handler (RustCoreBridge.executeTool) with a manager whose server table points at
  * the fake, as cg3_diagnostics_evidence.test.ts does. The product's timings are seconds long; a test that waits for one
@@ -322,7 +322,7 @@ test("FIXED (defect 22): Location, Location[], LocationLink and LocationLink[] a
   const location = { uri: "$root/b.ts", range };
   const link = { targetUri: "$root/b.ts", targetRange: { start: { line: 4, character: 0 }, end: { line: 6, character: 1 } }, targetSelectionRange: range };
   const forms = { "location.ts": location, "locations.ts": [location], "link.ts": link, "links.ts": [link] };
-  const s = open({ definition: forms }, { "b.ts": "x\n", ...Object.fromEntries(Object.keys(forms).map((name) => [name, "helper\n"])) });
+  const s = open({ definition: forms }, { "b.ts": "\n\n\n\n  helper\n", ...Object.fromEntries(Object.keys(forms).map((name) => [name, "helper\n"])) });
   try {
     for (const name of Object.keys(forms)) {
       assert.deepEqual(await s.tool("lsp_definition", { path: name, line: 1, character: 1 }), { success: true, output: JSON.stringify([{ file: "b.ts", line: 5, column: 3, endLine: 5, endColumn: 9 }], null, 2), error: undefined }, name);
@@ -398,53 +398,53 @@ test("FIXED (defect 9): an empty hover or definition from a server that has not 
 
 // ---------------------------------------------------------------------------------------------- 11. position units
 
-test("CURRENT (defects 4, 15): initialize offers no positionEncodings, no workspaceFolders, no clientInfo", async () => {
+test("FIXED (defects 4, 15): initialize offers general.positionEncodings (UTF-32 first: the model's unit) and sends workspaceFolders, declaring support for them", async () => {
   const s = open({}, { "a.ts": "x\n" });
   try {
     await s.mgr.hover("a.ts", 1, 1);
     assert.deepEqual((await s.received("initialize"))[0].params, {
       processId: process.pid,
       rootUri: pathToFileURL(s.ws).href,
+      workspaceFolders: [{ uri: pathToFileURL(s.ws).href, name: "ws" }],
       capabilities: {
+        general: { positionEncodings: ["utf-32", "utf-8", "utf-16"] },
         textDocument: {
           hover: { contentFormat: ["markdown", "plaintext"] },
           definition: { dynamicRegistration: true },
           publishDiagnostics: { relatedInformation: true, versionSupport: true },
           synchronization: { didSave: true },
-          // Since slice S2 (pull diagnostics, for servers that are not staged); not one of the defects this test pins.
           diagnostic: { dynamicRegistration: false, relatedDocumentSupport: false },
         },
-        workspace: { diagnostics: { refreshSupport: true } },
+        workspace: { workspaceFolders: true, diagnostics: { refreshSupport: true } },
         window: { workDoneProgress: true },
       },
     });
+    // No clientInfo: not part of either defect, and not sent.
+    assert.equal(s.mgr.serverStatus("a.ts")!.root, ".", "the server runs for the workspace root");
   } finally {
     await s.close();
   }
 });
-test.todo("TARGET (defects 4, 15): initialize offers general.positionEncodings and sends workspaceFolders (LS-2)");
 
-test("CURRENT (defect 4): line and character are passed through minus one, whatever unit the model counted in and whatever encoding the server announced", async () => {
+test("FIXED (defect 4): the column is counted in code points, as documented, and converted to the encoding the server announced: the column of `ab` after BMP and astral characters resolves `ab`", async () => {
   const prefix = 'const s = "é日😀"; ';
   const codePoints = [...prefix].length; // 17
   const utf16 = prefix.length; // 18: the emoji is two UTF-16 units
   const utf8 = Buffer.byteLength(prefix); // 23
   assert.deepEqual([codePoints, utf16, utf8], [17, 18, 23]);
-  // The server announces UTF-8 (which it may only do if the client offered it): the client does not look.
-  const s = open({ hover: "fromText", initialize: { capabilities: { positionEncoding: "utf-8" } } }, { "a.ts": `x\n${prefix}ab + other\n` });
+  // The server announces UTF-8, which the client offered, and counts in it (the three encodings, each way: lsp_positions.test.ts).
+  const s = open({ hover: "fromText", positionEncoding: "utf-8", initialize: { capabilities: { positionEncoding: "utf-8" } } }, { "a.ts": `x\n${prefix}ab + other\n` });
   try {
-    const ask = async (character: number) => JSON.parse(hoverBody((await s.tool("lsp_hover", { path: "a.ts", line: 2, character })).output)).word; // since slice S5 the hover text is inside the fence
-    // `ab` starts at 1-based column 18 in code points, 19 in UTF-16 units, 24 in UTF-8 bytes.
-    const words = [await ask(codePoints + 1), await ask(utf16 + 1), await ask(utf8 + 1)];
-    assert.deepEqual((await s.received("textDocument/hover")).map((e) => e.params.position), [{ line: 1, character: 17 }, { line: 1, character: 18 }, { line: 1, character: 23 }]);
-    // The fake reads `character` as UTF-16 (the protocol default): only the UTF-16 column finds `ab`. The code-point
-    // column lands on the space before it, the byte column on a different symbol.
-    assert.deepEqual(words, ["", "ab", "other"]);
+    const ask = async (character: number) => JSON.parse(hoverBody((await s.tool("lsp_hover", { path: "a.ts", line: 2, character })).output)).word;
+    // `ab` starts at 1-based column 18 in code points; `other` at 23. The byte column of `ab` (24) is, in code points, inside `other`.
+    assert.deepEqual([await ask(codePoints + 1), await ask(codePoints + 6), await ask(utf8 + 1)], ["ab", "other", "other"]);
+    // What the server was sent: byte offsets, its own unit.
+    assert.deepEqual((await s.received("textDocument/hover")).map((e) => e.params.position), [{ line: 1, character: utf8 }, { line: 1, character: utf8 + 5 }, { line: 1, character: utf8 + 6 }]);
+    assert.equal((await s.client()).positionEncoding, "utf-8");
   } finally {
     await s.close();
   }
 });
-test.todo("TARGET (defect 4): the tool documents its column unit and converts to the negotiated position encoding, so the documented column of `ab` resolves `ab` after BMP and astral characters (LS-2)");
 
 test("FIXED (defect 23): line and character must be positive integers; anything else is refused before the server is started or asked, with the expected form", async () => {
   const s = open({ hover: { "*": { contents: "h" } } }, { "a.ts": "x\n" });
