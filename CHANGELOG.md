@@ -6,6 +6,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Detailed per-release documentation is maintained in [`docs/releases/`](docs/releases/).
 
+## [Unreleased]
+
+Inventory of work already on `release/v1.3.0` toward v1.3.0 (version strings still 1.2.2). Full unit table and open gaps: [`docs/releases/v1.3.0-READINESS.md`](docs/releases/v1.3.0-READINESS.md). External qualification pending; not a frontier-grade claim.
+
+### Added
+- Client protocol schemas and docs (PF-1), `nexus run --json` result contract (PF-2).
+- ACP adapter and conformance fixtures against Zed and CodeCompanion (AC-1, AC-2).
+- `nexus verify`, MCP/ACP verify surfaces, sandbox-denial receipt records (VR-1, VR-2, VR-3).
+- Managed policy tiers, audit export/verify, flight hash chain, telemetry transparency and opt-out, admin strict mode and allowlists (GV-1–GV-5).
+- LSP lifecycle, bounds, position encodings and project roots (LS-1, LS-2).
+- CI CLI-suite shard fan-out under stable required check names.
+
+### Changed
+- Parallel resource admission for operations (PA-1 partial); staged PA-4 workflow surfaces as documented under `docs/v1.3.0/`.
+
+### Not yet in Unreleased (still open on the plan)
+- PF-3/PF-4 (UDS transport, library `exports`), HK-1/HK-2 (hooks/plugins), BG-1/BG-2 (detached runner/schedules), PA-2 and remaining PA-1/PA-4 items. Context-maturity and WP-P10-02 remain Codex-owned.
+
 ## [v1.2.2] - 2026-11-21
 
 ### Changed
