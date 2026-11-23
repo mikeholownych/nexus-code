@@ -152,7 +152,28 @@ jobs:
           test "$(env PATH=/usr/bin:/bin /usr/bin/npm --version)" = "$(npm --version)"
       - run: npm ci --prefix cli
       - run: npm --prefix cli run build
+      # Every leg builds the same release core. The dependency build is restored from a cache that only a push run
+      # writes, so a pull request can read what its base branch built but can never change what a later run reads.
+      # Cargo checks every restored artifact against the sources and the lockfile before it reuses it.
+      - name: Restore the release core build
+        id: core-build-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            core/target
+          key: core-release-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('core/Cargo.lock') }}
       - run: cargo build --locked --release --manifest-path core/Cargo.toml --bin harness-core --bin nexus-tui
+      - name: Save the release core build
+        if: ${{ github.event_name == 'push' && matrix.node == 22 && matrix.shard == 1 && steps.core-build-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            core/target
+          key: ${{ steps.core-build-cache.outputs.cache-primary-key }}
       # Keep the cache-key version list in sync with the pinned tool versions below.
       - name: Restore pinned security and SBOM tools
         id: test-cargo-tools
