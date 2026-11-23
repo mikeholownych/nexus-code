@@ -26,6 +26,7 @@ test("operator promotion carries scope, provenance, validation, and retention me
     assert.ok(entry.createdAt && entry.updatedAt);
     assert.match(graph.exportPromptSection(), /unverified memory; not evidence/);
     assert.match(graph.exportPromptSection(), /operator_reviewed_unverified/);
+    assert.match(graph.exportPromptSection(), /freshness: unknown; source references are not revalidated/);
     assert.throws(() => graph.set("expired-at-entry", "Rule", "rule", {
       retention: { policy: "expires_at", expiresAt: "2000-01-01T00:00:00.000Z" },
     }), /expiry must be in the future/);

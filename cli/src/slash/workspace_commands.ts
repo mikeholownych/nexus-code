@@ -484,7 +484,9 @@ async function context({ host, args, signal }: SlashContext): Promise<SlashOutco
     content: `${entry.category}\n${entry.key}\n${entry.value}`,
     trust: "persisted_unverified" as const,
     retention: entry.retention?.policy === "expires_at" ? `expires_at:${entry.retention.expiresAt}` : "until_deleted",
-    inclusionReason: `persistent project memory is available to the prompt builder; validation=${entry.validationStatus ?? "legacy_unverified"}`,
+    freshness: "unknown" as const,
+    freshnessRule: "memory source references have no stored content fingerprint and are not revalidated",
+    inclusionReason: `persistent project memory is available to the prompt builder; validation=${entry.validationStatus ?? "legacy_unverified"}; source freshness is unknown`,
     retrievalMethod: "knowledge_graph",
     sourceRefs: [`knowledge:${entry.id}`, ...(entry.provenance?.sourceRefs ?? [])],
   })));

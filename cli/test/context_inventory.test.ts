@@ -379,7 +379,17 @@ test("context inspection and maturity execute without provider calls and emit pa
     getSystemPromptContextSources: () => [{ ...input("client:system-policy", "session", systemPrompt), sourceType: "client_system_prompt", sourceRefs: ["request:message:0"] }],
     getObjective: () => null,
     getActivePlan: () => [],
-    getKnowledgeGraph: () => ({ list: () => [] }),
+    getKnowledgeGraph: () => ({
+      list: () => [{
+        id: "memory-1",
+        category: "rule",
+        key: "test rule",
+        value: "remembered claim",
+        validationStatus: "operator_reviewed_unverified",
+        provenance: { sourceRefs: ["operator-note:1"] },
+        retention: { policy: "until_deleted" },
+      }],
+    }),
     getSkillManager: () => ({ listSkills: () => [] }),
     getEffectiveTools: () => [],
     getProviderCapabilities: () => null,
@@ -412,6 +422,10 @@ test("context inspection and maturity execute without provider calls and emit pa
   assert.equal(snapshot.coverageGaps.some((gap: string) => gap.includes("does not yet persist a per-inference manifest")), false);
   assert.equal(snapshot.coverageGaps.some((gap: string) => gap.includes("active system prompt sections could not be linked")), false);
   assert.equal(snapshot.items.some((item: any) => item.sourceRefs?.includes("request:message:0")), true);
+  const memoryItem = snapshot.items.find((item: any) => item.sourceType === "durable_knowledge");
+  assert.equal(memoryItem?.freshness, "unknown");
+  assert.match(memoryItem?.freshnessRule ?? "", /no stored content fingerprint/);
+  assert.equal(memoryItem?.sourceRefs?.includes("operator-note:1"), true);
   assert.equal(snapshot.items.some((item: any) => item.sourceType === "system_context"), false);
   assert.equal(snapshot.metrics.tokenSource, "client_estimate");
   const bounded = await routeSlash(host, "context", "inspect --json --max-items 1", new AbortController().signal);

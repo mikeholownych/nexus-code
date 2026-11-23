@@ -290,7 +290,7 @@ export class KnowledgeGraph {
       `### Persistent Project Knowledge & Conventions [source: ${this.dbPath}] [trust: unverified memory; not evidence]:`,
     ];
     for (const entry of list) {
-      lines.push(`- [${entry.category.toUpperCase()}] [validation: ${entry.validationStatus}] **${entry.key}**: ${entry.value}`);
+      lines.push(`- [${entry.category.toUpperCase()}] [validation: ${entry.validationStatus}] [freshness: unknown; source references are not revalidated] **${entry.key}**: ${entry.value}`);
     }
 
     return lines.join("\n") + "\n";
