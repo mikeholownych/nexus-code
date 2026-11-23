@@ -28,7 +28,7 @@ A nightly real-project smoke (`.github/workflows/real-project-smoke.yml`, not a 
 
 A weekly, non-required `lsp-real-servers` workflow runs the LSP client against real language servers; see [the LSP notes](LSP_REAL_SERVERS.md).
 
-The Cloudflare service has separate setup and tests; see [the contest entry](CLOUDFLARE_CONTEST.md).
+The Cloudflare contest service and its demo were removed in v1.3.0; they remain in git history, and `v1.2.2` is the last tag that contains them.
 
 ## Release package
 

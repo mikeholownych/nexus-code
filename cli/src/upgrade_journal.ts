@@ -193,7 +193,8 @@ export function createPreMigrationBackup(
     if (fs.realpathSync(backupDir) !== path.resolve(backupDir)) throw new Error("Configuration backup directory is redirected");
     if (!backupDirExisted) syncDirectory(path.dirname(backupDir));
     const backupFile = path.join(backupDir, `config.env.bak.${timestamp}`);
-    copyPrivateFileDurably(configEnv, backupFile, true, observer.bytesCopied);
+    const bytes = copyPrivateFileDurably(configEnv, backupFile, true, observer.bytesCopied);
+    manifestEntries.push({ store: "config", path: "config.env", bytes });
     observer.fileCopied();
     result.configBackupPath = backupFile;
   }

@@ -1,6 +1,6 @@
 # Nexus Code quickstart
 
-Nexus Code is a local coding client. It is separate from the Cloudflare Workers and Artifacts collaboration service in the contest entry.
+Nexus Code is a local coding client.
 
 ## Install
 
@@ -16,7 +16,7 @@ The installer downloads the matching versioned client archive and `SHA256SUMS` f
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Without `NEXUS_VERSION`, the installer follows the latest stable release. If no stable release has been published yet, the installer exits with a hint to select a prerelease tag from [GitHub Releases](https://github.com/mikeholownych/nexus-code/releases). To install a prerelease or pin a version, set `NEXUS_VERSION` to its published tag. The `v1.0.0-rc.1` example below works after that tag appears on [GitHub Releases](https://github.com/mikeholownych/nexus-code/releases); before then, replace it with a prerelease tag already listed there:
+Without `NEXUS_VERSION`, the installer follows the latest stable release. To pin a version or install a prerelease, set `NEXUS_VERSION` to a tag already published on [GitHub Releases](https://github.com/mikeholownych/nexus-code/releases). The `v1.2.2` examples below use the current stable tag; replace it with another published tag if you need a different version:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v1.2.2 sh

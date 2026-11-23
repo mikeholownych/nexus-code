@@ -9,7 +9,9 @@ import { isWorkspaceTrusted } from "../workspace_trust.js";
 import { ExecutionReceipt, InvocationContext, extractTargetResources } from "./spine.js";
 import { repairJsonWithClass, isWriteOrExecTool } from "../parser.js";
 import { oneLine } from "../skills.js";
-import { VERIFICATION_CONFIG_PROTECTED, type VerificationEditContext, type VerificationShellChange } from "../security.js";
+import { VERIFICATION_CONFIG_PROTECTED, splitSubcommands, type VerificationEditContext, type VerificationShellChange } from "../security.js";
+import { decideManagedCommand, describeSource, permitsEgressHost, type EffectivePolicy } from "./managed_policy.js";
+import { approvalDecisionSource, clampApprovalSettings, humanRequirementForEffect, type HumanRequirement } from "./policy_runtime.js";
 import { sandboxNetworkNotice } from "../sandbox.js";
 import { hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand } from "../tester.js";
 import { toolGroupOf } from "./tool_groups.js";
@@ -311,7 +313,13 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
     const named = typeof args?.name === "string" ? this.skillManager.getSkill(args.name) : null;
     activateIsUntrustedSource = Boolean(named?.isWorkspaceSkill);
   }
-  const policyContext: PolicyContext = {
+  const verificationSecurity = this.bridge.getSecurityManager();
+  // GV-1: the effective policy of this workspace. Its command prefixes and `approval.require_human` ask in every mode,
+  // and the approval settings are clamped here whatever built this agent's configuration.
+  const managed: EffectivePolicy = verificationSecurity.getEffectivePolicy();
+  const managedCommand = toolName === "run_command" && typeof args.command === "string" ? decideManagedCommand(managed, splitSubcommands(args.command)) : undefined;
+  const human: HumanRequirement | undefined = managedCommand?.decision === "prompt" ? { message: managedCommand.message, source: managedCommand.source } : humanRequirementForEffect(managed, effect);
+  const askedContext: PolicyContext = {
     mode,
     trusted: isTrusted,
     sandbox: this.config.sandbox,
@@ -320,7 +328,50 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
     fullAccess: Boolean(this.config.fullAccess) && !this.isReadOnly(),
     isUntrustedSource: activateIsUntrustedSource,
   };
-  const verificationSecurity = this.bridge.getSecurityManager();
+  const policyContext: PolicyContext = clampApprovalSettings(managed, askedContext, human);
+  const policyDenial = (cancelMsg: string, denialReason: string) => {
+    if (this.flightRecorder) this.flightRecorder.recordToolResult(currentStep, call.id, toolName, false, cancelMsg, 0, denialReason);
+    this.observer?.onToolEnd?.({ dispatch, callId: call.id, tool: toolName, success: false, output: "", error: cancelMsg, denied: true });
+    return {
+      receipt: {
+        invocationId: call.id,
+        taskId: this.activeWorktree?.taskId || this.currentTaskId,
+        actor,
+        executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+        capabilityId: this.capabilityRegistry.getByToolName(toolName)?.id || "unknown",
+        toolName,
+        targetResources: extractTargetResources(toolName, args),
+        success: false,
+        output: "",
+        error: cancelMsg,
+        durationMs: 0,
+        candidateMutated: false,
+        status: "DENIED",
+        denialReason,
+        timestamp: new Date().toISOString(),
+        simulated: Boolean(this.config.dryRun),
+      } as ExecutionReceipt,
+      shouldExit: false,
+    };
+  };
+  if (managedCommand?.decision === "forbidden") {
+    return policyDenial(`Error: ${managedCommand.message} It is not run in any mode. Do the work another way, or report what you could not do.`, "MANAGED_POLICY_FORBIDDEN");
+  }
+  // A managed `egress.allowed_domains` decides the destination a call names. The project's own list keeps its existing
+  // check in the fetch tool; here the merged list applies as the policy library matches it.
+  if (effect === "egress" && typeof args.url === "string" && managed.egress.allowed_domains.tiers.some((tier) => tier.source.tier !== "project")) {
+    let hostName = "";
+    try {
+      hostName = new URL(args.url).hostname;
+    } catch {
+      // A destination that cannot be read cannot be shown to be on the list.
+    }
+    if (!hostName) {
+      return policyDenial(`Error: '${String(args.url).slice(0, 120)}' is not a URL whose host can be checked against the managed allowlist (egress.allowed_domains). ${describeSource(managed.egress.allowed_domains.source)}`, "MANAGED_POLICY_EGRESS");
+    }
+    const reachable = permitsEgressHost(managed, hostName);
+    if (!reachable.allowed) return policyDenial(`Error: ${reachable.message}`, "MANAGED_POLICY_EGRESS");
+  }
   // DV-3: a test edited through the shell is recorded against the obligation that names it (the CS-2 snapshot and diff).
   verificationSecurity.setShellChangeObserver(this.objective?.obligations?.length ? (changes: VerificationShellChange[], scan: { complete: boolean }) => {
     if (!this.objective) return;
@@ -389,14 +440,17 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
   // CS-9: the operator's command rules. `forbidden` refuses in every mode; `prompt` asks unless --yes; `allow` removes the
   // normal prompt only (every other control below still applies). The deciding rule is recorded for the session export.
   if (this.commandRulesNotice) {
-    const notice = `[nexus] command_rules: ${this.commandRulesNotice}`;
+    // The file is refused whole (unchanged); the notice says what that costs, so a dropped `forbidden` is not a surprise.
+    const notice = `[nexus] command_rules: ${this.commandRulesNotice} Its forbidden and prompt rules are NOT enforced until the file is fixed.`;
     this.commandRulesNotice = undefined;
     if (this.depth === 0) {
       if (this.observer?.onNotice) this.observer.onNotice(notice);
       else console.warn(notice);
     }
   }
-  const ruleVerdict: CommandVerdict | null = toolName === "run_command" && typeof args.command === "string" ? decideCommand(this.commandRules, args.command) : null;
+  const operatorVerdict: CommandVerdict | null = toolName === "run_command" && typeof args.command === "string" ? decideCommand(this.commandRules, args.command) : null;
+  // GV-1 `commands.disable_allow_rules`: the operator's `allow` rules are not used; `prompt` and `forbidden` keep working.
+  const ruleVerdict = operatorVerdict?.decision === "allow" && managed.commands.disable_allow_rules.value ? null : operatorVerdict;
   const recordRule = (verdict: CommandVerdict, effectText: CommandRuleDecision["effect"]): void => {
     this.commandRuleDecisions.push({
       timestamp: new Date().toISOString(),
@@ -444,7 +498,8 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
     && (this.interruptedCall.toolName === "*" || this.interruptedCall.toolName === toolName)
     && (this.interruptedCall.argsHash === undefined || this.interruptedCall.argsHash === argsFingerprint(toolName, args));
   const policyAsk = this.approvalPolicy.requiresDecision(effect, policyContext);
-  const ruleSkipsPrompt = ruleVerdict?.decision === "allow";
+  // A managed requirement for a human is not removed by an operator `allow` rule.
+  const ruleSkipsPrompt = ruleVerdict?.decision === "allow" && !human;
   const ruleAsks = ruleVerdict?.decision === "prompt" && !policyContext.fullAccess;
   if (ruleVerdict && ruleSkipsPrompt && policyAsk) recordRule(ruleVerdict, "allowed without prompt");
   else if (ruleVerdict && ruleAsks && !policyAsk) recordRule(ruleVerdict, "prompted");
@@ -502,9 +557,16 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
   if (askOperator && !preApproved) {
     if (!onConfirm) {
       const declined = toolQuestion && this.operatorAnswers.get(toolQuestion.id) === "decline";
-      const approvalGuidance = effect === "egress"
-        ? "Run with --yes to explicitly allow egress without an operator prompt."
-        : "Run with --yes or --mode auto to explicitly select automatic approvals.";
+      // GV-1: the tier that decided the call must ask is named beside the refusal.
+      const decidedBy = approvalDecisionSource(managed, askedContext);
+      const operatorRule = ruleAsks && !policyAsk ? ruleVerdict!.rule.index : undefined;
+      const approvalGuidance = human
+        ? human.message
+        : decidedBy.tier !== "default"
+          ? `Managed policy disables automatic approvals here. ${describeSource(decidedBy)}`
+          : `${effect === "egress"
+            ? "Run with --yes to explicitly allow egress without an operator prompt."
+            : "Run with --yes or --mode auto to explicitly select automatic approvals."} ${describeSource(operatorRule === undefined ? decidedBy : { tier: "operator-rules", ...(this.commandRules.file ? { file: this.commandRules.file } : {}), key: `rules[${operatorRule}]` })}`;
       const cancelMsg = reissuesInterrupted
         ? `Error: this '${toolName}' call matches one interrupted with an unknown outcome and may already have taken effect. It is not repeated without an explicit operator decision; inspect its effects first.${toolQuestion ? (declined ? " The operator declined this action." : ` needs_input ${toolQuestion.id}: the run ends BLOCKED so the operator can decide.`) : ""}`
         : `Error: Tool '${toolName}' requires operator approval (${effect}), but no operator is present (headless execution). ${approvalGuidance}${toolQuestion ? (declined ? " The operator declined this action." : ` needs_input ${toolQuestion.id}: the run ends BLOCKED so the operator can decide.`) : ""}`;
@@ -550,7 +612,11 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
       if (networkNotice) console.log(`⚠️ ${networkNotice}`);
     }
     if (reissuesInterrupted) console.log(`⚠️ ${toolName} matches a call interrupted with unknown outcome; it may already have taken effect.`);
-    const approved = await onConfirm(toolName, args, undefined, reissuesInterrupted ? { requireOperatorDecision: true } : undefined);
+    if (human) console.log(`⚠️ ${human.message}`);
+    // Where managed policy requires a human or disables automatic approval, a front end's own "approve everything"
+    // state must not answer: the operator decides this call.
+    const operatorMustDecide = reissuesInterrupted || Boolean(human) || managed.approval.disable_auto.value;
+    const approved = await onConfirm(toolName, args, undefined, operatorMustDecide ? { requireOperatorDecision: true } : undefined);
     if (verificationEdit?.action === "ask") {
       if (approved) verificationAuthority.approved = { path: verificationEdit.path };
       else {

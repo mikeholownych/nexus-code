@@ -17,6 +17,7 @@ import { applyProviderCatalog, ResourceRegistry, type ResourceConditionRecord, t
 import { turnSucceeded, type InferenceFailure, type TurnResult } from "./turn.js";
 import type { UnitRunContext, WorkUnitExecutor } from "./operation_runner.js";
 import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./operation_runner_diagnostics.js";
+import type { ObjectiveLedger } from "./objective.js";
 import { isTestPath } from "../tester.js";
 import { isContextAdmissible } from "../tokens.js";
 import { ensurePrivateDir, writePrivateFile } from "./durable_file.js";
@@ -100,6 +101,8 @@ export interface AgentExecutorOptions {
   baseConfig: HarnessConfig;
   /** Builds the unit's agent (tests inject state directories and clocks). */
   createAgent?: (config: HarnessConfig, depth?: number, options?: { durable?: boolean; role?: AgentRole; unitId?: string }) => AutonomousAgent;
+  /** Supplies a copy of the parent goal ledger to a fresh implementer or tester task before its first turn. */
+  objectiveLedgerForUnit?: (operationId: string, unit: WorkUnit) => ObjectiveLedger | undefined;
   /** Read provider `/v1/models` metadata on wake and at start. */
   discoverCatalog?: boolean;
   onDiagnostic?: OperationDiagnosticHandler;
@@ -424,6 +427,10 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
     }
     let lastCondition: ResourceConditionRecord | null = null;
     try {
+      if (!unit.agentTaskId && ctx.operationId && (unit.role === "implementer" || unit.role === "tester")) {
+        const objective = this.opts.objectiveLedgerForUnit?.(ctx.operationId, unit);
+        if (objective) agent.initializeFreshObjectiveLedger(objective);
+      }
       let prompt: string;
       let promptMessages = ctx.messages;
       let unusable: string | undefined;
@@ -762,7 +769,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       ...(verified
         ? {
             verifierCommand: verified.command,
-            verifierOutput: `status ${verified.status}${verified.hasExecutedTests ? "" : " (no tests executed)"}${verified.definitionBound === false ? " (the verifier's definition could not be bound and was not verified unchanged, so the pass is regression evidence only)" : ""}`,
+            verifierOutput: `status ${verified.status}${verified.hasExecutedTests ? "" : " (no tests executed)"}${verified.definitionBound === false ? " (the verifier's definition or test inputs could not be bound and were not verified unchanged, so the pass is regression evidence only)" : ""}`,
             // Anything but a passing run that executed tests is a failure to the deterministic gate.
             verifierExitCode: verified.status === "PASSED" && verified.hasExecutedTests ? 0 : 1,
           }

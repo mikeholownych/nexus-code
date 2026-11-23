@@ -196,7 +196,8 @@ test("review item 12: a SidecarServer writes a tool.end and a nested history tur
  * A new event type, or a new free-text field, fails here until it is classified.
  */
 const FREE_TEXT: Record<string, readonly string[] | string> = {
-  hello: "static slash catalog",
+  hello: "static slash catalog, version numbers and feature names defined by Nexus",
+  initialized: "structured: a version number and feature names defined by Nexus",
   "session.state": "paths go through PATH_FIELDS; model id and enums",
   "assistant.delta": ["text"],
   "stream.stall": "structured: a flag and a number of seconds",

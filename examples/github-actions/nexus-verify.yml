@@ -1,0 +1,61 @@
+# Copy to .github/workflows/nexus-verify.yml. Gives every pull request a verdict and fails the job unless it is VERIFIED.
+#
+# What VERIFIED means: tests that already existed on the base commit failed there and pass on the pull request (when the
+# pull request edits tests, the base's tests are run against its code and must pass), under the verifier the BASE
+# defines, and those tests import every file listed under deliverable-files; no enforced type-check failed; and the
+# pull request edits no CI, build or test configuration and weakens no test.
+# What it does not mean: that the change is correct beyond what those tests check, that it is safe, or that anyone
+# reviewed it. REGRESSION_FREE (exit 2) means the tests pass and nothing shows they test the change. BLOCKED (exit 3)
+# means a person must decide: read the receipt, then approve the verifier or the listed verification edit in this file.
+#
+# No model and no secret is used. Keep it that way: this job runs the pull request's code.
+# See docs/VERIFY_IN_CI.md for the exit codes, the sandbox and the limits.
+name: nexus-verify
+on:
+  pull_request:   # never pull_request_target: that event runs with the base repository's secrets and write token
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0              # the base commit must be in the clone
+          persist-credentials: false  # the pull request's code must not find the job's token in .git/config
+
+      # The sandbox confines the pull request's tests: no write outside their own scratch copy, no network, HOME masked.
+      # Bubblewrap needs unprivileged user namespaces, which current Ubuntu runners restrict. If it is still unusable,
+      # the verify step ends BLOCKED (SANDBOX_UNAVAILABLE); it never runs the tests unconfined instead.
+      - name: Enable the sandbox engine
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      # Do NOT install the pull request's dependencies here (no `npm ci` on its lockfile): an installed `node_modules`
+      # is linked into both sides, and a package the pull request chose could stand in for the test runner.
+
+      - id: verify
+        uses: mikeholownych/nexus-code/action/verify@v1.3.0   # pin a release tag (or its full commit SHA)
+        with:
+          version: v1.3.0
+          # Your own command, fixed in this file. Leave it out to use the verifier the base commit defines; the first
+          # run then ends BLOCKED and prints a digest to put under approve-verifier after you have read the command.
+          verifier: npm test
+          # The product files this repository's pull requests are meant to change (one per line). VERIFIED needs them.
+          deliverable-files: |
+            src/index.js
+          sandbox: bwrap
+          # approve-verification-edits: |
+          #   test/parser.test.js
+
+      - name: Keep the receipt
+        if: always() && steps.verify.outputs.receipt-path != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nexus-verify-receipt
+          path: ${{ steps.verify.outputs.receipt-path }}

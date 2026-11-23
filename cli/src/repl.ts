@@ -39,6 +39,8 @@ import { buildSessionExport } from "./session_export.js";
 import { SensitivePersistenceError } from "./core/persistence_protection.js";
 import { persistableEndpoint } from "./core/endpoint_identity.js";
 import { executeBatchCommand } from "./batch_command.js";
+import { executeGoalCommand } from "./goal_command.js";
+import { executeLoopCommand } from "./loop_command.js";
 
 interface PatchHunk {
   header: string;
@@ -105,6 +107,11 @@ export function replReadOnlyAllowed(command: string, args: string): boolean {
   if (name === "skill") return !value || !/^init(?:\s|$)/.test(value);
   if (name === "theme") return !value;
   if (name === "batch") return /^(?:status|list|validate|results)(?:\s|$)/.test(value);
+  if (name === "goal") {
+    if (/^requirements\s+(?:accept|descope)(?:\s|$)/.test(value)) return false;
+    return /^(?:status(?:\s|$)|list$|show\s+\S|requirements(?:\s|$)|evidence(?:\s|$))/.test(value);
+  }
+  if (name === "loop") return /^(?:status(?:\s|$)|list$)/.test(value);
   if (name === "doctor") return !/(^|\s)--fix(?:=|\s|$)/.test(value);
   return false;
 }
@@ -122,7 +129,7 @@ export class InteractiveRepl {
   private currentSessionId: string;
   private themeManager: ThemeManager = new ThemeManager();
   private exitResolve?: () => void;
-  /** Cancels a running durable /team or /batch operation (Ctrl-C). */
+  /** Cancels a running durable /team, /batch, or /goal operation (Ctrl-C). */
   private operationAbort?: AbortController;
   /** Set while `/worktree merge --ai-message` awaits the model: Ctrl-C cancels it instead of ending the session. */
   private worktreeAbort?: AbortController;
@@ -410,6 +417,8 @@ export class InteractiveRepl {
     console.log(`  ${pc.bold(pc.yellow("/plugins"))}            List loaded custom plugins and lifecycle hooks`);
     console.log(`  ${pc.bold(pc.yellow("/team <role|full> <task>"))} Multi-agent collaborative team orchestration`);
     console.log(`  ${pc.bold(pc.yellow("/batch <spec-file> | run|validate|status|list|pause|resume|cancel|results"))} Bounded durable work batches`);
+    console.log(`  ${pc.bold(pc.yellow("/goal <objective> | status|list|show|pause|resume|cancel|requirements|evidence"))} Durable objective with verification and independent review`);
+    console.log(`  ${pc.bold(pc.yellow("/loop [--until <condition>] [--max-iterations <n>] [--max-duration <duration>] <objective> | status|list|pause|resume|stop|reconcile"))} Bounded durable iteration loop with deterministic verification`);
     console.log(`  ${pc.bold(pc.yellow("/image <path> [prompt]"))} Ingest multi-modal image into vision model`);
     console.log(`  ${pc.bold(pc.yellow("/theme [name]"))}       View or switch terminal color theme`);
     console.log(`  ${pc.bold(pc.yellow("/tui"))}                Launch full-screen interactive TUI dashboard`);
@@ -676,7 +685,7 @@ export class InteractiveRepl {
           "/checkpoints", "/undo", "/audit", "/export", "/tokens", "/init",
           "/onboard", "/test",
           "/model", "/shell", "/cd", "/history", "/copy", "/paste",
-          "/image", "/theme", "/team", "/batch", "/upgrade",
+          "/image", "/theme", "/team", "/batch", "/goal", "/loop", "/upgrade",
           "/exit", "/quit"
         ];
         const trimmed = line.trim();
@@ -1732,6 +1741,42 @@ export class InteractiveRepl {
               const result = await executeBatchCommand(arg, this.config, this.operationAbort.signal, (event) => {
                 if (events.length < 200) events.push(event);
               });
+              for (const event of events) {
+                const color = event.type.startsWith("RESOURCE_") ? pc.dim : pc.cyan;
+                console.log(color(`◆ ${formatDiagnosticForOutput(event.message)}`));
+              }
+              console.log((result.success ? pc.green : pc.yellow)(`\n${formatDiagnosticForOutput(result.output)}\n`));
+            } catch (error) {
+              console.log(pc.red(`\n${formatDiagnosticForOutput(error)}\n`));
+            } finally {
+              this.operationAbort = undefined;
+            }
+            continue;
+          } else if (cmd === "goal") {
+            this.operationAbort = new AbortController();
+            try {
+              const events: Array<{ type: string; message: string }> = [];
+              const result = await executeGoalCommand(arg, this.config, this.operationAbort.signal, (event) => {
+                if (events.length < 200) events.push(event);
+              });
+              for (const event of events) {
+                const color = event.type.startsWith("RESOURCE_") ? pc.dim : pc.cyan;
+                console.log(color(`◆ ${formatDiagnosticForOutput(event.message)}`));
+              }
+              console.log((result.success ? pc.green : pc.yellow)(`\n${formatDiagnosticForOutput(result.output)}\n`));
+            } catch (error) {
+              console.log(pc.red(`\n${formatDiagnosticForOutput(error)}\n`));
+            } finally {
+              this.operationAbort = undefined;
+            }
+            continue;
+          } else if (cmd === "loop") {
+            this.operationAbort = new AbortController();
+            try {
+              const events: Array<{ type: string; message: string }> = [];
+              const result = await executeLoopCommand(arg, this.config, this.operationAbort.signal, (event) => {
+                if (events.length < 200) events.push(event);
+              }, (tool, values, approvalSignal) => this.confirmAction(tool, values, approvalSignal, { requireOperatorDecision: true }));
               for (const event of events) {
                 const color = event.type.startsWith("RESOURCE_") ? pc.dim : pc.cyan;
                 console.log(color(`◆ ${formatDiagnosticForOutput(event.message)}`));

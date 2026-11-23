@@ -32,6 +32,8 @@ const env = {
   XDG_CACHE_HOME: path.join(home, ".cache"),
   NEXUS_TEST_REAL_HOME: realHome,
 };
+// This process writes the durations file. A test that starts a nested runner must not inherit the path and write over it.
+delete env.NEXUS_TEST_DURATIONS_OUT;
 // Rust and Node toolchains installed per user keep working under the throwaway home.
 for (const [key, dir] of [["CARGO_HOME", ".cargo"], ["RUSTUP_HOME", ".rustup"]]) {
   if (!env[key] && fs.existsSync(path.join(realHome, dir))) env[key] = path.join(realHome, dir);

@@ -6,6 +6,8 @@ import { AgentRole, TEAM_TARGET_ROLES, TeamOrchestrator } from "../team.js";
 import { SlashContext, SlashHandler, SlashOutcome, reply } from "./catalog.js";
 import { recall } from "./session_commands.js";
 import { executeBatchCommand } from "../batch_command.js";
+import { executeGoalCommand } from "../goal_command.js";
+import { executeLoopCommand } from "../loop_command.js";
 
 const IMAGE_PROMPT = "Please analyze this image, describe its contents, and provide relevant technical solutions.";
 const ROLES: string[] = TEAM_TARGET_ROLES;
@@ -249,6 +251,24 @@ async function batch({ host, args, signal }: SlashContext): Promise<SlashOutcome
   return reply("batch", [...log, ...(log.length ? [""] : []), result.output].join("\n"), result.success);
 }
 
+async function goal({ host, args, signal }: SlashContext): Promise<SlashOutcome> {
+  const events: OperationEvent[] = [];
+  const result = await executeGoalCommand(args, host.app.getConfig(), signal, (event) => {
+    if (events.length < 200) events.push(event);
+  });
+  const log = events.map((event) => `◆ ${event.message}`);
+  return reply("goal", [...log, ...(log.length ? [""] : []), result.output].join("\n"), result.success);
+}
+
+async function loop({ host, args, signal }: SlashContext): Promise<SlashOutcome> {
+  const events: OperationEvent[] = [];
+  const result = await executeLoopCommand(args, host.app.getConfig(), signal, (event) => {
+    if (events.length < 200) events.push(event);
+  }, host.requestApproval ? (tool, values, approvalSignal) => host.requestApproval!(tool, values, approvalSignal) : undefined);
+  const log = events.map((event) => `◆ ${event.message}`);
+  return reply("loop", [...log, ...(log.length ? [""] : []), result.output].join("\n"), result.success);
+}
+
 async function recover({ host, args }: SlashContext): Promise<SlashOutcome> {
   const result = await host.app.executeSlashCommand("recover", args);
   return reply("recover", result.output, result.success);
@@ -276,6 +296,8 @@ export const EXTENSION_HANDLERS: Record<string, SlashHandler> = {
   tdd,
   team,
   batch,
+  goal,
+  loop,
   recover,
   "!": bang,
 };

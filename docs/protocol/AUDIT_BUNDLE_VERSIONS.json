@@ -1,0 +1,12 @@
+[
+  {
+    "schema_version": 1,
+    "schemaSha256": "5137795d995a9bf8290b423c4ea1784aa5810a2b5880b30c5423a7d63c4d9bf6",
+    "note": "First published schema of the audit bundle (GV-2), generated from AuditBundleDocument in cli/src/audit_contract.ts on release/v1.3.0: manifest.json (AuditManifest) and the detached signature envelope manifest.sig.json (AuditSignatureEnvelope). Nothing was published before it. The envelope is declared so the schema does not change when signing lands; nothing writes or checks one yet."
+  },
+  {
+    "schema_version": 1,
+    "schemaSha256": "86349b37bc99bb71672eac8ddb43d816bc90b5f61dac4529a07c05520e9618cc",
+    "note": "GV-2 slice 2 (the collectors and the commands). No member was added, removed or retyped, so schema_version stays 1: only the descriptions of AuditSubject.workspace_path and workspace_sha256 changed, pinning the hash as the SHA-256 of the UTF-8 bytes of the workspace path exactly as the task or session record holds it (not resolved, not normalised). The verifier now refuses a manifest whose workspace_sha256 is not the hash of its workspace_path; every bundle written under the first entry already satisfies that. GV-2 slice 3 uses the predeclared detached envelope for optional Ed25519 signing over the exact canonical manifest bytes; the public key is not embedded."
+  }
+]
