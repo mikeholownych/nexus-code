@@ -1,0 +1,17 @@
+take over what claude code has been running in this repo. Claude is rate-limited.
+
+---
+
+take over what claude code has been running in this repo. Claude is rate-limited.
+
+---
+
+while we wait for the agent to land the #732 corrections, review the codebase at https://github.com/openai/codex. What can we learn from that repo for Nexus Code?
+
+---
+
+add the practical next slices to the roadmap for v1.3.0
+
+---
+
+yes
