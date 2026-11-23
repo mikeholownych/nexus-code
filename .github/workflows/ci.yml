@@ -32,7 +32,7 @@ jobs:
           fetch-depth: 0 # let the changed-Rust-file rustfmt gate resolve the PR base
           persist-credentials: false
       - run: sudo apt-get update && sudo apt-get install --yes acl make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: '1.22.12'
       - name: Install pinned evaluator toolchains
@@ -114,7 +114,7 @@ jobs:
           fetch-depth: 0 # full history, as the suite has always had
           persist-credentials: false
       - run: sudo apt-get update && sudo apt-get install --yes acl make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: '1.22.12'
       - name: Install pinned evaluator toolchains
@@ -231,7 +231,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - run: sudo apt-get update && sudo apt-get install --yes acl make bubblewrap build-essential meson ninja-build pkg-config libcap-dev
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: '1.22.12'
       - name: Install pinned evaluator toolchains
