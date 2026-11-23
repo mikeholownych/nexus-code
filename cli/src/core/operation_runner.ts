@@ -5,6 +5,7 @@
  */
 import { credentialStorageHome, storedCredentialFor } from "../client.js";
 import { execFileSync } from "node:child_process";
+import * as fs from "node:fs";
 import type { HarnessConfig } from "../types.js";
 import { realRecoveryClock, type RecoveryClock } from "./provider_recovery.js";
 import { ConvergenceScheduler, type Assignment, type Decision, type DurableOperationState, type OperationEvent, type OperationMessage, type UnitRunResult, type WorkUnit } from "./operation.js";
@@ -715,6 +716,26 @@ export interface DriveOptions extends Omit<OperationRunnerOptions, "persist"> {
 }
 
 /** Runs an operation under its driver lock, persisting every transition through the store. */
+/** Best-effort Linux boot identity. A goal/operation active in a different boot was left by an earlier process. */
+export function currentBootId(): string | undefined {
+  try { return fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() || undefined; }
+  catch { return undefined; }
+}
+
+function pauseForStaleBoot(state: DurableOperationState, bootId: string): string | undefined {
+  if (!["RUNNING", "WAITING", "BLOCKED"].includes(state.status)) return undefined;
+  if (!state.activeBootId || state.activeBootId === bootId) return undefined;
+  const reason = `Paused on resume: this operation was active in an earlier process boot (${state.activeBootId.slice(0, 12)}) and was not cleanly paused before this process started. Resume it explicitly after inspecting its state.`;
+  state.status = "PAUSED";
+  state.pauseReason = reason;
+  delete state.wait;
+  delete state.blocked;
+  state.updatedAt = new Date().toISOString();
+  state.events.push({ type: "OPERATION_PAUSED", at: state.updatedAt, message: reason, detail: { reason: "stale_boot", previousBootId: state.activeBootId } });
+  if (state.events.length > 300) state.events.splice(0, state.events.length - 300);
+  return reason;
+}
+
 export async function driveOperation(state: DurableOperationState, opts: DriveOptions): Promise<DurableOperationState> {
   const { store, signal, entry, prepare, ...runnerOpts } = opts;
   const release = store.acquire(state.id);
@@ -723,9 +744,30 @@ export async function driveOperation(state: DurableOperationState, opts: DriveOp
       if (store.has(state.id)) throw new OperationExistsError(state.id);
     } else if (entry === "existing") {
       state = store.load(state.id);
-      prepare?.(state);
     }
-    return await new OperationRunner(state, { ...runnerOpts, persist: (s) => store.save(s) }).run(signal);
+    const bootId = currentBootId();
+    if (entry === "existing" && bootId) {
+      const staleReason = pauseForStaleBoot(state, bootId);
+      if (staleReason) {
+        store.save(state);
+        // Don't return yet if caller is explicitly resuming (prepare will clear pause). 
+      }
+    }
+    prepare?.(state);
+    if (bootId) {
+      if (state.status === "PAUSED" && state.pauseReason?.startsWith("Paused on resume:")) {
+        store.save(state);
+        return state;
+      }
+      if (state.status !== "COMPLETE" && state.status !== "CANCELLED") state.activeBootId = bootId;
+      else delete (state as any).activeBootId;
+    }
+    const result = await new OperationRunner(state, { ...runnerOpts, persist: (s) => store.save(s) }).run(signal);
+    if (bootId && (result.status === "COMPLETE" || result.status === "CANCELLED" || result.status === "PAUSED")) {
+      delete (result as any).activeBootId;
+      store.save(result);
+    }
+    return result;
   } finally {
     release();
   }

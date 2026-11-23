@@ -1,7 +1,7 @@
 /** Durable engineering goals are existing team operations with a pinned ObjectiveLedger. */
 import { randomUUID } from "node:crypto";
 import { acceptDescoping, applyRequirementUpdates, createLedger, recordAttempt, requirementDone, type ObjectiveLedger, type VerificationAttempt } from "./core/objective.js";
-import { OperationRunner, AgentWorkUnitExecutor, OperationLockedError, OperationStore, driveOperation, type WorkUnitExecutor } from "./core/operation_runner.js";
+import { OperationRunner, AgentWorkUnitExecutor, OperationLockedError, OperationStore, driveOperation, currentBootId, type WorkUnitExecutor } from "./core/operation_runner.js";
 import { TeamOrchestrator } from "./team.js";
 import type { DurableOperationState, OperationEvent, WorkUnit } from "./core/operation.js";
 import type { ResourceDescriptor } from "./core/resources.js";
@@ -47,9 +47,19 @@ function deterministicVerificationPassed(operation: DurableOperationState): bool
   return tester?.status === "COMPLETE" && tester.result?.verification?.status === "PASSED" && tester.result.verification.hasExecutedTests && tester.result.verification.definitionBound !== false;
 }
 
-export function goalStatus(operation: DurableOperationState, ledger?: ObjectiveLedger): { status: GoalStatus; reason?: string } {
+function staleBootReason(operation: DurableOperationState, bootId = currentBootId()): string | undefined {
+  if (!bootId) return undefined;
+  if (!["RUNNING", "WAITING", "BLOCKED"].includes(operation.status)) return undefined;
+  if (!operation.activeBootId || operation.activeBootId === bootId) return undefined;
+  return operation.pauseReason?.startsWith("Paused on resume:")
+    ? operation.pauseReason
+    : `Paused on resume: this goal was active in an earlier process boot (${operation.activeBootId.slice(0, 12)}) and was not cleanly paused before this process started. Resume it explicitly after inspecting its state.`;
+}
+
+export function goalStatus(operation: DurableOperationState, ledger?: ObjectiveLedger, bootId = currentBootId()): { status: GoalStatus; reason?: string } {
   if (operation.status === "CANCELLED") return { status: "CANCELLED" };
-  if (operation.status === "PAUSED") return { status: "PAUSED" };
+  const stale = staleBootReason(operation, bootId);
+  if (operation.status === "PAUSED" || stale) return { status: "PAUSED", ...(operation.pauseReason || stale ? { reason: operation.pauseReason ?? stale } : {}) };
   if (operation.status === "WAITING") return { status: "WAITING" };
   if (operation.status === "RUNNING") return { status: "RUNNING" };
   if (operation.status === "BLOCKED") return { status: "BLOCKED", reason: "A required work unit or operator decision is blocked." };
@@ -228,6 +238,8 @@ export class GoalOrchestrator {
       maxInProcessWaitMs: this.options.maxInProcessWaitMs,
     });
     const operation = team.plan("full", text);
+    const bootId = currentBootId();
+    if (bootId) operation.activeBootId = bootId;
     const reviewer = operation.units.find((unit) => unit.id === "review");
     if (!reviewer || !operation.units.some((unit) => unit.id === "verify")) throw new Error("goal workflow is missing its verification or independent review unit");
     // Independent acceptance review must inspect the post-verification candidate, including any test changes.
@@ -258,7 +270,10 @@ export class GoalOrchestrator {
       ...(this.options.maxInProcessWaitMs !== undefined ? { maxInProcessWaitMs: this.options.maxInProcessWaitMs } : {}),
       entry: "existing",
       prepare: (fresh) => {
-        if (fresh.status === "PAUSED") fresh.status = fresh.wait ? "WAITING" : "RUNNING";
+        if (fresh.status === "PAUSED") {
+          fresh.status = fresh.wait ? "WAITING" : "RUNNING";
+          delete fresh.pauseReason;
+        }
       },
     });
     return this.result(result);
@@ -292,7 +307,15 @@ export class GoalOrchestrator {
     let unchanged = false;
     try {
       operation = this.store.load(selected.id);
-      if (["COMPLETE", "CANCELLED", "PAUSED"].includes(operation.status)) unchanged = true;
+      const stale = staleBootReason(operation);
+      if (stale) {
+        operation.status = "PAUSED";
+        operation.pauseReason = stale;
+        delete operation.wait;
+        delete operation.blocked;
+        this.store.save(operation);
+        unchanged = true;
+      } else if (["COMPLETE", "CANCELLED", "PAUSED"].includes(operation.status)) unchanged = true;
       else if (operation.units.some((unit) => unit.status === "RUNNING")) {
         throw new Error(`goal ${operation.id} is executing a work unit; let it settle, then pause at the next safe boundary`);
       } else {
@@ -303,6 +326,7 @@ export class GoalOrchestrator {
           ...(this.options.onEvent ? { onEvent: this.options.onEvent } : {}),
         });
         runner.scheduler.pause();
+        operation.pauseReason = "Paused by operator at a safe boundary.";
         this.store.save(operation);
       }
     } finally { release(); }

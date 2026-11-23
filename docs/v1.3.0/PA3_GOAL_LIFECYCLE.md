@@ -35,8 +35,11 @@ after verification. Missing evidence, a failed review, or an unresolved hard req
 
 Pause and cancellation refuse to overwrite a running unit. The operator resumes first so the operation runner can
 reconcile any unknown effect. A cancelled goal is terminal. The existing operation/task store persists the graph,
-work-unit task ids, objective ledger and receipts. Restart-specific reconciliation and interrupted-effect behavior
-still require qualification.
+work-unit task ids, objective ledger and receipts.
+
+A goal left `RUNNING`/`WAITING`/`BLOCKED` from an earlier host boot is surfaced as `PAUSED` with a visible reason on
+the next load/resume path (`activeBootId` recorded in the durable operation). Resume is explicit; the stale-boot pause
+is cleared only when the operator resumes and the operation is driven again.
 
 The command handler is shared by the REPL and sidecar router; the TUI receives it from the sidecar catalogue. The REPL
 marks status/list/show/requirements/evidence as read-only inspection and keeps execution, pause, resume, cancel and
@@ -46,8 +49,10 @@ scope changes unavailable in read-only mode.
 
 - Goal decomposition currently reuses the existing full team graph; arbitrary requirement-to-work-unit mapping is not
   exposed by `/goal`. Use `/batch` when an operator needs an authored work-unit DAG.
-- This is a PA-3/PA-4 implementation slice. `/loop`, expanded goal decomposition, restart-specific paused boot
-  identity, lifecycle interface tests, and the complete PA-4 qualification matrix remain open.
+- PA-3 stretch gaps remain to be audited/implemented: stall counting by failure fingerprint (not turn count) at the
+  goal/operation semantics level where applicable, optional token budget roll-up from sub-operations, and full PA-3
+  acceptance qualification. `/team` remains experimental until PA-1 and PA-2 are complete.
+- Restart-specific interrupted-effect reconciliation beyond stale-boot pause still requires qualification.
 - No inference-provider or homelab-ai changes are required. Provider-neutral end-to-end qualification remains separate.
 
 ## Reference coding
@@ -55,4 +60,5 @@ scope changes unavailable in read-only mode.
 XERJ returned the opencode goal-state pattern of bounded rounds and a server boot identity at
 `packages/schema/src/goal.ts:11`, plus restart-pausing behavior in `packages/core/src/plugin/goal.ts:339`. These informed
 the recovery questions only; no peer code was copied. XERJ marked the corpus as incompletely indexed, so absence of a
-result is not evidence that no other pattern exists.
+result is not evidence that no other pattern exists. The stale-boot pause implementation follows Nexus's existing
+boot-id pattern (`cli/src/upgrade_journal.ts` / `currentUpgradeBootId`) and durable operation pause semantics.
