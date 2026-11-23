@@ -480,10 +480,11 @@ async function context({ host, args, signal }: SlashContext): Promise<SlashOutco
   let changedKnowledgeCount = 0;
   await measure("project_knowledge", () => agent.getKnowledgeGraph().list().map((entry, index) => {
     const sourceLocation = `repository:knowledge:${entry.id || index + 1}`;
-    const validationStatus = entry.validationStatus ?? "legacy_unverified";
-    const sourceVersion = JSON.stringify([entry.updatedAt ?? null, validationStatus]);
+    const validationStatus = entry.validationStatus === "operator_reviewed_unverified" ? entry.validationStatus : "legacy_unverified";
+    const updatedAt = typeof entry.updatedAt === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(entry.updatedAt) ? entry.updatedAt : null;
+    const sourceVersion = JSON.stringify([updatedAt, validationStatus]);
     const previous = previousInventory?.items.find((item) => item.sourceType === "durable_knowledge" && item.sourceLocation === sourceLocation);
-    const recordChanged = Boolean(previous?.sourceVersion && previous.sourceVersion !== sourceVersion);
+    const recordChanged = Boolean(previous?.sourceVersion !== undefined && previous.sourceVersion !== sourceVersion);
     if (recordChanged) changedKnowledgeCount++;
     return {
       sourceType: "durable_knowledge",

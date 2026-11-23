@@ -42,6 +42,11 @@ test("inventory has stable source identity, scope isolation, and omits source te
   assert.equal(JSON.stringify(first).includes("sensitive source text"), false);
   assert.equal(first.items[0].freshness, "unknown");
   assert.equal(first.items[0].trust, "persisted_unverified");
+  const malformedVersion = buildContextInventory({ sources: [{ name: "versioned", status: "ok", durationMs: 1, items: [{
+    ...input("memory:1"), sourceVersion: "`untrusted\nmarker`",
+  }] }] });
+  assert.equal(malformedVersion.items[0].sourceVersion, undefined, "untrusted version labels are omitted from diagnostics");
+  assert.equal(isContextInventorySnapshot(malformedVersion), true);
 });
 
 test("freshness is asserted only with an invalidation rule and is demoted after persistence", () => {
