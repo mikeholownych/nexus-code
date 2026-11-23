@@ -168,7 +168,8 @@ test("a head whose weakened test restores itself while it runs is still judged o
     assert.equal(doc.runs[1].passed, true, "the head's own run passes");
     assert.notEqual(doc.verdict, "VERIFIED");
     assert.equal(doc.verification.independent, false);
-    assert.deepEqual(phases(doc), ["base", "head", "base_tests_on_head"]);
+    assert.match(doc.verification.independenceDetail, /test\/math\.test\.mjs/);
+    assert.deepEqual(phases(doc), ["base", "head"]);
   });
 });
 

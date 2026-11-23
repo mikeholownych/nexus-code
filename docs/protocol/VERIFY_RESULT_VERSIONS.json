@@ -18,5 +18,15 @@
     "schema_version": 3,
     "schemaSha256": "fc7c244dc06ee35679862821d864441677ce8f4f0ba07d8de065186f71e32ef9",
     "note": "Bump schema_version: the review member changes meaning from 'not run in this version' (a VerifyIngredient with status NOT_RUN only) to a structured reviewer result when the independent reviewer read the evidence (status COMPLETE, ACCEPT/REJECT, verifiedObservations, suspectedDefects, unprovenCriteria, scopeViolations and reviewerConfidenceNote), with NOT_RUN retained when no head verifier ran. The published shape publishes only members this reviewer writes; internal IndependentReviewVerdict members such as boundaryReport, changeAssessment and a defect's optional line are not published. New reason REVIEW_REJECTED (BLOCKED, exit 3) lets a REJECT withhold VERIFIED; it never raises a lower verdict. Consumers that treated review as always NOT_RUN must reject version 3 until they read the new shape."
+  },
+  {
+    "schema_version": 3,
+    "schemaSha256": "7e976e86d37f9e991ae3162ccb5d0359ca04b36f335fd531303b979ac5da6f36",
+    "note": "Add optional runs[].testFixtureReads for test-oracle files and candidate-only workspace paths observed more often than in the base run, including directory and metadata observations. Additive to the v3 review shape: the member is optional so older documents still validate, and consumers that ignore unknown members are unaffected; independent-verification consumers should treat its presence as a pass that is not independent."
+  },
+  {
+    "schema_version": 3,
+    "schemaSha256": "cfa5a79dd94baf06076f78a5f58408a43f083f982fcf74b4a617afd8434cdd8a",
+    "note": "Combine the independent-reviewer review shape (fc7c244) with optional runs[].testFixtureReads (7e976e86) and the clarified definitionBound description: a single checked-in v3 schema after merging those slices. Additive; schema_version stays 3. Consumers that ignore unknown members and already accept either prior v3 document are unaffected."
   }
 ]

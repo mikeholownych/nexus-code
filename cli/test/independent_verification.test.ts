@@ -56,6 +56,51 @@ const done: Reply = {
   calls: [{ name: "task_completed", args: { summary: "done" } }],
 };
 
+test("verification refuses incomplete bounded test discovery", () => {
+  const deepRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-deep-test-discovery-"));
+  const manyRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-wide-test-discovery-"));
+  const linkRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-linked-test-discovery-"));
+  const testFileLinkRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-linked-test-file-discovery-"));
+  try {
+    const deepTest = path.join(deepRoot, "a", "b", "c", "d", "e", "f", "g", "hidden.test.js");
+    fs.mkdirSync(path.dirname(deepTest), { recursive: true });
+    fs.writeFileSync(deepTest, "test('hidden oracle', () => {});\n");
+    const deep = discoverWorkspaceTestFiles(deepRoot);
+    assert.equal(deep.complete, false);
+    assert.equal(snapshotTests(deepRoot), null);
+
+    fs.mkdirSync(path.join(linkRoot, "real-tests"));
+    fs.writeFileSync(path.join(linkRoot, "real-tests", "hidden.test.js"), "");
+    fs.symlinkSync("real-tests", path.join(linkRoot, "tests"), "dir");
+    // An ordinary directory symlink is walked with a realpath cycle guard: it does not cost the tree its completeness.
+    const followed = discoverWorkspaceTestFiles(linkRoot);
+    assert.equal(followed.complete, true);
+    assert.equal(followed.files.length, 1);
+    assert.equal(snapshotTests(linkRoot)?.size, 1);
+
+    fs.mkdirSync(path.join(testFileLinkRoot, "helpers"));
+    fs.mkdirSync(path.join(testFileLinkRoot, "test"));
+    fs.writeFileSync(path.join(testFileLinkRoot, "helpers", "hidden.js"), "test('hidden oracle', () => {});\n");
+    fs.symlinkSync(path.join(testFileLinkRoot, "helpers", "hidden.js"), path.join(testFileLinkRoot, "test", "hidden.test.js"));
+    assert.equal(discoverWorkspaceTestFiles(testFileLinkRoot).complete, false);
+    assert.equal(snapshotTests(testFileLinkRoot), null);
+
+    for (let index = 0; index <= MAX_TEST_FILES; index++) {
+      fs.writeFileSync(path.join(manyRoot, `case-${String(index).padStart(4, "0")}.test.js`), "");
+    }
+    const many = discoverWorkspaceTestFiles(manyRoot);
+    assert.equal(many.files.length, MAX_TEST_FILES);
+    assert.equal(many.complete, false);
+    assert.equal(snapshotTests(manyRoot), null);
+    assert.equal(snapshotVerifierDefinition(manyRoot, "node --test"), null);
+  } finally {
+    fs.rmSync(deepRoot, { recursive: true, force: true });
+    fs.rmSync(manyRoot, { recursive: true, force: true });
+    fs.rmSync(linkRoot, { recursive: true, force: true });
+    fs.rmSync(testFileLinkRoot, { recursive: true, force: true });
+  }
+});
+
 function repo(files: Record<string, string>): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-independent-"));
   for (const [name, content] of Object.entries(files)) {
@@ -133,46 +178,6 @@ async function run(
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
-
-test("test discovery fails closed when the oracle set is bounded, deep or linked", () => {
-  const deepRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-deep-test-discovery-"));
-  const manyRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-wide-test-discovery-"));
-  const linkRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-linked-test-discovery-"));
-  const testFileLinkRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-linked-test-file-discovery-"));
-  try {
-    const deepTest = path.join(deepRoot, "a", "b", "c", "d", "e", "f", "g", "hidden.test.js");
-    fs.mkdirSync(path.dirname(deepTest), { recursive: true });
-    fs.writeFileSync(deepTest, "test('hidden oracle', () => {});\n");
-    assert.equal(discoverWorkspaceTestFiles(deepRoot).complete, false);
-    assert.equal(snapshotTests(deepRoot), null);
-
-    fs.mkdirSync(path.join(linkRoot, "real-tests"));
-    fs.writeFileSync(path.join(linkRoot, "real-tests", "hidden.test.js"), "");
-    fs.symlinkSync("real-tests", path.join(linkRoot, "tests"), "dir");
-    assert.equal(discoverWorkspaceTestFiles(linkRoot).complete, false);
-    assert.equal(snapshotTests(linkRoot), null);
-
-    fs.mkdirSync(path.join(testFileLinkRoot, "helpers"));
-    fs.mkdirSync(path.join(testFileLinkRoot, "test"));
-    fs.writeFileSync(path.join(testFileLinkRoot, "helpers", "hidden.js"), "test('hidden oracle', () => {});\n");
-    fs.symlinkSync(path.join(testFileLinkRoot, "helpers", "hidden.js"), path.join(testFileLinkRoot, "test", "hidden.test.js"));
-    assert.equal(discoverWorkspaceTestFiles(testFileLinkRoot).complete, false);
-    assert.equal(snapshotTests(testFileLinkRoot), null);
-
-    for (let index = 0; index <= MAX_TEST_FILES; index++) {
-      fs.writeFileSync(path.join(manyRoot, `case-${String(index).padStart(4, "0")}.test.js`), "");
-    }
-    const many = discoverWorkspaceTestFiles(manyRoot);
-    assert.equal(many.files.length, MAX_TEST_FILES);
-    assert.equal(many.complete, false);
-    assert.equal(snapshotTests(manyRoot), null);
-  } finally {
-    fs.rmSync(deepRoot, { recursive: true, force: true });
-    fs.rmSync(manyRoot, { recursive: true, force: true });
-    fs.rmSync(linkRoot, { recursive: true, force: true });
-    fs.rmSync(testFileLinkRoot, { recursive: true, force: true });
-  }
-});
 
 test("an unhashable test snapshot reports why, not that the tests changed", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-snapshot-"));
