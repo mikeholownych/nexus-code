@@ -4,7 +4,7 @@ import * as path from "node:path";
 import type { HarnessConfig } from "./types.js";
 import { ApplicationCore } from "./core/app.js";
 import { formatSafeSidecarDiagnostic, SidecarServer } from "./sidecar.js";
-import { PROTOCOL_VERSION, type SidecarEvent } from "./protocol.js";
+import { PROTOCOL_VERSION, SIDECAR_MAX_HISTORY_PAGES, type SidecarEvent } from "./protocol.js";
 import {
   ACP_CANCEL_REQUEST_METHOD, ACP_ERROR, ACP_MAX_INFLIGHT_REQUESTS, ACP_MAX_PENDING_PERMISSIONS_PER_SESSION,
   ACP_MAX_OVERSIZED_LINES, ACP_MAX_SESSIONS, ACP_PERMISSION_TIMEOUT_SECS, ACP_RECEIPT_STORE_SIZE, ACP_TOMBSTONE_COUNT,
@@ -196,7 +196,7 @@ export class AcpStdioServer {
     let session: Session;
     const sink = (line: string) => session ? this.onSidecarLine(session, line) : early.push(line);
     const sidecar = this.options.createSidecar?.(config, resume, sink)
-      ?? new SidecarServer({ app: new ApplicationCore(config), resume, write: sink });
+      ?? new SidecarServer({ app: new ApplicationCore(config), resume, fullHistoryReplay: resume !== undefined, write: sink });
     session = { id: "", cwd, mcp, sidecar, events, tools: [] };
     try {
       sidecar.start();
@@ -250,11 +250,40 @@ export class AcpStdioServer {
     try {
       const session = await this.startSession(cwd, parsed.value.mcpServers, parsed.value.sessionId);
       if (!session) { if (!this.closed) this.replyError(id, { code: ACP_ERROR.INTERNAL_ERROR, message: "session could not be loaded" }); return; }
+      const pages = session.events.filter((event): event is Extract<SidecarEvent, { type: "history" }> => event.type === "history");
+      const first = pages[0];
+      const valid = Boolean(first && !first.error && Number.isSafeInteger(first.total) && first.total >= 0 &&
+        Number.isSafeInteger(first.pages) && first.pages! > 0 && first.pages! <= SIDECAR_MAX_HISTORY_PAGES &&
+        pages.length === first.pages && pages.every((page, index) => !page.error && page.session === session.id &&
+          page.total === first.total && page.pages === first.pages && page.page === index && Array.isArray(page.messages) &&
+          page.messages.every((entry: unknown) => {
+            if (!entry || typeof entry !== "object") return false;
+            const value = entry as Record<string, unknown>;
+            if (typeof value.text !== "string") return false;
+            if (["user", "steering", "assistant"].includes(String(value.role))) return true;
+            if (value.role === "tool") return (value.tool === undefined || typeof value.tool === "string") &&
+              (value.toolCallId === undefined || typeof value.toolCallId === "string") &&
+              (value.status === undefined || ["pending", "completed", "failed"].includes(String(value.status)));
+            if (value.role === "tool_result") return typeof value.toolCallId === "string" &&
+              (value.status === undefined || ["completed", "failed"].includes(String(value.status)));
+            return value.role === "outcome" && (value.heading === undefined || typeof value.heading === "string") &&
+              (value.text === undefined || typeof value.text === "string");
+          })));
+      if (!valid || !first) {
+        await session.sidecar.handleLine(JSON.stringify({ v: PROTOCOL_VERSION, type: "shutdown" }));
+        this.replyError(id, { code: ACP_ERROR.INTERNAL_ERROR, message: first?.error ?? "session history is incomplete or invalid; no history was replayed" });
+        return;
+      }
+      const replay = pages.map((page) => historyToReplay(page));
+      const extent = { sent: replay.reduce((sum, page) => sum + page.extent.sent, 0), total: first.total };
+      if (!Number.isSafeInteger(extent.total) || extent.total < 0 || extent.sent !== extent.total) {
+        await session.sidecar.handleLine(JSON.stringify({ v: PROTOCOL_VERSION, type: "shutdown" }));
+        this.replyError(id, { code: ACP_ERROR.INTERNAL_ERROR, message: "session history is incomplete; no history was replayed" });
+        return;
+      }
+      for (const page of replay) for (const update of page.updates) this.send(sessionUpdate(session.id, update));
       this.sessions.set(session.id, session);
-      const history = session.events.find((event) => event.type === "history") as Extract<SidecarEvent, { type: "history" }> | undefined;
-      if (history) for (const update of historyToReplay(history).updates) this.send(sessionUpdate(session.id, update));
       const state = session.events.find((event) => event.type === "session.state") as any;
-      const extent = history ? historyToReplay(history).extent : { sent: 0, total: 0 };
       this.send(resultResponse(id, loadSessionResult(state, session.mcp, extent)));
     } finally {
       this.startingSessions--;

@@ -485,11 +485,29 @@ test("history becomes replay updates in order, and reports how much of the conve
   const carrier = updates[5] as ReturnType<typeof verificationUpdate>;
   assert.deepEqual([carrier._meta["nexus/verification"].outcome, carrier._meta["nexus/verification"].turn_id, carrier._meta["nexus/verification"].receipt_id], ["UNVERIFIED", null, `turn:${SESSION}:last`]);
   assert.match((updates[6] as ReturnType<typeof verdictChunk>).content.text, /DONE - UNVERIFIED\nexecution=COMPLETED outcome=UNVERIFIED/);
-  // `total` counts conversation entries (prompts, steering, replies); so does `sent`. The replay is partial.
+  // `total` counts conversation entries (prompts, steering, replies); so does `sent` within this page.
   assert.deepEqual(extent, { sent: 3, total: 9 });
   assert.deepEqual(historyToReplay({ type: "history", session: SESSION, total: 0, messages: [] }), { updates: [], extent: { sent: 0, total: 0 } });
   assert.deepEqual(historyToReplay({ type: "history", session: SESSION, total: 1, messages: [{ role: "user", text: "a" }, { role: "assistant", text: "b" }] }).extent, { sent: 2, total: 2 }, "never fewer in total than sent");
   assert.deepEqual(historyToReplay({ type: "history", session: SESSION, total: 0, messages: [{ role: "tool", text: "x" }] }).updates[0], { sessionUpdate: "tool_call", toolCallId: "hist-1", title: "tool: x", kind: "other", status: "completed", rawInput: { tool: "tool", subject: "x" } });
+});
+
+test("history tool results update the matching replayed tool call", () => {
+  const { updates, extent } = historyToReplay({
+    type: "history", session: SESSION, total: 2,
+    messages: [
+      { role: "user", text: "inspect" },
+      { role: "tool", tool: "read_file", toolCallId: "hist-7", status: "pending", text: "src/a.ts" },
+      { role: "tool_result", toolCallId: "hist-7", status: "completed", text: "export const answer = 42;" },
+      { role: "assistant", text: "The answer is 42." },
+    ],
+  });
+  assert.deepEqual(updates.filter((update) => update.sessionUpdate === "tool_call").map((update: any) => [update.toolCallId, update.status]), [["hist-7", "pending"]]);
+  assert.deepEqual(updates.find((update) => update.sessionUpdate === "tool_call_update"), {
+    sessionUpdate: "tool_call_update", toolCallId: "hist-7", status: "completed",
+    content: [{ type: "content", content: { type: "text", text: "export const answer = 42;" } }],
+  });
+  assert.deepEqual(extent, { sent: 2, total: 2 });
 });
 
 test("sidecar error codes become JSON-RPC -32603 with the code as data.reason; every code has a row", () => {

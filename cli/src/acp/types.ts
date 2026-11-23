@@ -80,12 +80,8 @@ export const ACP_CANCEL_REQUEST_METHOD = "$/cancel_request";
  * servers load is decided by the operator's allowlist and workspace trust, not by the client. A non-empty `mcpServers`
  * is reported in `_meta["nexus/mcp_servers_ignored"]`.
  *
- * `ACP_DEVIATION_PARTIAL_REPLAY`: on `session/load`, "The Agent MUST replay the entire conversation" (session-setup).
- * Nexus replays what the sidecar's `history` event carries (at most 60 entries) and reports `{sent, total}` in
- * `_meta["nexus/history"]`.
  */
 export const ACP_DEVIATION_NO_CLIENT_MCP_SERVERS = "client-supplied MCP servers are not connected (stdio included)";
-export const ACP_DEVIATION_PARTIAL_REPLAY = "session/load replays at most the sidecar's history window, not the entire conversation";
 
 /** The only two answers Nexus offers to a permission request. `allow_always` and `reject_always` exist in the specification and are never offered. */
 export const ACP_ALLOW_ONCE_OPTION_ID = "allow_once";

@@ -161,6 +161,66 @@ test("loading a missing session fails closed instead of silently creating a fres
   }
 });
 
+test("session/load validates all history pages before replay and reports the complete extent", async () => {
+  const output: string[] = [];
+  const shutdowns: string[] = [];
+  const sessionId = "session_20261123_010000_abcdefgh";
+  const server = new AcpStdioServer({
+    config: { endpoint: "http://127.0.0.1:1/v1", model: "m", workspace: "/tmp", shell: "bash" } as any,
+    version: "test", write: (line) => output.push(line),
+    createSidecar: (_config, _resume, write) => ({
+      start() {
+        write(encodeEvent({ type: "session.state", session: sessionId, workspace: "/tmp", workspace_name: "tmp", model: "m", mode: "review", git: null, busy: false } as any));
+        write(encodeEvent({ type: "history", session: sessionId, total: 2, page: 0, pages: 2, messages: [{ role: "user", text: "first" }] } as any));
+        write(encodeEvent({ type: "history", session: sessionId, total: 2, page: 1, pages: 2, messages: [{ role: "assistant", text: "second" }] } as any));
+      },
+      async handleLine(line) { shutdowns.push(JSON.parse(line).type); },
+    }),
+  });
+  const send = (message: object) => server.push(Buffer.from(encodeMessage(message)));
+  try {
+    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 1, clientInfo: { name: "fixture", version: "1" }, clientCapabilities: {} } });
+    await until(output, (items) => items.some((item) => item.id === 1));
+    send({ jsonrpc: "2.0", id: 2, method: "session/load", params: { sessionId, cwd: "/tmp", mcpServers: [] } });
+    const loaded = await until(output, (items) => items.some((item) => item.id === 2 && item.result));
+    const updates = loaded.filter((item) => item.method === "session/update").map((item) => item.params.update);
+    assert.deepEqual(updates.map((update: any) => update.content.text), ["first", "second"]);
+    assert.deepEqual(loaded.find((item) => item.id === 2).result._meta["nexus/history"], { sent: 2, total: 2 });
+    assert.deepEqual(shutdowns, []);
+  } finally {
+    await server.close();
+  }
+});
+
+test("session/load rejects a missing page without emitting partial history", async () => {
+  const output: string[] = [];
+  const shutdowns: string[] = [];
+  const sessionId = "session_20261123_010000_abcdefgh";
+  const server = new AcpStdioServer({
+    config: { endpoint: "http://127.0.0.1:1/v1", model: "m", workspace: "/tmp", shell: "bash" } as any,
+    version: "test", write: (line) => output.push(line),
+    createSidecar: (_config, _resume, write) => ({
+      start() {
+        write(encodeEvent({ type: "session.state", session: sessionId, workspace: "/tmp", workspace_name: "tmp", model: "m", mode: "review", git: null, busy: false } as any));
+        write(encodeEvent({ type: "history", session: sessionId, total: 2, page: 0, pages: 2, messages: [{ role: "user", text: "first" }] } as any));
+      },
+      async handleLine(line) { shutdowns.push(JSON.parse(line).type); },
+    }),
+  });
+  const send = (message: object) => server.push(Buffer.from(encodeMessage(message)));
+  try {
+    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 1, clientInfo: { name: "fixture", version: "1" }, clientCapabilities: {} } });
+    await until(output, (items) => items.some((item) => item.id === 1));
+    send({ jsonrpc: "2.0", id: 2, method: "session/load", params: { sessionId, cwd: "/tmp", mcpServers: [] } });
+    const failed = await until(output, (items) => items.some((item) => item.id === 2 && item.error));
+    assert.equal(failed.find((item) => item.id === 2).error.code, -32603);
+    assert.equal(failed.filter((item) => item.method === "session/update").length, 0);
+    assert.deepEqual(shutdowns, ["shutdown"]);
+  } finally {
+    await server.close();
+  }
+});
+
 test("concurrent session creation cannot exceed the per-connection session limit", async () => {
   const output: string[] = [];
   let created = 0;
