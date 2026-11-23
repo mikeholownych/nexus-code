@@ -510,9 +510,10 @@ test("Python black-box oracle uses only pinned offline Go and Rust toolchains, o
   const workflow = fs.readFileSync(path.join(ROOT, ".github/workflows/ci.yml"), "utf8");
   assert.equal(toolchainPolicy.go, "1.22.12");
   assert.equal(toolchainPolicy.rust, /^channel = "([^"]+)"$/m.exec(rustToolchain)?.[1]);
-  assert.equal((workflow.match(/go-version: '([^']+)'/g) ?? []).length, 2);
-  assert.equal((workflow.match(/go-version: '1\.22\.12'/g) ?? []).length, 2, "both CI jobs install the exact approved Go version");
-  assert.equal((workflow.match(/run: bash scripts\/install-evaluator-toolchains\.sh/g) ?? []).length, 2, "both CI jobs use the same exact-version installer");
+  // test-gates, test-shard and linux-x86_64: every CI job that sets up the evaluator environment.
+  assert.equal((workflow.match(/go-version: '([^']+)'/g) ?? []).length, 3);
+  assert.equal((workflow.match(/go-version: '1\.22\.12'/g) ?? []).length, 3, "all three CI jobs install the exact approved Go version");
+  assert.equal((workflow.match(/run: bash scripts\/install-evaluator-toolchains\.sh/g) ?? []).length, 3, "all three CI jobs use the same exact-version installer");
   assert.equal(oracleToolchainVersionProblem({
     goVersion: "go version go1.22.12 linux/amd64",
     rustcVersion: "rustc 1.95.0 (fixture)",
