@@ -44,17 +44,13 @@ The service tests exercise caller-argument refusal, refusal when no operator ver
 
 ## Execution evidence
 
-The tested tree was the open PR #756 head (`4196a306c97152ff735498d7c6bdb5a0bcdd0c75`) plus the ACP implementation and schema-test correction. The binary Git diff from that head was SHA-256 `0985ec6f4b9d449d0981f1758f722000fe0a24c00ec3f7222a8235165d36c5e3`; the same patch is applied in the isolated branch `v1/vr2-acp-update`. No hosted CI has run on these additional changes yet.
+The current implementation was tested on PR #756 at `ee86b32d18b11ba8ed52b88be55966e21ece6e62`. The candidate includes the original MCP tool, the ACP extension, bounded worker shutdown on server signals, read-only resolution through flags/environment/config, and the ACP import-boundary allowlist update.
 
-On Node `v24.11.1`, from `cli/`, with fresh temporary `HOME`, `XDG_CONFIG_HOME`, and `XDG_CACHE_HOME` directories:
+Local tests used fresh temporary `HOME`, `XDG_CONFIG_HOME`, and `XDG_CACHE_HOME` directories. On Node `v24.11.1`, the focused MCP/ACP suite passed 69/69 before the later shutdown hardening; after that change, `mcp_verify.test.ts` passed 7/7 on Node 24. On Node `v22.23.5`, `mcp_verify.test.ts` passed 7/7, including caller cancellation and SIGTERM cleanup. The cancellation test also passed three additional targeted Node 22 repetitions. The ACP import-graph allowlist test passed on Node 22 and 24. TypeScript type-checking, schema generation check, and `git diff --check` passed.
 
-```sh
-node --import tsx --test test/acp_stdio.test.ts test/acp_validate.test.ts test/acp_mapping.test.ts test/acp_schema.test.ts test/mcp_verify.test.ts test/verify_service.test.ts
-```
+The first hosted run on `f25030a3c0c0cc64e5abbefadad06c648a9b59c4` failed the ACP import-graph check because the new type-only import of `verify_contract` was missing from its allowlist. That omission was corrected. The same run had one Node 22 cancellation timeout; the focused Node 22 suite and three repeated cancellation cases passed locally, and that timeout did not recur in the following full CI run. Its cause was not established.
 
-Result: exit 0; 69 tests passed, 0 failed, 0 skipped. The suite covers the MCP verifier, worker cancellation and timeout, ACP session-bound verification and cancellation, validation, mapping, and generated schema. The first run exposed one stale test expectation for the schema filename after the adapter moved to schema v2; the expectation now follows the current schema version, and the complete focused run passed afterward.
-
-Also passed on Node `v24.11.1`: `node --import tsx --test test/acp_schema.test.ts` (7/7), `npm run typecheck`, `node cli/scripts/gen_acp_schema.mjs --check`, and `git diff --check`. Node 22 was not available in this environment. The full repository suite has not been run on this candidate. Hosted CI remains outstanding.
+Hosted CI run [45265300422](https://github.com/mikeholownych/nexus-code/actions/runs/45265300422) completed successfully on `ee86b32d18b11ba8ed52b88be55966e21ece6e62`: both Node 22 and Node 24 test matrices, all eight test shards, Linux x86_64 packaging, TypeScript checks, and CodeQL passed. Diff coverage also passed. The separate `Entire Gates` check failed; it is not a required merge check under the repository's current instructions. The PR remains open and unmerged.
 
 ## Limits
 
