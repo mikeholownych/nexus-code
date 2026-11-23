@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01M2MMi55zqckRx5ghuF48AH",
+  "agent_id": "ab8ab662030fcc335",
+  "subagent_type": "Explore",
+  "task_description": "v1.3.0 plan unit status audit",
+  "token_usage": {
+    "input_tokens": 42,
+    "cache_creation_tokens": 110032,
+    "cache_read_tokens": 1455200,
+    "output_tokens": 12525,
+    "api_call_count": 21
+  },
+  "started_at": "2026-11-23T16:36:12.431451204Z",
+  "completed_at": "2026-11-23T16:38:41.398114219Z"
+}
