@@ -257,10 +257,7 @@ test("context inspection enforces a total retrieval budget and records timed-out
     getObjective: () => null,
     getActivePlan: () => [],
     getKnowledgeGraph: () => ({ list: () => [] }),
-    getSkillManager: () => ({ listSkills: () => [
-      { name: "workspace-guide", description: "Workspace rules", path: path.join(process.cwd(), ".agents/skills/workspace-guide/SKILL.md"), isWorkspaceSkill: true, trusted: true },
-      { name: "profile-guide", description: "Profile rules", path: path.join(os.homedir(), ".nexus/skills/profile-guide/SKILL.md"), isWorkspaceSkill: false, trusted: true },
-    ] }),
+    getSkillManager: () => ({ listSkills: () => [] }),
     getEffectiveTools: () => [],
     getProviderCapabilities: () => null,
     getLastRequestCount: () => undefined,
@@ -415,7 +412,10 @@ test("context inspection and maturity execute without provider calls and emit pa
         retention: { policy: "until_deleted" },
       }],
     }),
-    getSkillManager: () => ({ listSkills: () => [] }),
+    getSkillManager: () => ({ listSkills: () => [
+      { name: "workspace-guide", description: "Workspace rules", path: path.join(process.cwd(), ".agents/skills/workspace-guide/SKILL.md"), isWorkspaceSkill: true, trusted: true },
+      { name: "profile-guide", description: "Profile rules", path: path.join(os.homedir(), ".nexus/skills/profile-guide/SKILL.md"), isWorkspaceSkill: false, trusted: true },
+    ] }),
     getEffectiveTools: () => [],
     getProviderCapabilities: () => null,
     getLastRequestCount: () => undefined,
