@@ -190,7 +190,7 @@ for (const c of CASES) {
       assert.equal(clean.status, "ok", `clean file must be a published report, not unavailable: ${JSON.stringify(clean)}`);
       if (clean.status === "ok") assert.deepEqual(clean.diagnostics.filter((d) => d.severity === "error"), []);
     } finally {
-      mgr.shutdownAll();
+      await mgr.shutdownAll();
     }
 
     // The contrast: no server for the file's content is "unavailable", never an empty ok report.
@@ -199,7 +199,7 @@ for (const c of CASES) {
       const res = await broken.diagnostics(c.clean, 1000);
       assert.equal(res.status, "unavailable");
     } finally {
-      broken.shutdownAll();
+      await broken.shutdownAll();
     }
   });
 }
@@ -224,7 +224,7 @@ for (const c of CASES) {
       assert.equal(refused.status, "unavailable");
       if (refused.status === "unavailable") assert.match(refused.reason, /workspace not trusted|read-only mode/);
       assert.deepEqual(refusedManager.serverPids(), [], `refusal must not start the installed real server: ${refusal}`);
-      refusedManager.shutdownAll();
+      await refusedManager.shutdownAll();
     }
 
     const mgr = new LspBridgeManager(dir, { gate: () => null });
@@ -252,7 +252,7 @@ for (const c of CASES) {
       assert.ok(afterCrash.status === "unavailable" || afterCrash.diagnostics.some((d) => d.severity === "error" && c.message.test(d.message)),
         `after a server crash, stale clean diagnostics must not be returned: ${JSON.stringify(afterCrash)}`);
     } finally {
-      mgr.shutdownAll();
+      await mgr.shutdownAll();
     }
 
     // A fresh manager can recover the same workspace without inheriting the crashed process or its diagnostics.
@@ -262,7 +262,7 @@ for (const c of CASES) {
       assert.equal(result.status, "ok", `recovery after server crash: ${JSON.stringify(result)}`);
       if (result.status === "ok") assert.ok(result.diagnostics.some((d) => d.severity === "error" && c.message.test(d.message)));
     } finally {
-      recovered.shutdownAll();
+      await recovered.shutdownAll();
     }
   });
 }
@@ -291,7 +291,7 @@ test("the default servers for typescript and python are launched with --stdio (t
     for (const f of ["a.ts", "a.tsx", "a.js", "a.py"]) assert.deepEqual(mgr.getServerForFile(f)?.args, ["--stdio"], f);
     for (const f of ["a.rs", "a.go"]) assert.equal(mgr.getServerForFile(f)?.args, undefined, f);
   } finally {
-    mgr.shutdownAll();
+    void mgr.shutdownAll(); // nothing was started
   }
 });
 
@@ -375,7 +375,8 @@ for (const n of NAV) {
       let def: Awaited<ReturnType<typeof mgr.definition>> = { found: false };
       // A server may answer early from what it has loaded so far (tsserver names the import itself until the imported file is
       // loaded), so an answer counts once it points where the definition is; the last answer is what the assertions report.
-      const pointsAtDefinition = (d: typeof def) => (d.locations ?? []).some((l) => l.uri.endsWith(`/${n.definedIn}`));
+      // Since LS-1 slice S5 a target is {file, line, column, ...}: `file` relative to the workspace, "/"-separated.
+      const pointsAtDefinition = (d: typeof def) => (d.locations ?? []).some((l) => l.file === n.definedIn || l.file?.endsWith(`/${n.definedIn}`));
       while (Date.now() < deadline && !(hover.found && pointsAtDefinition(def))) {
         if (!hover.found) hover = await mgr.hover(n.at.file, n.at.line, n.at.character);
         if (!pointsAtDefinition(def)) def = await mgr.definition(n.at.file, n.at.line, n.at.character);
@@ -384,10 +385,10 @@ for (const n of NAV) {
       assert.ok(hover.found, `hover never answered: ${JSON.stringify(hover)}`);
       assert.match(hover.hoverText ?? "", n.hoverMentions, "hover text should name the function");
       assert.ok(def.found, `definition never answered: ${JSON.stringify(def)}`);
-      const uris = (def.locations ?? []).map((l) => l.uri);
-      assert.ok(uris.some((u) => u.endsWith(`/${n.definedIn}`)), `definition should point into ${n.definedIn}, got ${JSON.stringify(uris)}`);
+      assert.ok(pointsAtDefinition(def), `definition should point into ${n.definedIn}, got ${JSON.stringify(def.locations)}`);
+      assert.ok((def.locations ?? []).every((l) => l.external !== true && l.line >= 1 && l.column >= 1), `targets inside the workspace, 1-based: ${JSON.stringify(def.locations)}`);
     } finally {
-      mgr.shutdownAll();
+      await mgr.shutdownAll();
     }
   });
 }

@@ -1,0 +1,372 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "nexus audit verify output v1",
+  "description": "Generated from AuditVerifyOutput in cli/src/audit_contract.ts by cli/scripts/gen_audit_schema.mjs. Do not edit by hand. The one JSON document a verification of an audit bundle prints; `schema_version` is its first member. A result has `result`; an error document does not.",
+  "$ref": "#/$defs/AuditVerifyOutput",
+  "$defs": {
+    "AuditExportResult": {
+      "description": "Printed by `nexus audit export --json` when the bundle was written: it is complete and in place at `bundle_dir`. An\nexport that could not be carried out prints the error document (AuditVerifyError) instead.",
+      "type": "object",
+      "properties": {
+        "at_rest": {
+          "description": "False when the subject could still be changing while it was exported.",
+          "type": "boolean"
+        },
+        "bundle_dir": {
+          "description": "Absolute path of the bundle directory.",
+          "type": "string"
+        },
+        "bundle_id": {
+          "type": "string"
+        },
+        "exitCode": {
+          "description": "The process exit code (AUDIT_EXIT_CODES).",
+          "type": "number"
+        },
+        "file_bytes": {
+          "type": "number"
+        },
+        "file_count": {
+          "description": "Number of payload files written, and their sizes together in bytes.",
+          "type": "number"
+        },
+        "manifest_sha256": {
+          "description": "SHA-256 (hex) of the bytes of manifest.json: the value to record somewhere the bundle's holder cannot change it.",
+          "type": "string"
+        },
+        "omitted": {
+          "description": "Everything that was left out, each with the reason (the manifest's `omitted`).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AuditOmitted"
+          }
+        },
+        "redaction": {
+          "$ref": "#/$defs/AuditRedaction"
+        },
+        "result": {
+          "const": "exported"
+        },
+        "schema_version": {
+          "description": "Version of this document's schema. Always the first member.",
+          "const": 1
+        },
+        "signed": {
+          "description": "Whether the bundle carries a signature. An unsigned bundle shows that it is self-consistent, not who wrote it.",
+          "type": "boolean"
+        },
+        "warnings": {
+          "description": "Things the operator should know about this export; none of them is a failure.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "at_rest",
+        "bundle_dir",
+        "bundle_id",
+        "exitCode",
+        "file_bytes",
+        "file_count",
+        "manifest_sha256",
+        "omitted",
+        "redaction",
+        "result",
+        "schema_version",
+        "signed",
+        "warnings"
+      ]
+    },
+    "AuditFinding": {
+      "type": "object",
+      "properties": {
+        "expected_bytes": {
+          "type": "number"
+        },
+        "expected_sha256": {
+          "description": "For `file_altered`: what the manifest records and what was found.",
+          "type": "string"
+        },
+        "found_bytes": {
+          "type": "number"
+        },
+        "found_sha256": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/AuditFindingKind"
+        },
+        "message": {
+          "description": "One sentence a person can read.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The path inside the bundle the finding is about (characters outside printable ASCII escaped); absent for a finding about the bundle as a whole.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "message"
+      ]
+    },
+    "AuditFindingKind": {
+      "enum": [
+        "file_altered",
+        "file_missing",
+        "file_unexpected",
+        "limit_exceeded",
+        "log_chain_broken",
+        "log_head_mismatch",
+        "manifest_chain_broken",
+        "manifest_malformed",
+        "manifest_missing",
+        "manifest_not_canonical",
+        "manifest_root_mismatch",
+        "manifest_sha256_mismatch",
+        "signature_invalid",
+        "signature_key_mismatch",
+        "signature_missing",
+        "unreadable_entry",
+        "unsafe_entry",
+        "unsupported_version"
+      ]
+    },
+    "AuditOmitted": {
+      "description": "An artefact that was left out, and why.",
+      "type": "object",
+      "properties": {
+        "artefact": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "artefact",
+        "reason"
+      ]
+    },
+    "AuditRedaction": {
+      "enum": [
+        "standard",
+        "strict"
+      ]
+    },
+    "AuditSignatureStatus": {
+      "description": "absent: no manifest.sig.json. unchecked: present, not checked. valid, invalid: checked against the caller's key. missing: a key was supplied and there is no signature.",
+      "enum": [
+        "absent",
+        "invalid",
+        "missing",
+        "unchecked",
+        "valid"
+      ]
+    },
+    "AuditVerifiedLog": {
+      "description": "A chained log as the verification read it.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "flight",
+            "verification_config_attempts"
+          ]
+        },
+        "matches_manifest": {
+          "description": "The log reads exactly as the manifest recorded it (status, record count, head).",
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string"
+        },
+        "records": {
+          "type": "number"
+        },
+        "status": {
+          "description": "What `verifyChain` reports for the log now; `not_checked` when the log could not be read as one.",
+          "enum": [
+            "broken",
+            "intact",
+            "not_checked",
+            "unchained"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "matches_manifest",
+        "path",
+        "records",
+        "status"
+      ]
+    },
+    "AuditVerifyError": {
+      "description": "Printed instead of a result when the verification, or the export, could not be carried out (no such directory or subject, an invalid option, an internal error). Nothing was established and no bundle was written.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "exitCode": {
+          "type": "number"
+        },
+        "schema_version": {
+          "description": "Version of this document's schema. Always the first member.",
+          "const": 1
+        }
+      },
+      "required": [
+        "error",
+        "exitCode",
+        "schema_version"
+      ]
+    },
+    "AuditVerifyOutput": {
+      "description": "The one JSON document an `audit` command prints with `--json`. `audit verify`: a result (AuditVerifyResult) or the\nerror document. `audit export`: AuditExportResult (`result` is \"exported\") or the error document. An error document\nhas no `result`.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AuditExportResult"
+        },
+        {
+          "$ref": "#/$defs/AuditVerifyError"
+        },
+        {
+          "$ref": "#/$defs/AuditVerifyResult"
+        }
+      ]
+    },
+    "AuditVerifyResult": {
+      "description": "Printed when the bundle was examined, whatever the outcome.",
+      "type": "object",
+      "properties": {
+        "bundle_id": {
+          "description": "From the manifest; null when it could not be read. An unsigned manifest's own statements are not evidence of who wrote it.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "chained_logs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AuditVerifiedLog"
+          }
+        },
+        "exitCode": {
+          "description": "The process exit code (AUDIT_EXIT_CODES).",
+          "type": "number"
+        },
+        "expected_manifest_sha256": {
+          "description": "The manifest hash the caller expected, when one was given. A mismatch is a `manifest_sha256_mismatch` finding.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "files": {
+          "type": "object",
+          "properties": {
+            "listed": {
+              "description": "Files the manifest lists.",
+              "type": "number"
+            },
+            "matched": {
+              "description": "Of those, the files whose bytes and SHA-256 match.",
+              "type": "number"
+            }
+          },
+          "required": [
+            "listed",
+            "matched"
+          ]
+        },
+        "findings": {
+          "description": "At most AUDIT_LIMITS.findings entries; `findings_total` counts them all.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AuditFinding"
+          }
+        },
+        "findings_total": {
+          "type": "number"
+        },
+        "manifest_sha256": {
+          "description": "SHA-256 (hex) of the bytes of manifest.json as found; null when it could not be read. The value to compare with one recorded at export.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "notes": {
+          "description": "Things worth knowing that are not failures: a log that was not closed at export, a bounded excerpt.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "public_key_sha256": {
+          "description": "SHA-256 (hex) of the public key the signature was checked against; null when none was.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "result": {
+          "$ref": "#/$defs/AuditVerifyResultName"
+        },
+        "schema_version": {
+          "description": "Version of this document's schema. Always the first member.",
+          "const": 1
+        },
+        "signature": {
+          "$ref": "#/$defs/AuditSignatureStatus"
+        }
+      },
+      "required": [
+        "bundle_id",
+        "chained_logs",
+        "exitCode",
+        "expected_manifest_sha256",
+        "files",
+        "findings",
+        "findings_total",
+        "manifest_sha256",
+        "notes",
+        "public_key_sha256",
+        "result",
+        "schema_version",
+        "signature"
+      ]
+    },
+    "AuditVerifyResultName": {
+      "description": "intact_signed: every check passed and the signature verifies against the caller's key. intact_unsigned: every check\npassed and there is no signature, so the result rests on the manifest alone. signature_unchecked: every file check\npassed, and a signature is present that was not checked. tampered: at least one finding. unsupported_version: nothing\nwas checked.",
+      "enum": [
+        "intact_signed",
+        "intact_unsigned",
+        "signature_unchecked",
+        "tampered",
+        "unsupported_version"
+      ]
+    }
+  }
+}

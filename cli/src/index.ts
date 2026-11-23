@@ -38,6 +38,10 @@ import { isolateEvalCommandHome, runVersionedEvalCommand } from "./eval_cli.js";
 import { redactDiagnosticForOutput } from "./core/persistence_protection.js";
 import { formatDiagnosticForOutput } from "./ui.js";
 import { streamEventSink, streamObserver } from "./stream_json.js";
+import { RUN_RESULT_SCHEMA_VERSION, resolveRunTask, runExitCode, runJsonResult } from "./run_contract.js";
+import { VERIFY_RESULT_SCHEMA_VERSION, verifyExitCode, type VerifyJsonError } from "./verify_contract.js";
+import { VerifyInterrupted, VerifyUsageError, renderVerifyText, verifyChange, type VerifySandboxRequest } from "./core/verify.js";
+import { acpStartupRefusal, runAcpStdio } from "./acp_stdio.js";
 
 function collectAnswer(value: string, previous: string[] = []): string[] {
   return [...previous, value];
@@ -57,6 +61,8 @@ function buildConfig(options: any): HarnessConfig {
   }
 }
 import { registerOperationCommands } from "./operation_cli.js";
+import { requireManagedPolicyAtStartup } from "./core/policy_runtime.js";
+import { registerAuditCommands } from "./audit_cli.js";
 import pc from "picocolors";
 
 import * as os from "node:os";
@@ -492,6 +498,7 @@ program
   .option("--coder-provider <id>", "Cloud provider for the coder model (requires --coder-model)")
   .option("-j, --json", "Output machine-readable JSON structured result (UI-002, UI-003)")
   .option("--output <format>", "Output format: text (default), json (same as --json) or stream-json (one JSON event per line, nothing else on stdout; see docs/STREAM_JSON.md)")
+  .option("--input-json <file|->", "Read the task from a JSON document { \"schema_version\": 1, \"task\": \"...\" } in a file, or on stdin with '-' (see the manual: nexus run --json)")
   .option("-r, --resume [id]", "Resume previous session or task state")
   .option("--fork-session <id>", "Start in a new copy of the named session (the original is never changed; prints the new id)")
   .option("--fork-at <n>", "With --fork-session: copy only the first n messages (default: all)")
@@ -509,20 +516,28 @@ program
         answers = parseOperatorAnswers(options.answer);
       } catch (err: any) {
         console.error(`error: ${err.message}`);
-        exitAfterFlush(2);
+        exitAfterFlush(runExitCode("usage"));
         return;
       }
     }
     const forkError = forkStartError(options);
     if (forkError) {
       console.error(`error: ${forkError}`);
-      exitAfterFlush(2);
+      exitAfterFlush(runExitCode("usage"));
       return;
     }
     const outputFormat = String(options.output ?? (options.json ? "json" : "text"));
     if (!["text", "json", "stream-json"].includes(outputFormat) || (options.json && outputFormat !== "json")) {
       console.error(options.json && ["text", "stream-json"].includes(outputFormat) ? "error: --json cannot be combined with --output " + outputFormat : "error: --output must be text, json or stream-json");
-      exitAfterFlush(2);
+      exitAfterFlush(runExitCode("usage"));
+      return;
+    }
+    // PF-2: the task may also come from --input-json, or from stdin when no argument is given (src/run_contract.ts).
+    try {
+      prompt = await resolveRunTask({ prompt, inputJson: options.inputJson, resuming: (options.resume !== undefined && options.resume !== false) || options.forkSession !== undefined, stdin: process.stdin });
+    } catch (err: any) {
+      console.error(`error: ${redactDiagnosticForOutput(String(err?.message ?? err))}`);
+      exitAfterFlush(runExitCode("usage"));
       return;
     }
     const isStream = outputFormat === "stream-json";
@@ -560,7 +575,7 @@ program
       } catch (err: any) {
         console.error(`error: ${redactDiagnosticForOutput(String(err?.message ?? err))}`);
         app.shutdown();
-        exitAfterFlush(2);
+        exitAfterFlush(runExitCode("resume_unavailable"));
         return;
       }
     }
@@ -569,7 +584,7 @@ program
     if ((options.resume === undefined || options.resume === false) && !prompt) {
       console.error("error: missing required argument 'prompt'");
       app.shutdown();
-      exitAfterFlush(1);
+      exitAfterFlush(runExitCode("missing_prompt"));
       return;
     }
 
@@ -582,7 +597,7 @@ program
         abort.abort(new Error("SIGINT"));
         if (!isJson) console.error(pc.yellow("\nInterrupt received: no further work will be started (Ctrl-C again to terminate immediately)."));
       } else {
-        process.exit(130);
+        process.exit(runExitCode("interrupted"));
       }
     };
     process.on("SIGINT", onSigint);
@@ -600,7 +615,7 @@ program
           if (tasks.length === 0) {
             console.error(`no task to resume in ${formatDiagnosticForOutput(targetWorkspace)}; see 'nexus status'`);
             app.shutdown();
-            exitAfterFlush(2);
+            exitAfterFlush(runExitCode("resume_unavailable"));
             return;
           }
           resumeTaskId = tasks[0].taskId;
@@ -622,9 +637,9 @@ program
 
       const cloud = UsageLedger.global().cloudTotals();
       if (emitEvent) {
-        emitEvent("result", { ...(cloud.requests ? { ...result, cloudUsage: cloud } : result) });
+        emitEvent("result", { ...runJsonResult(result, cloud) });
       } else if (isJson) {
-        console.log(JSON.stringify(cloud.requests ? { ...result, cloudUsage: cloud } : result, null, 2));
+        console.log(JSON.stringify(runJsonResult(result, cloud), null, 2));
       } else if (cloud.requests) {
         console.error(pc.dim(UsageLedger.global().summary()!));
       }
@@ -636,6 +651,7 @@ program
         emitEvent("error", { taskId: app.getTaskId(), message: redactDiagnosticForOutput(String(err?.message ?? err)) });
       } else if (isJson) {
         console.log(JSON.stringify({
+          schema_version: RUN_RESULT_SCHEMA_VERSION,
           taskId: app.getTaskId(),
           success: false,
           status: "failed",
@@ -651,9 +667,103 @@ program
       } else {
         console.error(pc.red(`\nTask failed: ${formatDiagnosticForOutput(err)}`));
       }
-      const exitCode = (err instanceof TaskStateNotFoundError || err?.name === "TaskStateNotFoundError") ? 2 : 1;
+      const exitCode = runExitCode((err instanceof TaskStateNotFoundError || err?.name === "TaskStateNotFoundError") ? "task_not_found" : "failed");
       app.shutdown();
       exitAfterFlush(exitCode);
+    }
+  });
+
+// VR-1: the verdict on a change Nexus did not necessarily make (src/core/verify.ts; contract in src/verify_contract.ts).
+program
+  .command("verify")
+  .description("Verify a change without a model: run the verifier on the base and on the change, and report VERIFIED, REGRESSION_FREE, UNVERIFIED or BLOCKED")
+  .option("-w, --worktree <path>", "Top of the Git working tree (default: current directory); with no --head, its working tree is the change")
+  .option("--base <ref>", "Commit the change starts from (default: HEAD)")
+  .option("--head <ref>", "Commit that holds the change (default: the working tree)")
+  .option("--verifier <command>", "Your own verifier command (otherwise one is discovered in the base tree and needs approval)")
+  .option("--deliverable-file <path>", "Product file the change is meant to deliver, relative to the tree; VERIFIED needs at least one (repeatable)", collectDeliverableFile, [])
+  .option("-y, --yes", "Approve whatever verifier is discovered in the base tree")
+  .option("--approve-verifier <sha256>", "Approve the discovered verifier with exactly this digest (printed when approval is needed)")
+  .option("--approve-verification-edit <path>", "Approve the change's edit to this verification file (a weakened test, CI, build or test configuration); it lifts BLOCKED and never makes the change VERIFIED (repeatable)", collectDeliverableFile, [])
+  .option("--timeout-secs <n>", "Deadline of each verifier run, and of each side's type-checks, in seconds (default: NEXUS_VERIFIER_TIMEOUT_SECS, else 300)")
+  .option("--sandbox [engine]", "Confine every process verify starts on repository code: auto, bwrap or docker (default: auto); none explicitly opts out")
+  .option("--sandbox-network", "Let sandboxed verification processes use the network (off by default; incompatible with --sandbox none)")
+  .option("--receipt <file>", "Also write the result document (the receipt) to this file")
+  .option("-j, --json", "Print the result as one JSON document on stdout (see the manual: nexus verify)")
+  .action(async (_options: any, cmd: Command) => {
+    const options = commandOptions(cmd);
+    const isJson = Boolean(options.json);
+    const fail = (name: "usage" | "interrupted", message: string) => {
+      const exitCode = verifyExitCode(name);
+      console.error(`error: ${formatDiagnosticForOutput(message)}`);
+      if (isJson) console.log(JSON.stringify({ schema_version: VERIFY_RESULT_SCHEMA_VERSION, error: redactDiagnosticForOutput(message), exitCode } satisfies VerifyJsonError, null, 2));
+      exitAfterFlush(exitCode);
+    };
+    let timeoutSecs: number | undefined;
+    if (options.timeoutSecs !== undefined) {
+      timeoutSecs = Number(options.timeoutSecs);
+      if (!Number.isInteger(timeoutSecs) || timeoutSecs < 1 || timeoutSecs > 86_400) return fail("usage", "--timeout-secs must be a whole number of seconds from 1 to 86400");
+    }
+    if (options.verifier !== undefined && !String(options.verifier).trim()) return fail("usage", "--verifier needs a command");
+    if (options.approveVerifier !== undefined && !/^[0-9a-fA-F]{64}$/.test(String(options.approveVerifier).trim())) return fail("usage", "--approve-verifier needs the 64-character sha256 digest printed when approval is needed");
+    if (options.verifier !== undefined && (options.yes || options.approveVerifier !== undefined)) return fail("usage", "--verifier is your own command and needs no approval: do not combine it with --yes or --approve-verifier");
+    // Verification executes repository code, so confinement is the default. `none` is an explicit opt-out.
+    let sandbox: VerifySandboxRequest | undefined;
+    if (options.sandbox === "none") {
+      sandbox = { engine: "none" };
+    } else if (options.sandbox === undefined || options.sandbox === false) {
+      if (options.sandboxNetwork) sandbox = { engine: "auto", network: true };
+    } else if (options.sandbox === true) {
+      sandbox = { engine: "auto", network: Boolean(options.sandboxNetwork) };
+    } else {
+      const engine = options.sandbox === true ? "auto" : String(options.sandbox);
+      if (engine !== "auto" && engine !== "bwrap" && engine !== "docker") return fail("usage", "--sandbox takes auto, bwrap, docker or none");
+      sandbox = { engine, network: Boolean(options.sandboxNetwork) };
+    }
+    if (options.sandboxNetwork && sandbox?.engine === "none") return fail("usage", "--sandbox-network cannot be used with --sandbox none");
+
+    // The first signal stops verification once the running verifier process ends; a second one exits at once.
+    const abort = new AbortController();
+    const onSignal = () => {
+      if (abort.signal.aborted) process.exit(verifyExitCode("interrupted"));
+      abort.abort();
+      if (!isJson) console.error(pc.yellow("\nInterrupt received: stopping after the running verifier process (signal again to exit at once)."));
+    };
+    process.on("SIGINT", onSignal);
+    process.on("SIGTERM", onSignal);
+    try {
+      const result = await verifyChange(
+        { worktree: path.resolve(options.worktree ?? process.cwd()), base: options.base, head: options.head },
+        {
+          verifierCommand: options.verifier,
+          approveDiscoveredVerifier: Boolean(options.yes),
+          approvedVerifierDigest: options.approveVerifier,
+          deliverables: options.deliverableFile ?? [],
+          approvedVerificationEdits: options.approveVerificationEdit ?? [],
+          timeoutSecs,
+          sandbox,
+          signal: abort.signal,
+          onProgress: isJson ? undefined : (message) => console.error(pc.dim(message)),
+        },
+      );
+      const document = `${JSON.stringify(result, null, 2)}\n`;
+      if (options.receipt !== undefined) {
+        try {
+          fs.writeFileSync(path.resolve(String(options.receipt)), document);
+        } catch (err: any) {
+          return fail("usage", `--receipt: cannot write ${options.receipt} (${err?.code ?? "error"}); the verdict was ${result.verdict}`);
+        }
+      }
+      if (isJson) process.stdout.write(document);
+      else console.log(renderVerifyText(result));
+      exitAfterFlush(result.exitCode);
+    } catch (err: any) {
+      if (err instanceof VerifyUsageError) return fail("usage", err.message);
+      if (err instanceof VerifyInterrupted) return fail("interrupted", "interrupted: no verdict was reached");
+      throw err;
+    } finally {
+      process.removeListener("SIGINT", onSignal);
+      process.removeListener("SIGTERM", onSignal);
     }
   });
 
@@ -1032,7 +1142,7 @@ program
     console.log();
   });
 
-program
+const auditCommand = program
   .command("audit")
   .description("Inspect tool execution audit log and execution metrics")
   .option("-n, --limit <number>", "Number of recent records to display", "25")
@@ -1077,6 +1187,8 @@ program
     }
     console.log();
   });
+// GV-2: `nexus audit export` and `nexus audit verify`; `nexus audit` with any other argument is a usage error.
+registerAuditCommands(auditCommand);
 
 program
   .command("serve-mcp")
@@ -1123,10 +1235,12 @@ program
     const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
     const delay = parseInt(options.delay, 10) || 0;
     try {
-      const { manifest, events } = FlightPlayer.loadFlight(ws, flightId);
+      const { manifest, events, integrity } = FlightPlayer.loadFlight(ws, flightId);
       console.log(pc.bold(pc.cyan(`\n🛫 Replaying Flight: ${manifest.flightId}`)));
       console.log(`Model: ${pc.bold(manifest.model)} | Workspace: ${pc.dim(manifest.workspace)}`);
-      console.log(`Recorded: ${pc.dim(manifest.recordedAt)} | Events: ${events.length}\n`);
+      console.log(`Recorded: ${pc.dim(manifest.recordedAt)} | Events: ${events.length}`);
+      // GV-3: the chain is checked on load; showing the verdict here is what makes tampering visible to an operator.
+      console.log(`Record integrity: ${FlightPlayer.describeIntegrity(integrity)}\n`);
 
       await FlightPlayer.replay(events, (ev) => {
         const stepPrefix = ev.step !== undefined ? `[Step ${ev.step}] ` : "";
@@ -1385,6 +1499,22 @@ program
     uninstallCommand(options);
   });
 
+program
+  .command("acp")
+  .description("Serve the Agent Client Protocol over stdio")
+  .action(() => {
+    const config = buildConfig(program.opts());
+    // D-AC-3: an ACP client is untrusted, and under auto approval no tool call would ask it or anyone else. Whatever
+    // selected auto (--yes, --mode auto, NEXUS_APPROVAL_MODE), the adapter does not start.
+    const refusal = acpStartupRefusal(config);
+    if (refusal) {
+      console.error(refusal);
+      process.exit(2);
+    }
+    config.surface = "tui";
+    runAcpStdio({ config, version: getBuildIdentity().string });
+  });
+
 registerOperationCommands(program);
 registerProviderCommands(program);
 
@@ -1394,6 +1524,11 @@ program.hook("preAction", async (_thisCommand, actionCommand) => {
     topLevelCommand = topLevelCommand.parent;
   }
   const name = topLevelCommand === program ? program.name() : topLevelCommand.name();
+
+  // GV-1: the managed policy is read here, once, before any command acts. A policy file that exists and cannot be used
+  // ends the process (exit 2). `doctor` and `check` still run so the problem can be diagnosed; --version and --help
+  // never reach this hook.
+  if (name !== "doctor" && name !== "check") requireManagedPolicyAtStartup();
 
   if (operatorConfigStartupError && name !== "doctor" && name !== "check") {
     console.error(pc.red(`Configuration error: ${formatDiagnosticForOutput(operatorConfigStartupError)}`));

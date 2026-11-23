@@ -13,6 +13,7 @@ import {
   changesWorkspace,
 } from "./capabilities.js";
 import type { SkillAttribution } from "./skill_activation.js";
+import { sandboxDenialEvent, sandboxEngineLabel, type SandboxDenialEvent } from "../sandbox_events.js";
 
 export interface InvocationRequest {
   /** Unique invocation identity (assigned if omitted) (EXEC-002) */
@@ -116,6 +117,8 @@ export interface ExecutionReceipt {
   output: string;
   /** Error message if failed or denied */
   error?: string;
+  /** VR-3: typed sandbox refusal behind this outcome, when one happened. Evidence only; never an approval. */
+  sandboxEvents?: SandboxDenialEvent[];
   /** The call may have taken effect, but its executor outcome could not be established. */
   outcomeUnknown?: boolean;
   /** Execution duration in milliseconds */
@@ -645,6 +648,15 @@ export class ExecutionSpine {
       }
     }
 
+    const sandboxDenial = result.sandboxDenial
+      ? sandboxDenialEvent({
+          kind: result.sandboxDenial.kind,
+          engine: sandboxEngineLabel((context.metadata as any)?.sandbox ?? (context as any)?.config?.sandbox),
+          operation: toolName,
+          category: result.sandboxDenial.category,
+          reason: result.sandboxDenial.reason,
+        })
+      : undefined;
     const receipt: ExecutionReceipt = {
       invocationId,
       taskId,
@@ -656,6 +668,7 @@ export class ExecutionSpine {
       success: result.success,
       output: result.output || "",
       error: reportedError,
+      ...(sandboxDenial ? { sandboxEvents: [sandboxDenial] } : {}),
       ...(outcomeUnknown ? { outcomeUnknown: true } : {}),
       durationMs,
       candidateMutated,

@@ -18,7 +18,8 @@ cp "$ARCHIVE" "$TMP/release/download/$VERSION/$NAME"
 # Create the log before starting the server: the backgrounded redirect may not have created it by the
 # first poll, and under `set -e` a failed sed on a missing file aborts the script (exit 2).
 : > "$TMP/http.log"
-python3 "$(dirname "$0")/package-smoke-http.py" "$TMP/release" > "$TMP/http.log" 2>&1 &
+: > "$TMP/http.headers"
+NEXUS_HEADER_LOG="$TMP/http.headers" python3 "$(dirname "$0")/package-smoke-http.py" "$TMP/release" > "$TMP/http.log" 2>&1 &
 SERVER_PID=$!
 for _ in $(seq 1 50); do
   PORT=$(sed -n 's/^PORT=//p' "$TMP/http.log" | head -n 1)
@@ -242,4 +243,124 @@ mkdir -p "$TMP/conflict/bin"
 printf 'unrelated file\n' > "$TMP/conflict/bin/nexus"
 if NEXUS_VERSION="$VERSION" NEXUS_PREFIX="$TMP/conflict" NEXUS_RELEASE_BASE_URL="http://127.0.0.1:$PORT" sh "$INSTALLER" > "$TMP/conflict.out" 2>&1; then echo "installer overwrote a non-Nexus path" >&2; exit 1; fi
 grep -Fx 'unrelated file' "$TMP/conflict/bin/nexus" >/dev/null
+
+# INSTALL_POLICY_01: sudo from a regular user's shell is refused unless the
+# caller explicitly opts in. Plain root (no SUDO_USER) is left alone.
+mkdir -p "$TMP/fake-id-bin"
+cat > "$TMP/fake-id-bin/id" <<EOF
+#!/bin/sh
+if [ "\$1" = "-u" ]; then printf '0\\n'; exit 0; fi
+exec /usr/bin/id "\$@"
+EOF
+chmod +x "$TMP/fake-id-bin/id"
+if PATH="$TMP/fake-id-bin:$PATH" SUDO_USER=regular \
+  NEXUS_VERSION="$VERSION" NEXUS_PREFIX="$TMP/sudo-prefix" \
+  NEXUS_RELEASE_BASE_URL="http://127.0.0.1:$PORT" sh "$INSTALLER" > "$TMP/sudo.out" 2>&1; then
+  echo "installer accepted sudo from a regular user's shell" >&2
+  exit 1
+fi
+grep -F "do not run this installer with sudo" "$TMP/sudo.out" >/dev/null
+[ ! -e "$TMP/sudo-prefix/bin/nexus" ] || { echo "sudo refusal still installed" >&2; exit 1; }
+PATH="$TMP/fake-id-bin:$PATH" SUDO_USER=regular NEXUS_INSTALL_ALLOW_SUDO=1 \
+  NEXUS_VERSION="$VERSION" NEXUS_PREFIX="$TMP/sudo-allowed-prefix" \
+  NEXUS_RELEASE_BASE_URL="http://127.0.0.1:$PORT" sh "$INSTALLER" > "$TMP/sudo-allowed.out" 2>&1
+[ -L "$TMP/sudo-allowed-prefix/bin/nexus" ] || { echo "explicit sudo opt-in did not install" >&2; exit 1; }
+
+# A pending upgrade journal is read-only to the installer and must be resolved
+# by `nexus upgrade --recover` before another install repoints the launcher.
+JOURNAL_PREFIX="$TMP/journal-prefix"
+mkdir -p "$JOURNAL_PREFIX/lib/nexus"
+UPGRADE_JOURNAL="$JOURNAL_PREFIX/lib/nexus/.upgrade-journal.json"
+printf '{"formatVersion":1,"state":"downloading"}\n' > "$UPGRADE_JOURNAL"
+JOURNAL_BEFORE=$(cat "$UPGRADE_JOURNAL")
+if NEXUS_VERSION="$VERSION" NEXUS_PREFIX="$JOURNAL_PREFIX" \
+  NEXUS_RELEASE_BASE_URL="http://127.0.0.1:$PORT" sh "$INSTALLER" > "$TMP/journal.out" 2>&1; then
+  echo "installer ignored a pending upgrade journal" >&2
+  exit 1
+fi
+grep -F "pending upgrade journal" "$TMP/journal.out" >/dev/null
+[ "$(cat "$UPGRADE_JOURNAL")" = "$JOURNAL_BEFORE" ] || { echo "installer modified the upgrade journal" >&2; exit 1; }
+printf '{"formatVersion":1,"state":"complete"}\n' > "$UPGRADE_JOURNAL"
+NEXUS_VERSION="$VERSION" NEXUS_PREFIX="$JOURNAL_PREFIX" \
+  NEXUS_RELEASE_BASE_URL="http://127.0.0.1:$PORT" sh "$INSTALLER" > "$TMP/journal-complete.out" 2>&1
+[ -L "$JOURNAL_PREFIX/bin/nexus" ] || { echo "closed upgrade journal blocked a fresh install" >&2; exit 1; }
+
+# Signals during a download use the shell's conventional exit codes, and the
+# download is the first place a long-running child can be interrupted.
+REAL_CURL=$(command -v curl)
+mkdir -p "$TMP/signal-curl-bin"
+cat > "$TMP/signal-curl-bin/curl" <<EOF
+#!/bin/sh
+if [ "\${NEXUS_SIGNAL_FIXTURE:-}" = 1 ]; then
+  printf '%s\\n' "\$\$" > "\$NEXUS_SIGNAL_READY"
+  exec sleep 5
+fi
+exec "$REAL_CURL" "\$@"
+EOF
+chmod +x "$TMP/signal-curl-bin/curl"
+expect_signal_exit() {
+  local signal=$1 expected=$2 label=$3
+  rm -f "$TMP/signal.ready"
+  # A shell started as an async list inherits SIGINT as ignored, which would
+  # hide the installer's trap. Python resets both dispositions before exec.
+  PATH="$TMP/signal-curl-bin:$PATH" NEXUS_SIGNAL_FIXTURE=1 NEXUS_SIGNAL_READY="$TMP/signal.ready" \
+    NEXUS_VERSION="$VERSION" NEXUS_PREFIX="$TMP/signal-prefix-$expected" \
+    NEXUS_RELEASE_BASE_URL="http://127.0.0.1:$PORT" \
+    python3 - sh "$INSTALLER" > "$TMP/signal-$expected.out" 2>&1 <<'PY' &
+import os
+import signal
+import sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+signal.signal(signal.SIGTERM, signal.SIG_DFL)
+os.execvp(sys.argv[1], sys.argv[1:])
+PY
+  local pid=$!
+  local ready=0
+  for _ in $(seq 1 50); do
+    if [ -s "$TMP/signal.ready" ]; then ready=1; break; fi
+    sleep 0.1
+  done
+  if [ "$ready" -ne 1 ]; then
+    echo "$label fixture did not start" >&2
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    exit 1
+  fi
+  local curl_pid
+  curl_pid=$(cat "$TMP/signal.ready")
+  kill -"$signal" "$pid"
+  kill -"$signal" "$curl_pid" 2>/dev/null || true
+  set +e
+  wait "$pid"
+  local status=$?
+  set -e
+  if [ "$status" -ne "$expected" ]; then
+    echo "$label exited $status, expected $expected" >&2
+    cat "$TMP/signal-$expected.out" >&2
+    exit 1
+  fi
+  [ ! -e "$TMP/signal-prefix-$expected/bin/nexus" ] || { echo "$label still installed" >&2; exit 1; }
+}
+expect_signal_exit INT 130 SIGINT
+expect_signal_exit TERM 143 SIGTERM
+
+# A caller token fixes GitHub's rate limit but must never be printed or sent
+# to a custom (often loopback) release API.
+if GITHUB_TOKEN=nexus-token-canary NEXUS_RELEASES_API="http://127.0.0.1:$PORT/api/rel" \
+  NEXUS_PREFIX="$TMP/token-prefix" NEXUS_RELEASE_BASE_URL="http://127.0.0.1:$PORT" \
+  sh "$INSTALLER" > "$TMP/token.out" 2>&1; then
+  echo "installer unexpectedly succeeded with only prereleases" >&2
+  exit 1
+fi
+grep -F "no stable release yet" "$TMP/token.out" >/dev/null
+if grep -F 'nexus-token-canary' "$TMP/token.out" >/dev/null; then
+  echo "installer printed the GitHub token" >&2
+  exit 1
+fi
+if grep -F 'Authorization:' "$TMP/http.headers" >/dev/null; then
+  echo "installer sent GITHUB_TOKEN to a custom release API" >&2
+  cat "$TMP/http.headers" >&2
+  exit 1
+fi
+
 printf 'INSTALLER_SMOKE_PASS\n'

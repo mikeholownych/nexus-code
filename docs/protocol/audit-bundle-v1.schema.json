@@ -1,0 +1,436 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "nexus audit bundle v1",
+  "description": "Generated from AuditBundleDocument in cli/src/audit_contract.ts by cli/scripts/gen_audit_schema.mjs. Do not edit by hand. A document of an audit bundle: manifest.json (AuditManifest), or the detached signature envelope manifest.sig.json (AuditSignatureEnvelope).",
+  "$ref": "#/$defs/AuditBundleDocument",
+  "$defs": {
+    "AuditBuildIdentity": {
+      "description": "The Nexus build that wrote the bundle.",
+      "type": "object",
+      "properties": {
+        "commit": {
+          "type": "string"
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "commit",
+        "dirty",
+        "version"
+      ]
+    },
+    "AuditBundleDocument": {
+      "description": "A document of the bundle: the manifest, or the signature envelope.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AuditManifest"
+        },
+        {
+          "$ref": "#/$defs/AuditSignatureEnvelope"
+        }
+      ]
+    },
+    "AuditChainHead": {
+      "description": "The last link of a chain: the position of the last record and its hash.",
+      "type": "object",
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "seq": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "hash",
+        "seq"
+      ]
+    },
+    "AuditChainedLog": {
+      "description": "A payload file that is itself a hash-chained log (one JSON record per line), with what its chain read as at export.",
+      "type": "object",
+      "properties": {
+        "closed": {
+          "description": "The log ended with its defined last record (a flight's `session_end`). False: still recording, stopped early, or cut.",
+          "type": "boolean"
+        },
+        "head": {
+          "description": "The last record's link; present when the chain was intact and not empty.",
+          "$ref": "#/$defs/AuditChainHead"
+        },
+        "kind": {
+          "enum": [
+            "flight",
+            "verification_config_attempts"
+          ]
+        },
+        "path": {
+          "description": "The log's path in the bundle; it is also listed in `files`.",
+          "type": "string"
+        },
+        "records": {
+          "description": "Number of records in the bundled log.",
+          "type": "number"
+        },
+        "selection": {
+          "description": "How the log was chosen: named by the operator, or found by time window (a heuristic that can pick up another task's log).",
+          "enum": [
+            "explicit",
+            "time_window"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/AuditChainedLogSource"
+        },
+        "status": {
+          "description": "What `verifyChain` reported for the bundled log at export. A log already broken or unchained is recorded as such, not hidden.",
+          "enum": [
+            "broken",
+            "intact",
+            "unchained"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "path",
+        "records",
+        "status"
+      ]
+    },
+    "AuditChainedLogSource": {
+      "description": "The log a bundled excerpt was taken from, as it was when the bundle was written.",
+      "type": "object",
+      "properties": {
+        "bytes": {
+          "type": "number"
+        },
+        "closed": {
+          "type": "boolean"
+        },
+        "complete": {
+          "description": "The bundle holds the whole source log; false when it holds a prefix of it.",
+          "type": "boolean"
+        },
+        "head": {
+          "$ref": "#/$defs/AuditChainHead"
+        },
+        "records": {
+          "type": "number"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "bytes",
+        "closed",
+        "complete",
+        "records",
+        "sha256"
+      ]
+    },
+    "AuditFileEntry": {
+      "description": "One payload file of the bundle.",
+      "type": "object",
+      "properties": {
+        "bytes": {
+          "description": "Size of the file in bytes.",
+          "type": "number"
+        },
+        "chain": {
+          "description": "Link to the entry before this one (core/hash_chain.ts `linkRecord` over `{ path, bytes, sha256, role }`).",
+          "$ref": "#/$defs/ChainLink"
+        },
+        "path": {
+          "description": "Relative POSIX path inside the bundle: segments of `[A-Za-z0-9._-]`, never `.` or `..`.",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "diff",
+            "evidence_findings",
+            "evidence_provenance",
+            "flight_log",
+            "last_turn",
+            "session_export",
+            "session_export_markdown",
+            "trace",
+            "validation_receipts",
+            "verification_attempts",
+            "verification_config_attempts",
+            "verify_receipt"
+          ]
+        },
+        "sha256": {
+          "description": "SHA-256 of the file's bytes, lowercase hex.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bytes",
+        "chain",
+        "path",
+        "role",
+        "sha256"
+      ]
+    },
+    "AuditManifest": {
+      "description": "`manifest.json`. On disk it is exactly `canonicalJson(manifest) + \"\\n\"` (core/hash_chain.ts: keys sorted at every\ndepth, no whitespace), UTF-8; any other byte form is rejected, so the SHA-256 of the file is well defined.",
+      "type": "object",
+      "properties": {
+        "bundle_id": {
+          "description": "32 lowercase hex characters, random per bundle.",
+          "type": "string"
+        },
+        "chained_logs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AuditChainedLog"
+          }
+        },
+        "created_at": {
+          "description": "When the bundle was written (ISO 8601, UTC).",
+          "type": "string"
+        },
+        "files": {
+          "description": "Every payload file, sorted by path, each linked to the one before it. `manifest.json` and `manifest.sig.json` are not listed.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AuditFileEntry"
+          }
+        },
+        "files_head": {
+          "description": "The link of the last entry of `files`; null when there are none.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuditChainHead"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "format": {
+          "const": "nexus-audit-bundle/1"
+        },
+        "nexus": {
+          "$ref": "#/$defs/AuditBuildIdentity"
+        },
+        "omitted": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AuditOmitted"
+          }
+        },
+        "redaction": {
+          "$ref": "#/$defs/AuditRedaction"
+        },
+        "root_sha256": {
+          "description": "SHA-256 (hex) of `canonicalJson` of this manifest without `root_sha256`, as UTF-8.",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "subject": {
+          "$ref": "#/$defs/AuditSubject"
+        }
+      },
+      "required": [
+        "bundle_id",
+        "chained_logs",
+        "created_at",
+        "files",
+        "files_head",
+        "format",
+        "nexus",
+        "omitted",
+        "redaction",
+        "root_sha256",
+        "schema_version",
+        "subject"
+      ]
+    },
+    "AuditOmitted": {
+      "description": "An artefact that was left out, and why.",
+      "type": "object",
+      "properties": {
+        "artefact": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "artefact",
+        "reason"
+      ]
+    },
+    "AuditRedaction": {
+      "enum": [
+        "standard",
+        "strict"
+      ]
+    },
+    "AuditSignatureEnvelope": {
+      "description": "`manifest.sig.json`, the detached signature. The signed bytes are AUDIT_SIGNATURE_DOMAIN followed by the exact bytes\nof manifest.json. The public key is never in the bundle: a verifier checks against a key it already holds, and\n`public_key_sha256` only helps name the key in messages.",
+      "type": "object",
+      "properties": {
+        "algorithm": {
+          "const": "ed25519"
+        },
+        "manifest_sha256": {
+          "description": "SHA-256 (hex) of the bytes of manifest.json.",
+          "type": "string"
+        },
+        "public_key_sha256": {
+          "description": "SHA-256 (hex) of the signing key's public half, as SPKI DER.",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "signature": {
+          "description": "The ed25519 signature, base64.",
+          "type": "string"
+        },
+        "signed_file": {
+          "const": "manifest.json"
+        }
+      },
+      "required": [
+        "algorithm",
+        "manifest_sha256",
+        "public_key_sha256",
+        "schema_version",
+        "signature",
+        "signed_file"
+      ]
+    },
+    "AuditSubject": {
+      "description": "What the bundle is about.",
+      "type": "object",
+      "properties": {
+        "at_rest": {
+          "description": "False when the subject could still be changing while it was exported.",
+          "type": "boolean"
+        },
+        "kind": {
+          "enum": [
+            "session",
+            "task"
+          ]
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "store": {
+          "description": "The store the subject was read from.",
+          "enum": [
+            "sessions",
+            "tasks"
+          ]
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "updated_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspace_path": {
+          "description": "The workspace as the task or session record names it: the string stored there, not resolved again at export.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspace_sha256": {
+          "description": "SHA-256 (lowercase hex) of the UTF-8 bytes of the workspace path exactly as the task or session record holds it:\nno `realpath`, no normalisation, no trailing separator added or removed, no newline. Bundles of one workspace can\nso be matched when the path is withheld. When `workspace_path` is present this is the hash of that very string\n(a bundle where the two disagree does not verify); null exactly when the record names no workspace.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "at_rest",
+        "kind",
+        "session_id",
+        "status",
+        "store",
+        "task_id",
+        "updated_at",
+        "workspace_path",
+        "workspace_sha256"
+      ]
+    },
+    "ChainLink": {
+      "type": "object",
+      "properties": {
+        "hash": {
+          "description": "SHA-256 over `${seq}\\n${prev}\\n${canonicalJson(record without its chain)}`, hex.",
+          "type": "string"
+        },
+        "prev": {
+          "description": "`hash` of the previous record; CHAIN_GENESIS for the first.",
+          "type": "string"
+        },
+        "seq": {
+          "description": "Position in the log, from 0.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "hash",
+        "prev",
+        "seq"
+      ]
+    }
+  }
+}

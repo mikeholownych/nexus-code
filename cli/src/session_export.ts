@@ -8,6 +8,7 @@ import type { SessionData, SessionManager } from "./session.js";
 import { safeOperatorText } from "./protocol.js";
 import type { ChatMessage } from "./types.js";
 import { gatingRequirements, requirementDone } from "./core/objective.js";
+import { describeChain, verifyChain } from "./core/hash_chain.js";
 
 export const EXPORT_FORMAT = "nexus-session-export/2";
 const SUMMARY_PREFIX = "[Structured Context Memory";
@@ -166,6 +167,7 @@ function markdownExport(session: SessionData, history: HistoryCompleteness, arch
   if (session.verificationConfigAttempts?.length) {
     out.push("**Verification configuration edits (tests, CI, build):**", "");
     for (const a of session.verificationConfigAttempts) out.push(`- ${a.timestamp} ${a.decision} \`${a.tool}\` ${a.path} (${a.class}${a.role ? `, ${a.role}` : ""})`);
+    out.push("", `Record integrity: ${describeChain(verifyChain(session.verificationConfigAttempts))}.`);
     out.push("");
   }
   if (session.commandRuleDecisions?.length) {

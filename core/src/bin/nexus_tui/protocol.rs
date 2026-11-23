@@ -5,6 +5,10 @@ use serde_json::Value;
 use std::fmt;
 
 pub const PROTOCOL_VERSION: u64 = 1;
+/// The inclusive range of protocol versions this client can speak (exactly `PROTOCOL_VERSION` today). A version
+/// bump changes this pair; `hello_mismatch` compares it with the range the sidecar announces.
+pub const PROTOCOL_MIN: u64 = PROTOCOL_VERSION;
+pub const PROTOCOL_MAX: u64 = PROTOCOL_VERSION;
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct GitInfo {
@@ -167,6 +171,30 @@ pub enum Event {
         protocol: u64,
         #[serde(default)]
         commands: Vec<SlashSpec>,
+        /// The inclusive range of versions the sidecar can speak. Absent from a sidecar older than capability
+        /// negotiation, which speaks exactly `protocol`.
+        #[serde(default)]
+        protocol_min: Option<u64>,
+        #[serde(default)]
+        protocol_max: Option<u64>,
+        /// Stable features the sidecar supports (absent from older sidecars).
+        #[serde(default)]
+        capabilities: Vec<String>,
+        /// Experimental features the sidecar offers; off until `initialize` asks for them.
+        #[serde(default)]
+        experimental: Vec<String>,
+    },
+    /// Answer to `initialize`: the negotiated version and the features in force on this connection. This client
+    /// does not send `initialize` yet, so it never expects one; the variant keeps the event from being read as
+    /// an unknown type.
+    #[serde(rename = "initialized")]
+    Initialized {
+        id: String,
+        protocol: u64,
+        #[serde(default)]
+        capabilities: Vec<String>,
+        #[serde(default)]
+        experimental: Vec<String>,
     },
     #[serde(rename = "session.state")]
     SessionState {
@@ -405,10 +433,29 @@ pub enum Event {
     Unknown,
 }
 
+/// Who is connecting, as sent in `initialize`.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct ClientInfo {
+    pub name: String,
+    pub version: String,
+}
+
 /// UI → sidecar commands used by the live view.
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum Command {
+    /// Optional capability negotiation, answered with `initialized`. The live view does not send it in this
+    /// release (it accepts or refuses the sidecar from `hello` alone); the variant fixes the bytes a client sends,
+    /// checked against the shared golden corpus.
+    #[allow(dead_code)]
+    #[serde(rename = "initialize")]
+    Initialize {
+        id: String,
+        client: ClientInfo,
+        protocol_min: u64,
+        protocol_max: u64,
+        experimental: bool,
+    },
     #[serde(rename = "prompt.submit")]
     PromptSubmit { id: String, text: String },
     /// Guidance for the work in progress; the sidecar answers with `steer.ack`.
@@ -458,6 +505,28 @@ pub enum Command {
     ProviderDisconnect { id: String, provider: String },
     #[serde(rename = "shutdown")]
     Shutdown,
+}
+
+/// Why this client cannot work with the sidecar that sent `hello`, or `None` when it can. A sidecar that announces
+/// a version range is compatible when the range shares a version with this client's; an older sidecar (no range)
+/// must speak exactly `PROTOCOL_VERSION`, as before.
+pub fn hello_mismatch(
+    protocol: u64,
+    protocol_min: Option<u64>,
+    protocol_max: Option<u64>,
+) -> Option<String> {
+    match (protocol_min, protocol_max) {
+        (Some(min), Some(max)) => (min > PROTOCOL_MAX || max < PROTOCOL_MIN).then(|| {
+            format!(
+                "The agent sidecar speaks protocol {min} to {max}; this view needs protocol {PROTOCOL_MIN} to {PROTOCOL_MAX}."
+            )
+        }),
+        _ => (protocol != PROTOCOL_VERSION).then(|| {
+            format!(
+                "The agent sidecar speaks protocol {protocol}; this view needs protocol {PROTOCOL_VERSION}."
+            )
+        }),
+    }
 }
 
 pub fn parse_event(line: &str) -> Result<Event, String> {
@@ -528,7 +597,11 @@ mod tests {
             parse_event(r#"{"v":1,"type":"hello","protocol":1,"pid":42}"#),
             Ok(Event::Hello {
                 protocol: 1,
-                commands: Vec::new()
+                commands: Vec::new(),
+                protocol_min: None,
+                protocol_max: None,
+                capabilities: Vec::new(),
+                experimental: Vec::new()
             })
         );
         assert_eq!(
@@ -823,7 +896,11 @@ mod tests {
                     name: "diff".into(),
                     usage: "/diff".into(),
                     summary: "Uncommitted changes as a diff".into()
-                }]
+                }],
+                protocol_min: None,
+                protocol_max: None,
+                capabilities: Vec::new(),
+                experimental: Vec::new()
             })
         );
         assert_eq!(
@@ -1094,6 +1171,8 @@ mod tests {
             std::fs::read_to_string(path).expect("the shared protocol corpus must be checked in");
         let mut events = 0;
         let mut commands = 0;
+        let mut negotiation = Vec::new();
+        let mut older_sidecar = 0;
         for (index, line) in corpus.lines().enumerate() {
             if line.trim().is_empty() {
                 continue;
@@ -1120,15 +1199,81 @@ mod tests {
             );
             match record["direction"].as_str() {
                 Some("event") => {
+                    let event = parse_event(json);
                     assert!(
-                        parse_event(json).is_ok(),
+                        event.is_ok(),
                         "the Rust client must accept sidecar event {name}"
                     );
+                    // A record marked `older_sidecar` lacks fields the protocol now requires; it is in the corpus
+                    // because this client must keep accepting it.
+                    if let Some(missing) = record["older_sidecar"].as_array() {
+                        older_sidecar += 1;
+                        for field in missing {
+                            let field = field.as_str().expect("older_sidecar lists field names");
+                            assert!(
+                                value.get(field).is_none(),
+                                "older-sidecar record {name} must lack {field}"
+                            );
+                        }
+                    }
+                    match event {
+                        Ok(Event::Hello {
+                            protocol,
+                            protocol_min: Some(min),
+                            protocol_max: Some(max),
+                            capabilities,
+                            experimental,
+                            ..
+                        }) => {
+                            assert_eq!(Value::from(protocol), value["protocol"]);
+                            assert_eq!(Value::from(min), value["protocol_min"]);
+                            assert_eq!(Value::from(max), value["protocol_max"]);
+                            assert_eq!(Value::from(capabilities), value["capabilities"]);
+                            assert_eq!(Value::from(experimental), value["experimental"]);
+                            assert_eq!(hello_mismatch(protocol, Some(min), Some(max)), None);
+                            negotiation.push("hello");
+                        }
+                        Ok(Event::Initialized {
+                            id,
+                            protocol,
+                            capabilities,
+                            experimental,
+                        }) => {
+                            assert_eq!(Value::from(id), value["id"]);
+                            assert_eq!(Value::from(protocol), value["protocol"]);
+                            assert_eq!(Value::from(capabilities), value["capabilities"]);
+                            assert_eq!(Value::from(experimental), value["experimental"]);
+                            negotiation.push("initialized");
+                        }
+                        _ => assert_ne!(
+                            name, "initialized",
+                            "initialized must not parse as an unknown event"
+                        ),
+                    }
                     events += 1;
                 }
                 Some("command") => {
                     let id = value["id"].as_str().unwrap_or_default();
                     let command = match name {
+                        "initialize" => {
+                            negotiation.push("initialize");
+                            Command::Initialize {
+                                id: id.into(),
+                                client: ClientInfo {
+                                    name: value["client"]["name"]
+                                        .as_str()
+                                        .unwrap_or_default()
+                                        .into(),
+                                    version: value["client"]["version"]
+                                        .as_str()
+                                        .unwrap_or_default()
+                                        .into(),
+                                },
+                                protocol_min: value["protocol_min"].as_u64().unwrap_or_default(),
+                                protocol_max: value["protocol_max"].as_u64().unwrap_or_default(),
+                                experimental: value["experimental"].as_bool().unwrap_or_default(),
+                            }
+                        }
                         "prompt.submit" => Command::PromptSubmit {
                             id: id.into(),
                             text: value["text"].as_str().unwrap_or_default().into(),
@@ -1154,6 +1299,431 @@ mod tests {
         assert!(
             events >= 4 && commands >= 4,
             "the corpus must cover both wire directions"
+        );
+        assert_eq!(
+            older_sidecar, 2,
+            "the corpus keeps its older-sidecar tolerance records (hello without commands, tool.end without evidence)"
+        );
+        negotiation.sort_unstable();
+        assert_eq!(
+            negotiation,
+            ["hello", "initialize", "initialized"],
+            "the corpus must cover capability negotiation: a hello with a version range, initialize and initialized"
+        );
+    }
+
+    #[test]
+    fn hello_parses_with_and_without_the_negotiation_fields() {
+        // An older sidecar: no range, no capabilities.
+        assert!(matches!(
+            parse_event(r#"{"v":1,"type":"hello","protocol":1,"pid":42}"#),
+            Ok(Event::Hello { protocol: 1, protocol_min: None, protocol_max: None, capabilities, experimental, .. })
+                if capabilities.is_empty() && experimental.is_empty()
+        ));
+        assert_eq!(
+            parse_event(
+                r#"{"v":1,"type":"hello","protocol":1,"pid":42,"commands":[],"protocol_min":1,"protocol_max":3,"capabilities":["receipt","steer"],"experimental":["x.test"],"added_later":true}"#
+            ),
+            Ok(Event::Hello {
+                protocol: 1,
+                commands: Vec::new(),
+                protocol_min: Some(1),
+                protocol_max: Some(3),
+                capabilities: vec!["receipt".into(), "steer".into()],
+                experimental: vec!["x.test".into()]
+            })
+        );
+    }
+
+    #[test]
+    fn initialized_parses_as_its_own_event() {
+        assert_eq!(
+            parse_event(
+                r#"{"v":1,"type":"initialized","id":"i1","protocol":1,"capabilities":["steer"],"experimental":[]}"#
+            ),
+            Ok(Event::Initialized {
+                id: "i1".into(),
+                protocol: 1,
+                capabilities: vec!["steer".into()],
+                experimental: Vec::new()
+            })
+        );
+    }
+
+    #[test]
+    fn compatibility_is_range_overlap_when_the_sidecar_announces_a_range() {
+        assert_eq!(
+            hello_mismatch(PROTOCOL_VERSION, Some(PROTOCOL_MIN), Some(PROTOCOL_MAX)),
+            None
+        );
+        // A newer sidecar that still speaks this client's version, whatever its default is.
+        assert_eq!(hello_mismatch(3, Some(1), Some(3)), None);
+        assert_eq!(
+            hello_mismatch(3, Some(2), Some(3)).as_deref(),
+            Some("The agent sidecar speaks protocol 2 to 3; this view needs protocol 1 to 1.")
+        );
+        assert!(hello_mismatch(0, Some(0), Some(0)).is_some());
+    }
+
+    #[test]
+    fn an_older_sidecar_must_match_the_version_exactly() {
+        assert_eq!(hello_mismatch(PROTOCOL_VERSION, None, None), None);
+        assert_eq!(
+            hello_mismatch(2, None, None).as_deref(),
+            Some("The agent sidecar speaks protocol 2; this view needs protocol 1.")
+        );
+        // Half a range is not a range: the exact rule applies.
+        assert!(hello_mismatch(2, Some(1), None).is_some());
+        assert_eq!(hello_mismatch(1, None, Some(9)), None);
+    }
+
+    #[test]
+    fn initialize_encodes_the_client_and_its_range() {
+        let line = encode_command(&Command::Initialize {
+            id: "i1".into(),
+            client: ClientInfo {
+                name: "nexus-tui".into(),
+                version: "1.3.0".into(),
+            },
+            protocol_min: PROTOCOL_MIN,
+            protocol_max: PROTOCOL_MAX,
+            experimental: false,
+        });
+        assert_eq!(
+            serde_json::from_str::<Value>(&line).unwrap(),
+            serde_json::json!({"v":1,"type":"initialize","id":"i1","client":{"name":"nexus-tui","version":"1.3.0"},"protocol_min":1,"protocol_max":1,"experimental":false})
+        );
+    }
+
+    // ---- Parity with the TypeScript types (cli/src/protocol.ts), driven by the published schema ----
+    //
+    // `Event` and `Command` are written by hand. These tests replace keeping them in step by eye: the schema
+    // generated from the TypeScript types says what exists on the wire, and every difference from this file is
+    // either a failure or an entry in one of the lists below, which must stay exact.
+
+    use std::collections::{BTreeMap, BTreeSet};
+
+    /// Schema fields this client does not read, per event. A field the TypeScript type gains fails
+    /// `schema_samples_parse_as_their_own_event_variants` until `Event` reads it or it is listed here.
+    const EVENT_FIELDS_NOT_READ: &[(&str, &[&str])] = &[
+        // The live view shows one turn at a time and matches tool events by `call_id`, so it never reads `turn_id`.
+        ("activity", &["turn_id"]),
+        // `preview` is the older, plain-text form of `review`.
+        ("approval.request", &["preview", "turn_id"]),
+        ("checkpoint.choice.request", &["turn_id"]),
+        ("file.diff", &["turn_id"]),
+        // The pid of the sidecar is the child this client spawned.
+        ("hello", &["pid"]),
+        // ACP session/load uses these fields for paginated replay and fail-closed errors; the terminal client's
+        // legacy resume path sends one recent-history event and does not consume ACP replay metadata.
+        ("history", &["error", "page", "pages"]),
+        ("stream.stall", &["turn_id"]),
+        // The record is found again by the request `id`; the transcript already holds what the call was.
+        ("tool.detail", &["evidence", "subject", "tool"]),
+        // `evidence` is taken from `tool.start`.
+        ("tool.end", &["evidence", "turn_id"]),
+        ("tool.start", &["turn_id"]),
+        ("turn.result", &["turn_id"]),
+        // The header shows `workspace_name`.
+        ("session.state", &["workspace"]),
+    ];
+
+    /// Commands the schema defines and this client has no variant for. A command the TypeScript union gains fails
+    /// `rust_commands_are_the_checked_in_fixture_and_published_commands` until it is added to `Command` or here.
+    const COMMANDS_NOT_SENT: &[&str] = &[
+        // The live view answers a blocked turn at its approval prompt (`approve` / `deny`), not with `answer`.
+        "answer",
+    ];
+
+    /// One of every `Command` variant, with each optional field both absent and present.
+    fn command_representatives() -> Vec<Command> {
+        let id = || "c1".to_string();
+        vec![
+            Command::Initialize {
+                id: id(),
+                client: ClientInfo {
+                    name: "nexus-tui".into(),
+                    version: "1.3.0".into(),
+                },
+                protocol_min: PROTOCOL_MIN,
+                protocol_max: PROTOCOL_MAX,
+                experimental: false,
+            },
+            Command::PromptSubmit {
+                id: id(),
+                text: "fix\nit".into(),
+            },
+            Command::Steer {
+                id: id(),
+                text: "use tabs".into(),
+            },
+            Command::Cancel,
+            Command::Approve {
+                id: id(),
+                always: true,
+            },
+            Command::Deny { id: id() },
+            Command::CheckpointChoice {
+                id: id(),
+                choice: "retry".into(),
+            },
+            Command::Slash {
+                id: id(),
+                command: "diff".into(),
+                args: String::new(),
+            },
+            Command::ToolDetail {
+                id: id(),
+                evidence: "e1".into(),
+            },
+            Command::Receipt { id: id() },
+            Command::ModelsList { id: id() },
+            Command::ModelSelect {
+                id: id(),
+                provider: "local".into(),
+                model: "m".into(),
+            },
+            Command::ProviderConnect {
+                id: id(),
+                provider: "local".into(),
+                method: "endpoint".into(),
+                key: None,
+                endpoint: None,
+            },
+            Command::ProviderConnect {
+                id: id(),
+                provider: "local".into(),
+                method: "api-key".into(),
+                key: Some(Secret("not-a-real-key".into())),
+                endpoint: Some("http://127.0.0.1:1/v1".into()),
+            },
+            Command::ProviderCancel { id: id() },
+            Command::ProviderLocalCancel { id: id() },
+            Command::ProviderDisconnect {
+                id: id(),
+                provider: "local".into(),
+            },
+            Command::Shutdown,
+        ]
+    }
+
+    fn repo_file(relative: &str) -> String {
+        let path = format!("{}/../{relative}", env!("CARGO_MANIFEST_DIR"));
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path} must be checked in: {e}"))
+    }
+
+    /// Message type → its field names (without `v` and `type`), for one direction of the published schema.
+    fn schema_messages(def: &str) -> BTreeMap<String, BTreeSet<String>> {
+        let schema: Value = serde_json::from_str(&repo_file(&format!(
+            "docs/protocol/sidecar-v{PROTOCOL_VERSION}.schema.json"
+        )))
+        .expect("the schema is JSON");
+        let variants = schema["$defs"][def]["oneOf"]
+            .as_array()
+            .unwrap_or_else(|| panic!("the schema defines {def}"));
+        variants
+            .iter()
+            .map(|variant| {
+                let name = variant["properties"]["type"]["const"]
+                    .as_str()
+                    .expect("a message variant has a constant type");
+                let fields = variant["properties"]
+                    .as_object()
+                    .expect("a message variant has properties")
+                    .keys()
+                    .filter(|field| *field != "v" && *field != "type")
+                    .cloned()
+                    .collect();
+                (name.to_string(), fields)
+            })
+            .collect()
+    }
+
+    /// The wire names of the variants of `pub enum <name>` in this file, read from the source: each variant's
+    /// `#[serde(rename = "...")]`. Rust has no way to list an enum's variants, and a list kept by hand in a test
+    /// would be the hand-sync this replaces. Every variant must carry a rename (the `#[serde(other)]` fallback
+    /// excepted), which is asserted, so a variant cannot be missed.
+    fn rust_wire_names(name: &str) -> BTreeSet<String> {
+        let source = include_str!("protocol.rs");
+        let opening = format!("pub enum {name} {{\n");
+        let start = source
+            .find(&opening)
+            .unwrap_or_else(|| panic!("enum {name} is declared in protocol.rs"));
+        let body = &source[start + opening.len()..];
+        let body = &body[..body.find("\n}\n").expect("the enum body ends")];
+        let mut names = BTreeSet::new();
+        let (mut variants, mut fallbacks) = (0, 0);
+        for line in body.lines() {
+            // Variant-level lines are indented by exactly four spaces; fields and their attributes by eight.
+            let Some(item) = line
+                .strip_prefix("    ")
+                .filter(|rest| !rest.starts_with(' '))
+            else {
+                continue;
+            };
+            if let Some(rest) = item.strip_prefix("#[serde(rename = \"") {
+                let wire = rest
+                    .strip_suffix("\")]")
+                    .unwrap_or_else(|| panic!("unexpected rename attribute: {line}"));
+                assert!(
+                    names.insert(wire.to_string()),
+                    "{name}: two variants are renamed {wire}"
+                );
+            } else if item == "#[serde(other)]" {
+                fallbacks += 1;
+            } else if item.starts_with(|c: char| c.is_ascii_uppercase()) {
+                variants += 1;
+            }
+        }
+        assert!(!names.is_empty(), "{name} has variants");
+        assert_eq!(
+            variants,
+            names.len() + fallbacks,
+            "every {name} variant needs #[serde(rename = \"<wire type>\")]"
+        );
+        names
+    }
+
+    /// The top-level field names of a parsed message, from its derived `Debug` form (`{:#?}` puts each field of
+    /// the variant on its own line, indented by four spaces). No field of `Event` is renamed, so these are the
+    /// wire names.
+    fn fields_read(debug: &str) -> BTreeSet<String> {
+        debug
+            .lines()
+            .filter_map(|line| line.strip_prefix("    "))
+            .filter(|rest| rest.starts_with(|c: char| c.is_ascii_lowercase()))
+            .filter_map(|rest| rest.split_once(": ").map(|(field, _)| field.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn schema_samples_parse_as_their_own_event_variants() {
+        let published = schema_messages("SidecarEvent");
+        // Every event the schema publishes has a variant here, and every variant here is a published event.
+        assert_eq!(
+            rust_wire_names("Event"),
+            published.keys().cloned().collect(),
+            "the Rust Event enum and the schema's events differ: add the variant, or regenerate the schema"
+        );
+        let not_read: BTreeMap<&str, BTreeSet<String>> = EVENT_FIELDS_NOT_READ
+            .iter()
+            .map(|(event, fields)| (*event, fields.iter().map(|f| f.to_string()).collect()))
+            .collect();
+        assert_eq!(
+            not_read.len(),
+            EVENT_FIELDS_NOT_READ.len(),
+            "EVENT_FIELDS_NOT_READ lists an event twice"
+        );
+        for event in not_read.keys() {
+            assert!(
+                published.contains_key(*event),
+                "EVENT_FIELDS_NOT_READ names {event}, which the schema does not define"
+            );
+        }
+
+        let samples = repo_file(&format!(
+            "cli/test/fixtures/protocol_v{PROTOCOL_VERSION}_schema_samples.jsonl"
+        ));
+        let mut seen = BTreeSet::new();
+        for line in samples.lines() {
+            let record: Value = serde_json::from_str(line).expect("a sample record is JSON");
+            if record["direction"] != "event" {
+                continue;
+            }
+            let name = record["name"].as_str().expect("a sample has a name");
+            let shape = record["shape"].as_str().expect("a sample has a shape");
+            let json = record["json"].as_str().expect("a sample has json");
+            let event = parse_event(json).unwrap_or_else(|err| {
+                panic!("the {shape} {name} sample does not parse: {err}\n{json}\nThe TypeScript type allows this message; make the Rust field optional or add what is missing.")
+            });
+            let debug = format!("{event:#?}");
+            // `Event::Unknown` and `Review::Unknown` are what a type or shape this client lacks parses as.
+            let fallback = debug.lines().any(|line| {
+                let value = line.trim().trim_end_matches(',');
+                value == "Unknown" || value.ends_with(": Unknown")
+            });
+            assert!(
+                !fallback,
+                "the {shape} {name} sample parsed as an unknown variant: {debug}"
+            );
+            seen.insert((name.to_string(), shape.to_string()));
+            if shape != "full" {
+                continue;
+            }
+            let read = fields_read(&debug);
+            let fields = &published[name];
+            assert_eq!(
+                read.difference(fields).collect::<Vec<_>>(),
+                Vec::<&String>::new(),
+                "{name}: Rust reads fields the schema does not define"
+            );
+            assert_eq!(
+                fields.difference(&read).cloned().collect::<BTreeSet<_>>(),
+                not_read.get(name).cloned().unwrap_or_default(),
+                "{name}: the schema fields this client does not read must equal EVENT_FIELDS_NOT_READ"
+            );
+        }
+        for name in published.keys() {
+            for shape in ["minimal", "full"] {
+                assert!(
+                    seen.contains(&(name.clone(), shape.to_string())),
+                    "no {shape} sample for {name}: run `node cli/scripts/gen_protocol_samples.mjs`"
+                );
+            }
+        }
+    }
+
+    /// The fixture holds the exact lines this client writes, one command per line. This test keeps it equal to
+    /// what `encode_command` produces today; `cli/test/protocol_parity.test.ts` validates each line against the
+    /// schema and gives it to the sidecar's `parseCommand`. So a field renamed here fails there. Rewrite the
+    /// fixture with `NEXUS_UPDATE_PROTOCOL_FIXTURES=1 cargo test --bin nexus-tui rust_commands`.
+    #[test]
+    fn rust_commands_are_the_checked_in_fixture_and_published_commands() {
+        let relative =
+            format!("cli/test/fixtures/protocol_v{PROTOCOL_VERSION}_rust_commands.jsonl");
+        let encoded: String = command_representatives()
+            .iter()
+            .map(encode_command)
+            .collect();
+        if std::env::var_os("NEXUS_UPDATE_PROTOCOL_FIXTURES").is_some() {
+            std::fs::write(
+                format!("{}/../{relative}", env!("CARGO_MANIFEST_DIR")),
+                &encoded,
+            )
+            .expect("the fixture is writable");
+        }
+        assert_eq!(
+            repo_file(&relative),
+            encoded,
+            "{relative} is not what the client serializes: rerun with NEXUS_UPDATE_PROTOCOL_FIXTURES=1 and review the diff"
+        );
+
+        let sent: BTreeSet<String> = encoded
+            .lines()
+            .map(|line| {
+                let value: Value = serde_json::from_str(line).expect("a command line is JSON");
+                assert_eq!(value["v"], Value::from(PROTOCOL_VERSION));
+                value["type"]
+                    .as_str()
+                    .expect("a command has a type")
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(
+            sent,
+            rust_wire_names("Command"),
+            "command_representatives must hold every Command variant"
+        );
+        let published: BTreeSet<String> = schema_messages("SidecarCommand").into_keys().collect();
+        assert_eq!(
+            sent.difference(&published).collect::<Vec<_>>(),
+            Vec::<&String>::new(),
+            "this client can send a command the schema does not define"
+        );
+        assert_eq!(
+            published.difference(&sent).cloned().collect::<Vec<_>>(),
+            COMMANDS_NOT_SENT,
+            "the published commands this client has no variant for must equal COMMANDS_NOT_SENT"
         );
     }
 }
