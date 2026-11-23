@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -159,6 +160,27 @@ test("inference request manifests capture the exact dispatch arrays without reta
   assert.equal(persistence.length, 2, "dispatch and response states are durably checkpointed");
 });
 
+test("active system-prompt inventory slices current bytes and refuses stale offsets", () => {
+  const prompt = "base policy\nproject rules\nruntime identity";
+  const agent: any = Object.create(AutonomousAgent.prototype);
+  Object.assign(agent, {
+    messages: [{ role: "system", content: prompt }],
+    systemPromptSectionMessageDigest: createHash("sha256").update(prompt).digest("hex"),
+    systemPromptSectionReferences: [
+      { sourceType: "client_system_prompt", sourceLocation: "client:runtime-system-prompt:segment:1", scope: "profile", trust: "system_instruction", retention: "runtime_prompt", inclusionReason: "runtime policy", retrievalMethod: "system_prompt_builder", segments: [{ start: 0, end: 11 }] },
+      { sourceType: "project_rules", sourceLocation: "repository:/repo:rules", scope: "repository", trust: "persisted_unverified", retention: "workspace_rules_policy", inclusionReason: "workspace rules remain untrusted", retrievalMethod: "trusted_project_rules", segments: [{ start: 12, end: 25 }] },
+    ],
+  });
+  const sources = agent.getSystemPromptContextSources();
+  assert.equal(sources[0].content, "base policy");
+  assert.equal(sources[1].content, "project rules");
+  assert.equal(sources[1].trust, "persisted_unverified");
+  assert.deepEqual(sources.map((source: any) => source.sourceRefs), [["request:message:0"], ["request:message:0"]]);
+  assert.equal(JSON.stringify(buildContextInventory({ sources: [{ name: "prompt", status: "ok", durationMs: 1, items: sources }] })).includes("project rules"), false);
+  agent.messages[0].content += " changed";
+  assert.equal(agent.getSystemPromptContextSources(), undefined, "changed prompt bytes cannot reuse old offsets");
+});
+
 test("failed and interrupted inference manifest states remain unknown rather than successful", async () => {
   const agent: any = Object.create(AutonomousAgent.prototype);
   Object.assign(agent, {
@@ -201,8 +223,101 @@ test("source failures and deterministic inventory limits report incomplete conte
   assert.equal(snapshot.metrics.omittedItems, 1);
   assert.equal(snapshot.coverage, "partial");
   assert.equal(snapshot.metrics.budgetStatus, "unknown");
+  assert.equal(isContextInventorySnapshot(snapshot), true, "timeout details remain valid additive schema-1 metadata");
   assert.match(snapshot.coverageGaps.join(" "), /partial or unavailable/);
   assert.equal(snapshot.sourceMeasurements.find((item) => item.source === "memory")?.status, "failed");
+});
+
+test("context inspection enforces a total retrieval budget and records timed-out sources", async () => {
+  let resolveLate!: (messages: Array<{ role: string; content: string }>) => void;
+  const agent = {
+    getMessages: () => new Promise((resolve) => { resolveLate = resolve; }),
+    getObjective: () => null,
+    getActivePlan: () => [],
+    getKnowledgeGraph: () => ({ list: () => [] }),
+    getSkillManager: () => ({ listSkills: () => [] }),
+    getEffectiveTools: () => [],
+    getProviderCapabilities: () => null,
+    getLastRequestCount: () => undefined,
+    getContextBudget: () => ({ contextLimit: 2048 }),
+    getTaskId: () => "ctx-task",
+    getWorkspaceContextFingerprint: () => "b".repeat(64),
+    getInferenceContextManifests: () => [],
+  };
+  const host = {
+    app: {
+      getAgent: () => agent,
+      getConfig: () => ({ workspace: process.cwd() }),
+      getSessionManager: () => ({ loadSession: () => null }),
+    },
+    sessionId: () => "ctx-session",
+  } as any;
+
+  const started = performance.now();
+  const outcome = await routeSlash(host, "context", "inspect --json --budget-ms 30", new AbortController().signal);
+  const elapsed = performance.now() - started;
+  assert.equal(outcome.kind, "reply");
+  assert.equal(outcome.success, true);
+  const snapshot = JSON.parse(outcome.output);
+  const messages = snapshot.sourceMeasurements.find((source: any) => source.source === "session_messages");
+  assert.equal(messages.status, "failed");
+  assert.equal(messages.outcome, "timed_out");
+  assert.equal(messages.itemCount, 0);
+  assert.equal(snapshot.coverage, "partial");
+  assert.equal(snapshot.metrics.budgetStatus, "unknown");
+  assert.ok(snapshot.coverageGaps.some((gap: string) => gap.includes("session_messages") && gap.includes("inspection budget")));
+  assert.ok(snapshot.metrics.assemblyDurationMs < 500, `inspection should not wait for the pending source, got ${snapshot.metrics.assemblyDurationMs}ms`);
+  assert.ok(elapsed < 500, `command should not wait for the pending source, got ${elapsed}ms`);
+  resolveLate([{ role: "user", content: "late source" }]);
+
+  const invalid = await routeSlash(host, "context", "inspect --json --budget-ms 0", new AbortController().signal);
+  assert.equal(invalid.success, false);
+  const tooManyItems = await routeSlash(host, "context", "inspect --max-items 501", new AbortController().signal);
+  assert.equal(tooManyItems.success, false);
+
+  const cancelController = new AbortController();
+  const cancelOutcomePromise = routeSlash(host, "context", "inspect --json --budget-ms 2000", cancelController.signal);
+  setTimeout(() => cancelController.abort(), 5);
+  const cancelOutcome = await cancelOutcomePromise;
+  assert.equal(cancelOutcome.success, true);
+  const cancelledSnapshot = JSON.parse(cancelOutcome.output);
+  const cancelledSource = cancelledSnapshot.sourceMeasurements.find((source: any) => source.source === "session_messages");
+  assert.equal(cancelledSource.status, "failed");
+  assert.equal(cancelledSource.outcome, "cancelled");
+  resolveLate([{ role: "user", content: "cancelled late source" }]);
+
+  const rejectedHost = {
+    ...host,
+    app: { ...host.app, getAgent: () => ({ ...agent, getMessages: () => Promise.reject(new Error("untrusted source error")) }) },
+  };
+  const rejected = await routeSlash(rejectedHost, "context", "inspect --json", new AbortController().signal);
+  const rejectedSnapshot = JSON.parse(rejected.output);
+  const failedSource = rejectedSnapshot.sourceMeasurements.find((source: any) => source.source === "session_messages");
+  assert.equal(failedSource.status, "failed");
+  assert.equal(failedSource.outcome, undefined);
+  assert.equal(JSON.stringify(rejectedSnapshot).includes("untrusted source error"), false, "source errors must not leak arbitrary content into diagnostics");
+
+  let syncReadCompleted = false;
+  const slowHost = {
+    ...host,
+    app: {
+      ...host.app,
+      getAgent: () => ({ ...agent, getMessages: () => {
+        const until = performance.now() + 80;
+        while (performance.now() < until) { /* exercise a synchronous source that cannot be preempted */ }
+        syncReadCompleted = true;
+        return [{ role: "user", content: "late synchronous result" }];
+      } }),
+    },
+  };
+  const slow = await routeSlash(slowHost, "context", "inspect --json --budget-ms 30", new AbortController().signal);
+  const slowSnapshot = JSON.parse(slow.output);
+  const slowSource = slowSnapshot.sourceMeasurements.find((source: any) => source.source === "session_messages");
+  assert.equal(syncReadCompleted, true);
+  assert.equal(slowSource.status, "failed");
+  assert.equal(slowSource.outcome, "timed_out");
+  assert.equal(slowSource.itemCount, 0);
+  assert.match(slowSource.detail, /synchronous reads cannot be preempted/);
 });
 
 test("merging a saved inventory with archive references stays bounded and reports omissions", () => {
@@ -245,6 +360,7 @@ test("context command is discoverable and dispatched through the common REPL/TUI
   const spec = SLASH_COMMANDS.find((item) => item.name === "context");
   assert.ok(spec);
   assert.ok(spec.usage.includes("/context inspect"));
+  assert.ok(spec.usage.includes("--budget-ms"));
   assert.equal(hasHandler("context"), true);
   const outcome = await routeSlash({} as any, "context", "not-a-view", new AbortController().signal);
   assert.equal(outcome.kind, "reply");
@@ -257,8 +373,10 @@ test("context command is discoverable and dispatched through the common REPL/TUI
 });
 
 test("context inspection and maturity execute without provider calls and emit parseable evidence", async () => {
+  const systemPrompt = "private composite system prompt";
   const agent = {
-    getMessages: () => [{ role: "user", content: "private prompt text" }],
+    getMessages: () => [{ role: "system", content: systemPrompt }, { role: "user", content: "private prompt text" }],
+    getSystemPromptContextSources: () => [{ ...input("client:system-policy", "session", systemPrompt), sourceType: "client_system_prompt", sourceRefs: ["request:message:0"] }],
     getObjective: () => null,
     getActivePlan: () => [],
     getKnowledgeGraph: () => ({ list: () => [] }),
@@ -292,8 +410,15 @@ test("context inspection and maturity execute without provider calls and emit pa
   assert.equal(JSON.stringify(snapshot).includes("private prompt text"), false);
   assert.ok(snapshot.items.some((item: any) => item.sourceType === "inference_request_manifest"));
   assert.equal(snapshot.coverageGaps.some((gap: string) => gap.includes("does not yet persist a per-inference manifest")), false);
-  assert.ok(snapshot.coverageGaps.some((gap: string) => gap.includes("composite system prompt")));
+  assert.equal(snapshot.coverageGaps.some((gap: string) => gap.includes("active system prompt sections could not be linked")), false);
+  assert.equal(snapshot.items.some((item: any) => item.sourceRefs?.includes("request:message:0")), true);
+  assert.equal(snapshot.items.some((item: any) => item.sourceType === "system_context"), false);
   assert.equal(snapshot.metrics.tokenSource, "client_estimate");
+  const bounded = await routeSlash(host, "context", "inspect --json --max-items 1", new AbortController().signal);
+  const boundedSnapshot = JSON.parse(bounded.output);
+  assert.equal(boundedSnapshot.items.length, 1);
+  assert.ok(boundedSnapshot.metrics.omittedItems > 0);
+  assert.equal(boundedSnapshot.coverage, "partial");
   const maturity = await routeSlash(host, "context", "maturity --json", new AbortController().signal);
   const assessment = JSON.parse(maturity.output);
   assert.equal(assessment.basis, "deterministic_client_evidence");

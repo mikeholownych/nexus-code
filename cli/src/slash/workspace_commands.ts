@@ -11,7 +11,7 @@ import { isWorkspaceTrusted } from "../workspace_trust.js";
 import { PolicyContext } from "../core/approval_policy.js";
 import { isLegacyWorktreeArgs, relocationAfter, runWorktreeCommandAsync, tokenizeWorktreeArgs } from "../worktrunk/command.js";
 import { providerCompleter } from "../worktrunk/provider.js";
-import { assessContextMaturity, buildContextInventory, compareWorkspaceState, inventorySourcesFromMessages, isContextInventorySnapshot, renderContextInventoryText, renderContextMaturityText, type ContextSourceItemInput } from "../core/context_inventory.js";
+import { assessContextMaturity, buildContextInventory, compareWorkspaceState, inventorySourcesFromMessagesBounded, isContextInventorySnapshot, renderContextInventoryText, renderContextMaturityText, type BoundedContextSourceItems, type ContextSourceItemInput, type ContextSourceStatus, type ContextSourceOutcome } from "../core/context_inventory.js";
 import { NOT_A_REPO, SlashContext, SlashHandler, SlashOutcome, errorText, reply } from "./catalog.js";
 import { MAX_PASTE } from "../protocol.js";
 
@@ -285,35 +285,132 @@ function paste(): SlashOutcome {
   return reply("paste", `Pasted ${result.text.length} characters into the composer.`, true, { composer: result.text });
 }
 
-function context({ host, args, signal }: SlashContext): SlashOutcome {
-  const [view, ...flags] = args.trim().split(/\s+/).filter(Boolean);
-  if (!view || !["inspect", "maturity"].includes(view)) return reply("context", "Usage: /context inspect [--json] [--record] | /context maturity [--json]", false);
-  const allowed = view === "inspect" ? new Set(["--json", "--record"]) : new Set(["--json"]);
-  if (flags.some((flag) => !allowed.has(flag)) || new Set(flags).size !== flags.length) return reply("context", "Invalid or duplicate option. Use /context inspect [--json] [--record] or /context maturity [--json].", false);
+const DEFAULT_CONTEXT_BUDGET_MS = 2_000;
+const MAX_CONTEXT_BUDGET_MS = 30_000;
+const MAX_CONTEXT_ITEMS = 500;
+
+async function context({ host, args, signal }: SlashContext): Promise<SlashOutcome> {
+  const [view, ...tokens] = args.trim().split(/\s+/).filter(Boolean);
+  const usage = "Usage: /context inspect [--json] [--record] [--budget-ms <1..30000>] [--max-items <1..500>] | /context maturity [--json] [--budget-ms <1..30000>] [--max-items <1..500>]";
+  if (!view || !["inspect", "maturity"].includes(view)) return reply("context", usage, false);
+  let json = false;
+  let record = false;
+  let budgetMs = DEFAULT_CONTEXT_BUDGET_MS;
+  let maxItems = MAX_CONTEXT_ITEMS;
+  const seen = new Set<string>();
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index];
+    if (seen.has(token)) return reply("context", `Duplicate option: ${token}. ${usage}`, false);
+    seen.add(token);
+    if (token === "--json") { json = true; continue; }
+    if (token === "--record" && view === "inspect") { record = true; continue; }
+    if (token === "--budget-ms" || token === "--max-items") {
+      const value = tokens[++index];
+      if (!value || !/^[1-9]\d*$/.test(value)) return reply("context", `Invalid value for ${token}. ${usage}`, false);
+      const parsed = Number(value);
+      const upper = token === "--budget-ms" ? MAX_CONTEXT_BUDGET_MS : MAX_CONTEXT_ITEMS;
+      if (!Number.isSafeInteger(parsed) || parsed > upper) return reply("context", `Value for ${token} must be between 1 and ${upper}.`, false);
+      if (token === "--budget-ms") budgetMs = parsed;
+      else maxItems = parsed;
+      continue;
+    }
+    return reply("context", `Invalid option: ${token}. ${usage}`, false);
+  }
   if (signal.aborted) return reply("context", "Context inspection was cancelled.", false);
 
   const agent = host.app.getAgent();
   const config = host.app.getConfig();
   const sessionManager = host.app.getSessionManager();
+  const assemblyStarted = performance.now();
   const savedSession = sessionManager.loadSession(host.sessionId());
   const previousInventory = isContextInventorySnapshot(savedSession?.contextInventory) ? savedSession.contextInventory : undefined;
-  const sources: Array<{ name: string; status: "ok" | "partial" | "failed"; durationMs: number; items: ContextSourceItemInput[]; detail?: string }> = [];
-  const gaps: string[] = ["The composite system prompt contains rules and other sources that are not yet split into per-item provenance."];
+  const sources: Array<{ name: string; status: ContextSourceStatus; outcome?: ContextSourceOutcome; durationMs: number; items: ContextSourceItemInput[]; omittedItemCount?: number; detail?: string }> = [];
+  const gaps: string[] = [];
   if (typeof agent.getInferenceContextManifests !== "function") gaps.push("This agent instance does not expose persisted per-inference request manifests.");
-  const measure = (name: string, read: () => ContextSourceItemInput[], status: "ok" | "partial" = "ok", detail?: string) => {
+  type SourceReadResult = ContextSourceItemInput[] | BoundedContextSourceItems;
+  const remainingItemBudget = () => Math.max(0, maxItems - sources.reduce((sum, source) => sum + source.items.length + (source.omittedItemCount ?? 0), 0));
+  const recordSourceItems = (name: string, status: ContextSourceStatus, durationMs: number, result: SourceReadResult, detail?: string) => {
+    const collection = Array.isArray(result) ? { items: result, omittedItemCount: 0 } : result;
+    const itemBudget = remainingItemBudget();
+    const items = collection.items.slice(0, itemBudget);
+    const omittedItemCount = collection.omittedItemCount + Math.max(0, collection.items.length - items.length);
+    sources.push({ name, status, durationMs, items, ...(omittedItemCount ? { omittedItemCount } : {}), ...(detail ? { detail } : {}) });
+  };
+  const measure = async (name: string, read: (itemBudget: number) => SourceReadResult | Promise<SourceReadResult>, status: "ok" | "partial" = "ok", detail?: string): Promise<void> => {
+    const remainingMs = Math.max(0, budgetMs - (performance.now() - assemblyStarted));
+    if (signal.aborted || remainingMs <= 0) {
+      const timedOut = !signal.aborted;
+      const outcome: ContextSourceOutcome = timedOut ? "timed_out" : "cancelled";
+      const reason = timedOut ? "inspection budget exhausted before source lookup" : "inspection cancelled before source lookup";
+      sources.push({ name, status: "failed", outcome, durationMs: 0, items: [], detail: reason });
+      gaps.push(`${name} ${reason}`);
+      return;
+    }
     const started = performance.now();
+    let timeout: NodeJS.Timeout | undefined;
+    let abortListener: (() => void) | undefined;
     try {
-      const items = read();
-      sources.push({ name, status, durationMs: performance.now() - started, items, ...(detail ? { detail } : {}) });
+      const result = read(remainingItemBudget());
+      if (result && typeof (result as Promise<ContextSourceItemInput[]>).then === "function") {
+        const interrupted = new Promise<{ kind: "timeout" } | { kind: "cancelled" }>((resolve) => {
+          timeout = setTimeout(() => resolve({ kind: "timeout" }), remainingMs);
+          abortListener = () => resolve({ kind: "cancelled" });
+          signal.addEventListener("abort", abortListener, { once: true });
+        });
+        const completed = Promise.resolve(result).then(
+          (items) => ({ kind: "ok" as const, items }),
+          () => ({ kind: "failed" as const }),
+        );
+        const outcome = await Promise.race([completed, interrupted]);
+        if (outcome.kind === "timeout" || outcome.kind === "cancelled") {
+          const sourceOutcome: ContextSourceOutcome = outcome.kind === "timeout" ? "timed_out" : "cancelled";
+          const reason = outcome.kind === "timeout"
+            ? `source did not return within the remaining ${remainingMs}ms inspection budget; late results are discarded`
+            : "inspection cancelled while the source was pending; late results are discarded";
+          sources.push({ name, status: "failed", outcome: sourceOutcome, durationMs: performance.now() - started, items: [], detail: reason });
+          gaps.push(`${name} ${reason}`);
+          return;
+        }
+        if (outcome.kind === "failed") throw new Error("source rejected");
+        recordSourceItems(name, status, performance.now() - started, outcome.items, detail);
+      } else {
+        const durationMs = performance.now() - started;
+        if (durationMs > remainingMs) {
+          const reason = `synchronous source exceeded the remaining ${remainingMs}ms inspection budget by ${Math.round(durationMs - remainingMs)}ms; result discarded because synchronous reads cannot be preempted`;
+          sources.push({ name, status: "failed", outcome: "timed_out", durationMs, items: [], detail: reason });
+          gaps.push(`${name} ${reason}`);
+          return;
+        }
+        recordSourceItems(name, status, durationMs, result as SourceReadResult, detail);
+      }
     } catch {
       sources.push({ name, status: "failed", durationMs: performance.now() - started, items: [], detail: "source lookup failed; no source content was recorded" });
       gaps.push(`${name} source lookup failed`);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      if (abortListener) signal.removeEventListener("abort", abortListener);
     }
   };
 
-  measure("session_messages", () => inventorySourcesFromMessages(agent.getMessages()));
+  let promptComponentsAvailable = false;
+  await measure("system_prompt_components", () => {
+    if (typeof agent.getSystemPromptContextSources !== "function") throw new Error("system prompt source API unavailable");
+    const components = agent.getSystemPromptContextSources();
+    if (!components?.length) throw new Error("active system prompt source references are unavailable or stale");
+    promptComponentsAvailable = true;
+    return components;
+  }, "partial", "content is sliced from the active prompt in memory for token estimation; only metadata and source references are retained");
+  if (!promptComponentsAvailable) gaps.push("active system prompt sections could not be linked to the current message; the transcript fallback is retained as one opaque item");
+  await measure("session_messages", (itemBudget) => {
+    const messages: any = agent.getMessages();
+    const collect = (value: any[]) => inventorySourcesFromMessagesBounded(
+      promptComponentsAvailable ? value.filter((message: any, index: number) => !(index === 0 && message?.role === "system")) : value,
+      { maxItems: itemBudget },
+    );
+    return messages && typeof messages.then === "function" ? messages.then(collect) : collect(messages);
+  });
   let workspaceFingerprint: string | undefined;
-  measure("workspace_state_fingerprint", () => {
+  await measure("workspace_state_fingerprint", () => {
     if (typeof agent.getWorkspaceContextFingerprint !== "function") throw new Error("workspace fingerprint API unavailable");
     workspaceFingerprint = agent.getWorkspaceContextFingerprint();
     if (!workspaceFingerprint) throw new Error("workspace fingerprint unavailable");
@@ -331,7 +428,7 @@ function context({ host, args, signal }: SlashContext): SlashOutcome {
     }];
   });
   if (typeof agent.getInferenceContextManifests === "function") {
-    measure("inference_request_manifests", () => agent.getInferenceContextManifests().map((manifest: any) => ({
+    await measure("inference_request_manifests", () => agent.getInferenceContextManifests().map((manifest: any) => ({
         sourceType: "inference_request_manifest",
         sourceLocation: `task:inference-request:${manifest.id}`,
         scope: "task" as const,
@@ -343,18 +440,18 @@ function context({ host, args, signal }: SlashContext): SlashOutcome {
         sourceRefs: manifest.messages.slice(0, 100).map((item: any) => item.sourceRef),
       })));
   } else {
-    measure("inference_request_manifests", () => [], "partial", "request manifest history is unavailable from this agent instance");
+    await measure("inference_request_manifests", () => [], "partial", "request manifest history is unavailable from this agent instance");
   }
-  measure("task_ledger", () => {
+  await measure("task_ledger", () => {
     const objective = agent.getObjective();
     if (!objective) return [];
     return [{ sourceType: "objective_ledger", sourceLocation: "task:objective-ledger", scope: "task", content: JSON.stringify(objective), trust: "persisted_unverified", retention: "task", inclusionReason: "pinned objective and acceptance state", retrievalMethod: "durable_task_state", freshness: "current", freshnessRule: "read from the live task ledger at inspection time", sourceRefs: objective.requirements?.map((requirement) => `requirement:${requirement.id}`) }];
   });
-  measure("plan", () => {
+  await measure("plan", () => {
     const plan = agent.getActivePlan();
     return plan.length ? [{ sourceType: "active_plan", sourceLocation: "task:active-plan", scope: "task", content: JSON.stringify(plan), trust: "persisted_unverified", retention: "task", inclusionReason: "current task plan", retrievalMethod: "durable_task_state", freshness: "current", freshnessRule: "read from the live task plan at inspection time" }] : [];
   });
-  measure("durable_session_state", () => {
+  await measure("durable_session_state", () => {
     if (!savedSession) return [];
     const items: ContextSourceItemInput[] = [];
     savedSession.durableNotes?.forEach((note, index) => items.push({
@@ -380,7 +477,7 @@ function context({ host, args, signal }: SlashContext): SlashOutcome {
     });
     return items;
   }, "partial", "saved durable notes and compaction links only; full session messages are inventoried separately");
-  measure("project_knowledge", () => agent.getKnowledgeGraph().list().map((entry, index) => ({
+  await measure("project_knowledge", () => agent.getKnowledgeGraph().list().map((entry, index) => ({
     sourceType: "durable_knowledge",
     sourceLocation: `repository:knowledge:${entry.id || index + 1}`,
     scope: "repository" as const,
@@ -391,7 +488,7 @@ function context({ host, args, signal }: SlashContext): SlashOutcome {
     retrievalMethod: "knowledge_graph",
     sourceRefs: [`knowledge:${entry.id}`, ...(entry.provenance?.sourceRefs ?? [])],
   })));
-  measure("skills", () => agent.getSkillManager().listSkills().map((skill) => ({
+  await measure("skills", () => agent.getSkillManager().listSkills().map((skill) => ({
     sourceType: "skill_catalog_entry",
     sourceLocation: skill.isWorkspaceSkill ? `repository:skill:${path.relative(config.workspace, skill.path)}` : `profile:skill:${skill.name}`,
     scope: "profile" as const,
@@ -402,7 +499,7 @@ function context({ host, args, signal }: SlashContext): SlashOutcome {
     retrievalMethod: "skill_manager",
     ...(skill.isWorkspaceSkill ? { sourceRefs: [path.relative(config.workspace, skill.path)] } : {}),
   })), "partial");
-  measure("tool_schemas", () => agent.getEffectiveTools().map((tool, index) => ({
+  await measure("tool_schemas", () => agent.getEffectiveTools().map((tool, index) => ({
     sourceType: "tool_schema",
     sourceLocation: `request:tool:${String(tool.function?.name ?? index + 1).replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80)}`,
     scope: "turn" as const,
@@ -414,7 +511,7 @@ function context({ host, args, signal }: SlashContext): SlashOutcome {
     freshness: "current" as const,
     freshnessRule: "effective runtime tool schema as observed at inspection time; invalidate after tool registry or policy changes",
   })));
-  measure("repository_state", () => {
+  await measure("repository_state", () => {
     const info = getGitInfo(config.workspace);
     return [{ sourceType: "repository_state", sourceLocation: "repository:git-status", scope: "repository", content: JSON.stringify({ isRepo: info.isRepo, branch: info.branch, dirtyCount: info.dirtyCount }), trust: "tool_output_unverified", retention: "capture_only", inclusionReason: "current workspace state snapshot", retrievalMethod: "git_status", freshness: "current", freshnessRule: "live git status at observedAt; invalidate after any workspace or repository mutation" }];
   });
@@ -428,27 +525,30 @@ function context({ host, args, signal }: SlashContext): SlashOutcome {
     workspaceState: compareWorkspaceState(previousInventory, workspaceFingerprint),
     sources,
     coverageGaps: gaps,
+    assemblyDurationMs: performance.now() - assemblyStarted,
+    maxItems,
     contextLimit,
     contextLimitSource: caps?.contextSource ?? (config.contextLimit ? "operator" : "client_default_or_unknown"),
     ...(last ? { lastRequestTokens: last.promptTokens, lastRequestTokenSource: last.source } : {}),
   });
+  snapshot.metrics.assemblyDurationMs = Math.round((performance.now() - assemblyStarted) * 100) / 100;
 
-  if (flags.includes("--record")) {
+  if (record) {
     if (!savedSession) return reply("context", "No saved session exists to attach this inventory to. Run /save first, then /context inspect --record.", false);
     sessionManager.saveSession({ ...savedSession, contextInventory: snapshot });
   }
 
   if (view === "inspect") {
-    return flags.includes("--json")
+    return json
       ? reply("context", JSON.stringify(snapshot, null, 2))
-      : reply("context", `${renderContextInventoryText(snapshot)}${flags.includes("--record") ? "\n\nInventory recorded in the current session." : ""}`);
+      : reply("context", `${renderContextInventoryText(snapshot)}${record ? "\n\nInventory recorded in the current session." : ""}`);
   }
 
   const assessment = assessContextMaturity(snapshot, {
     hasDurableKnowledge: Boolean(sources.find((source) => source.name === "project_knowledge")?.items.length),
     hasActiveSkills: Boolean(sources.find((source) => source.name === "skills")?.items.length),
   });
-  return flags.includes("--json")
+  return json
     ? reply("context", JSON.stringify(assessment, null, 2))
     : reply("context", renderContextMaturityText(assessment));
 }

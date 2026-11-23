@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { assertValidContinuationBudget, ChatMessage, DEFAULT_CONTINUATION, EvaluationToolReceipt, HarnessConfig, MAX_CONTINUATION_STEPS, ToolCall, ToolDefinition } from "./types.js";
 import { LocalLlmClient } from "./client.js";
 import { normalizeToolArguments } from "./core/tool_arguments.js";
@@ -56,7 +56,7 @@ import { withDurableSync, type ArchiveRead } from "./core/durable_file.js";
 import { protectArchivedMessages } from "./core/persistence_protection.js";
 import { buildProbePrompt, describeRejection, parseProbeAnswer, PROBE_TIMEOUT_MS, type ProbeRequirement, type ProbeVerdict } from "./core/compaction_probe.js";
 import { buildCompactionRecord, type CompactionRecord } from "./core/compaction_record.js";
-import { buildInferenceContextManifest, isInferenceContextManifest, markInterruptedInferenceManifestsUnknown, retainInferenceContextManifest, type InferenceContextManifest } from "./core/context_inventory.js";
+import { buildInferenceContextManifest, isInferenceContextManifest, markInterruptedInferenceManifestsUnknown, retainInferenceContextManifest, type ContextSourceItemInput, type InferenceContextManifest } from "./core/context_inventory.js";
 import { advertisementChanged, describeCapabilities, resolveLimits, toolHeadroomPolicy, type AdmissionReport, type CountSource, type ProviderCapabilities, type RequestCount } from "./core/provider_capabilities.js";
 import { snapshotModel } from "./core/models_snapshot.js";
 import { ProviderRecoveryController, RecoveryCancelled, RecoveryClock, RecoveryHooks, RecoveryPolicy, realRecoveryClock, recoveryPolicyFromEnv, startupProblemWarning, startupEndpointProblems, type StartupEndpointProblem } from "./core/provider_recovery.js";
@@ -81,6 +81,9 @@ import { captureChangeBaselineImpl, ensureVerifierApprovedImpl, judgeIndependenc
 export { DEFAULT_VERIFIER_TIMEOUT_SECS, CompactionCommitError, ContextBudgetError, LedgerNotRetainedError, observationKey, foldVoluminousOutput } from "./core/agent_support.js";
 export type { ConfirmHandler, SubagentResult, AgentObserver, AgentActivity, CompactionOutcome } from "./core/agent_support.js";
 
+type SystemPromptSectionDefinition = Omit<ContextSourceItemInput, "content" | "freshness" | "freshnessRule" | "sourceRefs"> & { key: string; text: string };
+type SystemPromptSectionReference = Omit<ContextSourceItemInput, "content" | "freshness" | "freshnessRule"> & { segments: Array<{ start: number; end: number }> };
+
 export class AutonomousAgent {
   private client: LocalLlmClient;
   private bridge: RustCoreBridge;
@@ -101,6 +104,9 @@ export class AutonomousAgent {
   public lastToolReceipts: ExecutionReceipt[] = [];
   /** The skill catalog in `messages[0]`, the window it was sized for, and whether that window came from the provider. */
   private skillCatalog?: { text: string; limit: number; discovered: boolean };
+  /** Offsets into the active system message; avoids retaining a duplicate copy of prompt source text. */
+  private systemPromptSectionReferences: SystemPromptSectionReference[] = [];
+  private systemPromptSectionMessageDigest?: string;
   private mcpManager: McpClientManager;
   private pluginManager: PluginManager;
   private securityManager: SecurityManager;
@@ -1024,6 +1030,8 @@ export class AutonomousAgent {
       this.switchWorktreeWorkspace(state.worktreeBinding.worktreePath);
     }
     this.activePlan = state.activePlan || [];
+    this.systemPromptSectionReferences = [];
+    this.systemPromptSectionMessageDigest = undefined;
     this.messages = withHarnessProvenance(state.messages || []);
     this.restoreFindings(state.findings);
     this.objective = state.objective ?? undefined;
@@ -1434,7 +1442,30 @@ export class AutonomousAgent {
     }));
   }
 
+  /** Active system-prompt sections for inventory. Content is derived from message 0 only while its bytes match. */
+  public getSystemPromptContextSources(): ContextSourceItemInput[] | undefined {
+    const message = this.messages[0];
+    const promptContent = message?.content;
+    if (message?.role !== "system" || typeof promptContent !== "string" || !this.systemPromptSectionMessageDigest) return undefined;
+    if (createHash("sha256").update(promptContent).digest("hex") !== this.systemPromptSectionMessageDigest) return undefined;
+    return this.systemPromptSectionReferences.flatMap((section) => section.segments.map((segment, index) => ({
+      sourceType: section.sourceType,
+      sourceLocation: section.segments.length > 1 ? `${section.sourceLocation}:segment:${index + 1}` : section.sourceLocation,
+      scope: section.scope,
+      content: promptContent.slice(segment.start, segment.end),
+      trust: section.trust,
+      retention: section.retention,
+      inclusionReason: section.inclusionReason,
+      retrievalMethod: section.retrievalMethod,
+      freshness: "current" as const,
+      freshnessRule: "section bytes are sliced from the active system message; digest mismatch invalidates the references",
+      sourceRefs: ["request:message:0", ...(section.sourceRefs ?? []), ...(index ? [`prompt-segment:${index}`] : [])],
+    })));
+  }
+
   public setMessages(msgs: ChatMessage[]): void {
+    this.systemPromptSectionReferences = [];
+    this.systemPromptSectionMessageDigest = undefined;
     this.messages = withHarnessProvenance(msgs);
   }
 
@@ -1475,6 +1506,8 @@ export class AutonomousAgent {
   ): void {
     this.approvedEgressOrigins.clear();
     this.approvedVerifiers.clear();
+    this.systemPromptSectionReferences = [];
+    this.systemPromptSectionMessageDigest = undefined;
     this.messages = withHarnessProvenance(msgs);
     this.restoreFindings(findings);
     this.objective = objective ?? undefined;
@@ -4061,7 +4094,7 @@ export class AutonomousAgent {
     const verifierCommand = this.config.authoritativeVerifierCommand?.trim() || discoverVerifier(this.config.workspace)?.command;
     // Fixed text first and per-workspace text last: a provider's prompt cache reuses the longest unchanged prefix, so
     // the workspace path and project sections must not sit above the operating rules.
-    return `You are Nexus Code, an autonomous AI software engineering agent running in a Linux shell environment.
+    const prompt = `You are Nexus Code, an autonomous AI software engineering agent running in a Linux shell environment.
 You solve coding problems, build features, fix bugs, and refactor codebases by iteratively exploring, reading, editing, and verifying files.
 
 ### Operating Rules:
@@ -4086,6 +4119,52 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
 ` : ""}${rulesSection}${skillsSection}${knowledgeSection}
 
 ${NEXUS_RUNTIME_IDENTITY}`;
+    const definitions: SystemPromptSectionDefinition[] = [
+      { key: "few_shots", sourceType: "few_shot_examples", sourceLocation: "client:fewshots", scope: "profile", trust: "system_instruction", retention: "runtime_prompt", inclusionReason: "canonical examples selected by the client for this request", retrievalMethod: "few_shot_selector", text: fewShotSection },
+      ...(tddSection ? [{ key: "tdd_policy", sourceType: "tdd_policy", sourceLocation: "profile:tdd", scope: "profile" as const, trust: "system_instruction" as const, retention: "runtime_prompt", inclusionReason: "operator-configured test-driven development policy", retrievalMethod: "agent_config", text: tddSection }] : []),
+      ...(roleSection ? [{ key: "role_profile", sourceType: "role_profile", sourceLocation: `profile:${this.role}`, scope: "profile" as const, trust: "system_instruction" as const, retention: "runtime_prompt", inclusionReason: "selected specialist role instructions", retrievalMethod: "role_profile_registry", text: roleSection }] : []),
+      ...(rulesSection ? [{ key: "project_rules", sourceType: "project_rules", sourceLocation: "repository:project-rules", scope: "repository" as const, trust: "persisted_unverified" as const, retention: "workspace_rules_policy", inclusionReason: "workspace rules included by the startup trust policy; their text remains untrusted input", retrievalMethod: "trusted_project_rules", text: rulesSection }] : []),
+      ...(skillsSection ? [{ key: "skill_catalog", sourceType: "skill_catalog_prompt", sourceLocation: "profile:eligible-skills", scope: "profile" as const, trust: "persisted_unverified" as const, retention: "skill_source_policy", inclusionReason: "eligible skill descriptions included for discovery; this does not activate skills or grant permission", retrievalMethod: "skill_manager", text: skillsSection }] : []),
+      ...(knowledgeSection ? [{ key: "project_knowledge", sourceType: "durable_knowledge_prompt", sourceLocation: "repository:project-knowledge", scope: "repository" as const, trust: "persisted_unverified" as const, retention: "knowledge_graph_policy", inclusionReason: "durable project knowledge was rendered into the active prompt; memory is not evidence", retrievalMethod: "knowledge_graph", text: knowledgeSection }] : []),
+    ];
+    const located: Array<{ definition: SystemPromptSectionDefinition; start: number; end: number }> = [];
+    let searchFrom = 0;
+    for (const definition of definitions) {
+      const start = prompt.indexOf(definition.text, searchFrom);
+      if (start < 0) continue;
+      located.push({ definition, start, end: start + definition.text.length });
+      searchFrom = start + definition.text.length;
+    }
+    const references: SystemPromptSectionReference[] = located.map(({ definition, start, end }) => ({
+      sourceType: definition.sourceType,
+      sourceLocation: definition.sourceLocation,
+      scope: definition.scope,
+      trust: definition.trust,
+      retention: definition.retention,
+      inclusionReason: definition.inclusionReason,
+      retrievalMethod: definition.retrievalMethod,
+      segments: [{ start, end }],
+    }));
+    const baseSegments: Array<{ start: number; end: number }> = [];
+    let cursor = 0;
+    for (const range of located) {
+      if (range.start > cursor) baseSegments.push({ start: cursor, end: range.start });
+      cursor = range.end;
+    }
+    if (cursor < prompt.length) baseSegments.push({ start: cursor, end: prompt.length });
+    if (baseSegments.length) references.unshift({
+      sourceType: "client_system_prompt",
+      sourceLocation: "client:runtime-system-prompt",
+      scope: "profile",
+      trust: "system_instruction",
+      retention: "runtime_prompt",
+      inclusionReason: "base Nexus runtime policy and task-specific instructions assembled by the client",
+      retrievalMethod: "system_prompt_builder_residual_sections",
+      segments: baseSegments,
+    });
+    this.systemPromptSectionReferences = references;
+    this.systemPromptSectionMessageDigest = createHash("sha256").update(prompt).digest("hex");
+    return prompt;
   }
 
   private setupSpineHandlers(): void {

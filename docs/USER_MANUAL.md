@@ -332,7 +332,7 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   recognised. The check can also be wrongly cautious (a URL with `a=1&b=2`, `|&`, a quoted `&`, or the word `setsid`
   in an `echo` keep the turn `UNVERIFIED`), which only keeps the verification step. A file-write tool
   (`write_file`, `edit_file`, `patch_file`, `delete_file`) always counts as a change, so it still needs a verifier
-  (`UNVERIFIED`, exit code 2), as does a command that changes a file. Nexus's own `.nexus/` state is not part of that comparison, so a turn that only records knowledge (`manage_knowledge`, which writes `.nexus/knowledge.json`) also ends `Done`. The receipt's `turnEvidence`
+  (`UNVERIFIED`, exit code 2), as does a command that changes a file. Nexus's own `.nexus/` state is not part of that comparison; model-invoked `manage_knowledge` writes are denied, while explicit operator promotion is recorded as separate workspace state. The receipt's `turnEvidence`
   records what the turn did: whether the workspace changed, changes carried in, actions denied and verifier runs.
   **Verified** means the passing test run — whether you configured the
   verifier or Nexus found it — is evidence about the change: it
@@ -618,6 +618,8 @@ nexus (qwen2.5-coder) my-app ❯ !npm test
 | :--- | :--- |
 | `/help` | Display cheatsheet of all available commands |
 | `/status` | View active model, endpoint, shell, git badge, context sizing with sources, last request count, objective progress |
+| `/context inspect [--json] [--record] [--budget-ms <1..30000>] [--max-items <1..500>]` | Inspect source provenance, freshness, retrieval timing, omissions, and context budget; default assembly budget is 2,000 ms |
+| `/context maturity [--json] [--budget-ms <1..30000>] [--max-items <1..500>]` | Report separate evidence-based levels for navigability, retrieval speed, freshness, and compounding value |
 | `/plan [add\|done\|start\|clear]` | Formulate and manage multi-phase milestone execution plan |
 | `/tui` | REPL only: open the session dashboard (not offered in the live TUI, where it had no purpose) |
 | `/doctor [--deep] [--fix [--yes]]` | Diagnose this session's configuration, endpoint, engine, shell and state (see `docs/DOCTOR_TROUBLESHOOTING.md`) |
