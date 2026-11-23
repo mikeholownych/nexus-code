@@ -126,6 +126,8 @@ export class FlightRecorder {
       sanitizedPayload = InformationFlowBoundary.getGlobalInstance().redactForTelemetry(payload);
     } catch {
       // Do not propagate classifier diagnostics that could echo inspected input.
+      // A later event must not make a log with this missing record look complete.
+      this.chained = false;
       return {
         eventId,
         timestamp,
@@ -148,7 +150,16 @@ export class FlightRecorder {
       // Advance only once the record is on disk: a failed write must not leave a gap in the sequence.
       if (event.chain) this.lastLink = event.chain;
     } catch {
-      // Ignore flightlog append errors in restricted environments
+      // Flight recording is optional telemetry, so it must not block the authorized action. But continuing
+      // the chain after a skipped event would make a later successful write look like complete evidence.
+      this.chained = false;
+      return {
+        eventId,
+        timestamp,
+        type,
+        step,
+        payload: { recordingSkipped: true, reason: "append_failed" },
+      };
     }
     return event;
   }

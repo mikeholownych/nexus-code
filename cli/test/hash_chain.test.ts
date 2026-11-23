@@ -10,6 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { CHAIN_GENESIS, canonicalJson, describeChain, linkRecord, verifyChain, type ChainLink } from "../src/core/hash_chain.js";
+import { InformationFlowBoundary } from "../src/core/egress.js";
 import { FlightPlayer, FlightRecorder } from "../src/flight.js";
 import { SecurityManager } from "../src/security.js";
 import { CLI_DIR } from "./helpers/audit_fixture.js";
@@ -159,6 +160,54 @@ describe("flight recorder", () => {
     assert.equal(events.length, 6);
     assert.deepEqual([integrity.chain.status, integrity.closed], ["intact", true]);
     assert.equal(FlightPlayer.describeIntegrity(integrity), "chain intact (6 records), closed by its session end");
+  });
+
+  test("a failed append is reported to the caller and makes later flight evidence unverifiable", () => {
+    const ws = workspace();
+    const flight = new FlightRecorder(ws, "flight-append-failure");
+    flight.startSession({ model: "m", endpoint: "http://127.0.0.1:1/v1" });
+    const file = flight.getLogPath();
+    const saved = `${file}.saved`;
+    fs.renameSync(file, saved);
+    fs.mkdirSync(file);
+
+    let skipped: ReturnType<typeof flight.recordToolCall>;
+    try {
+      skipped = flight.recordToolCall(1, "c1", "read_file", { path: "a.ts" });
+    } finally {
+      fs.rmdirSync(file);
+      fs.renameSync(saved, file);
+    }
+
+    assert.equal(skipped.payload.recordingSkipped, true);
+    assert.equal(skipped.payload.reason, "append_failed");
+    assert.equal(skipped.chain, undefined, "a skipped event must not look like a persisted chain record");
+
+    flight.recordSessionEnd("done", true);
+    const { integrity } = FlightPlayer.loadFlight(ws, "flight-append-failure");
+    assert.deepEqual([integrity.chain.status, integrity.closed], ["broken", true]);
+    assert.match(FlightPlayer.describeIntegrity(integrity), /CHAIN BROKEN/);
+  });
+
+  test("a sanitization failure does not let later flight evidence appear complete", () => {
+    const ws = workspace();
+    const flight = new FlightRecorder(ws, "flight-sanitization-failure");
+    flight.startSession({ model: "m", endpoint: "http://127.0.0.1:1/v1" });
+    const boundary = InformationFlowBoundary.getGlobalInstance();
+    const redact = boundary.redactForTelemetry;
+    boundary.redactForTelemetry = (() => { throw new Error("classifier detail must not escape"); }) as typeof redact;
+    let skipped: ReturnType<typeof flight.recordToolCall>;
+    try {
+      skipped = flight.recordToolCall(1, "c1", "read_file", { path: "a.ts" });
+    } finally {
+      boundary.redactForTelemetry = redact;
+    }
+
+    assert.equal(skipped.payload.recordingSkipped, true);
+    assert.equal(skipped.payload.reason, "sanitization_failed");
+    flight.recordSessionEnd("done", true);
+    const { integrity } = FlightPlayer.loadFlight(ws, "flight-sanitization-failure");
+    assert.equal(integrity.chain.status, "broken");
   });
 
   test("editing one record on disk is detected at that record", () => {
