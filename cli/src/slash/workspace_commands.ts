@@ -493,12 +493,16 @@ async function context({ host, args, signal }: SlashContext): Promise<SlashOutco
   await measure("skills", () => agent.getSkillManager().listSkills().map((skill) => ({
     sourceType: "skill_catalog_entry",
     sourceLocation: skill.isWorkspaceSkill ? `repository:skill:${path.relative(config.workspace, skill.path)}` : `profile:skill:${skill.name}`,
-    scope: "profile" as const,
+    scope: skill.isWorkspaceSkill ? "repository" as const : "profile" as const,
     content: `${skill.name}\n${skill.description}`,
     trust: "persisted_unverified" as const,
     retention: "skill_source_policy",
     inclusionReason: `skill catalog is eligible for prompt discovery; activation is separate${skill.trusted === false ? "; source is not trusted" : "; source trust is recorded by SkillManager"}`,
     retrievalMethod: "skill_manager",
+    freshness: "unknown" as const,
+    freshnessRule: skill.isWorkspaceSkill
+      ? "workspace skill file content is not revalidated here; repository candidate changes invalidate this prior item"
+      : "profile skill file content is not revalidated here; freshness remains unknown",
     ...(skill.isWorkspaceSkill ? { sourceRefs: [path.relative(config.workspace, skill.path)] } : {}),
   })), "partial");
   await measure("tool_schemas", () => agent.getEffectiveTools().map((tool, index) => ({

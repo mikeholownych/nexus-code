@@ -257,7 +257,10 @@ test("context inspection enforces a total retrieval budget and records timed-out
     getObjective: () => null,
     getActivePlan: () => [],
     getKnowledgeGraph: () => ({ list: () => [] }),
-    getSkillManager: () => ({ listSkills: () => [] }),
+    getSkillManager: () => ({ listSkills: () => [
+      { name: "workspace-guide", description: "Workspace rules", path: path.join(process.cwd(), ".agents/skills/workspace-guide/SKILL.md"), isWorkspaceSkill: true, trusted: true },
+      { name: "profile-guide", description: "Profile rules", path: path.join(os.homedir(), ".nexus/skills/profile-guide/SKILL.md"), isWorkspaceSkill: false, trusted: true },
+    ] }),
     getEffectiveTools: () => [],
     getProviderCapabilities: () => null,
     getLastRequestCount: () => undefined,
@@ -448,6 +451,12 @@ test("context inspection and maturity execute without provider calls and emit pa
   assert.equal(memoryItem?.freshness, "unknown");
   assert.match(memoryItem?.freshnessRule ?? "", /no stored content fingerprint/);
   assert.equal(memoryItem?.sourceRefs?.includes("operator-note:1"), true);
+  const workspaceSkill = snapshot.items.find((item: any) => item.sourceLocation === "repository:skill:.agents/skills/workspace-guide/SKILL.md");
+  const profileSkill = snapshot.items.find((item: any) => item.sourceLocation === "profile:skill:profile-guide");
+  assert.equal(workspaceSkill?.scope, "repository");
+  assert.equal(workspaceSkill?.freshness, "unknown", "inventory does not claim file freshness without source revalidation");
+  assert.equal(profileSkill?.scope, "profile");
+  assert.equal(profileSkill?.freshness, "unknown");
   assert.equal(snapshot.items.some((item: any) => item.sourceType === "system_context"), false);
   assert.equal(snapshot.metrics.tokenSource, "client_estimate");
   const bounded = await routeSlash(host, "context", "inspect --json --max-items 1", new AbortController().signal);
@@ -475,7 +484,10 @@ test("context inspection and maturity execute without provider calls and emit pa
 
   const previous = buildContextInventory({
     workspaceState: { fingerprint: "a".repeat(64), comparison: "no_previous_capture", invalidatedRepositoryItemIds: [] },
-    sources: [{ name: "repository", status: "ok", durationMs: 1, items: [input("repository:old", "repository")] }],
+    sources: [{ name: "repository", status: "ok", durationMs: 1, items: [
+      input("repository:old", "repository"),
+      { ...input("repository:skill:.agents/skills/workspace-guide/SKILL.md", "repository"), sourceType: "skill_catalog_entry", freshness: "unknown", freshnessRule: "workspace skill file content is not revalidated here" },
+    ] }],
   });
   const changedHost = {
     ...host,
@@ -487,7 +499,7 @@ test("context inspection and maturity execute without provider calls and emit pa
   const changed = await routeSlash(changedHost, "context", "inspect --json", new AbortController().signal);
   const changedSnapshot = JSON.parse(changed.output);
   assert.equal(changedSnapshot.workspaceState.comparison, "changed");
-  assert.deepEqual(changedSnapshot.workspaceState.invalidatedRepositoryItemIds, [previous.items[0].id]);
+  assert.deepEqual(changedSnapshot.workspaceState.invalidatedRepositoryItemIds, previous.items.map((item) => item.id));
   assert.ok(changedSnapshot.coverageGaps.some((gap: string) => gap.includes("workspace state changed")));
 
   const unavailableHost = {
