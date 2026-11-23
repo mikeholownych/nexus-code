@@ -1226,11 +1226,15 @@ export class SidecarServer {
    */
   private emitHistory(sessionId: string, messages: ChatMessage[], lastTurn?: TurnResult | null, complete = false): void {
     const text = (m: ChatMessage) => (typeof m.content === "string" ? m.content : Array.isArray(m.content) ? m.content.map((p: any) => (typeof p?.text === "string" ? p.text : "")).join("") : "");
+    const replayableContent = (content: ChatMessage["content"]) => content == null || typeof content === "string" ||
+      (Array.isArray(content) && content.every((part: any) => part && part.type === "text" && typeof part.text === "string"));
     const entries: HistoryEntry[] = [];
     const historyToolIds = new Map<string, string>();
     let toolSequence = 0;
     let unpairedToolResult = false;
+    let unrepresentableContent = false;
     for (const m of messages) {
+      if (complete && (m.role === "user" || m.role === "assistant" || m.role === "tool") && !replayableContent(m.content)) unrepresentableContent = true;
       const body = text(m);
       if (m.role === "user") {
         if (!body.trim() || isHarnessNote(m)) continue;
@@ -1265,8 +1269,8 @@ export class SidecarServer {
     const conversation = entries.filter((entry) => entry.role !== "tool" && entry.role !== "tool_result" && entry.role !== "outcome").length;
     const resultIds = new Set(entries.filter((entry) => entry.role === "tool_result").map((entry) => entry.toolCallId));
     const unresolvedToolCall = complete && entries.some((entry) => entry.role === "tool" && !resultIds.has(entry.toolCallId));
-    if (complete && (unpairedToolResult || unresolvedToolCall)) {
-      this.emit({ type: "history", session: sessionId, total: conversation, page: 0, pages: 0, messages: [], error: "Retained session history contains an unpaired tool call or result." });
+    if (complete && (unpairedToolResult || unresolvedToolCall || unrepresentableContent)) {
+      this.emit({ type: "history", session: sessionId, total: conversation, page: 0, pages: 0, messages: [], error: "Retained session history cannot be replayed faithfully." });
       return;
     }
     if (lastTurn) {
