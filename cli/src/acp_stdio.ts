@@ -42,7 +42,11 @@ export interface AcpStdioOptions {
   createSidecar?: (config: HarnessConfig, resume: string | undefined, write: (line: string) => void) => SidecarLike;
   realpath?: (value: string) => string;
   isDirectory?: (value: string) => boolean;
+  /** How long a signalled process waits for its sessions to stop before it exits anyway. */
+  shutdownGraceMs?: number;
 }
+
+const ACP_SHUTDOWN_GRACE_MS = 10_000;
 
 /** One ACP connection. Every session still executes through ApplicationCore and SidecarServer gates. */
 export class AcpStdioServer {
@@ -451,7 +455,11 @@ export function runAcpStdio(options: AcpStdioOptions): AcpStdioServer {
   process.stdin.on("data", (chunk: Buffer) => server.push(chunk));
   process.stdin.once("end", () => { void server.close(); });
   // The stdin listener keeps the process alive, so setting an exit code would leave it running after a signal.
-  const stop = (code: number) => { void server.close().finally(() => process.exit(code)); };
+  // close() waits for every session to stop. A session that never does must not keep a signalled process alive.
+  const stop = (code: number) => {
+    setTimeout(() => process.exit(code), options.shutdownGraceMs ?? ACP_SHUTDOWN_GRACE_MS).unref();
+    void server.close().finally(() => process.exit(code));
+  };
   process.once("SIGINT", () => stop(130));
   process.once("SIGTERM", () => stop(143));
   return server;
