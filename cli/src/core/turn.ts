@@ -49,6 +49,8 @@ export type TurnReason =
   | "STEP_BUDGET_EXHAUSTED"
   /** The objective-wide tool dispatcher admission ceiling is spent. */
   | "TOOL_INVOCATION_BUDGET_EXHAUSTED"
+  /** The objective-wide inference request admission ceiling is spent. */
+  | "INFERENCE_SUBMISSION_BUDGET_EXHAUSTED"
   /** Continued turn: the wall-clock budget is spent. */
   | "TIME_BUDGET_EXHAUSTED"
   /** Continued turn: no progress for the configured number of steps, or bounded recovery from a repeated action failed. */
@@ -363,6 +365,11 @@ export interface TurnResult {
     maxToolInvocations?: number;
     /** False means earlier dispatches predate this counter or the persisted counter was malformed. */
     toolInvocationHistoryComplete?: boolean;
+    /** Inference requests admitted for this objective, including provider retries. */
+    inferenceSubmissions?: number;
+    maxInferenceSubmissions?: number;
+    /** False means earlier requests predate this counter or the persisted counter was malformed. */
+    inferenceSubmissionHistoryComplete?: boolean;
     /** Demonstrated loops: the same action and result on an unchanged workspace, at least REPEAT_THRESHOLD times. */
     repeated?: Array<{ action: string; count: number; firstStep: number; lastStep: number }>;
     /** Why repetition could not be judged against workspace state this turn, when it could not. */
@@ -598,6 +605,9 @@ export function summarizeTurn(t: TurnResult): { heading: string; line: string } 
     }
     if (t.reason === "TOOL_INVOCATION_BUDGET_EXHAUSTED") {
       return { heading: "TOOL INVOCATION BUDGET EXHAUSTED", line: `execution=LIMIT_REACHED outcome=NOT_ESTABLISHED (${t.detail ?? "objective tool invocation limit reached"}; raise --max-tool-invocations only when starting a new objective)` };
+    }
+    if (t.reason === "INFERENCE_SUBMISSION_BUDGET_EXHAUSTED") {
+      return { heading: "INFERENCE SUBMISSION BUDGET EXHAUSTED", line: `execution=LIMIT_REACHED outcome=NOT_ESTABLISHED (${t.detail ?? "objective inference submission limit reached"}; raise NEXUS_MAX_INFERENCE_SUBMISSIONS only when starting a new objective)` };
     }
     return { heading: "STEP LIMIT REACHED", line: `execution=LIMIT_REACHED outcome=NOT_ESTABLISHED (${t.steps.used}/${t.steps.max} steps)` };
   }
