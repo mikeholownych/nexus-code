@@ -89,6 +89,7 @@ Implementation worktree: `codex/context-maturity-v130`, based on current `origin
 | `node --import tsx --test test/session_export_escaping.test.ts` | 5 passed, 0 failed | Existing export escaping regressions. |
 | `node --import tsx --test test/harness.test.ts` | 90 passed, 0 failed | Agent execution, context budgeting/compaction, provider recovery fixtures, workspace behavior, cancellation, and worktree isolation. This is one test file, not the full repository suite. |
 | `node --import tsx --test test/provider_wire_matrix.test.ts` | 90 passed, 0 failed | Local mock wire fixtures across OpenAI-compatible, Anthropic-compatible, and other adapters; no live inference or provider modification. |
+| Focused re-audit (`npm run build`; `node --import tsx --test test/context_inventory.test.ts`) | Build passed; 11 passed, 0 failed | Rechecked command inspection against persisted inference manifests and removed the obsolete claim that per-inference capture was unavailable. |
 | `git diff --check` | Passed after documentation and implementation changes | Whitespace/error check on the implementation worktree. |
 
 All TypeScript test commands used Node 24.11.1, one file at a time, with isolated `HOME` and `XDG_CONFIG_HOME`. The full repository suite was not run. No inference provider was modified or contacted by this feature.

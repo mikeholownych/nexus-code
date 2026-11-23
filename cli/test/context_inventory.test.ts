@@ -215,6 +215,11 @@ test("context inspection and maturity execute without provider calls and emit pa
     getLastRequestCount: () => undefined,
     getContextBudget: () => ({ contextLimit: 2048 }),
     getTaskId: () => "ctx-task",
+    getInferenceContextManifests: () => [buildInferenceContextManifest({
+      id: "ctxreq_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", sequence: 1,
+      messages: [{ role: "user", content: "private request body" }], tools: [],
+      contextLimit: 2048, contextLimitSource: "client_default", outputAllowance: 128, outputAllowanceSource: "client_default", toolResponseReserve: 64,
+    })],
   };
   const host = {
     app: {
@@ -231,6 +236,9 @@ test("context inspection and maturity execute without provider calls and emit pa
   assert.equal(snapshot.sessionId, "ctx-session");
   assert.equal(snapshot.coverage, "partial");
   assert.equal(JSON.stringify(snapshot).includes("private prompt text"), false);
+  assert.ok(snapshot.items.some((item: any) => item.sourceType === "inference_request_manifest"));
+  assert.equal(snapshot.coverageGaps.some((gap: string) => gap.includes("does not yet persist a per-inference manifest")), false);
+  assert.ok(snapshot.coverageGaps.some((gap: string) => gap.includes("composite system prompt")));
   assert.equal(snapshot.metrics.tokenSource, "client_estimate");
   const maturity = await routeSlash(host, "context", "maturity --json", new AbortController().signal);
   const assessment = JSON.parse(maturity.output);

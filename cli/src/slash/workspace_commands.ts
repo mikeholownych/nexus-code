@@ -295,7 +295,8 @@ function context({ host, args, signal }: SlashContext): SlashOutcome {
   const agent = host.app.getAgent();
   const config = host.app.getConfig();
   const sources: Array<{ name: string; status: "ok" | "partial" | "failed"; durationMs: number; items: ContextSourceItemInput[]; detail?: string }> = [];
-  const gaps: string[] = ["Nexus does not yet persist a per-inference manifest of the exact provider request; this command captures current client-visible sources on demand.", "The composite system prompt contains rules and other sources that are not yet split into per-item provenance."];
+  const gaps: string[] = ["The composite system prompt contains rules and other sources that are not yet split into per-item provenance."];
+  if (typeof agent.getInferenceContextManifests !== "function") gaps.push("This agent instance does not expose persisted per-inference request manifests.");
   const measure = (name: string, read: () => ContextSourceItemInput[], status: "ok" | "partial" = "ok", detail?: string) => {
     const started = performance.now();
     try {
