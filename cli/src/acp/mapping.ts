@@ -32,6 +32,7 @@ import {
   ACP_PERMISSION_OPTIONS,
   ACP_PROTOCOL_VERSION,
   ACP_RECEIPT_GET_METHOD,
+  ACP_VERIFY_METHOD,
   ACP_VERIFICATION_CARRIER,
 } from "./types.js";
 import type {
@@ -176,7 +177,7 @@ export function initializeResult(nexus: { version: string; sidecarProtocol: numb
       loadSession: true,
       promptCapabilities: { image: false, audio: false, embeddedContext: false },
       mcpCapabilities: { http: false, sse: false },
-      _meta: { [ACP_META_EXPERIMENTAL]: true, [ACP_META_EXTENSIONS]: [ACP_RECEIPT_GET_METHOD], [ACP_META_SIDECAR_PROTOCOL]: nexus.sidecarProtocol },
+      _meta: { [ACP_META_EXPERIMENTAL]: true, [ACP_META_EXTENSIONS]: [ACP_RECEIPT_GET_METHOD, ACP_VERIFY_METHOD], [ACP_META_SIDECAR_PROTOCOL]: nexus.sidecarProtocol },
     },
   };
 }

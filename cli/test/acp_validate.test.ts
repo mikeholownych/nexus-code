@@ -22,6 +22,7 @@ import {
   validatePermissionResult,
   validatePrompt,
   validateReceiptGet,
+  validateVerify,
   validateSessionId,
   type AcpFs,
   type Validated,
@@ -357,6 +358,17 @@ test("session/cancel, $/cancel_request and the receipt request", () => {
   refused(validateReceiptGet({ sessionId: "latest" }), "sessionId");
   refused(validateReceiptGet({ receiptId: id }), "sessionId");
   refused(validateReceiptGet("x"), "params");
+});
+
+test("verification params identify a session and reject caller-controlled verifier settings", () => {
+  assert.deepEqual(accepted(validateVerify({ sessionId: SESSION })), { sessionId: SESSION });
+  assert.deepEqual(accepted(validateVerify({ sessionId: SESSION, _meta: { traceparent: "opaque" } })), { sessionId: SESSION });
+  for (const field of ["verifier", "command", "base", "deliverables", "verdict", "result", "workspace"]) {
+    refused(validateVerify({ sessionId: SESSION, [field]: "caller-controlled" }), "params", field);
+  }
+  refused(validateVerify({ sessionId: SESSION, _meta: "bad" }), "_meta");
+  refused(validateVerify({ sessionId: "latest" }), "sessionId");
+  refused(validateVerify(null), "params");
 });
 
 test("a permission result is selected with a string option id, or cancelled; every other shape is an error", () => {

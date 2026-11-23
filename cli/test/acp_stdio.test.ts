@@ -2,9 +2,11 @@ import "./helpers/leak_guard.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import { AcpStdioServer } from "../src/acp_stdio.js";
 import { encodeMessage } from "../src/acp/jsonrpc.js";
 import { encodeEvent } from "../src/protocol.js";
+import { mergePolicies } from "../src/core/managed_policy.js";
 import { startGateway, makeRepo, makeHome } from "./helpers/fixtures.js";
 
 function messages(output: string[]): any[] { return output.flatMap((line) => line.trim() ? [JSON.parse(line)] : []); }
@@ -57,6 +59,123 @@ test("ACP stdio completes a sidecar turn and exposes its receipt", async () => {
     fs.rmSync(home, { recursive: true, force: true });
     if (oldHome === undefined) delete process.env.HOME; else process.env.HOME = oldHome;
     if (oldXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = oldXdg;
+  }
+});
+
+test("ACP verification uses operator settings, pins its session base, and returns a session-scoped receipt", async () => {
+  const repo = makeRepo({ "src/product.ts": "export const value = 1;\n" });
+  const home = makeHome();
+  const oldHome = process.env.HOME;
+  const oldXdg = process.env.XDG_CONFIG_HOME;
+  process.env.HOME = home;
+  process.env.XDG_CONFIG_HOME = `${home}/.config`;
+  const output: string[] = [];
+  const sessionId = "session_20261123_010099_abcdefgh";
+  const jobs: any[] = [];
+  const server = new AcpStdioServer({
+    config: { endpoint: "http://127.0.0.1:1/v1", model: "m", workspace: repo, shell: "bash", approvalMode: "review", readOnly: false, authoritativeVerifierCommand: "npm test", trustedDeliverableFiles: ["src/product.ts"], verifierTimeoutSecs: 5 } as any,
+    version: "test",
+    write: (line) => output.push(line),
+    verifyDeps: {
+      policy: () => mergePolicies(),
+      run: async (job) => {
+        jobs.push(job);
+        return { result: { schema_version: 3, verdict: "VERIFIED", outcome: "VERIFIED" } as any };
+      },
+    },
+    createSidecar: (_config, _resume, write) => ({
+      start() { write(encodeEvent({ type: "session.state", session: sessionId, workspace: repo, workspace_name: "fixture", model: "m", mode: "review", git: null, busy: false } as any)); },
+      async handleLine() {},
+    }),
+  });
+  const send = (message: object) => server.push(Buffer.from(encodeMessage(message)));
+  try {
+    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 1, clientInfo: { name: "fixture", version: "1" }, clientCapabilities: {} } });
+    const initialized = await until(output, (items) => items.some((item) => item.id === 1));
+    assert.deepEqual(initialized.find((item) => item.id === 1).result.agentCapabilities._meta["nexus/extensions"], ["_nexus/receipt/get", "_nexus/verify"]);
+    send({ jsonrpc: "2.0", id: 2, method: "session/new", params: { cwd: repo, mcpServers: [] } });
+    await until(output, (items) => items.some((item) => item.id === 2 && item.result?.sessionId));
+    const sessionBase = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+    fs.writeFileSync(`${repo}/after-session.txt`, "later commit is part of the change\n");
+    execFileSync("git", ["add", "after-session.txt"], { cwd: repo });
+    execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-m", "later change"], { cwd: repo, stdio: "ignore" });
+
+    send({ jsonrpc: "2.0", id: 3, method: "_nexus/verify", params: { sessionId, verifier: "echo forged", base: "HEAD~99" } });
+    const refused = await until(output, (items) => items.some((item) => item.id === 3 && item.error));
+    assert.equal(refused.find((item) => item.id === 3).error.code, -32602);
+    assert.equal(jobs.length, 0, "caller-controlled settings run nothing");
+
+    send({ jsonrpc: "2.0", id: 4, method: "_nexus/verify", params: { sessionId } });
+    const checked = await until(output, (items) => items.some((item) => item.id === 4 && item.result?.receipt_id));
+    const summary = checked.find((item) => item.id === 4).result;
+    assert.equal(summary.verdict, "VERIFIED");
+    assert.match(summary.receipt_id, /^vr-[0-9a-f]{32}$/);
+    assert.equal(jobs[0].operator.verifierCommand, "npm test");
+    assert.deepEqual(jobs[0].operator.deliverables, ["src/product.ts"]);
+    assert.equal(jobs[0].request.worktree, repo);
+    assert.equal(jobs[0].request.base, sessionBase, "a later commit cannot move the session's pinned base");
+
+    send({ jsonrpc: "2.0", id: 5, method: "_nexus/receipt/get", params: { sessionId } });
+    const receiptReply = await until(output, (items) => items.some((item) => item.id === 5 && item.result?.receipt_sha256));
+    assert.equal(receiptReply.find((item) => item.id === 5).result.session_id, sessionId);
+    assert.equal(receiptReply.find((item) => item.id === 5).result.receipt_id, summary.receipt_id, "latest receipt includes the newer verification receipt");
+    assert.equal(receiptReply.find((item) => item.id === 5).result.result.verdict, "VERIFIED");
+
+    send({ jsonrpc: "2.0", id: 6, method: "_nexus/receipt/get", params: { sessionId: "session_20261123_010098_abcdefgh", receiptId: summary.receipt_id } });
+    const crossSession = await until(output, (items) => items.some((item) => item.id === 6 && item.error));
+    assert.equal(crossSession.find((item) => item.id === 6).error.code, -32602);
+    send({ jsonrpc: "2.0", id: 7, method: "_nexus/receipt/get", params: { sessionId, receiptId: summary.receipt_id } });
+    const explicitReceipt = await until(output, (items) => items.some((item) => item.id === 7 && item.result?.receipt_id));
+    assert.equal(explicitReceipt.find((item) => item.id === 7).result.receipt_id, summary.receipt_id);
+  } finally {
+    await server.close();
+    fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+    if (oldHome === undefined) delete process.env.HOME; else process.env.HOME = oldHome;
+    if (oldXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = oldXdg;
+  }
+});
+
+test("ACP request cancellation interrupts verification and produces one cancellation response without a receipt", async () => {
+  const repo = makeRepo();
+  const output: string[] = [];
+  const sessionId = "session_20261123_010097_abcdefgh";
+  let started!: () => void;
+  const didStart = new Promise<void>((resolve) => { started = resolve; });
+  const server = new AcpStdioServer({
+    config: { endpoint: "http://127.0.0.1:1/v1", model: "m", workspace: repo, shell: "bash", approvalMode: "review", readOnly: false, authoritativeVerifierCommand: "npm test" } as any,
+    version: "test",
+    write: (line) => output.push(line),
+    verifyDeps: {
+      policy: () => mergePolicies(),
+      run: async (_job, signal) => new Promise((resolve) => {
+        started();
+        signal.addEventListener("abort", () => resolve({ interrupted: true }), { once: true });
+      }),
+    },
+    createSidecar: (_config, _resume, write) => ({
+      start() { write(encodeEvent({ type: "session.state", session: sessionId, workspace: repo, workspace_name: "fixture", model: "m", mode: "review", git: null, busy: false } as any)); },
+      async handleLine() {},
+    }),
+  });
+  const send = (message: object) => server.push(Buffer.from(encodeMessage(message)));
+  try {
+    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 1, clientInfo: { name: "fixture", version: "1" }, clientCapabilities: {} } });
+    await until(output, (items) => items.some((item) => item.id === 1));
+    send({ jsonrpc: "2.0", id: 2, method: "session/new", params: { cwd: repo, mcpServers: [] } });
+    await until(output, (items) => items.some((item) => item.id === 2 && item.result?.sessionId));
+    send({ jsonrpc: "2.0", id: 3, method: "_nexus/verify", params: { sessionId } });
+    await didStart;
+    send({ jsonrpc: "2.0", method: "$/cancel_request", params: { requestId: 3 } });
+    const cancelled = await until(output, (items) => items.some((item) => item.id === 3));
+    assert.equal(cancelled.filter((item) => item.id === 3).length, 1);
+    assert.equal(cancelled.find((item) => item.id === 3).error.code, -32800);
+    send({ jsonrpc: "2.0", id: 4, method: "_nexus/receipt/get", params: { sessionId } });
+    const unavailable = await until(output, (items) => items.some((item) => item.id === 4 && item.error));
+    assert.equal(unavailable.find((item) => item.id === 4).error.code, -32602);
+  } finally {
+    await server.close();
+    fs.rmSync(repo, { recursive: true, force: true });
   }
 });
 

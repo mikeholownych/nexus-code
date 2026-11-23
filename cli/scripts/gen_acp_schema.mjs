@@ -24,7 +24,7 @@ export function generateAcpAdapterSchema() {
     versionConst: "ACP_ADAPTER_SCHEMA_VERSION",
     title: (version) => `nexus ACP adapter v${version}: Nexus's subset of the Agent Client Protocol`,
     description:
-      "Generated from AcpAdapterDocument in cli/src/acp/types.ts by cli/scripts/gen_acp_schema.mjs. Do not edit by hand. One line of an ACP connection to Nexus (newline-delimited JSON-RPC 2.0), in either direction: a message a client may send that Nexus acts on (AcpClientMessage), or a message Nexus sends (AcpAgentMessage). This is NOT the schema of the Agent Client Protocol: it describes only the subset of ACP version 1 that Nexus implements, plus Nexus's own extension method (`_nexus/receipt/get`) and its `_meta` members (`nexus/...`). A valid ACP message outside this subset is answered with an error or ignored. Experimental: names and fields may change.",
+      "Generated from AcpAdapterDocument in cli/src/acp/types.ts by cli/scripts/gen_acp_schema.mjs. Do not edit by hand. One line of an ACP connection to Nexus (newline-delimited JSON-RPC 2.0), in either direction: a message a client may send that Nexus acts on (AcpClientMessage), or a message Nexus sends (AcpAgentMessage). This is NOT the schema of the Agent Client Protocol: it describes only the subset of ACP version 1 that Nexus implements, plus Nexus's own extension methods (`_nexus/receipt/get`, `_nexus/verify`) and its `_meta` members (`nexus/...`). A valid ACP message outside this subset is answered with an error or ignored. Experimental: names and fields may change.",
   });
 }
 
