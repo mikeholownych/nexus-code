@@ -2482,6 +2482,10 @@
             "maxInferenceSubmissions": {
               "type": "number"
             },
+            "maxTaskElapsedMs": {
+              "description": "Fixed objective-wide wall-clock age ceiling.",
+              "type": "number"
+            },
             "maxToolInvocations": {
               "type": "number"
             },
@@ -2527,6 +2531,14 @@
             },
             "stopReason": {
               "type": "string"
+            },
+            "taskElapsedHistoryComplete": {
+              "description": "False when the legacy objective start time was missing or malformed and prior elapsed time is unknown.",
+              "type": "boolean"
+            },
+            "taskElapsedMs": {
+              "description": "Objective wall-clock age charged across turns, resumes, and persisted in-flight intervals.",
+              "type": "number"
             },
             "toolInvocationHistoryComplete": {
               "description": "False means earlier dispatches predate this counter or the persisted counter was malformed.",

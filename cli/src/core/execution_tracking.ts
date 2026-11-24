@@ -178,6 +178,14 @@ export interface ExecutionTracking {
   inferenceSubmissionHistoryComplete: boolean;
   /** Fixed objective-wide ceiling; absent on legacy objectives until their first request is reserved. */
   maxInferenceSubmissions?: number;
+  /** Known cumulative execution time in milliseconds; legacy records are conservatively estimated from objective.startedAt. */
+  taskElapsedMs: number;
+  /** False when the legacy objective start time was missing or malformed and prior elapsed time is unknown. */
+  taskElapsedHistoryComplete: boolean;
+  /** Epoch milliseconds when the current objective execution interval began; kept while the process is interrupted. */
+  taskActiveSinceMs?: number;
+  /** Fixed objective-wide cumulative execution-time ceiling; lowering on resume takes effect, raising does not renew it. */
+  maxTaskElapsedMs?: number;
   turns: number;
   /** Consecutive steps without progress, across turns; operator input resets it. */
   stepsWithoutProgress: number;
@@ -211,6 +219,8 @@ export function createTracking(): ExecutionTracking {
     toolInvocationHistoryComplete: true,
     inferenceSubmissions: 0,
     inferenceSubmissionHistoryComplete: true,
+    taskElapsedMs: 0,
+    taskElapsedHistoryComplete: true,
     turns: 0,
     stepsWithoutProgress: 0,
     lastProgressStep: 0,
@@ -249,6 +259,11 @@ export function normalizeTracking(raw: unknown): ExecutionTracking {
   const hasValidInferenceCount = Number.isSafeInteger(t.inferenceSubmissions) && t.inferenceSubmissions >= 0;
   const hasInferenceHistoryFlag = typeof t.inferenceSubmissionHistoryComplete === "boolean";
   const hasValidInferenceLimit = t.maxInferenceSubmissions === undefined || (Number.isSafeInteger(t.maxInferenceSubmissions) && t.maxInferenceSubmissions >= 1);
+  const hasTaskElapsedField = Object.hasOwn(t, "taskElapsedMs");
+  const hasValidTaskElapsed = Number.isSafeInteger(t.taskElapsedMs) && t.taskElapsedMs >= 0;
+  const hasTaskElapsedHistoryFlag = typeof t.taskElapsedHistoryComplete === "boolean";
+  const hasValidTaskActiveSince = t.taskActiveSinceMs === undefined || (Number.isSafeInteger(t.taskActiveSinceMs) && t.taskActiveSinceMs >= 0);
+  const hasValidTaskLimit = t.maxTaskElapsedMs === undefined || (Number.isSafeInteger(t.maxTaskElapsedMs) && t.maxTaskElapsedMs >= 1);
   const base = createTracking() as unknown as Record<string, any>;
   for (const [key, value] of Object.entries(base)) {
     if (Array.isArray(value)) {
@@ -279,6 +294,10 @@ export function normalizeTracking(raw: unknown): ExecutionTracking {
   t.inferenceSubmissions = hasValidInferenceCount ? t.inferenceSubmissions : (hasInferenceCountField ? -1 : 0);
   t.inferenceSubmissionHistoryComplete = hasValidInferenceCount && hasInferenceHistoryFlag ? t.inferenceSubmissionHistoryComplete : false;
   t.maxInferenceSubmissions = hasValidInferenceLimit ? t.maxInferenceSubmissions : -1;
+  t.taskElapsedMs = hasValidTaskElapsed ? t.taskElapsedMs : (hasTaskElapsedField ? -1 : 0);
+  t.taskElapsedHistoryComplete = hasValidTaskElapsed && hasTaskElapsedField && hasTaskElapsedHistoryFlag ? t.taskElapsedHistoryComplete : false;
+  t.taskActiveSinceMs = hasValidTaskActiveSince ? t.taskActiveSinceMs : -1;
+  t.maxTaskElapsedMs = hasValidTaskLimit ? t.maxTaskElapsedMs : -1;
   return t as ExecutionTracking;
 }
 
@@ -514,6 +533,81 @@ export class ExecutionTracker {
 
   beginTurn(): void {
     this.data.turns++;
+  }
+
+  /**
+   * Starts one durable objective execution interval. A still-open interval is charged through restart downtime; for
+   * legacy ledgers without elapsed history, objective.startedAt supplies a conservative wall-clock lower bound.
+   */
+  beginTaskElapsedBudget(maximumMs: number, nowMs = Date.now(), objectiveStartedAt?: string): number {
+    if (!Number.isSafeInteger(maximumMs) || maximumMs < 1 || !Number.isSafeInteger(nowMs) || nowMs < 0) {
+      throw new Error("Task elapsed budget requires a positive safe-integer limit and timestamp.");
+    }
+    if (!Number.isSafeInteger(this.data.taskElapsedMs) || this.data.taskElapsedMs < 0) {
+      throw new Error("Persisted task elapsed time is invalid; refusing to execute the objective.");
+    }
+    const savedLimit = this.data.maxTaskElapsedMs;
+    if (savedLimit !== undefined && (!Number.isSafeInteger(savedLimit) || savedLimit < 1)) {
+      throw new Error("Persisted task elapsed budget is invalid; refusing to execute the objective.");
+    }
+    const effectiveLimit = savedLimit === undefined ? maximumMs : Math.min(savedLimit, maximumMs);
+    let elapsed = this.data.taskElapsedMs;
+    if (this.data.taskActiveSinceMs !== undefined) {
+      if (!Number.isSafeInteger(this.data.taskActiveSinceMs) || this.data.taskActiveSinceMs < 0) {
+        throw new Error("Persisted active task interval is invalid; refusing to execute the objective.");
+      }
+      if (nowMs < this.data.taskActiveSinceMs) {
+        // Wall-clock rollback must not create budget. The active interval's duration is unknowable, so exhaust it.
+        elapsed = effectiveLimit;
+        this.data.taskElapsedHistoryComplete = false;
+      } else {
+        elapsed += nowMs - this.data.taskActiveSinceMs;
+      }
+    }
+    if (!this.data.taskElapsedHistoryComplete) {
+      const startedAt = objectiveStartedAt ? Date.parse(objectiveStartedAt) : Number.NaN;
+      // An unknown or future start time is not evidence that elapsed budget remains.
+      const estimatedElapsed = Number.isFinite(startedAt) && startedAt <= nowMs ? nowMs - startedAt : effectiveLimit;
+      elapsed = Math.max(elapsed, estimatedElapsed);
+    }
+    if (!Number.isSafeInteger(elapsed)) throw new Error("Task elapsed time exceeded safe accounting bounds; refusing to execute the objective.");
+    this.data.taskElapsedMs = elapsed;
+    this.data.maxTaskElapsedMs = effectiveLimit;
+    this.data.taskActiveSinceMs = nowMs;
+    return Math.max(0, effectiveLimit - elapsed);
+  }
+
+  /** Closes and accounts the current interval before the final durable checkpoint. */
+  finishTaskElapsedBudget(nowMs = Date.now()): number {
+    if (!Number.isSafeInteger(nowMs) || nowMs < 0 || !Number.isSafeInteger(this.data.taskElapsedMs) || this.data.taskElapsedMs < 0) {
+      throw new Error("Task elapsed accounting state is invalid.");
+    }
+    if (this.data.taskActiveSinceMs !== undefined) {
+      if (!Number.isSafeInteger(this.data.taskActiveSinceMs) || this.data.taskActiveSinceMs < 0) {
+        throw new Error("Persisted active task interval is invalid.");
+      }
+      if (nowMs < this.data.taskActiveSinceMs) {
+        this.data.taskElapsedMs = this.data.maxTaskElapsedMs ?? this.data.taskElapsedMs;
+        this.data.taskElapsedHistoryComplete = false;
+      } else {
+        this.data.taskElapsedMs += nowMs - this.data.taskActiveSinceMs;
+      }
+      this.data.taskActiveSinceMs = undefined;
+    }
+    if (!Number.isSafeInteger(this.data.taskElapsedMs)) throw new Error("Task elapsed time exceeded safe accounting bounds.");
+    return this.data.taskElapsedMs;
+  }
+
+  /** Remaining wall-clock age, including the currently open interval. */
+  remainingTaskElapsedBudget(nowMs = Date.now()): number {
+    const maximum = this.data.maxTaskElapsedMs;
+    if (typeof maximum !== "number" || !Number.isSafeInteger(maximum) || maximum < 1 || !Number.isSafeInteger(this.data.taskElapsedMs) || this.data.taskElapsedMs < 0) {
+      throw new Error("Task elapsed budget is unavailable or invalid.");
+    }
+    if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new Error("Task elapsed budget timestamp is invalid.");
+    if (this.data.taskActiveSinceMs !== undefined && nowMs < this.data.taskActiveSinceMs) return 0;
+    const active = this.data.taskActiveSinceMs === undefined ? 0 : nowMs - this.data.taskActiveSinceMs;
+    return Math.max(0, maximum - this.data.taskElapsedMs - active);
   }
 
   beginStep(): number {

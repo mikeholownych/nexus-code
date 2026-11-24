@@ -187,6 +187,7 @@ const PROJECT_ENV_KEYS = new Set([
   "NEXUS_MAX_TOOL_INVOCATIONS",
   "NEXUS_MAX_INFERENCE_SUBMISSIONS",
   "NEXUS_MAX_TURN_MINUTES",
+  "NEXUS_MAX_TASK_MINUTES",
   "NEXUS_STAGNATION_STEPS",
   "NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS",
   "NEXUS_REPEATED_CALL_SOFT",
@@ -799,7 +800,7 @@ export function mergeOperationPolicy(
 }
 
 /**
- * Continuation budgets: flags, then NEXUS_MAX_TOTAL_STEPS / NEXUS_MAX_TURN_MINUTES / NEXUS_STAGNATION_STEPS, then
+ * Continuation budgets: flags, then NEXUS_MAX_TOTAL_STEPS / NEXUS_MAX_TURN_MINUTES / NEXUS_MAX_TASK_MINUTES / NEXUS_STAGNATION_STEPS, then
  * finite defaults. Total steps are charged to the durable objective ledger, so resume does not reset them.
  * `--no-continuation` (or NEXUS_CONTINUATION=0) is the operator's explicit choice of the single-segment turn that
  * ends at --max-steps.
@@ -823,6 +824,7 @@ export function continuationBudget(options: any): ContinuationBudget | undefined
     maxToolInvocations: toolInvocationLimit(options),
     maxInferenceSubmissions: inferenceSubmissionLimit(options),
     maxTurnMinutes: positive(options.maxTurnMinutes, effectiveSetting("NEXUS_MAX_TURN_MINUTES"), DEFAULT_CONTINUATION.maxTurnMinutes, MAX_CONTINUATION_MINUTES),
+    maxTaskMinutes: Math.floor(positive(options.maxTaskMinutes, effectiveSetting("NEXUS_MAX_TASK_MINUTES"), DEFAULT_CONTINUATION.maxTaskMinutes, MAX_CONTINUATION_MINUTES)),
     stagnationSteps: Math.floor(positive(options.stagnationSteps, effectiveSetting("NEXUS_STAGNATION_STEPS"), DEFAULT_CONTINUATION.stagnationSteps)),
     verifierConvergenceAttempts: Math.floor(positive(undefined, effectiveSetting("NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS"), DEFAULT_CONVERGENCE_ATTEMPTS)),
   };

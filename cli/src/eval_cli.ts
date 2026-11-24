@@ -60,7 +60,7 @@ export function resolveInstalledEvalRuntime(env: NodeJS.ProcessEnv = process.env
 
 /** Global options that consume the next token (`<value>`); the program enables positional options, so these can only precede the subcommand. */
 export const GLOBAL_VALUE_OPTIONS = new Set([
-  "-e", "--endpoint", "-m", "--model", "-w", "--workspace", "-s", "--max-steps", "--max-total-steps", "--max-tool-invocations", "--max-turn-minutes",
+  "-e", "--endpoint", "-m", "--model", "-w", "--workspace", "-s", "--max-steps", "--max-total-steps", "--max-tool-invocations", "--max-turn-minutes", "--max-task-minutes",
   "--stagnation-steps", "-t", "--temperature", "--mode", "--shell", "--fallback", "--context-limit", "--authoritative-verifier",
   "--deliverable-file", "--planner-model", "--planner-endpoint", "--coder-model", "--coder-endpoint", "--provider", "--base-url",
   "--planner-provider", "--coder-provider", "--worktree-branch", "--fork-session", "--fork-at",

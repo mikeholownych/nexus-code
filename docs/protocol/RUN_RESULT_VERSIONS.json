@@ -13,5 +13,10 @@
     "schema_version": 1,
     "schemaSha256": "7129e0a6bfe0d5fa7e8f15747bc7499c60e7c2e9947f1ec45fb8c8ecb427e573",
     "note": "Add the INFERENCE_SUBMISSION_BUDGET_EXHAUSTED reason and optional continuation fields for objective inference submission counts and history completeness. Additive fields preserve existing meanings, so schema_version stays 1."
+  },
+  {
+    "schema_version": 1,
+    "schemaSha256": "c86506c35ed11784c5ea4775ec208b27d0865ff83deaca48d03da491015239c1",
+    "note": "Add optional objective elapsed-time usage fields to execution results. The fields are additive and preserve existing meanings, so schema_version stays 1."
   }
 ]

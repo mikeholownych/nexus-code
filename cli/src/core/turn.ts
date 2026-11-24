@@ -370,6 +370,12 @@ export interface TurnResult {
     maxInferenceSubmissions?: number;
     /** False means earlier requests predate this counter or the persisted counter was malformed. */
     inferenceSubmissionHistoryComplete?: boolean;
+    /** Objective wall-clock age charged across turns, resumes, and persisted in-flight intervals. */
+    taskElapsedMs?: number;
+    /** Fixed objective-wide wall-clock age ceiling. */
+    maxTaskElapsedMs?: number;
+    /** False when the legacy objective start time was missing or malformed and prior elapsed time is unknown. */
+    taskElapsedHistoryComplete?: boolean;
     /** Demonstrated loops: the same action and result on an unchanged workspace, at least REPEAT_THRESHOLD times. */
     repeated?: Array<{ action: string; count: number; firstStep: number; lastStep: number }>;
     /** Why repetition could not be judged against workspace state this turn, when it could not. */
