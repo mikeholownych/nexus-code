@@ -155,6 +155,9 @@ The `code` of an `error` event:
 | `NO_PROVIDER` | No model provider is reachable, so the prompt was not sent. |
 | `UNSUPPORTED_PROTOCOL` | `initialize` named a range that shares no version with the sidecar's, or a command arrived after such an `initialize`. |
 | `EXPERIMENTAL_DISABLED` | An experimental feature was used on a connection that did not enable it. |
+| `UNAUTHORIZED` | Socket transport only: the attach was refused. The message never says why (token, role, order or timing); the connection then ends. |
+| `NOT_CONTROLLER` | Socket transport only: an observer sent a command other than `initialize`. |
+| `NOT_PERMITTED` | Socket transport only: the controller sent a command a socket client may not send (allow-always, a slash command, a provider or model change, `shutdown`). |
 
 ## Capabilities
 
