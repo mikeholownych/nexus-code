@@ -13,5 +13,10 @@
     "schema_version": 1,
     "schemaSha256": "f5a70fc239c8687537d888567379819f44041a135930fde48549248622bd2202",
     "note": "Additive P10-03 follow-up: audit verification now reports a log that was already broken at export as a finding; schema_version remains 1."
+  },
+  {
+    "schema_version": 1,
+    "schemaSha256": "18a4b9660a68eb5e1e486353c03778c4eb1af2fd045d0985fad7188feddebf1c",
+    "note": "Additive P10-03 follow-up: audit verification reports durable flight recording-gap markers as findings, including a marker before any chained record; schema_version remains 1."
   }
 ]
