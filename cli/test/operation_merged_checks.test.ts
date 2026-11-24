@@ -536,13 +536,14 @@ test("with the session's sandbox, a merged-tree check is confined: no write outs
     write(sibling, "secret.txt", "sibling\n");
     write(f.prepare("u1"), "u1.txt", "one\n");
     // The repository itself stays readable (as for the session's own commands); the sibling unit's worktree does not.
-    const command = `touch '${escaped}' 2>/dev/null; test -f '${path.join(f.root, "file.txt")}' && test ! -e '${path.join(sibling, "secret.txt")}' && test -f u1.txt && touch inside.tmp`;
+    // Leave the worktree clean: a passing verifier that dirties it is refused (hostile tree-mutation cases cover that).
+    const command = `touch '${escaped}' 2>/dev/null; test -f '${path.join(f.root, "file.txt")}' && test ! -e '${path.join(sibling, "secret.txt")}' && test -f u1.txt`;
     const outcome = await f.integrate("u1", command);
     assert.ok(outcome.kind === "integrated", outcome.kind === "failed" ? outcome.reason : "");
     assert.deepEqual(outcome.receipt.mergedChecks, [{ command, owners: ["u1"], status: "PASSED", sandbox: "bwrap" }]);
     assert.equal(fs.existsSync(escaped), false, "the host outside the integration worktree is read-only");
     assert.equal(fs.existsSync(path.join(sibling, "secret.txt")), true);
-    assert.equal(git(f.integrationWorktree, ["status", "--porcelain"]), "", "what the check wrote in the worktree is cleaned up");
+    assert.equal(git(f.integrationWorktree, ["status", "--porcelain"]), "", "the worktree stays clean after a confined check");
   } finally {
     fs.rmSync(f.root, { recursive: true, force: true });
   }
