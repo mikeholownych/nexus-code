@@ -1,0 +1,292 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "nexus job receipt v1",
+  "description": "Generated from JobReceiptDocument in cli/src/core/job_receipt.ts by cli/scripts/gen_job_receipt_schema.mjs. Do not edit by hand. The receipt the runner writes when a detached job ends (jobs/<id>/receipt.json); `unattended` is always true.",
+  "$ref": "#/$defs/JobReceipt",
+  "$defs": {
+    "JobBudgets": {
+      "type": "object",
+      "properties": {
+        "maxInferenceSubmissions": {
+          "type": "number"
+        },
+        "maxToolInvocations": {
+          "type": "number"
+        },
+        "maxTotalSteps": {
+          "description": "Objective-wide, counted across attempts.",
+          "type": "number"
+        },
+        "maxTurnMinutes": {
+          "description": "One attempt's turn deadline.",
+          "type": "number"
+        },
+        "timeoutMinutes": {
+          "description": "The whole job, from `createdAt`; `deadlineAt` is derived from it once.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "maxInferenceSubmissions",
+        "maxToolInvocations",
+        "maxTotalSteps",
+        "maxTurnMinutes",
+        "timeoutMinutes"
+      ]
+    },
+    "JobPolicy": {
+      "description": "What an unattended job may do to the fresh worktree it runs in. Nothing else is expressible.",
+      "enum": [
+        "read-only",
+        "worktree-write"
+      ]
+    },
+    "JobReceipt": {
+      "type": "object",
+      "properties": {
+        "approval_mode": {
+          "enum": [
+            "read-only",
+            "review"
+          ]
+        },
+        "attempts": {
+          "type": "number"
+        },
+        "base_commit": {
+          "type": "string"
+        },
+        "budgets": {
+          "$ref": "#/$defs/JobBudgets"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "ended_at": {
+          "type": "string"
+        },
+        "format": {
+          "const": "nexus-job-receipt"
+        },
+        "integration_branch": {
+          "description": "Where the job's results are. Nothing is merged into the operator's branch.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "job_id": {
+          "type": "string"
+        },
+        "missed": {
+          "type": "null"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/TerminalJobState"
+        },
+        "pending_decisions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JobReceiptDecision"
+          }
+        },
+        "policy": {
+          "$ref": "#/$defs/JobPolicy"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schedule_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "unattended": {
+          "description": "No operator was present: no call was approved by a person, and none was approved \"always\".",
+          "const": true
+        },
+        "units": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JobReceiptUnit"
+          }
+        },
+        "verifier": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "command": {
+                  "type": "string"
+                },
+                "source": {
+                  "const": "operator"
+                }
+              },
+              "required": [
+                "command",
+                "source"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspace": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "approval_mode",
+        "attempts",
+        "base_commit",
+        "budgets",
+        "created_at",
+        "ended_at",
+        "format",
+        "integration_branch",
+        "job_id",
+        "missed",
+        "operation_id",
+        "outcome",
+        "pending_decisions",
+        "policy",
+        "reason",
+        "schedule_id",
+        "schema_version",
+        "started_at",
+        "summary",
+        "unattended",
+        "units",
+        "verifier",
+        "workspace"
+      ]
+    },
+    "JobReceiptDecision": {
+      "type": "object",
+      "properties": {
+        "decide": {
+          "description": "The command that records the operator's answer; `nexus job resume <job>` then continues the job.",
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "question": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "decide",
+        "id",
+        "question"
+      ]
+    },
+    "JobReceiptUnit": {
+      "type": "object",
+      "properties": {
+        "blocked": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "cause": {
+                  "type": "string"
+                },
+                "question": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "cause",
+                "question"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "outcome": {
+          "description": "The unit's turn outcome as the operation recorded it (for example VERIFIED or UNVERIFIED); null when it has none.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "blocked",
+        "id",
+        "outcome",
+        "reason",
+        "status"
+      ]
+    },
+    "TerminalJobState": {
+      "enum": [
+        "BLOCKED",
+        "CANCELLED",
+        "COMPLETE",
+        "FAILED",
+        "TIMED_OUT"
+      ]
+    }
+  }
+}

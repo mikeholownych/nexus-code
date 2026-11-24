@@ -1,0 +1,7 @@
+[
+  {
+    "schema_version": 1,
+    "schemaSha256": "5c23694d90320ad9f6ae31ac12fee53dd5047d626931d96fa3d6cc3d4690be6d",
+    "note": "First published schema of a detached job's receipt nexus-job-receipt (BG-1), generated from JobReceiptDocument in cli/src/core/job_receipt.ts on release/v1.3.0: the job and operation ids, the base commit and integration branch, the policy and approval mode (review or read-only, never auto), the constant unattended: true, the job outcome with its reason and summary, each unit's status and copied outcome, and the pending decisions. Nothing was published before it."
+  }
+]

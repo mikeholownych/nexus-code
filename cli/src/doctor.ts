@@ -45,6 +45,9 @@ import { isNexusDirPermissive } from "./core/durable_file.js";
 export { isNexusDirPermissive };
 import { DEFAULT_REPEATED_CALL_HARD, DEFAULT_REPEATED_CALL_SOFT } from "./core/repeated_calls.js";
 import { DEFAULT_CONVERGENCE_ATTEMPTS, DEFAULT_MAX_INFERENCE_SUBMISSIONS, type HarnessConfig } from "./types.js";
+import { acquireFileGuard, releaseFileGuard } from "./core/file_guard.js";
+import { readRunnerInfo, runnerAlive } from "./core/job_runner.js";
+import { isTerminal, listJobs, runnerPaths } from "./core/runner_store.js";
 
 export const DOCTOR_SCHEMA_VERSION = 2;
 export type DoctorStatus = "pass" | "warn" | "fail" | "skip";
@@ -1252,6 +1255,58 @@ const pluginCheck: Check = async (ctx) => {
 const policyCheck: Check = async (ctx) =>
   policyFindings(processPolicyReport(ctx.config?.workspace ?? process.cwd())).map((finding) => f(finding.id, "config", finding.status, finding.explanation, finding.evidence, finding.action));
 
+const backgroundRunnerCheck: Check = async (ctx) => {
+  const stateDir = process.env.NEXUS_STATE_DIR || path.join(ctx.home, ".nexus");
+  const paths = runnerPaths(path.join(stateDir, "runner"));
+  const alive = runnerAlive(paths);
+  const unit = path.join(process.env.XDG_CONFIG_HOME || path.join(ctx.home, ".config"), "systemd", "user", "nexus-runner.service");
+  const findings: Array<Omit<DoctorFinding, "durationMs">> = [];
+  let info: ReturnType<typeof readRunnerInfo>;
+  let infoProblem: string | undefined;
+  try { info = readRunnerInfo(paths); } catch (error) { infoProblem = error instanceof Error ? error.message : String(error); }
+
+  findings.push(f("runner.alive", "state", alive ? "pass" : "skip", alive ? "The detached job runner holds its state-directory lock." : "The detached job runner is not running (optional).", [paths.guard]));
+  if (infoProblem) findings.push(f("runner.version", "state", alive ? "warn" : "skip", `The runner status record is unreadable: ${infoProblem}`, [paths.runnerJson]));
+  else if (info && alive) {
+    const version = getBuildIdentity().version;
+    const matches = version === "unknown" || info.nexusVersion === version;
+    findings.push(f("runner.version", "state", matches ? "pass" : "warn", matches ? `The runner uses Nexus ${info.nexusVersion}.` : `The runner uses Nexus ${info.nexusVersion}, while this CLI is ${version}. Stop and restart the runner after upgrades.`, [paths.runnerJson, `CLI ${version}`]));
+  } else findings.push(f("runner.version", "state", "skip", "No live runner version is available to compare.", [paths.runnerJson]));
+
+  try {
+    const stat = fs.lstatSync(unit);
+    const bad = stat.isSymbolicLink() || !stat.isFile() || stat.uid !== process.getuid?.() || (stat.mode & 0o400) === 0 || (stat.mode & 0o022) !== 0;
+    findings.push(f("runner.unit", "state", bad ? "fail" : "pass", bad ? "The systemd runner unit is not an owner-readable regular file owned by this user, or it is writable by other users." : "The systemd user runner unit is present and not group/world writable.", [unit], bad ? "Replace the unit with an owner-readable regular file and remove group/world write permissions." : undefined));
+  } catch (error: any) {
+    findings.push(f("runner.unit", "state", error?.code === "ENOENT" ? "skip" : "warn", error?.code === "ENOENT" ? "No systemd user unit is installed (optional; a runner may use another supervisor)." : `The systemd runner unit could not be inspected: ${String(error?.message ?? error)}`, [unit]));
+  }
+
+  try {
+    const listing = listJobs(paths);
+    const stuck: string[] = [];
+    for (const job of listing.jobs) {
+      if (isTerminal(job.state)) continue;
+      let workerAlive = false;
+      const guardFile = paths.workerGuard(job.id);
+      if (fs.existsSync(guardFile)) {
+        try {
+          const probe = acquireFileGuard(guardFile, { label: "Worker guard", mode: "shared" });
+          releaseFileGuard(probe);
+          workerAlive = probe === null;
+        } catch { /* an untrusted guard is not evidence of a live worker */ }
+      }
+      if (!alive && !workerAlive) stuck.push(`${job.id} (${job.state})`);
+    }
+    for (const invalid of listing.invalid) stuck.push(`${invalid.id} (unreadable: ${invalid.error})`);
+    findings.push(stuck.length
+      ? f("runner.stuck", "state", "warn", `${stuck.length} non-terminal or unreadable job record(s) have no live runner/worker and need operator inspection.`, stuck.slice(0, 20), "Start the runner to recover valid jobs; inspect or back up unreadable records before changing them.")
+      : f("runner.stuck", "state", "pass", "No non-terminal job is stranded without a runner or worker."));
+  } catch (error) {
+    findings.push(f("runner.stuck", "state", "warn", `Runner jobs could not be inspected: ${error instanceof Error ? error.message : String(error)}`, [paths.jobs]));
+  }
+  return findings;
+};
+
 const CHECKS: Array<[string, Check]> = [
   ["install", installCheck],
   ["tui", tuiCheck],
@@ -1277,6 +1332,7 @@ const CHECKS: Array<[string, Check]> = [
   ["mcp", mcpCheck],
   ["plugins", pluginCheck],
   ["policy", policyCheck],
+  ["background_runner", backgroundRunnerCheck],
 ];
 
 /** Runs `check` with its own deadline; a throw or timeout becomes a finding, so other checks are unaffected. */

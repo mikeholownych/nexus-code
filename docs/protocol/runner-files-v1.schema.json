@@ -1,0 +1,418 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "nexus runner files v1",
+  "description": "Generated from RunnerFileDocument in cli/src/core/runner_store.ts by cli/scripts/gen_job_schema.mjs. Do not edit by hand. One of the detached runner's files, told apart by `format`: a client's request (nexus-runner-request), the runner record (nexus-runner), and a job's worker record (nexus-job-worker), worker result (nexus-job-result) and frozen operation spec (nexus-job-spec). The schema describes shape only; the readers also refuse unknown keys, repeated keys and out-of-range values.",
+  "$ref": "#/$defs/RunnerFileDocument",
+  "$defs": {
+    "JobBudgets": {
+      "type": "object",
+      "properties": {
+        "maxInferenceSubmissions": {
+          "type": "number"
+        },
+        "maxToolInvocations": {
+          "type": "number"
+        },
+        "maxTotalSteps": {
+          "description": "Objective-wide, counted across attempts.",
+          "type": "number"
+        },
+        "maxTurnMinutes": {
+          "description": "One attempt's turn deadline.",
+          "type": "number"
+        },
+        "timeoutMinutes": {
+          "description": "The whole job, from `createdAt`; `deadlineAt` is derived from it once.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "maxInferenceSubmissions",
+        "maxToolInvocations",
+        "maxTotalSteps",
+        "maxTurnMinutes",
+        "timeoutMinutes"
+      ]
+    },
+    "JobOrigin": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "dueAt": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "schedule"
+            },
+            "scheduleId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "dueAt",
+            "kind",
+            "scheduleId"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "cli"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "JobPolicy": {
+      "description": "What an unattended job may do to the fresh worktree it runs in. Nothing else is expressible.",
+      "enum": [
+        "read-only",
+        "worktree-write"
+      ]
+    },
+    "JobProvider": {
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      }
+    },
+    "JobSpecFile": {
+      "description": "`jobs/<id>/spec.json`: the operation spec as submitted, frozen.",
+      "type": "object",
+      "properties": {
+        "format": {
+          "const": "nexus-job-spec"
+        },
+        "jobId": {
+          "type": "string"
+        },
+        "spec": {
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "specSha256": {
+          "type": "string"
+        },
+        "version": {
+          "const": 1
+        }
+      },
+      "required": [
+        "format",
+        "jobId",
+        "spec",
+        "specSha256",
+        "version"
+      ]
+    },
+    "JobSubmission": {
+      "description": "What a client states when it submits a job; the runner adds the rest.",
+      "type": "object",
+      "properties": {
+        "baseCommit": {
+          "description": "HEAD at submit: the job never sees a later commit.",
+          "type": "string"
+        },
+        "budgets": {
+          "$ref": "#/$defs/JobBudgets"
+        },
+        "deliverables": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "operationId": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/JobOrigin"
+        },
+        "policy": {
+          "$ref": "#/$defs/JobPolicy"
+        },
+        "provider": {
+          "$ref": "#/$defs/JobProvider"
+        },
+        "specSha256": {
+          "type": "string"
+        },
+        "unattended": {
+          "description": "Constant. A record without it is invalid, so no reader can take an attended run for a job.",
+          "const": true
+        },
+        "verifier": {
+          "description": "The operator's verifier command, or null.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspace": {
+          "description": "Real path of the repository at submit.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "baseCommit",
+        "budgets",
+        "deliverables",
+        "id",
+        "operationId",
+        "origin",
+        "policy",
+        "provider",
+        "specSha256",
+        "unattended",
+        "verifier",
+        "workspace"
+      ]
+    },
+    "RunnerFileDocument": {
+      "description": "The documents `docs/protocol/runner-files-v<N>.schema.json` describes.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JobSpecFile"
+        },
+        {
+          "$ref": "#/$defs/RunnerInfo"
+        },
+        {
+          "$ref": "#/$defs/WorkerInfo"
+        },
+        {
+          "$ref": "#/$defs/WorkerResult"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "at": {
+              "type": "string"
+            },
+            "format": {
+              "const": "nexus-runner-request"
+            },
+            "id": {
+              "type": "string"
+            },
+            "job": {
+              "$ref": "#/$defs/JobSubmission"
+            },
+            "kind": {
+              "const": "start"
+            },
+            "spec": {
+              "type": "object",
+              "additionalProperties": {}
+            },
+            "version": {
+              "const": 1
+            }
+          },
+          "required": [
+            "at",
+            "format",
+            "id",
+            "job",
+            "kind",
+            "spec",
+            "version"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "at": {
+              "type": "string"
+            },
+            "format": {
+              "const": "nexus-runner-request"
+            },
+            "id": {
+              "type": "string"
+            },
+            "jobId": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "resume",
+                "stop"
+              ]
+            },
+            "version": {
+              "const": 1
+            }
+          },
+          "required": [
+            "at",
+            "format",
+            "id",
+            "jobId",
+            "kind",
+            "version"
+          ]
+        }
+      ]
+    },
+    "RunnerInfo": {
+      "description": "`runner.json`: who holds the runner lock. Informational: the lock itself is what says a runner is alive.",
+      "type": "object",
+      "properties": {
+        "bootId": {
+          "type": "string"
+        },
+        "format": {
+          "const": "nexus-runner"
+        },
+        "maxJobs": {
+          "type": "number"
+        },
+        "nexusVersion": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "number"
+        },
+        "startTicks": {
+          "type": "string"
+        },
+        "startedAt": {
+          "type": "string"
+        },
+        "version": {
+          "const": 1
+        }
+      },
+      "required": [
+        "bootId",
+        "format",
+        "maxJobs",
+        "nexusVersion",
+        "pid",
+        "startTicks",
+        "startedAt",
+        "version"
+      ]
+    },
+    "WorkerInfo": {
+      "description": "`jobs/<id>/worker.json`: written by the worker once it holds `worker.guard`, which is what makes it ready.",
+      "type": "object",
+      "properties": {
+        "attempt": {
+          "type": "number"
+        },
+        "bootId": {
+          "type": "string"
+        },
+        "format": {
+          "const": "nexus-job-worker"
+        },
+        "jobId": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "number"
+        },
+        "startTicks": {
+          "type": "string"
+        },
+        "startedAt": {
+          "type": "string"
+        },
+        "version": {
+          "const": 1
+        }
+      },
+      "required": [
+        "attempt",
+        "bootId",
+        "format",
+        "jobId",
+        "pid",
+        "startTicks",
+        "startedAt",
+        "version"
+      ]
+    },
+    "WorkerResult": {
+      "description": "`jobs/<id>/result.json`: the worker's last word before it exits. `error` is a failure outside the operation.",
+      "type": "object",
+      "properties": {
+        "attempt": {
+          "type": "number"
+        },
+        "error": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "message",
+            "reason"
+          ]
+        },
+        "exit": {
+          "type": "number"
+        },
+        "format": {
+          "const": "nexus-job-result"
+        },
+        "jobId": {
+          "type": "string"
+        },
+        "operationId": {
+          "type": "string"
+        },
+        "operationStatus": {
+          "description": "The operation's status when the worker stopped driving it; null when it never drove it.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version": {
+          "const": 1
+        }
+      },
+      "required": [
+        "attempt",
+        "exit",
+        "format",
+        "jobId",
+        "operationId",
+        "operationStatus",
+        "version"
+      ]
+    }
+  }
+}
