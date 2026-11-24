@@ -12,6 +12,7 @@ import { AUDIT_FILE_ROLES, auditExitCode } from "../src/audit_contract.js";
 import { AUDIT_STANDARD_REDACTION_NOTE, AuditExportError, auditIdProblem, exportAuditBundle, renderAuditExportText, type AuditExportRequest } from "../src/audit_export.js";
 import { AUDIT_UNSIGNED_CAVEAT, auditWorkspaceSha256, readChainedLogRecords } from "../src/core/audit_bundle.js";
 import { verifyChain } from "../src/core/hash_chain.js";
+import { computeCandidateIdentitySync } from "../src/core/candidate.js";
 import { DurableStateManager } from "../src/core/state.js";
 import { WorkspacePath } from "../src/core/workspace_path.js";
 import { FlightRecorder } from "../src/flight.js";
@@ -55,6 +56,13 @@ const stateOf = (subject: SubjectFixture) => snapshot(path.join(subject.root, "s
 const FLIGHT = "flights/flight-in-window.flightlog";
 const ATTEMPTS = "verification/config-attempts.jsonl";
 
+function setReceiptCandidateId(subject: SubjectFixture, candidateId: string): void {
+  const file = path.join(subject.storeDir, `${subject.id}.json`);
+  const state = JSON.parse(fs.readFileSync(file, "utf8"));
+  state.validationReceipts[0].candidateId = candidateId;
+  fs.writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`);
+}
+
 test("a saved task exports every artefact with its role, and the bundle verifies as intact by hash only", () => {
   const subject = savedSubject();
   const receipt = path.join(subject.root, "verify-receipt.json");
@@ -70,6 +78,7 @@ test("a saved task exports every artefact with its role, and the bundle verifies
     "evidence/provenance.json": "evidence_provenance",
     [FLIGHT]: "flight_log",
     "receipts/last-turn.json": "last_turn",
+    "receipts/candidate-binding.json": "validation_receipts",
     "receipts/validation-receipts.json": "validation_receipts",
     "receipts/verify-1.json": "verify_receipt",
     "session/export.json": "session_export",
@@ -91,6 +100,12 @@ test("a saved task exports every artefact with its role, and the bundle verifies
   assert.match(files["session/export.md"], new RegExp(`- \\*\\*Workspace:\\*\\* \`${subject.workspace}\``));
   assert.ok(!Object.values(files).some((text) => text.includes("NEXUS_AUDIT_")), "no stand-in is left in any file");
   assert.equal(JSON.parse(files["receipts/validation-receipts.json"])[0].receiptId, "r1");
+  const binding = JSON.parse(files["receipts/candidate-binding.json"]);
+  assert.equal(binding.status, process.platform === "linux" ? "partial" : "unavailable", "a legacy or malformed candidate id is not treated as a match");
+  assert.equal(binding.receipts[0].relation, "unverifiable");
+  assert.equal(binding.meaning, "Candidate identity relation sampled separately from bundle collection; it is not an atomic workspace snapshot and does not indicate verifier success or task acceptance.");
+  assert.equal(exported.candidateBinding.status, binding.status);
+  assert.ok(renderAuditExportText(exported).includes("candidate binding: " + binding.status + " (see receipts/candidate-binding.json; not a verifier or acceptance result)"));
   assert.equal(JSON.parse(files["receipts/last-turn.json"]).outcome, "VERIFIED");
   assert.deepEqual(JSON.parse(files["verification/attempts.json"]).map((attempt: any) => [attempt.n, attempt.status]), [[1, "PASSED"]]);
   assert.deepEqual(JSON.parse(files["evidence/provenance.json"]), [{ requirement: "R1", evidence: "npm test", source: "tool" }]);
@@ -120,15 +135,69 @@ test("a saved task exports every artefact with its role, and the bundle verifies
 
   const verified = check(exported.written.dir);
   assert.equal(verified.exit, "intact_unsigned");
-  assert.equal(verified.result.files.matched, 11);
+  assert.equal(verified.result.files.matched, 12);
   assert.ok(verified.text.includes(AUDIT_UNSIGNED_CAVEAT));
   assert.equal(verified.result.manifest_sha256, exported.document.manifest_sha256);
 
   assert.deepEqual(
     { ...exported.document, file_bytes: 0 },
-    { schema_version: 1, result: "exported", exitCode: 0, bundle_dir: exported.written.dir, bundle_id: manifest.bundle_id, manifest_sha256: exported.written.manifestSha256, signed: false, redaction: "standard", at_rest: true, file_count: 11, file_bytes: 0, omitted: manifest.omitted, warnings: [] },
+    { schema_version: 1, result: "exported", exitCode: 0, bundle_dir: exported.written.dir, bundle_id: manifest.bundle_id, manifest_sha256: exported.written.manifestSha256, signed: false, redaction: "standard", at_rest: true, file_count: 12, file_bytes: 0, omitted: manifest.omitted, warnings: process.platform === "linux"
+      ? ["Some persisted validation receipts could not be bound to the current workspace candidate or the report was truncated; see receipts/candidate-binding.json."]
+      : ["Current workspace candidate identity could not be computed; validation receipt bindings are inconclusive."] },
   );
   assert.equal(exported.document.file_bytes, manifest.files.reduce((sum, file) => sum + file.bytes, 0));
+});
+
+test("candidate binding distinguishes current receipts from stale and unavailable identities", { skip: process.platform !== "linux" }, () => {
+  const matched = savedSubject({ flight: false });
+  const matchedId = computeCandidateIdentitySync(matched.workspace).candidateId;
+  setReceiptCandidateId(matched, matchedId);
+  const matchedExport = exportChecked(matched.request({ out: path.join(matched.root, "out", "matched") }));
+  const matchedBinding = JSON.parse(bundleTexts(matchedExport.written.dir)["receipts/candidate-binding.json"]);
+  assert.equal(matchedBinding.status, "matched");
+  assert.equal(matchedBinding.current_candidate_id, matchedId);
+  assert.deepEqual(matchedBinding.receipts.map((receipt: any) => [receipt.receipt_id, receipt.receipt_status, receipt.relation]), [["r1", "PASSED", "match"]]);
+
+  const capped = savedSubject({ flight: false });
+  const cappedId = computeCandidateIdentitySync(capped.workspace).candidateId;
+  const cappedStateFile = path.join(capped.storeDir, `${capped.id}.json`);
+  const cappedState = JSON.parse(fs.readFileSync(cappedStateFile, "utf8"));
+  cappedState.validationReceipts = Array.from({ length: 10_001 }, (_, index) => ({
+    ...cappedState.validationReceipts[0], receiptId: `receipt-${index}`, candidateId: cappedId,
+  }));
+  fs.writeFileSync(cappedStateFile, `${JSON.stringify(cappedState, null, 2)}\n`);
+  const cappedExport = exportChecked(capped.request({ out: path.join(capped.root, "out", "capped") }));
+  const cappedBinding = JSON.parse(bundleTexts(cappedExport.written.dir)["receipts/candidate-binding.json"]);
+  assert.equal(cappedBinding.status, "partial");
+  assert.equal(cappedBinding.receipt_count, 10_001);
+  assert.equal(cappedBinding.receipts.length, 10_000);
+  assert.equal(cappedBinding.receipts_omitted, 1);
+  assert.ok(cappedExport.document.warnings.some((warning) => warning.includes("report was truncated")));
+
+  const stale = savedSubject({ flight: false });
+  const validatedId = computeCandidateIdentitySync(stale.workspace).candidateId;
+  setReceiptCandidateId(stale, validatedId);
+  fs.writeFileSync(path.join(stale.workspace, "changed-after-validation.txt"), "modified\n");
+  const staleExport = exportChecked(stale.request({ out: path.join(stale.root, "out", "stale") }));
+  const staleBinding = JSON.parse(bundleTexts(staleExport.written.dir)["receipts/candidate-binding.json"]);
+  assert.equal(staleBinding.status, "mismatch");
+  assert.notEqual(staleBinding.current_candidate_id, validatedId);
+  assert.equal(staleBinding.receipts[0].relation, "mismatch");
+  assert.ok(staleExport.document.warnings.some((warning) => warning.includes("different workspace candidate")));
+
+  const unavailable = savedSubject({ flight: false });
+  const stateFile = path.join(unavailable.storeDir, `${unavailable.id}.json`);
+  const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+  state.workspacePath = path.join(unavailable.root, "missing-workspace");
+  state.workspace = state.workspacePath;
+  fs.writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`);
+  const unavailableExport = exportChecked(unavailable.request({ out: path.join(unavailable.root, "out", "unavailable") }));
+  const unavailableBinding = JSON.parse(bundleTexts(unavailableExport.written.dir)["receipts/candidate-binding.json"]);
+  assert.equal(unavailableBinding.status, "unavailable");
+  assert.equal(unavailableBinding.current_candidate_id, null);
+  assert.equal(unavailableBinding.unavailable_reason, "workspace_missing");
+  assert.equal(unavailableBinding.receipts[0].relation, "unverifiable");
+  assert.ok(unavailableExport.document.warnings.some((warning) => warning.includes("candidate identity could not be computed")));
 });
 
 test("VR-3 sandbox denial flight events reach the bundle with the chained flight log", () => {
@@ -453,7 +522,7 @@ test("an export is deterministic for a fixed subject, clock and id, and its file
   const second = snapshot(exportChecked(subject.request()).written.dir);
   assert.deepEqual(second, first);
   for (const [entry, mode] of Object.entries(first.modes)) assert.equal(mode, entry in first.files ? 0o600 : 0o700, entry);
-  assert.equal(Object.keys(first.files).length, 11);
+  assert.equal(Object.keys(first.files).length, 12);
   const other = exportChecked(subject.request({ bundleId: "cd".repeat(16) }));
   assert.notEqual(other.document.manifest_sha256, sha256(Buffer.from(first.files["manifest.json"], "hex")));
 });

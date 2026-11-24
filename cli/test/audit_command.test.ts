@@ -89,12 +89,14 @@ test("the round trip through the commands: export a saved task, verify it, alter
   const hash = /^manifest sha256: ([0-9a-f]{64})$/m.exec(exported.stdout)?.[1];
   assert.ok(hash, exported.stdout);
   assert.ok(exported.stdout.startsWith(`Audit bundle written: ${dir}\n`));
-  assert.match(exported.stdout, /files: 11 \(\d+ bytes\) and manifest\.json/);
+  assert.match(exported.stdout, /files: 12 \(\d+ bytes\) and manifest\.json/);
   assert.match(exported.stdout, /Left out of the bundle:\n  - traces\/trace\.jsonl: local traces \(timings only\) are not exported by this version\n/);
   assert.match(exported.stdout, /Record this value somewhere the bundle's holder cannot change it/);
   assert.ok(exported.stdout.includes(AUDIT_UNSIGNED_CAVEAT));
   assert.ok(exported.stdout.includes(AUDIT_STANDARD_REDACTION_NOTE));
-  assert.ok(!exported.stdout.includes("WARNING"), "a subject at rest is exported without a warning");
+  assert.match(exported.stdout, /candidate binding: partial \(see receipts\/candidate-binding\.json; not a verifier or acceptance result\)/);
+  assert.match(exported.stdout, /WARNING: Some persisted validation receipts could not be bound to the current workspace candidate or the report was truncated; see receipts\/candidate-binding\.json\./);
+  assert.ok(!exported.stdout.includes("The subject was not at rest"), "a subject at rest has no at-rest warning");
 
   const altered = manifest.files.map((file) => {
     const copy = subject.out();
@@ -113,9 +115,9 @@ test("the round trip through the commands: export a saved task, verify it, alter
 
   assert.equal(text.code, 0, text.stderr);
   assert.equal(text.stderr, "");
-  assert.ok(text.stdout.startsWith(`INTACT BY HASH ONLY: all 11 files match the manifest. ${AUDIT_UNSIGNED_CAVEAT} To rule that out, compare the manifest hash ${hash} with one recorded at export.\n`), text.stdout);
+  assert.ok(text.stdout.startsWith(`INTACT BY HASH ONLY: all 12 files match the manifest. ${AUDIT_UNSIGNED_CAVEAT} To rule that out, compare the manifest hash ${hash} with one recorded at export.\n`), text.stdout);
   const document = consume(json);
-  assert.deepEqual([json.code, document.result, document.manifest_sha256, document.signature, document.files], [0, "intact_unsigned", hash, "absent", { listed: 11, matched: 11 }]);
+  assert.deepEqual([json.code, document.result, document.manifest_sha256, document.signature, document.files], [0, "intact_unsigned", hash, "absent", { listed: 12, matched: 12 }]);
   assert.equal(expected.code, 0);
   assert.match(expected.stdout, /The manifest hash [0-9a-f]{64} is the one you expected/);
   assert.deepEqual([unexpected.code, consume(unexpected).findings.map((finding: any) => finding.kind)], [1, ["manifest_sha256_mismatch"]]);
@@ -127,7 +129,7 @@ test("the round trip through the commands: export a saved task, verify it, alter
     assert.deepEqual([...new Set(result.findings.map((finding: any) => finding.path))], [file.path], "exactly the altered file is named");
     const finding = result.findings.find((entry: any) => entry.kind === "file_altered");
     assert.deepEqual([finding.expected_sha256, finding.expected_bytes], [file.sha256, file.bytes]);
-    assert.equal(result.files.matched, 10);
+    assert.equal(result.files.matched, 11);
   }
   // And as a person sees it.
   const seen = await runAudit(["verify", altered[0].copy]);
@@ -276,7 +278,7 @@ test("`--json` prints one document of the published schema for every outcome, wi
 
   const document = consume(written);
   assert.equal(written.stderr, "");
-  assert.deepEqual([written.code, document.result, document.bundle_dir, document.signed, document.redaction, document.at_rest, document.file_count], [0, "exported", out, false, "standard", false, 10]);
+  assert.deepEqual([written.code, document.result, document.bundle_dir, document.signed, document.redaction, document.at_rest, document.file_count], [0, "exported", out, false, "standard", false, 11]);
   assert.match(document.warnings.join("\n"), /The subject was not at rest \(status in_progress\)/);
   assert.equal(document.manifest_sha256, consume(await runAudit(["verify", out, "--json"])).manifest_sha256);
   assertManifestValid(readManifest(out));
