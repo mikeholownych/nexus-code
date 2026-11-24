@@ -87,3 +87,26 @@ test("an operator verifier string is held to what an interactive command is held
   assert.equal(verifierProblem(repo, "make test"), undefined);
   fs.rmSync(path.join(home, ".config", "nexus", "command_rules.json"));
 });
+
+test("a hand-written inbox request cannot carry a verifier that `job start` or `schedule add` would refuse", async () => {
+  // Guard: submissionProblem calls verifierProblem, so the runner refuses the request itself.
+  const { bench } = await import("./helpers/runner_fixture.js");
+  const repo = fs.realpathSync(makeRepo({ "README.md": "x\n" }));
+  temp.push(repo);
+  const b = bench(repo);
+  try {
+    const runner = b.runner({ schedules: false });
+    fs.mkdirSync(b.paths.root, { recursive: true, mode: 0o700 });
+    runner.start();
+    const bad = b.submit({ verifier: "rm -rf /", policy: "worktree-write" });
+    const good = b.submit({ verifier: "node --test", policy: "worktree-write" });
+    runner.tick();
+    const why = fs.readdirSync(b.paths.rejected).filter((name) => name.endsWith(".why")).map((name) => fs.readFileSync(path.join(b.paths.rejected, name), "utf8"));
+    assert.equal(why.length, 1, why.join("\n"));
+    assert.match(why[0], /refused by the security policy/);
+    assert.equal(b.job(good).state === "QUEUED" || b.job(good).state === "STARTING", true);
+    assert.throws(() => b.job(bad), /no job/);
+  } finally {
+    await b.cleanup();
+  }
+});
