@@ -1,7 +1,7 @@
 /**
  * BG-2 acceptance (c): "missed runs are reported, not silently skipped". Two hourly schedules whose runner was down
  * for three days (their grid says 72 slots have passed), then a real runner starts. The one with `--on-missed report`
- * starts nothing and says 72 runs were missed; the default one starts exactly one catch-up job (never 72), whose
+ * starts nothing and says 72 runs were missed; the explicitly opted-in schedule starts exactly one catch-up job (never 72), whose
  * receipt says how many runs it stands in for. Neither is silent, and nothing is replayed later.
  */
 import "./helpers/leak_guard.js";
@@ -27,7 +27,7 @@ test("after three days with no runner, missed runs are reported on both policies
   try {
     await trustRepo(world, repo);
     await addSchedule(world, repo, "Report that you are alive.", "--name", "reports", "--every", "1h", "--on-missed", "report", "-e", gw.url, "-m", "m");
-    await addSchedule(world, repo, "Report that you are alive.", "--name", "catches", "--every", "1h", "-e", gw.url, "-m", "m");
+    await addSchedule(world, repo, "Report that you are alive.", "--name", "catches", "--every", "1h", "--on-missed", "run-once", "-e", gw.url, "-m", "m");
     backdate(world, "reports", 72);
     backdate(world, "catches", 72);
     const paths = schedulePaths(world.paths);
@@ -53,7 +53,7 @@ test("after three days with no runner, missed runs are reported on both policies
     assert.match(status.stdout, /last outcome MISSED/);
     assert.match((await world.run(["schedule", "list"])).stdout, /reports\s+enabled.*last MISSED\s+72 missed/);
 
-    // run-once (the default): exactly one catch-up job, and it says what it stands in for.
+    // Explicit run-once opt-in: exactly one catch-up job, and it says what it stands in for.
     const job = await firstJobOf(world, "catches");
     assert.equal(job.origin.kind === "schedule" && job.origin.dueAt, readSchedule(paths, "catches")!.state.lastFire!.dueAt);
     const ended = await world.waitJob(job.id, ["COMPLETE", "BLOCKED", "FAILED", "CANCELLED", "TIMED_OUT"], 200_000);
