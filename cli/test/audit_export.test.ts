@@ -638,17 +638,17 @@ test("a repository whose own Git configuration names a program is not hashed: th
   ];
   for (const [name, plant] of cases) {
     const subject = savedSubject({ flight: false });
-    if (!fs.existsSync(path.join(subject.workspace, ".git"))) {
-      git(subject.workspace, "init", "-q");
-      git(subject.workspace, "add", "-A");
-      git(subject.workspace, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "--allow-empty", "-m", "base");
-    }
+    if (!fs.existsSync(path.join(subject.workspace, ".git"))) git(subject.workspace, "init", "-q");
+    fs.writeFileSync(path.join(subject.workspace, "tracked.txt"), "tracked\n");
+    git(subject.workspace, "add", "-A");
+    git(subject.workspace, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "base");
     setReceiptCandidateId(subject, "0".repeat(64));
-    // A tracked file with new content, so Git has to read it again. Listed before the plant: the test's own Git
-    // commands would otherwise run the planted program themselves.
-    const tracked = git(subject.workspace, "ls-files").split("\n").find((file) => file && file !== ".gitattributes");
-    if (tracked) fs.appendFileSync(path.join(subject.workspace, tracked), "changed\n");
-    else fs.writeFileSync(path.join(subject.workspace, "new.txt"), "new\n");
+    // The tracked file keeps its content and size and gets a new modification time: Git cannot tell whether it changed
+    // without hashing it again, and hashing is what runs a content filter. (A file whose size changed is known to be
+    // modified without being read.) Done before the plant: the test's own Git commands would otherwise run the
+    // planted program themselves.
+    const later = new Date(Date.now() + 5_000);
+    fs.utimesSync(path.join(subject.workspace, "tracked.txt"), later, later);
     const marker = path.join(subject.root, "ran");
     plant(subject.workspace, `sh -c 'echo ran > ${marker}; cat'`);
     assert.equal(fs.existsSync(marker), false, `${name}: planting ran the command`);
