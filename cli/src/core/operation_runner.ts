@@ -228,7 +228,11 @@ export class OperationRunner {
         const cap = this.state.policy.maxTotalTokens;
         if (cap !== undefined) {
           const total = this.rolledUpTokens();
-          if (total !== undefined && total >= cap) {
+          if (total === undefined) {
+            this.pauseForUnmeasuredTokenBudget(cap);
+            return this.state;
+          }
+          if (total >= cap) {
             this.pauseForTokenBudget(total, cap);
             return this.state;
           }
@@ -446,19 +450,40 @@ export class OperationRunner {
     if (cap === undefined) return undefined;
     const store = this.opts.store;
     const workspace = this.opts.workspace ?? this.state.git?.repoRoot;
-    if (!store || !workspace) return undefined;
+    const hasPriorRun = this.state.units.some((unit) => Boolean(unit.agentTaskId) || unit.runs > 0);
+    if (!store || !workspace) return hasPriorRun ? undefined : 0;
     let total = 0;
     for (const unit of this.state.units) {
-      if (!unit.agentTaskId) continue;
+      if (!unit.agentTaskId) {
+        if (unit.runs > 0) return undefined;
+        continue;
+      }
       try {
         const stats = store.manager.loadTaskState(unit.agentTaskId, workspace).tokenStats;
-        if (!stats) continue;
+        if (!stats || !Number.isSafeInteger(stats.total) || stats.total < 0) return undefined;
         total += stats.total;
+        if (!Number.isSafeInteger(total)) return undefined;
       } catch {
-        // Missing child accounting remains unmeasured; do not fabricate.
+        return undefined;
       }
     }
     return total;
+  }
+
+  private pauseForUnmeasuredTokenBudget(cap: number): boolean {
+    if (this.state.status === "COMPLETE" || this.state.status === "CANCELLED" || this.state.status === "PAUSED") return false;
+    const reason = `Paused: goal token budget cannot be enforced because child token usage is unavailable; inspect or repair the accounting before resuming (cap ${cap}).`;
+    this.state.status = "PAUSED";
+    this.state.pauseReason = reason;
+    delete this.state.wait;
+    delete this.state.blocked;
+    for (const unit of this.state.units) {
+      if (unit.status === "RUNNING") unit.status = "RUNNABLE";
+    }
+    this.state.updatedAt = new Date(this.clock.now()).toISOString();
+    this.scheduler.emit("OPERATION_PAUSED", reason, { detail: { reason: "token_budget_unmeasured", maxTotalTokens: cap } });
+    this.save();
+    return true;
   }
 
   private pauseForTokenBudget(total: number, cap: number): boolean {

@@ -24,7 +24,10 @@ function renderGoal(result: GoalResult, detailed = false): string {
   if (operation.pauseReason && !result.reason?.includes(operation.pauseReason)) rows.push(`Paused: ${operation.pauseReason}`);
   if (result.usage) {
     const cap = result.usage.maxTotalTokens !== undefined ? ` / cap ${result.usage.maxTotalTokens}` : "";
-    rows.push(`Usage: ${result.usage.agentRuns} agent runs, ${result.usage.totalTokens} total tokens${cap} (${result.usage.reportedTokens} reported, ${result.usage.estimatedTokens} estimated), ${result.usage.inferenceRequests} inference requests`);
+    const total = result.usage.tokenAccountingComplete
+      ? `${result.usage.totalTokens} total tokens`
+      : `at least ${result.usage.totalTokens} measured tokens (some child usage unavailable)`;
+    rows.push(`Usage: ${result.usage.agentRuns} agent runs, ${total}${cap} (${result.usage.reportedTokens} reported, ${result.usage.estimatedTokens} estimated), ${result.usage.inferenceRequests} inference requests`);
   }
   rows.push("", "Work units:");
   for (const unit of operation.units) {
