@@ -102,6 +102,8 @@ export interface HarnessConfig {
    */
   strictTokenCount?: boolean;
   sandbox?: boolean | string; // Linux namespace / bwrap / container isolation (default: false)
+  /** SB-1: explicit named permission profile, when the operator selected one. */
+  sandboxProfile?: ":workspace" | ":read-only" | ":network";
   worktree?: boolean;        // Isolated ephemeral git worktree execution (default: false)
   /** A diagnostic run works on a snapshot of a failing candidate: its diagnosis completes it, so no completion verifier runs. */
   diagnosticRun?: boolean;
