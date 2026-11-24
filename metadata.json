@@ -1,0 +1,58 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M86E2SX4BCE5A3HRAX49SJCT",
+  "strategy": "manual-commit",
+  "branch": "v1/vr2-followups",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "cli/src/acp/types.ts",
+    "cli/src/acp/validate.ts",
+    "cli/src/acp_stdio.ts",
+    "cli/test/acp_review_fixes.test.ts",
+    "cli/test/acp_stdio.test.ts",
+    "cli/test/acp_validate.test.ts",
+    "cli/test/acp_verify_followups.test.ts",
+    "docs/ACP.md",
+    "docs/MCP_GUIDE.md",
+    "docs/evidence/v1.3.0/VR2.md",
+    "docs/protocol/ACP_ADAPTER_VERSIONS.json",
+    "docs/protocol/acp-adapter-v4.schema.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 16511,
+    "cache_read_tokens": 7114768,
+    "output_tokens": 10880,
+    "api_call_count": 9,
+    "subagent_tokens": {
+      "input_tokens": 550,
+      "cache_creation_tokens": 780913,
+      "cache_read_tokens": 46739883,
+      "output_tokens": 280068,
+      "api_call_count": 275
+    }
+  },
+  "redaction": {
+    "replacements": 1358,
+    "layers": {
+      "betterleaks": 2,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 43,
+      "credentialed_uri": 3,
+      "entropy": 1310,
+      "key_context": 0,
+      "provider_token": 2,
+      "shell_stdin": 0
+    }
+  }
+}

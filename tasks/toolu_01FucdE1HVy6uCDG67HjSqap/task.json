@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01FucdE1HVy6uCDG67HjSqap",
+  "agent_id": "add2d9de159235857",
+  "subagent_type": "reviewer",
+  "task_description": "Review PR #776 submodule check",
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 33193,
+    "cache_read_tokens": 212361,
+    "output_tokens": 4813,
+    "api_call_count": 9
+  },
+  "started_at": "2026-11-24T09:12:50.009405146Z",
+  "completed_at": "2026-11-24T09:16:25.093448687Z"
+}
