@@ -19,6 +19,7 @@
 import * as path from "node:path";
 import { resolveProductionPolicyInputs, type ProductionPolicyInputs } from "./managed_policy_inputs.js";
 import {
+  inspectManagedTiers,
   loadManagedTiers,
   loadProjectPolicy,
   ManagedPolicyError,
@@ -26,8 +27,9 @@ import {
   recordProjectPolicyApproval,
   type LoadedPolicy,
   type ManagedTiers,
+  type TierInspection,
 } from "./managed_policy_load.js";
-import { describeSource, mergePolicies, requiresHuman, type EffectivePolicy, type HumanEffect, type PolicySource } from "./managed_policy.js";
+import { clampSandbox, clampSandboxNetwork, describeSource, mergePolicies, requiresHuman, type EffectivePolicy, type HumanEffect, type PolicySource } from "./managed_policy.js";
 
 /** The managed tiers as read, and their merge (no project tier). Frozen. */
 export interface ManagedPolicyState {
@@ -53,6 +55,8 @@ export interface PolicyHost {
    * relaxations apply until the file changes. Returns the hash, or undefined when there is no readable file to approve.
    */
   approveProjectPolicy(workspace: string, approvedAt: string): string | undefined;
+  /** For diagnosis: each managed file read by itself, now (see `inspectManagedTiers`). Changes nothing `managed()` returns. */
+  inspect(): TierInspection[];
 }
 
 function deepFreeze<T>(value: T): T {
@@ -93,6 +97,7 @@ export function createPolicyHost(resolve: () => ProductionPolicyInputs): PolicyH
       recordProjectPolicyApproval({ fs: loaded!.inputs.fs, storePath: resolve().trustStorePath, workspace, sha256, approvedAt });
       return sha256;
     },
+    inspect: () => inspectManagedTiers(resolve()),
   };
 }
 
@@ -131,10 +136,30 @@ export function emitPolicyNotice(notice: string): void {
   process.stderr.write(`${notice}\n`);
 }
 
+/** A refusal that quotes a name a configuration file chose (an MCP server, a plugin file), made safe to print: control characters become `?`. */
+export function printableRefusal(message: string): string {
+  return message.replace(/[\u0000-\u001f\u007f-\u009f]/g, "?");
+}
+
 /** How a project file whose relaxations were not applied gets approved in this release. */
 export function approvalHint(policy: LoadedPolicy): string | undefined {
   if (policy.effective.verification.relaxationStatus !== "not_approved") return undefined;
   return `nexus: to apply the relaxations of ${policy.project.file}, review the file and approve it with \`nexus trust ${path.dirname(policy.project.file)}\`; a later change to the file needs a new approval.`;
+}
+
+/**
+ * `nexus verify` builds no session configuration, so its own flags meet the policy here: `--yes` under
+ * `approval.disable_yes`, `--sandbox none` under `sandbox.required`, `--sandbox-network` under
+ * `sandbox.forbid_network`. Returns the refusal (it names the policy source), or undefined. With no `--sandbox` verify
+ * already confines every run and stops when no engine can, so `sandbox.required` has nothing to switch on.
+ */
+export function verifyFlagRefusal(policy: EffectivePolicy, flags: { yes: boolean; sandboxNone: boolean; sandboxNetwork: boolean }): string | undefined {
+  const noYes = policy.approval.disable_yes;
+  if (flags.yes && noYes.value) return `--yes is refused: managed policy disables it. ${describeSource(noYes.source)}`;
+  const sandbox = clampSandbox(policy, flags.sandboxNone ? { mode: "none", origin: "--sandbox none" } : { mode: "auto" });
+  if (!sandbox.allowed) return sandbox.message;
+  const network = clampSandboxNetwork(policy, flags.sandboxNetwork, "--sandbox-network");
+  return network.allowed ? undefined : network.message;
 }
 
 /** The approval settings a tool call is decided under. Structurally the `PolicyContext` members this module clamps. */

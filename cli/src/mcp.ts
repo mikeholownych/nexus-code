@@ -4,7 +4,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { ToolDefinition, ExecutionResult } from "./types.js";
 import { HARNESS_TOOLS, RustCoreBridge } from "./tools.js";
-import { isWorkspaceTrusted, WORKSPACE_MCP_FILES } from "./workspace_trust.js";
+import { isWorkspaceFile, isWorkspaceTrusted, WORKSPACE_MCP_FILES } from "./workspace_trust.js";
+import { permitsMcpServer, type EffectivePolicy, type McpServerDescriptor } from "./core/managed_policy.js";
+import { ManagedPolicyError } from "./core/managed_policy_load.js";
+import { emitPolicyNotice, managedPolicy, printableRefusal } from "./core/policy_runtime.js";
 import { VERIFY_RESULT_SCHEMA_VERSION, verifyExitCode, type VerifyJsonError } from "./verify_contract.js";
 import { pinBase, VerifyService, VERIFY_KILL_GRACE_MS, VERIFY_RECEIPT_URI_PREFIX, type PinnedBase, type VerifyServiceDeps } from "./core/verify_service.js";
 import pc from "picocolors";
@@ -118,6 +121,17 @@ export class McpConnection {
     } else {
       this.transport = "stdio";
     }
+  }
+
+  /**
+   * GV-5: what managed policy decides on, before anything is started. It names what `connect` would reach: the URL
+   * only when the transport uses it, else the program. A program given as a bare name is found through PATH at spawn,
+   * so it has no path a `command:` entry could pin, and can be admitted by name only.
+   */
+  public policyDescriptor(fromWorkspace: boolean): McpServerDescriptor {
+    const { command, url } = this.config;
+    if (url && (this.transport === "websocket" || this.transport === "sse" || this.transport === "http")) return { name: this.serverName, url: String(url), fromWorkspace };
+    return { name: this.serverName, ...(typeof command === "string" && path.isAbsolute(command) ? { command } : {}), fromWorkspace };
   }
 
   public async connect(): Promise<boolean> {
@@ -576,12 +590,42 @@ export class McpClientManager {
   private trusted: boolean;
   private connections: Map<string, McpConnection> = new Map();
   private toolToServerMap: Map<string, { server: McpConnection; originalName: string; serverName: string }> = new Map();
+  private readonly policy: () => EffectivePolicy;
+  private readonly notify: (notice: string) => void;
+  private policyRefusals: string[] = [];
 
-  constructor(workspace: string, options: { readOnly?: boolean; trusted?: boolean } = {}) {
+  constructor(workspace: string, options: { readOnly?: boolean; trusted?: boolean; policy?: () => EffectivePolicy; notify?: (notice: string) => void } = {}) {
     this.workspace = path.resolve(workspace);
     this.readOnly = options.readOnly ?? false;
     this.trusted = options.trusted ?? isWorkspaceTrusted(this.workspace, this.readOnly);
+    this.policy = options.policy ?? managedPolicy;
+    this.notify = options.notify ?? emitPolicyNotice;
     McpClientManager.activeManagers.add(this);
+  }
+
+  /**
+   * GV-5: the managed policy's refusal of a server, decided before it is started; undefined when it may start. The
+   * refusal names the policy source and is told to the operator. A policy that cannot be read admits no server.
+   */
+  private refusedByPolicy(conn: McpConnection, fromWorkspace: boolean): string | undefined {
+    let message: string | undefined;
+    try {
+      const decision = permitsMcpServer(this.policy(), conn.policyDescriptor(fromWorkspace));
+      if (!decision.allowed) message = decision.message;
+    } catch (error) {
+      if (!(error instanceof ManagedPolicyError)) throw error;
+      message = `MCP server '${conn.serverName}' is not started: the managed policy cannot be read (${error.tier} tier, ${error.file}).`;
+    }
+    if (message === undefined) return undefined;
+    message = printableRefusal(message);
+    this.policyRefusals.push(message);
+    this.notify(`nexus: ${message}`);
+    return message;
+  }
+
+  /** The servers managed policy refused since the last load, each with the policy source. */
+  public getPolicyRefusals(): string[] {
+    return [...this.policyRefusals];
   }
 
   public static shutdownAllGlobal(): void {
@@ -593,16 +637,19 @@ export class McpClientManager {
 
   public async loadAndConnect(): Promise<void> {
     this.shutdownAll();
+    this.policyRefusals = [];
 
     for (const file of mcpConfigFiles(this.workspace, this.trusted, this.readOnly)) {
       if (fs.existsSync(file)) {
         try {
           const content = fs.readFileSync(file, "utf-8");
           const config = JSON.parse(content) as McpConfigFile;
+          const fromWorkspace = isWorkspaceFile(this.workspace, file);
           if (config.mcpServers && typeof config.mcpServers === "object") {
             for (const [name, serverCfg] of Object.entries(config.mcpServers)) {
               if ((serverCfg.command || serverCfg.url) && !this.connections.has(name)) {
                 const conn = new McpConnection(name, serverCfg);
+                if (this.refusedByPolicy(conn, fromWorkspace)) continue;
                 const ok = await conn.connect();
                 if (ok) {
                   this.connections.set(name, conn);
@@ -620,6 +667,7 @@ export class McpClientManager {
   }
 
   public addConnection(name: string, connection: McpConnection): void {
+    if (this.refusedByPolicy(connection, false)) return;
     this.connections.set(name, connection);
     this.rebuildToolMap();
   }
@@ -642,6 +690,8 @@ export class McpClientManager {
     persistError?: string;
   }> {
     const conn = new McpConnection(name, config);
+    const refusal = this.refusedByPolicy(conn, false);
+    if (refusal) return { success: false, error: refusal, toolCount: 0, resourceCount: 0, promptCount: 0 };
     const connected = await conn.connect();
     if (!connected) {
       return {

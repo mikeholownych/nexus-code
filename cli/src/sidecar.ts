@@ -85,6 +85,7 @@ import { buildCatalog } from "./model_catalog.js";
 import { cancelLocalEndpointSetup, clearLocalEndpointSetup, clearLocalEndpointSetupAfterSelectionFailure, connectWithKey, disconnect, prepareLocalEndpoint, selectModel, startSignIn } from "./provider_connect.js";
 import { isHarnessNote, withHarnessProvenance } from "./harness_notes.js";
 import { persistableEndpoint } from "./core/endpoint_identity.js";
+import { clampAlwaysApproval } from "./core/managed_policy.js";
 
 export interface SidecarOptions {
   app: ApplicationCore;
@@ -896,6 +897,7 @@ export class SidecarServer {
       this.emit({ type: "error", id, code: "NO_PENDING_APPROVAL", message: `No pending approval with id ${id}.` });
       return;
     }
+    if (approved && always && pending.tool !== DELIBERATE_APPROVAL && !this.mayRememberAlways()) always = false;
     if (approved && always && pending.tool !== DELIBERATE_APPROVAL) {
       this.alwaysApprove = true;
       this.mode = "auto";
@@ -905,6 +907,18 @@ export class SidecarServer {
     // Only the operator's own Deny says "denied by you"; a cancelled turn or a shutdown settles the approval as false too.
     if (pending.tool !== DELIBERATE_APPROVAL) this.operatorDeclined = !approved;
     pending.settle(approved);
+  }
+
+  /**
+   * GV-1: whether an "always" answer may switch this session to approving without asking. Under
+   * `approval.disable_auto` it may not: the client's answer approves the one call it was given for, the mode and this
+   * server's own approve-everything state stay as they are, and the operator is told which policy decided. Decided
+   * here, so no client can remember the answer on the operator's behalf.
+   */
+  private mayRememberAlways(): boolean {
+    const clamp = clampAlwaysApproval(this.app.getAgent().getBridge().getSecurityManager().getEffectivePolicy());
+    if (clamp.notice) this.emit({ type: "notice", text: clamp.notice });
+    return clamp.remember;
   }
 
   private requestCheckpointChoice(

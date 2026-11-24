@@ -4,7 +4,10 @@ import * as os from "node:os";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import { ToolDefinition, ExecutionResult } from "./types.js";
-import { isWorkspaceTrusted, WORKSPACE_PLUGIN_DIRS } from "./workspace_trust.js";
+import { isWorkspaceFile, isWorkspaceTrusted, WORKSPACE_PLUGIN_DIRS } from "./workspace_trust.js";
+import { permitsPlugin, type EffectivePolicy } from "./core/managed_policy.js";
+import { ManagedPolicyError } from "./core/managed_policy_load.js";
+import { emitPolicyNotice, managedPolicy, printableRefusal } from "./core/policy_runtime.js";
 import { recordMiddlewareAudit } from "./core/persistence_protection.js";
 import type { FlightRecorder } from "./flight.js";
 import pc from "picocolors";
@@ -58,12 +61,46 @@ export class PluginManager {
   private plugins: Map<string, PluginHooks> = new Map();
   private customToolsMap: Map<string, (args: Record<string, any>) => Promise<ExecutionResult>> = new Map();
   private customToolDefs: ToolDefinition[] = [];
+  private readonly policy: () => EffectivePolicy;
+  private readonly notify: (notice: string) => void;
+  private policyRefusals: string[] = [];
 
-  constructor(workspace: string, options?: { readOnly?: boolean; trusted?: boolean; flightRecorder?: FlightRecorder }) {
+  constructor(workspace: string, options?: { readOnly?: boolean; trusted?: boolean; flightRecorder?: FlightRecorder; policy?: () => EffectivePolicy; notify?: (notice: string) => void }) {
     this.workspace = path.resolve(workspace);
     this.readOnly = Boolean(options?.readOnly);
     this.trusted = options?.trusted !== undefined ? options.trusted : isWorkspaceTrusted(this.workspace, this.readOnly);
     this.flightRecorder = options?.flightRecorder;
+    this.policy = options?.policy ?? managedPolicy;
+    this.notify = options?.notify ?? emitPolicyNotice;
+  }
+
+  /**
+   * GV-5: the managed policy's refusal of a plugin file, decided before its code runs; undefined when it may be
+   * imported. The decision is on the file (its real path and the SHA-256 of its bytes): a plugin's name is known only
+   * after it ran. The refusal names the policy source and is told to the operator. A policy that cannot be read admits
+   * no plugin; a file that cannot be read throws, and is not imported.
+   */
+  private refusedByPolicy(filePath: string): string | undefined {
+    let message: string | undefined;
+    try {
+      const policy = this.policy();
+      const real = fs.realpathSync(filePath);
+      const decision = permitsPlugin(policy, { path: real, sha256: sha256(fs.readFileSync(real)), fromWorkspace: isWorkspaceFile(this.workspace, filePath) });
+      if (!decision.allowed) message = decision.message;
+    } catch (error) {
+      if (!(error instanceof ManagedPolicyError)) throw error;
+      message = `plugin '${filePath}' is not imported: the managed policy cannot be read (${error.tier} tier, ${error.file}).`;
+    }
+    if (message === undefined) return undefined;
+    message = printableRefusal(message);
+    this.policyRefusals.push(message);
+    this.notify(`nexus: ${message}`);
+    return message;
+  }
+
+  /** The plugin files managed policy refused in the last load, each with the policy source. */
+  public getPolicyRefusals(): string[] {
+    return [...this.policyRefusals];
   }
 
   public setFlightRecorder(flightRecorder: FlightRecorder): void {
@@ -74,6 +111,7 @@ export class PluginManager {
     this.plugins.clear();
     this.customToolsMap.clear();
     this.customToolDefs = [];
+    this.policyRefusals = [];
 
     const allowWorkspace = this.trusted && !this.readOnly;
     for (const dir of pluginDirs(this.workspace, allowWorkspace)) {
@@ -95,6 +133,7 @@ export class PluginManager {
 
   private async loadPluginFile(filePath: string): Promise<void> {
     try {
+      if (this.refusedByPolicy(filePath)) return;
       const fileUrl = pathToFileURL(filePath).href;
       const mod = await import(fileUrl);
       const plugin: PluginHooks = mod.default || mod;
@@ -300,6 +339,6 @@ export class PluginManager {
   }
 }
 
-function sha256(content: string): string {
+function sha256(content: string | Uint8Array): string {
   return createHash("sha256").update(content).digest("hex");
 }

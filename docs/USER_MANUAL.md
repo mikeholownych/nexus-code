@@ -740,6 +740,30 @@ check. Invalid effective settings are reported when an operation is created; a s
 otherwise contradictory operator wait defaults for that operation. Already persisted operations keep their stored
 policy when resumed.
 
+### Managed policy (`nexus policy`)
+
+An administrator can restrict Nexus on a machine with `/etc/nexus/policy.toml` (root-owned), and an operator can
+restrict their own sessions with `~/.config/nexus/policy.toml`. A policy only restricts: it can disable `--yes` and
+approval mode `auto`, require the sandbox, forbid or always ask before named commands, protect paths, and limit which
+MCP servers start and which plugin files are imported (`mcp.allow`, `plugins.allow`, and `disable_workspace` for
+each). A server or plugin the policy does not admit is not started or imported, and Nexus says which policy file and
+key decided. A policy file that exists and cannot be read or parsed stops Nexus with exit code 2; there is no bypass.
+The format, every key and the exact rules are in [MANAGED_POLICY.md](MANAGED_POLICY.md).
+
+```bash
+nexus policy show                       # every key, its effective value, and the tier that decides it
+nexus policy show --json
+nexus policy check                      # validate the installed files; exit 2 when Nexus would refuse to start
+nexus policy check ./policy.toml        # validate a file before rolling it out
+```
+
+Both commands only read, and both run when a policy file is broken, as `nexus doctor` does. `nexus doctor` reports
+the policy as the findings `policy.system`, `policy.user`, `policy.project` and `policy.effective`; `nexus doctor
+--fix` never changes a policy file. Under `approval.disable_auto` (or `approval.strict`) an "always" answer to an
+approval prompt approves that one call and is not remembered, and `/mode auto` is refused with the policy source.
+`nexus verify` honours the same policy: `--yes`, `--sandbox none` and `--sandbox-network` are refused (exit code 2)
+when `approval.disable_yes`, `sandbox.required` or `sandbox.forbid_network` is set.
+
 - **Workspace Symlink Boundary Confinement**: Native Rust canonicalization verifies that neither relative paths nor symlinks can escape the workspace jail directory.
 - **Configurable Security Policy (`.nexus-security.json`)**: Declare repository-specific blocked shell commands, protected files (`.git`, `.env*`, keys), and allowed outbound network domains. Protected-path checks cover case-insensitive variants, `.env*` prefixes, and canonical targets across all file read/write/edit tools. Patterns match the path relative to the workspace root, so a workspace that sits under a directory with a protected-looking name (for example `~/.env-tools/project`) is not blocked wholesale; a symlink that leaves the workspace for a protected target is still refused. The old `allowExternalSymlinks` key was never read and has been removed; a policy file that still sets it loads, and the key is ignored; for `run_command` path protection is advisory because shell commands execute in the host shell environment.
 - **Prompt-injection scanner (CS-7).** Text that enters the model from outside (a fetched page, a file, command output, a tool server's reply) is checked for: instruction-like text aimed at the assistant ("ignore the previous instructions", "do not tell the user", "send the credentials to ..."); characters a reader cannot see (Unicode tag characters that spell hidden text, bidirectional overrides, runs of zero-width characters); markup posing as a chat turn or a tool call; and a base64 or percent-encoded payload that decodes to one of these. A result that trips a strong signal, or two weak ones, reaches the model with a notice first, between `<<<UNTRUSTED RESULT BEGIN>>>` and `<<<UNTRUSTED RESULT END>>>`, with its content unchanged except that hidden characters are shown as `<U+XXXX>`; nothing is deleted. The `security.injection_suspected` stream event and the operator console say it happened. While an operator is present, the next step's state-changing calls (writes, commands, network, delegation; not reads) ask for approval even in `--mode auto`, naming the tool whose result looked wrong. With no operator present (headless, `--yes`) nothing is blocked: the label and fence are the whole response. Nexus's own memory tools are not scanned. **Limits:** it is a heuristic, not a guarantee. It reads English phrasing; a paraphrase, another language, text split by punctuation, look-alike letters, reversed or leetspeak text, and an instruction with none of the trigger words are not seen, and ordinary text that quotes an attack (a security article, a test for this very scanner) is flagged. On the labelled corpus in `cli/test/fixtures/injection_corpus.json`: phrasings the scanner was tuned on, 54 of 64 attacks caught and 5 of 45 benign samples flagged; phrasings written after it was frozen, 15 of 30 caught and 2 of 24 flagged; 0 of 12 deliberate evasions caught. Treat the second line as the realistic figure. The only complete defence is not letting untrusted content steer actions you did not ask for: keep approvals on, and use `--sandbox`.
