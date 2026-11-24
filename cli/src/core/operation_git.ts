@@ -660,6 +660,15 @@ export class OperationGit {
     if (!this.inIntegration(["merge-base", "--is-ancestor", commit, "HEAD"]).ok) {
       return { ok: false, reason: "integration branch no longer contains the unit commit; it was rewritten or rewound" };
     }
+    // A verifier must observe the exact tree that will be accepted. A passing command that leaves tracked, staged, or
+    // untracked changes behind must not be followed by cleanup and a receipt for the different committed tree.
+    const status = this.inIntegration(["status", "--porcelain", "--untracked-files=all"]);
+    if (!status.ok) {
+      return { ok: false, reason: "could not verify the integration worktree after verification" };
+    }
+    if (status.stdout.trim()) {
+      return { ok: false, reason: "integration verification changed the integration worktree" };
+    }
     return { ok: true };
   }
 

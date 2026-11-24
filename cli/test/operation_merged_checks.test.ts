@@ -370,6 +370,24 @@ test("hostile: a unit's own trivially passing verifier does not mask an earlier 
   assertUntouched(f, tip);
 });
 
+test("hostile: a passing verifier that changes the merged tree is rejected and the merge is restored", async () => {
+  const f = fixture();
+  write(f.prepare("u1"), "u1.txt", "one\n");
+  const tip = f.ops.currentTip();
+
+  const outcome = await f.integrate("u1", "printf 'changed\\n' > file.txt; exit 0");
+
+  assert.ok(outcome.kind === "failed");
+  if (outcome.kind === "failed") {
+    assert.match(outcome.reason, /integration verification changed the integration worktree/);
+    assert.equal(outcome.checks?.at(-1)?.status, "PASSED", "the command returned success, but its modified tree was rejected");
+  }
+  assertUntouched(f, tip);
+  assert.equal(fs.readFileSync(path.join(f.integrationWorktree, "file.txt"), "utf8"), "base\n");
+  assert.equal(f.state.units.u1.integratedCommit, undefined);
+  assert.deepEqual(f.receipts, []);
+});
+
 test("hostile: nothing a unit reports marks a merge verified: checks on a receipt are the ones that ran", async () => {
   const f = fixture();
   write(f.prepare("u1"), "u1.txt", "one\n");
