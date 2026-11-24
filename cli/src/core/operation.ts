@@ -308,6 +308,8 @@ export interface OperationGitState {
   integrationWorktree: string;
   baseDir: string;
   units: Record<string, OperationGitUnit>;
+  /** Operator verifiers pinned for the operation: each runs on every merged tree. Only ever added to (PA-2). */
+  integrationVerifiers?: string[];
 }
 
 /** A durable snapshot of a unit's conversation, restorable by the operator. */
@@ -352,6 +354,22 @@ export interface OperationMessage {
   deliveredTo?: string[];
 }
 
+/**
+ * One verifier command run on a merged tree at integration (PA-2). Written by the runner from the processes it ran
+ * itself; nothing a unit says or writes sets one.
+ */
+export interface MergedCheck {
+  command: string;
+  /** Whose verifier this is: unit ids, or `operator` for a verifier pinned for the operation. */
+  owners: string[];
+  /** ENVIRONMENT: the command could not be started (exit 126/127), or the session's sandbox could not be built. */
+  status: "PASSED" | "FAILED" | "ENVIRONMENT" | "TIMED_OUT";
+  /** The same command on the tree before the merge, run only after a failure to decide whether the merge caused it. */
+  baseline?: "PASSED" | "FAILED";
+  /** The engine that confined the run; absent when the session has no sandbox configured. */
+  sandbox?: "bwrap" | "docker";
+}
+
 /** What was integrated, and the evidence the merge was accepted with. */
 export interface IntegrationReceipt {
   unitId: string;
@@ -369,6 +387,8 @@ export interface IntegrationReceipt {
   tests?: { command: string; status: string; hasExecutedTests: boolean; definitionBound?: false };
   /** 1-based merge order within the operation, assigned by the runner. */
   sequence?: number;
+  /** Every verifier run on the merged tree before this receipt was written, in the order run (PA-2). */
+  mergedChecks?: MergedCheck[];
 }
 
 export interface DurableOperationState {
