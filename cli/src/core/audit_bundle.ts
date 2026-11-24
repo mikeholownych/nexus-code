@@ -1011,7 +1011,8 @@ function verify(bundleDir: string, options: VerifyAuditBundleOptions): AuditVeri
       logs.push({ path: recorded.path, kind: recorded.kind, status: verdict.status, records: verdict.records, matches_manifest: matches });
 
       // What the manifest says about the log that is not a failure. It is the manifest's statement, as old as the export.
-      if (recorded.status !== "intact") notes.push(`${recorded.path} was already ${recorded.status === "broken" ? "broken" : "not chained"} when it was exported; its integrity before export cannot be shown.`);
+      if (recorded.status === "broken") findings.add("log_not_intact_at_export", `${recorded.path} was already broken when it was exported; its source evidence is incomplete.`, recorded.path);
+      else if (recorded.status === "unchained") notes.push(`${recorded.path} was not chained when it was exported; its integrity before export cannot be shown.`);
       if (recorded.closed === false) notes.push(`${recorded.path} was not closed when it was exported: it has no end record (still recording, stopped early, or records were already missing from the end).`);
       if (recorded.source && !recorded.source.complete) notes.push(`${recorded.path} is a bounded excerpt: the first ${plural(recorded.records, "record")} of a source log of ${recorded.source.records}.`);
     }

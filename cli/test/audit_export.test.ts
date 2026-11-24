@@ -535,6 +535,7 @@ test("characterisation: redaction at save can break the chain of the verificatio
   assert.match(exported.document.warnings.join("\n"), /config-attempts\.jsonl does not read as an intact chain; the manifest records it as broken/);
   assert.ok(!Object.values(bundleTexts(exported.written.dir)).some((text) => text.includes(key)));
   const verified = check(exported.written.dir);
-  assert.equal(verified.exit, "intact_unsigned", "the bundle is what its manifest says: a log that was already broken");
-  assert.match(verified.result.notes.join("\n"), /config-attempts\.jsonl was already broken when it was exported/);
+  assert.equal(verified.exit, "tampered", "a faithfully bundled but already broken source log cannot be accepted as intact");
+  assert.deepEqual(verified.result.findings.map((finding) => [finding.kind, finding.path]), [["log_not_intact_at_export", ATTEMPTS]]);
+  assert.deepEqual(verified.result.notes, []);
 });

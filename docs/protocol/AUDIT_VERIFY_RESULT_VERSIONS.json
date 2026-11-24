@@ -8,5 +8,10 @@
     "schema_version": 1,
     "schemaSha256": "ec3cd858df6a7d023defbaca0b26c1fd4222fe74be40ea201d61feaccb609137",
     "note": "GV-2 slice 2. Additive, so schema_version stays 1: the schema now also admits AuditExportResult, the document `nexus audit export --json` prints when a bundle was written (result \"exported\", with bundle_dir, bundle_id, manifest_sha256, signed, redaction, at_rest, file_count, file_bytes, omitted, warnings). Every document valid under the first entry is still valid, and what `nexus audit verify` prints is unchanged. The error document (AuditVerifyError) is now also what a failed export prints; only its description changed. GV-2 slice 3 now produces the predeclared intact_signed and valid/invalid/missing signature states when a caller supplies an operator-held Ed25519 public key."
+  },
+  {
+    "schema_version": 1,
+    "schemaSha256": "f5a70fc239c8687537d888567379819f44041a135930fde48549248622bd2202",
+    "note": "Additive P10-03 follow-up: audit verification now reports a log that was already broken at export as a finding; schema_version remains 1."
   }
 ]

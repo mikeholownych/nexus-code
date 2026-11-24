@@ -35,9 +35,10 @@ Verification reads the directory, not the manifest's word for it: it lists what 
 - a symbolic link or anything that is not a regular file (it is reported and never followed or read);
 - a manifest that is malformed, not in its canonical byte form, or inconsistent with its own hashes;
 - a chained log (a flight log, the verification-configuration attempts) that no longer ends where the manifest recorded, or whose chain is broken;
+- a chained log whose chain was already broken when the bundle was exported (`log_not_intact_at_export`), even when the bundle preserves those bytes exactly;
 - a manifest whose hash is not the one given with `--expect-manifest-sha256`.
 
-A chained log that was not closed when it was exported, one that was already broken, and a bounded excerpt are notes, not failures: they are what the manifest says about the log.
+A chained log that was not closed when it was exported, an unchained legacy log, and a bounded excerpt are notes: they describe what the manifest says about the log. A log already broken at export is a failure because its source evidence is incomplete. If the log was intact at export but later changes or is cut, verification reports `log_chain_broken` or `log_head_mismatch`.
 
 ### What an intact result establishes, and what it does not
 
@@ -148,7 +149,7 @@ Only 0 means a bundle was written or found intact. A code can stand for several 
 | 0 | `exported` | `audit export`: the bundle was written. |
 | 0 | `intact_signed` | `audit verify`: every file matches the manifest, and the manifest is signed by the key given with `--public-key`. |
 | 0 | `intact_unsigned` | `audit verify`: every file matches the manifest and the bundle is not signed. The result rests on the manifest alone, and the output says so every time. |
-| 1 | `tampered` | `audit verify`: a file is altered, missing, extra or unsafe (a symbolic link, not a regular file); the manifest is malformed or inconsistent; a chained log does not match its recorded head; a limit was exceeded; the signature is invalid; or a key was given and the bundle has no signature. |
+| 1 | `tampered` | `audit verify`: a file is altered, missing, extra or unsafe (a symbolic link, not a regular file); the manifest is malformed or inconsistent; a chained log was already broken at export or no longer matches its recorded head; a limit was exceeded; the signature is invalid; or a key was given and the bundle has no signature. |
 | 1 | `error` | The command itself failed (the bundle directory cannot be read, an export could not be written), so nothing was established. |
 | 1 | `option_parse` | The command line could not be parsed: an unknown option or an option without its value (the option parser exits before the command runs; no JSON document). |
 | 2 | `signature_unchecked` | `audit verify`: every file matches the manifest, and the bundle carries a signature that was not checked because no `--public-key` was given. |
