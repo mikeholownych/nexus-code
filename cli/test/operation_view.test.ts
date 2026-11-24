@@ -708,7 +708,14 @@ test("the --json document satisfies the checked-in JSON schema", () => {
     integrationBranch: "nexus/op-op-view/integration",
     integrationWorktree: "/repo/.nexus/worktrees/op-op-view/integration",
     baseDir: "/repo/.nexus/worktrees/op-op-view",
-    units: {},
+    units: {
+      u1: {
+        branch: "nexus/op-op-view/u1",
+        worktree: "/repo/.nexus/worktrees/op-op-view/units/u1",
+        baseCommit: "a".repeat(40),
+        ownerId: "op-view:u1:42",
+      },
+    },
   };
   op.integrations = [
     {
@@ -721,6 +728,7 @@ test("the --json document satisfies the checked-in JSON schema", () => {
       outcome: "VERIFIED",
       summary: "done",
       verification: "PASSED",
+      ownerId: "op-view:u1:42",
     },
   ];
   const key = scopeKey(op.resources[0], "model");
