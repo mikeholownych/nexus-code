@@ -13,9 +13,10 @@
  * loader runs there; the scratch directory is removed before the export returns. The guard is the store's own lock
  * file; it is taken only when that file already exists, so that an export never creates even that.
  *
- * THE SNAPSHOT RULE. An export may run beside a live session. Every source file is opened once and read once; what is
- * hashed, scanned and written is that one buffer. A log is cut at its last complete line. Nothing is read a second
- * time, so no file of the bundle can disagree with its manifest entry because the source moved.
+ * THE SNAPSHOT RULE. An export may run beside a live session. Files that become bundle artefacts are opened once and
+ * read once; what is hashed, scanned and written is that one buffer. A log is cut at its last complete line. The
+ * candidate-binding report separately scans the recorded workspace using the bounded candidate identity routine;
+ * that observation is not atomic with collecting the bundle files and does not lock the workspace against changes.
  *
  * REDACTION `standard`. A file this module generates (the session export as JSON and Markdown, the receipts, the
  * verifier attempts, the evidence) goes through the persistence redactor and is then checked by the sensitive-content
@@ -59,6 +60,8 @@ import {
   type WrittenAuditBundle,
 } from "./core/audit_bundle.js";
 import { getBuildIdentity } from "./build_identity.js";
+import { computeCandidateIdentitySync } from "./core/candidate.js";
+import { verifyCheckout } from "./core/checkout_trust.js";
 import { verifyChain, type ChainVerdict } from "./core/hash_chain.js";
 import { assertNoSensitivePersistenceContent, redactForPersistence } from "./core/persistence_protection.js";
 import { STATE_STORE_GUARD_FILE, withStateStoreGuard } from "./core/state_store_guard.js";
@@ -71,6 +74,10 @@ export type AuditStore = "tasks" | "sessions";
 export const AUDIT_FLIGHT_COPY_BYTES = 16 * 1024 * 1024;
 /** Largest `nexus verify` receipt a bundle takes. */
 export const AUDIT_RECEIPT_BYTES = 16 * 1024 * 1024;
+/** Candidate-binding export stays bounded even when the workspace exceeds the normal verifier scan budget. */
+const AUDIT_CANDIDATE_ENTRIES = 50_000;
+const AUDIT_CANDIDATE_BYTES = 256 * 1024 * 1024;
+const AUDIT_CANDIDATE_RECEIPTS = 10_000;
 
 /** Printed with every export: what `standard` redaction is and is not. */
 export const AUDIT_STANDARD_REDACTION_NOTE =
@@ -120,6 +127,8 @@ export interface AuditExport {
   written: WrittenAuditBundle;
   /** What `--json` prints. */
   document: AuditExportResult;
+  /** The current-workspace comparison printed for people and serialized in receipts/candidate-binding.json. */
+  candidateBinding: { status: "no_receipts" | "matched" | "mismatch" | "partial" | "unavailable"; currentCandidateId: string | null };
   /** `receipts/verify-<n>.json` for each `--receipt-file`, in the order given (also the ones left out). */
   receipts: Array<{ path: string; source: string }>;
 }
@@ -609,6 +618,73 @@ export function exportAuditBundle(request: AuditExportRequest): AuditExport {
     return restored.endsWith("\n") ? restored : `${restored}\n`;
   });
   generated("receipts/validation-receipts.json", "validation_receipts", session.validationReceipts ?? [], asJson);
+  const allValidationReceipts = Array.isArray(session.validationReceipts) ? session.validationReceipts : [];
+  const validationReceipts = allValidationReceipts.slice(0, AUDIT_CANDIDATE_RECEIPTS);
+  const candidateBinding: {
+    schema_version: 1;
+    checked_at: string;
+    meaning: string;
+    status: "no_receipts" | "matched" | "mismatch" | "partial" | "unavailable";
+    current_candidate_id: string | null;
+    receipt_count: number;
+    receipts_omitted: number;
+    unavailable_reason?: string;
+    receipts: Array<{ receipt_id: string | null; receipt_status: string | null; receipt_candidate_id: string | null; relation: "match" | "mismatch" | "unverifiable" }>;
+  } = {
+    schema_version: 1,
+    checked_at: createdAt,
+    meaning: "Candidate identity relation sampled separately from bundle collection; it is not an atomic workspace snapshot and does not indicate verifier success or task acceptance.",
+    status: validationReceipts.length === 0 ? "no_receipts" : "unavailable",
+    current_candidate_id: null,
+    receipt_count: allValidationReceipts.length,
+    receipts_omitted: Math.max(0, allValidationReceipts.length - validationReceipts.length),
+    receipts: [],
+  };
+  if (validationReceipts.length > 0) {
+    try {
+      if (workspacePath === null) throw new Error("workspace_not_recorded");
+      if (verifyCheckout(workspacePath).reason) throw new Error("workspace_checkout_untrusted");
+      candidateBinding.current_candidate_id = computeCandidateIdentitySync(workspacePath, {
+        maxEntries: AUDIT_CANDIDATE_ENTRIES,
+        maxTotalBytes: AUDIT_CANDIDATE_BYTES,
+      }).candidateId;
+      candidateBinding.status = "matched";
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      candidateBinding.unavailable_reason = /manifest exceeds .* (entry|byte) limit/.test(message)
+        ? "candidate_scan_limit_exceeded"
+        : /GitTimeoutError/.test(errorCode(error)) ? "git_timeout"
+          : /does not exist/.test(message) ? "workspace_missing"
+            : message === "workspace_checkout_untrusted" || /Refusing to compute the candidate identity/.test(message) ? "workspace_checkout_untrusted"
+              : "candidate_identity_unavailable";
+      warnings.push("Current workspace candidate identity could not be computed; validation receipt bindings are inconclusive.");
+    }
+    for (const value of validationReceipts) {
+      const receipt: Record<string, unknown> = isObject(value) ? value : {};
+      const receiptCandidateId = typeof receipt.candidateId === "string" ? receipt.candidateId : null;
+      const validReceiptCandidate = receiptCandidateId !== null && /^[a-f0-9]{64}$/.test(receiptCandidateId);
+      const relation = candidateBinding.current_candidate_id === null || !validReceiptCandidate
+        ? "unverifiable"
+        : receiptCandidateId === candidateBinding.current_candidate_id ? "match" : "mismatch";
+      candidateBinding.receipts.push({
+        receipt_id: typeof receipt.receiptId === "string" ? receipt.receiptId : null,
+        receipt_status: typeof receipt.status === "string" ? receipt.status : null,
+        receipt_candidate_id: validReceiptCandidate ? receiptCandidateId : null,
+        relation,
+      });
+    }
+    const relations = candidateBinding.receipts.map((receipt) => receipt.relation);
+    if (relations.includes("mismatch")) candidateBinding.status = "mismatch";
+    else if (candidateBinding.current_candidate_id !== null && (relations.includes("unverifiable") || candidateBinding.receipts_omitted > 0)) candidateBinding.status = "partial";
+  }
+  if (candidateBinding.status === "mismatch") {
+    warnings.push("At least one persisted validation receipt targets a different workspace candidate; see receipts/candidate-binding.json.");
+  } else if (candidateBinding.status === "partial") {
+    warnings.push("Some persisted validation receipts could not be bound to the current workspace candidate or the report was truncated; see receipts/candidate-binding.json.");
+  } else if (candidateBinding.status === "no_receipts") {
+    warnings.push("No persisted validation receipts were available to bind to the current workspace candidate.");
+  }
+  generated("receipts/candidate-binding.json", "validation_receipts", candidateBinding, asJson);
   generated("receipts/last-turn.json", "last_turn", session.lastTurn ?? null, asJson);
   generated("verification/attempts.json", "verification_attempts", session.objective?.verification ?? [], asJson);
   generated("evidence/provenance.json", "evidence_provenance", evidenceProvenance(session.objective), asJson);
@@ -690,7 +766,12 @@ export function exportAuditBundle(request: AuditExportRequest): AuditExport {
     omitted: written.manifest.omitted,
     warnings,
   };
-  return { written, document, receipts };
+  return {
+    written,
+    document,
+    candidateBinding: { status: candidateBinding.status, currentCandidateId: candidateBinding.current_candidate_id },
+    receipts,
+  };
 }
 
 function identity(): AuditBuildIdentity {
@@ -709,6 +790,7 @@ export function renderAuditExportText(exported: AuditExport): string {
     `Audit bundle written: ${document.bundle_dir}`,
     `  subject: ${subject.kind} ${subject.kind === "task" ? subject.task_id : subject.session_id} (${subject.store} store), status ${subject.status ?? "unknown"}, last updated ${subject.updated_at ?? "unknown"}`,
     `  files: ${document.file_count} (${document.file_bytes} bytes) and manifest.json`,
+    `  candidate binding: ${exported.candidateBinding.status} (see receipts/candidate-binding.json; not a verifier or acceptance result)`,
   ];
   for (const log of manifest.chained_logs) {
     const parts = [describeLog(log.status, log.records)];
