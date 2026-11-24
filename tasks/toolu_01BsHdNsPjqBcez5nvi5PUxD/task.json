@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01BsHdNsPjqBcez5nvi5PUxD",
+  "agent_id": "aaa81cc7d6cb7775f",
+  "subagent_type": "reviewer",
+  "task_description": "Review PR #767 orphan fix",
+  "token_usage": {
+    "input_tokens": 42,
+    "cache_creation_tokens": 55502,
+    "cache_read_tokens": 793430,
+    "output_tokens": 11705,
+    "api_call_count": 21
+  },
+  "started_at": "2026-11-24T03:37:06.063352866Z",
+  "completed_at": "2026-11-24T03:50:28.46974949Z"
+}
