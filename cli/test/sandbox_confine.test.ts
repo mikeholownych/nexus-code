@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync, spawn } from "node:child_process";
 import { buildCommandEnvironment } from "../src/command_env.js";
-import { wrapSandboxedCommand, isBwrapAvailable, sandboxHomeMounts, setSandboxNetworkFlag, sandboxNetworkNotice, sandboxWorkspaceOverlays, hideDirectoryFromSandbox, wrapSandboxedWorker } from "../src/sandbox.js";
+import { wrapSandboxedCommand, isBwrapAvailable, sandboxHomeMounts, setSandboxNetworkFlag, sandboxNetworkNotice, sandboxWorkspaceOverlays, hideDirectoryFromSandbox, isPathWithin, wrapSandboxedWorker } from "../src/sandbox.js";
 
 const SKIP = isBwrapAvailable() ? false : "bwrap is not installed on this host";
 
@@ -283,6 +283,22 @@ describe("the control socket's directory is hidden from sandboxed commands (PF-3
     for (const dir of [underHome, insideWorkspace]) {
       const wrapped = wrapSandboxedCommand("true", workspace, { mode: "bwrap", readOnlyHost: true, workspaceFd: 3, network: false, hideDirectories: [dir] });
       assert.ok(masks(wrapped.argv!, fs.realpathSync(dir)), `--tmpfs ${dir}`);
+    }
+  });
+
+  test("a directory whose first segment merely starts with two dots is inside the workspace (..hid), not outside it", () => {
+    const { workspace } = throwawayHome();
+    assert.equal(isPathWithin(path.join(workspace, "..hid"), workspace), true);
+    assert.equal(isPathWithin(path.join(workspace, "..hid", "nexus", "x"), workspace), true);
+    assert.equal(isPathWithin(workspace, workspace), true);
+    assert.equal(isPathWithin(path.dirname(workspace), workspace), false);
+    assert.equal(isPathWithin(path.join(workspace, "..", "other"), workspace), false);
+    assert.equal(isPathWithin(`${workspace}-sibling`, workspace), false);
+    const dir = path.join(workspace, "..hid");
+    fs.mkdirSync(dir);
+    for (const readOnly of [false, true]) {
+      const wrapped = wrapSandboxedCommand("true", workspace, { mode: "bwrap", hideDirectories: [dir], ...(readOnly ? { readOnlyHost: true, workspaceFd: 3, network: false } : {}) });
+      assert.ok(masks(wrapped.argv!, fs.realpathSync(dir)), `${readOnly ? "read-only" : "write"} profile masks ..hid`);
     }
   });
 

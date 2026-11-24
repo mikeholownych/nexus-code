@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import {
   SOCKET_ATTACH_TIMEOUT_MS, SOCKET_MAX_CONNECTIONS, SOCKET_MAX_LINE_BYTES, SOCKET_MAX_PREAUTH, SessionSocketServer, type SocketSession,
 } from "../src/session_socket.js";
-import { newToken, readDescriptor, socketRuntimeDir, sweepStaleSockets, tokenMatches } from "../src/core/socket_files.js";
+import { newToken, readDescriptor, realpathAllowingMissing, socketRuntimeDir, socketRuntimeDirPath, sweepStaleSockets, tokenMatches } from "../src/core/socket_files.js";
 
 const REFUSAL = '{"v":1,"type":"error","code":"UNAUTHORIZED","message":"attach refused"}\n';
 const scratch: string[] = [];
@@ -29,6 +29,27 @@ function tmp(): string {
   scratch.push(dir);
   return dir;
 }
+
+test("the planned socket runtime path is side-effect-free and follows the runtime directory policy", () => {
+  const runtime = tmp();
+  const expected = path.join(runtime, "nexus");
+  assert.equal(socketRuntimeDirPath({ XDG_RUNTIME_DIR: runtime } as NodeJS.ProcessEnv), expected);
+  assert.equal(fs.existsSync(expected), false, "planning the path must not create the socket directory");
+  const uid = typeof process.geteuid === "function" ? process.geteuid() : -1;
+  assert.equal(socketRuntimeDirPath({}, uid), path.join("/tmp", `nexus-sockets-${uid}`));
+  assert.equal(socketRuntimeDirPath({ XDG_RUNTIME_DIR: "relative" } as NodeJS.ProcessEnv, uid), path.join("/tmp", `nexus-sockets-${uid}`));
+});
+
+test("a planned missing socket path resolves existing symlink parents before containment checks", () => {
+  const root = tmp();
+  const real = path.join(root, "real");
+  fs.mkdirSync(real, { mode: 0o700 });
+  const link = path.join(root, "runtime-link");
+  fs.symlinkSync(real, link, "dir");
+  const planned = path.join(link, "not-created", "nexus");
+  assert.equal(realpathAllowingMissing(planned), path.join(real, "not-created", "nexus"));
+  assert.equal(fs.existsSync(path.join(real, "not-created")), false, "resolving the planned path must not create it");
+});
 
 /** The sidecar stand-in: records what the hub forwards. */
 class FakeSession implements SocketSession {

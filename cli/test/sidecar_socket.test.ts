@@ -293,25 +293,31 @@ describe("sidecar --listen", () => {
     }
   });
 
-  test("is refused when the socket directory is inside the workspace, and binds nothing", async () => {
-    const gw = await startGateway(() => ({ kind: "text", content: "x" }));
-    const repo = makeRepo();
-    const home = makeHome();
-    const runtime = path.join(repo, "run");
-    fs.mkdirSync(runtime, { mode: 0o700 });
-    const proc = spawnSidecar(["-w", repo, "-e", gw.url, "-m", "m", "--listen"], { HOME: home, XDG_RUNTIME_DIR: runtime });
-    try {
-      assert.notEqual(await proc.exited, 0);
-      assert.match(proc.stderr(), /inside the workspace/);
-      assert.equal(proc.lines().some((l) => l.includes('"type":"listening"')), false);
-      assert.deepEqual(fs.readdirSync(path.join(runtime, "nexus")), [], "nothing was bound");
-    } finally {
-      proc.child.kill("SIGKILL");
-      await gw.close();
-      fs.rmSync(repo, { recursive: true, force: true });
-      fs.rmSync(home, { recursive: true, force: true });
-    }
-  });
+  for (const name of ["run", "..hid"]) {
+    test(`is refused when the socket directory is inside the workspace (${name}), exits 1, binds nothing and creates nothing`, async () => {
+      const gw = await startGateway(() => ({ kind: "text", content: "x" }));
+      const repo = makeRepo();
+      const home = makeHome();
+      const runtime = path.join(repo, name);
+      fs.mkdirSync(runtime, { mode: 0o700 });
+      const proc = spawnSidecar(["-w", repo, "-e", gw.url, "-m", "m", "--listen"], { HOME: home, XDG_RUNTIME_DIR: runtime });
+      try {
+        // A mutated guard leaves a running sidecar: fail with a message after a few seconds instead of waiting for the file timeout.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const code = await Promise.race([proc.exited, new Promise<string>((resolve) => { timer = setTimeout(() => resolve("still running"), 20000); })]);
+        clearTimeout(timer);
+        assert.equal(code, 1, `the sidecar did not refuse --listen with the socket directory inside the workspace (${code}); stderr: ${proc.stderr().slice(0, 300)}`);
+        assert.match(proc.stderr(), /inside the workspace/);
+        assert.equal(proc.lines().some((l) => l.includes('"type":"listening"')), false);
+        assert.equal(fs.existsSync(path.join(runtime, "nexus")), false, "the refused directory was not created");
+      } finally {
+        proc.child.kill("SIGKILL");
+        await gw.close();
+        fs.rmSync(repo, { recursive: true, force: true });
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    });
+  }
 
   test("under --sandbox a model command cannot read the descriptor, even with XDG_RUNTIME_DIR outside /run/user and /tmp", { skip: isBwrapAvailable() ? false : "bwrap is not installed on this host" }, async () => {
     const repo = makeRepo();

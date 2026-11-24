@@ -272,9 +272,10 @@ export function isSandboxAvailable(mode: SandboxMode = "auto"): boolean {
   return probeBwrapSandbox() || probeDockerSandbox();
 }
 
-function isPathWithin(candidate: string, root: string): boolean {
+/** `candidate` is `root` or below it. A first segment that merely starts with two dots (`..hid`) is inside. */
+export function isPathWithin(candidate: string, root: string): boolean {
   const relative = path.relative(root, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return relative === "" || !(relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative));
 }
 
 function appendDirectoryTree(args: string[], target: string, known: Set<string>): void {

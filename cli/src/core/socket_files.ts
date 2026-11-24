@@ -46,20 +46,41 @@ function ensurePrivate(dir: string, uid: number): void {
   assertPrivateDir(dir, uid);
 }
 
+/** Where `socketRuntimeDir` would put the directory, without touching the file system: for a check that must run before anything is created. */
+export function socketRuntimeDirPath(env: NodeJS.ProcessEnv = process.env, uid: number = effectiveUid()): string {
+  const runtime = env.XDG_RUNTIME_DIR;
+  return runtime && path.isAbsolute(runtime) ? path.join(runtime, "nexus") : path.join("/tmp", `nexus-sockets-${uid}`);
+}
+
+/** `target` with symlinks resolved as far as it exists, and the part that does not exist yet appended unchanged. */
+export function realpathAllowingMissing(target: string): string {
+  const missing: string[] = [];
+  let current = path.resolve(target);
+  for (;;) {
+    try { return path.join(fs.realpathSync(current), ...missing.reverse()); }
+    catch (error: any) {
+      if (error.code !== "ENOENT" && error.code !== "ENOTDIR") throw error;
+      const parent = path.dirname(current);
+      if (parent === current) return path.join(current, ...missing.reverse());
+      missing.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
 /**
  * The directory sockets live in: `$XDG_RUNTIME_DIR/nexus` when that variable is an absolute path to a private
  * directory, otherwise `/tmp/nexus-sockets-<uid>` (the pattern of `clientLeasePath`). Fails closed: a directory that
  * exists but is redirected or open to others is an error, never a fallback.
  */
 export function socketRuntimeDir(env: NodeJS.ProcessEnv = process.env, uid: number = effectiveUid()): string {
+  const dir = socketRuntimeDirPath(env, uid);
   const runtime = env.XDG_RUNTIME_DIR;
   if (runtime && path.isAbsolute(runtime)) {
     assertPrivateDir(runtime, uid);
-    const dir = path.join(runtime, "nexus");
     ensurePrivate(dir, uid);
     return dir;
   }
-  const dir = path.join("/tmp", `nexus-sockets-${uid}`);
   ensurePrivate(dir, uid);
   if (fs.realpathSync(dir) !== dir) throw new SocketFilesError(`socket directory ${dir} is redirected`);
   return dir;
