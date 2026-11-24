@@ -33,5 +33,10 @@
     "protocol": 1,
     "schemaSha256": "a83669f1acbd466529e6fd0531f396a2b9616e11deff7d292ddd91d01fd4fc7e",
     "note": "Add optional objective elapsed-time accounting fields to turn results; additive sidecar protocol v1 change preserves existing meanings."
+  },
+  {
+    "protocol": 1,
+    "schemaSha256": "3e6303a93bfb521b1beb13d2e4ad2fd0ab713f1aa6006c1d0dd787a241b532f3",
+    "note": "Add the error codes UNAUTHORIZED, NOT_CONTROLLER and NOT_PERMITTED for the optional unix-socket transport (sidecar --listen); additive, protocol stays 1, and the stdio transport never sends them."
   }
 ]
