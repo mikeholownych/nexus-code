@@ -1,0 +1,66 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M86K0AM6676CXEY51W1AGEAA",
+  "strategy": "manual-commit",
+  "branch": "v1/hk1-hooks-lib",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "CHANGELOG.md",
+    "cli/src/core/hooks.ts",
+    "cli/src/core/strict_json.ts",
+    "cli/src/doctor.ts",
+    "cli/src/doctor_hooks.ts",
+    "cli/src/hooks_cli.ts",
+    "cli/src/index.ts",
+    "cli/test/doctor_hooks.test.ts",
+    "cli/test/hooks_cli.test.ts",
+    "cli/test/hooks_examples.test.ts",
+    "cli/test/hooks_project_trust.test.ts",
+    "docs/DOCTOR_TROUBLESHOOTING.md",
+    "docs/HOOKS.md",
+    "docs/STATE_COMPATIBILITY.md",
+    "docs/USER_MANUAL.md",
+    "examples/README.md",
+    "examples/hooks/README.md",
+    "examples/hooks/deny-force-push.sh",
+    "examples/hooks/hooks.json",
+    "examples/hooks/run.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 2861,
+    "cache_read_tokens": 2618995,
+    "output_tokens": 975,
+    "api_call_count": 3,
+    "subagent_tokens": {
+      "input_tokens": 138,
+      "cache_creation_tokens": 349419,
+      "cache_read_tokens": 20602232,
+      "output_tokens": 64072,
+      "api_call_count": 68
+    }
+  },
+  "redaction": {
+    "replacements": 1513,
+    "layers": {
+      "betterleaks": 2,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 43,
+      "credentialed_uri": 3,
+      "entropy": 1465,
+      "key_context": 0,
+      "provider_token": 2,
+      "shell_stdin": 0
+    }
+  }
+}
