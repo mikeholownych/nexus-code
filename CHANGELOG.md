@@ -18,12 +18,13 @@ Inventory of work already on `release/v1.3.0` toward v1.3.0 (version strings sti
 - LSP lifecycle, bounds, position encodings and project roots (LS-1, LS-2).
 - Experimental detached jobs: a supervised Linux runner, isolated worktrees, unattended policy, bounded budgets, receipts, recovery, and operator commands (BG-1).
 - CI CLI-suite shard fan-out under stable required check names.
+- Command hooks (HK-1): `pre-tool` and `post-tool` programs declared in `~/.config/nexus/hooks.json` or an approved `<workspace>/.nexus/hooks.json`; a hook can deny a tool call and can never approve one or change its input. Approving project hooks needs a person at a terminal and covers the workspace scripts the hooks run. `nexus hooks list|approve|revoke|test`, a `hooks.config` doctor finding, `docs/HOOKS.md`.
 
 ### Changed
 - Parallel resource admission for operations (PA-1 partial); staged PA-4 workflow surfaces as documented under `docs/v1.3.0/`.
 
 ### Not yet in Unreleased (still open on the plan)
-- PF-3/PF-4 (UDS transport, library `exports`), HK-1/HK-2 (hooks/plugins), BG-2 (schedules), PA-2 and remaining PA-1/PA-4 items. Context-maturity and WP-P10-02 remain Codex-owned.
+- PF-3 (UDS transport), HK-2 (plugins) and the other hook events of HK-1, BG-2 (schedules), PA-2 and remaining PA-1/PA-4 items. Context-maturity and WP-P10-02 remain Codex-owned.
 
 ## [v1.2.2] - 2026-11-21
 

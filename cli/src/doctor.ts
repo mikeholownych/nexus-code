@@ -42,6 +42,7 @@ import { classifyLocality } from "./core/egress.js";
 import { redactSecrets } from "./ui.js";
 import { SafePathError, ancestryProblem, chmodVerified, identityOf, mkdirVerified, readVerified, unlinkVerified, writeExclusiveVerified, type Identity } from "./safe_fs.js";
 import { isNexusDirPermissive } from "./core/durable_file.js";
+import { diagnoseHooks } from "./doctor_hooks.js";
 export { isNexusDirPermissive };
 import { DEFAULT_REPEATED_CALL_HARD, DEFAULT_REPEATED_CALL_SOFT } from "./core/repeated_calls.js";
 import { DEFAULT_CONVERGENCE_ATTEMPTS, DEFAULT_MAX_INFERENCE_SUBMISSIONS, type HarnessConfig } from "./types.js";
@@ -1247,6 +1248,12 @@ const pluginCheck: Check = async (ctx) => {
   return f("plugins.config", "extensions", found.length ? "pass" : "skip", found.length ? `${found.length} plugin module(s) found. ${note}` : "No plugins are installed (optional).", found.slice(0, 10));
 };
 
+/** HK-1: command hooks that are declared and not in force (see doctor_hooks.ts). */
+const hooksCheck: Check = async (ctx) => {
+  const { status, explanation, evidence, action } = diagnoseHooks(ctx.config?.workspace ?? process.cwd(), ctx.home);
+  return f("hooks.config", "extensions", status, explanation, evidence, action);
+};
+
 /**
  * GV-1: the managed policy as this process would apply it: one finding per tier and one for the result. A broken
  * managed file is a failure here and never a reason for doctor not to run. No finding carries a repair: a policy file
@@ -1331,6 +1338,7 @@ const CHECKS: Array<[string, Check]> = [
   ["custom_ca", customCaCheck],
   ["mcp", mcpCheck],
   ["plugins", pluginCheck],
+  ["hooks", hooksCheck],
   ["policy", policyCheck],
   ["background_runner", backgroundRunnerCheck],
 ];

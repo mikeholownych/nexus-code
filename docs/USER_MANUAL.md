@@ -696,6 +696,22 @@ Release notes: `docs/releases/v1.2.0.md`. These changes affect existing workflow
 - **Start from a copy of a session.** `nexus run --fork-session <task> [--fork-at <n>] "<prompt>"` copies the task (its first `n` messages, backed up to a complete tool exchange; default all) into a new id, prints that id on stderr, and runs the prompt in the copy; the original is never changed. `nexus repl --fork-session <session> [--fork-at <n>]` does the same for the REPL. Exit code 2 for an unknown source, a bad `--fork-at`, or `--fork-session` with `--resume`. If the source is bound to a git worktree, the fork gets a separate branch and checkout with the source's tracked edits and non-ignored untracked files copied at fork time. Ignored files and generated output are not copied; forks are refused if the source branch changed or the untracked snapshot exceeds the safety limits. A fork at an earlier message still uses the workspace snapshot as it exists when the fork is created.
 - **Steering conflicts.** Steering that negates a numbered requirement does not replace the requirements. The ledger stays intact and you are asked to decide; headless runs record the conflict as unresolved. A request that would replace a ledger with unmet requirements keeps a `superseded` record. Steering that does not conflict behaves as before.
 
+### Command hooks
+
+A hook is a program you name that Nexus runs before (`pre-tool`) or after (`post-tool`) a tool call. A pre-tool hook can deny the call: exit status 2, or a `block`/`deny` answer. No hook can approve a call or change its arguments; an "allow" is recorded and ignored, and approval prompts, read-only mode, verification-file protection and managed policy decide exactly as they do without hooks. A hook that fails, hangs or answers unreadably denies the call.
+
+Your hooks go in `~/.config/nexus/hooks.json`. A repository may ship `.nexus/hooks.json`; it runs only after you approve its exact content yourself in a terminal (the approval also covers the workspace scripts it runs), and a change to any of them needs a new approval. If your own hooks file is invalid, every tool call is denied until you fix it.
+
+```bash
+nexus hooks list
+nexus hooks approve
+nexus hooks approve --sha256 <hex>
+nexus hooks revoke
+nexus hooks test pre-tool --tool run_command --input '{"command":"git push --force"}'
+```
+
+The file format, what a hook is given and may answer, how scripts written for Claude Code transfer, and the limits (hooks are not sandboxed; `nexus serve-mcp` runs none) are in [`docs/HOOKS.md`](HOOKS.md). A runnable example is in [`examples/hooks/`](../examples/hooks/).
+
 ### Verifier environment (`NEXUS_VERIFIER_ENV_PASSTHROUGH`)
 
 The operation runner re-runs a unit's approved verifier on the merged tree in a child whose inherited **environment variables** are scrubbed: the MCP allowlist (`PATH`, `HOME`, `LANG`, proxy and CA settings, ...) plus common toolchain variables (`CARGO_HOME`, `RUSTUP_*`, `GOPATH`, `GOCACHE`, `GOFLAGS`, `NODE_OPTIONS`, `NVM_DIR`, `VOLTA_HOME`, `PYENV_ROOT`, `VIRTUAL_ENV`, `PYTHONPATH`, `JAVA_HOME`, `CI`, `XDG_CACHE_HOME`, `LD_LIBRARY_PATH`, `UV_*`, `GRADLE_*`, `MAVEN_*`, `DOTNET_*`). Any name containing `KEY`, `TOKEN`, `SECRET`, `PASSWORD` or `CREDENTIAL` is never passed by default, and no `NEXUS_*` variable is.

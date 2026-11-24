@@ -236,6 +236,8 @@ describe("the project file: its restrictions always apply, its relaxations only 
     assert.equal(security.getPolicy().allowedDomains, undefined);
     assert.equal(security.isPathProtected(".env").reason, "Security Policy Violation: Path '.env' matches protected pattern '.env*' [policy: default]");
     assert.equal(security.isPathProtected(path.join(os.homedir(), ".config", "nexus", "policy_trust.json")).protected, true, "the approval store is not the agent's to write");
+    assert.equal(security.isPathProtected(path.join(os.homedir(), ".config", "nexus", "extension_trust.json")).protected, true, "nor is the store of hook approvals");
+    assert.equal(security.isPathProtected(path.join(os.homedir(), ".config", "nexus", "hooks.json")).protected, true, "nor the operator's hooks file");
   });
 
   test("NEW in an untrusted workspace: restrictions apply, relaxations are dropped, and the notice says how to approve", () => {
