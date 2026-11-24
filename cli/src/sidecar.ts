@@ -86,6 +86,7 @@ import { cancelLocalEndpointSetup, clearLocalEndpointSetup, clearLocalEndpointSe
 import { isHarnessNote, withHarnessProvenance } from "./harness_notes.js";
 import { persistableEndpoint } from "./core/endpoint_identity.js";
 import { clampAlwaysApproval } from "./core/managed_policy.js";
+import { SessionSocketServer, listeningLine } from "./session_socket.js";
 
 export interface SidecarOptions {
   app: ApplicationCore;
@@ -112,7 +113,7 @@ export class SidecarServer {
   private alwaysApprove = false;
   private activeTurn?: Promise<void>;
   private turnAbort?: AbortController;
-  private pendingApproval?: { id: string; tool: string; settle: (approved: boolean) => void };
+  private pendingApproval?: { id: string; tool: string; settle: (approved: boolean) => void; event: SidecarEvent };
   /** Approvals are asked one at a time: a second request waits for the open one instead of replacing it. */
   private approvalTail: Promise<unknown> = Promise.resolve();
   /** The last approval was settled by the operator's Deny, not by a cancel or a shutdown. */
@@ -168,11 +169,24 @@ export class SidecarServer {
     this.experimentalOffered = [...new Set(options.experimentalFeatures ?? EXPERIMENTAL_FEATURES)].sort();
   }
 
-  start(): void {
-    this.emit({
+  private helloEvent(): SidecarEvent {
+    return {
       type: "hello", protocol: PROTOCOL_VERSION, pid: process.pid, commands: slashCatalog(),
       protocol_min: PROTOCOL_MIN, protocol_max: PROTOCOL_MAX, capabilities: [...SIDECAR_CAPABILITIES], experimental: [...this.experimentalOffered],
+    };
+  }
+
+  /** What a client attaching over the socket (PF-3) is shown first: `hello`, the current state, and for a controller the open approval again. */
+  attachSnapshot(): { common: string[]; controller: string[] } {
+    const lines = (events: Array<SidecarEvent | undefined>): string[] => events.flatMap((event) => {
+      const safe = event && formatSafeSidecarEvent(event);
+      return safe ? [encodeEvent(safe)] : [];
     });
+    return { common: lines([this.helloEvent(), this.sessionStateEvent()]), controller: lines([this.pendingApproval?.event]) };
+  }
+
+  start(): void {
+    this.emit(this.helloEvent());
     let resumed: { ok: boolean; message: string } | undefined;
     try {
       resumed = this.resume ? this.resumeSession(this.resume) : undefined;
@@ -878,8 +892,7 @@ export class SidecarServer {
         resolve(approved);
       };
       signal.addEventListener("abort", onAbort, { once: true });
-      this.pendingApproval = { id, tool, settle };
-      this.emit({
+      const request: SidecarEvent = {
         type: "approval.request",
         id,
         turn_id: turnId,
@@ -887,7 +900,9 @@ export class SidecarServer {
         subject: toolSubject(args, tool),
         preview: redactedJson(args),
         review: approvalReview(tool, args, this.app.getConfig().workspace),
-      });
+      };
+      this.pendingApproval = { id, tool, settle, event: request };
+      this.emit(request);
     });
   }
 
@@ -1347,12 +1362,16 @@ export class SidecarServer {
   }
 
   private emitSessionState(): void {
+    this.emit(this.sessionStateEvent());
+  }
+
+  private sessionStateEvent(): SidecarEvent {
     const config = this.app.getConfig();
     const facts = surfaceFacts(this.app, this.sessionId);
     const git = getGitInfo(config.workspace);
     const trusted = isWorkspaceTrusted(config.workspace, Boolean(config.readOnly));
     const sandboxStatus = config.sandbox ? (typeof config.sandbox === "string" ? config.sandbox : "on") : "off";
-    this.emit({
+    return {
       type: "session.state",
       workspace: config.workspace,
       workspace_name: path.basename(config.workspace),
@@ -1370,7 +1389,7 @@ export class SidecarServer {
         sandbox: sandboxStatus,
         trusted,
       },
-    });
+    };
   }
 
   private emit(event: SidecarEvent): void {
@@ -1580,6 +1599,7 @@ async function main(argv: string[]): Promise<void> {
     .option("-y, --yes", "Run non-interactively without approval prompts (forces auto mode)")
     .option("--mode <mode>", "Execution mode: auto, review, or read-only (default: review; folder trust does not change it)")
     .option("-r, --resume [id]", "Resume a saved session (the latest when no id is given)")
+    .option("--listen", "Also accept clients on a private unix socket; the socket path is printed as one stdout line and the token is in a 0600 descriptor file. Stdio stays the owner. Refused under auto approval")
     .parse(argv);
 
   // Commander help is ordinary CLI output, before protocol-only stdout
@@ -1615,17 +1635,27 @@ async function main(argv: string[]): Promise<void> {
   const config = await autoDetectModel(buildConfig(options), { resuming: Boolean(options.resume) });
   config.surface = "tui";
   const app = new ApplicationCore(config);
+  let hub: SessionSocketServer | undefined;
   const server = new SidecarServer({
     app,
     mode: config.approvalMode,
     resume: typeof options.resume === "string" ? options.resume : options.resume ? "latest" : undefined,
     write: (line) => {
       protocolWrite(line);
+      hub?.broadcast(line);
     },
-    onShutdown: () => process.exit(0),
+    onShutdown: () => {
+      hub?.closeSync();
+      process.exit(0);
+    },
   });
 
   const report = (err: unknown) => process.stderr.write(`nexus sidecar: ${formatSafeSidecarDiagnostic([err])}\n`);
+  if (options.listen) {
+    // A socket client must never reach a session that approves everything: refuse before anything is bound.
+    if (app.getAgent().getApprovalMode() === "auto") throw new Error("--listen is refused under auto approval (-y, --mode auto); use review or read-only");
+    hub = new SessionSocketServer({ session: server, onError: report });
+  }
   const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
   input.on("line", (line) => {
     server.handleLine(line).catch(report);
@@ -1636,6 +1666,11 @@ async function main(argv: string[]): Promise<void> {
   input.on("close", requestShutdown);
   process.stdout.on("error", requestShutdown);
   server.start();
+  if (hub) {
+    process.once("exit", () => hub?.closeSync());
+    for (const signal of ["SIGTERM", "SIGINT"] as const) process.once(signal, requestShutdown);
+    protocolWrite(listeningLine(await hub.listen()));
+  }
 }
 
 /** True when argv[1] names this module, comparing real paths so a symlinked launcher still counts. */

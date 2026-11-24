@@ -33,6 +33,11 @@ export const SOCKET_MAX_OUTBOUND_BYTES = 8 * 1024 * 1024;
 
 export type SocketRole = "control" | "observe";
 
+/** The one stdout line a sidecar started with `--listen` prints once the socket is bound. It never carries the token. */
+export function listeningLine(info: SocketInfo, pid: number = process.pid): string {
+  return `${JSON.stringify({ v: PROTOCOL_VERSION, type: "listening", socket: info.socket, descriptor: info.descriptor, pid })}\n`;
+}
+
 /** What the hub needs from the sidecar; `SidecarServer` is one. */
 export interface SocketSession {
   handleLine(line: string): Promise<void>;
