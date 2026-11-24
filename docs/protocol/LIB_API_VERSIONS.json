@@ -1,0 +1,8 @@
+[
+  {
+    "api_version": 1,
+    "exports": ["NEXUS_LIB_API_VERSION", "SidecarClient", "SidecarClientError", "spawnSidecar"],
+    "type_exports": ["ApprovalDecision", "ApprovalHandler", "ApprovalRequest", "EngineeringOutcome", "ErrorCode", "ExecutionState", "PromptOptions", "SidecarChild", "SidecarClientErrorCode", "SidecarCommand", "SidecarEvent", "SidecarExit", "SpawnSidecarOptions", "TurnResult"],
+    "note": "First library entry point (PF-4): cli/src/lib.ts, the only `exports` target of cli/package.json. Out of process only: it spawns the sidecar and speaks sidecar protocol 1. No export sends allow-always and ApplicationCore is not exported."
+  }
+]
