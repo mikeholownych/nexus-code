@@ -36,9 +36,14 @@ Verification reads the directory, not the manifest's word for it: it lists what 
 - a manifest that is malformed, not in its canonical byte form, or inconsistent with its own hashes;
 - a chained log (a flight log, the verification-configuration attempts) that no longer ends where the manifest recorded, or whose chain is broken;
 - a chained log whose chain was already broken when the bundle was exported (`log_not_intact_at_export`), even when the bundle preserves those bytes exactly;
+- a flight log that contains a durable recording-gap marker (`log_recording_gap_at_export`), including when the first skipped event left the log with no chained records;
 - a manifest whose hash is not the one given with `--expect-manifest-sha256`.
 
 A chained log that was not closed when it was exported, an unchained legacy log, and a bounded excerpt are notes: they describe what the manifest says about the log. A log already broken at export is a failure because its source evidence is incomplete. If the log was intact at export but later changes or is cut, verification reports `log_chain_broken` or `log_head_mismatch`.
+
+If flight recording fails and the recorder cannot persist its gap marker either, a later process cannot infer from the log alone that an event was skipped. The operator warning reports the recording failure at the time, but no durable log evidence exists for that failure. Keep the warning and external process logs with the exported evidence when investigating such an incident. A flight log that does contain the marker fails verification, even when that marker is the first record. After any skipped event, the recorder leaves subsequent events unchained for the rest of that session so a later write cannot imply the missing event was recorded.
+
+The finding set is additive within schema version 1. Consumers that validate `finding.kind` against an older, closed enum must update their schema before accepting `log_recording_gap_at_export`. Verification can also change a prior bundle's result from `intact_unsigned` to `tampered` when the bundle already recorded a broken source log or a recording-gap marker.
 
 ### What an intact result establishes, and what it does not
 

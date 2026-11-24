@@ -577,6 +577,22 @@ describe("verifying an unsigned bundle (G-5)", () => {
     assert.deepEqual(check(dir).kinds, ["log_head_mismatch", "log_not_intact_at_export"]);
   });
 
+  test("a first-record flight gap is a verification finding, not an intact unsigned bundle", () => {
+    const input = fixtureInput();
+    const gap = { type: "recording_gap", payload: { recordingSkipped: true, reason: "sanitization_failed" } };
+    const { dir, manifest } = writeFixture({
+      ...input,
+      artefacts: input.artefacts.map((artefact) =>
+        artefact.path === FLIGHT_PATH ? { ...artefact, bytes: Buffer.from(`${JSON.stringify(gap)}\n`) } : artefact,
+      ),
+      chainedLogs: [{ path: FLIGHT_PATH, kind: "flight", closed: false }],
+    });
+    assert.equal(manifest.chained_logs[0].status, "unchained");
+    const checked = check(dir);
+    assert.deepEqual([checked.exit, checked.code, checked.kinds], ["tampered", 1, ["log_recording_gap_at_export"]]);
+    assert.match(checked.result.findings[0].message, /one or more events were skipped/);
+  });
+
   test("a log written by the real flight recorder reads here as the flight player reads it", () => {
     const workspace = tempDir();
     const flight = new FlightRecorder(workspace, "flight-real");

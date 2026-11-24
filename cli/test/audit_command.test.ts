@@ -13,7 +13,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { AUDIT_EXIT_CODES } from "../src/audit_contract.js";
 import { AUDIT_STANDARD_REDACTION_NOTE } from "../src/audit_export.js";
 import { AUDIT_UNSIGNED_CAVEAT } from "../src/core/audit_bundle.js";
-import { ATTEMPTS_PATH, AUDIT_VERIFY_SCHEMA, CLI_DIR, assertManifestValid, cleanTemp, fixtureInput, flipByte, readManifest, runAudit, savedSubject, snapshot, tempDir, writeFixture, type AuditCliRun, type SubjectFixture } from "./helpers/audit_fixture.js";
+import { ATTEMPTS_PATH, AUDIT_VERIFY_SCHEMA, CLI_DIR, FLIGHT_PATH, assertManifestValid, cleanTemp, fixtureInput, flipByte, readManifest, runAudit, savedSubject, snapshot, tempDir, writeFixture, type AuditCliRun, type SubjectFixture } from "./helpers/audit_fixture.js";
 import { validate } from "./helpers/json_schema.js";
 
 after(cleanTemp);
@@ -147,6 +147,21 @@ test("`nexus audit verify` fails when a bundled source log was already broken at
     1,
     "tampered",
     [["log_not_intact_at_export", ATTEMPTS_PATH]],
+  ]);
+});
+
+test("`nexus audit verify` fails when the first flight record is a durable recording-gap marker", async () => {
+  const input = fixtureInput();
+  const flight = input.artefacts.find((entry) => entry.path === FLIGHT_PATH)!;
+  flight.bytes = Buffer.from(`${JSON.stringify({ type: "recording_gap", payload: { recordingSkipped: true, reason: "sanitization_failed" } })}\n`);
+  const bundle = writeFixture(input);
+
+  const run = await runAudit(["verify", bundle.dir, "--json"]);
+  const result = consume(run);
+  assert.deepEqual([run.code, result.result, result.findings.map((finding: any) => [finding.kind, finding.path])], [
+    1,
+    "tampered",
+    [["log_recording_gap_at_export", FLIGHT_PATH]],
   ]);
 });
 

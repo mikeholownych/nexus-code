@@ -94,6 +94,7 @@ test("the audit JSON schema is an export result, verification result, or error d
     "log_chain_broken",
     "log_head_mismatch",
     "log_not_intact_at_export",
+    "log_recording_gap_at_export",
     "manifest_chain_broken",
     "manifest_malformed",
     "manifest_missing",

@@ -994,6 +994,9 @@ function verify(bundleDir: string, options: VerifyAuditBundleOptions): AuditVeri
         continue;
       }
       const head = headOf(verdict);
+      const hasRecordingGap = recorded.kind === "flight" && read.records.some((record) =>
+        isObject(record) && record.type === "recording_gap" && isObject(record.payload) && record.payload.recordingSkipped === true,
+      );
       const ends = head ? `its records end at record ${head.seq} (${head.hash})` : `it reads as ${describeChain(verdict)}`;
       const wanted = `the manifest recorded ${plural(recorded.records, "record")}${recorded.head ? ` ending at ${recorded.head.hash}` : ""}`;
       let matches = false;
@@ -1011,6 +1014,9 @@ function verify(bundleDir: string, options: VerifyAuditBundleOptions): AuditVeri
       logs.push({ path: recorded.path, kind: recorded.kind, status: verdict.status, records: verdict.records, matches_manifest: matches });
 
       // What the manifest says about the log that is not a failure. It is the manifest's statement, as old as the export.
+      if (hasRecordingGap) {
+        findings.add("log_recording_gap_at_export", `${recorded.path} records that one or more events were skipped; its source evidence is incomplete.`, recorded.path);
+      }
       if (recorded.status === "broken") findings.add("log_not_intact_at_export", `${recorded.path} was already broken when it was exported; its source evidence is incomplete.`, recorded.path);
       else if (recorded.status === "unchained") notes.push(`${recorded.path} was not chained when it was exported; its integrity before export cannot be shown.`);
       if (recorded.closed === false) notes.push(`${recorded.path} was not closed when it was exported: it has no end record (still recording, stopped early, or records were already missing from the end).`);
