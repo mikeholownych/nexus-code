@@ -263,6 +263,15 @@ export class OperationStore {
     return { stale, holder, ...identity };
   }
 
+  /** Returns the live lock holder for an operation, or undefined when there is no readable live lock by another process. */
+  activeLock(id: string): { pid?: number; host?: string; at?: string } | undefined {
+    const lockPath = path.join(this.manager.getBaseDir(), `${id}.lock`);
+    const judged = this.judgeLock(lockPath, false);
+    if (judged.stale || judged.holder.pid === undefined) return undefined;
+    if (judged.holder.pid === process.pid) return undefined;
+    return judged.holder;
+  }
+
   /** Most recently updated operation in this workspace that can resume after restart. */
   latestResumable(): DurableOperationState | undefined {
     return this.list().find((op) => op.status === "WAITING" || op.status === "RUNNING" || op.status === "PAUSED");

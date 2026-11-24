@@ -260,7 +260,7 @@ async function drive(
   store: OperationStore,
   discoverCatalog: boolean,
   json: boolean,
-  entry: Pick<DriveOptions, "entry" | "prepare"> = {},
+  entry: Pick<DriveOptions, "entry" | "prepare" | "resumeAfterDecision"> = {},
 ): Promise<void> {
   const clamped = clampUnisolatedConcurrency(op);
   if (clamped && !json) console.error(pc.yellow(`warning: ${safeTerminal(clamped)}`));
@@ -388,7 +388,7 @@ export function registerOperationCommands(program: Command): void {
         return;
       }
       if (options.resume === false) return void printStatus(state);
-      await drive(state, config, store, Boolean(options.discover), Boolean(options.json), { entry: "existing" });
+      await drive(state, config, store, Boolean(options.discover), Boolean(options.json), { entry: "existing", resumeAfterDecision: true });
     }));
 
   op.command("status")

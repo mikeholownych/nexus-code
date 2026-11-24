@@ -399,6 +399,14 @@ export interface DurableOperationState {
   messages?: OperationMessage[];
   /** Highest message id ever issued. Kept so a pruned id is never reused (events cite message ids). */
   messageSeq?: number;
+  /** Host boot identity of the process last driving this operation; a different boot means an earlier process left it active. */
+  activeBootId?: string;
+  /** PID of the process last driving this operation on activeHost; used to detect same-boot process restarts. */
+  activePid?: number;
+  /** Hostname of the process last driving this operation. */
+  activeHost?: string;
+  /** Operator-visible reason the operation was paused (stale recovery, explicit pause, etc.). */
+  pauseReason?: string;
 }
 
 /** An option before it is numbered into a decision. */
@@ -521,6 +529,7 @@ export function newOperation(
   resources: ResourceDescriptor[],
   now: number,
   policy: Partial<OperationPolicy> = {},
+  bootId?: string,
 ): DurableOperationState {
   const ids = new Set<string>();
   for (const u of units) {
@@ -561,6 +570,7 @@ export function newOperation(
     status: "RUNNING",
     createdAt: at,
     updatedAt: at,
+    ...(bootId ? { activeBootId: bootId } : {}),
     units: units.map((u) => ({
       id: u.id,
       title: u.title ?? u.id,

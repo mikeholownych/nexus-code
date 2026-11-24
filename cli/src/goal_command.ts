@@ -21,6 +21,8 @@ function renderGoal(result: GoalResult, detailed = false): string {
   const operation = result.operation;
   const rows = [`Goal ${result.id}: ${result.status}`, `Objective: ${operation.objective}`];
   if (result.reason) rows.push(`Outstanding: ${result.reason}`);
+  if (operation.pauseReason && !result.reason?.includes(operation.pauseReason)) rows.push(`Paused: ${operation.pauseReason}`);
+  if (result.usage) rows.push(`Usage: ${result.usage.agentRuns} agent runs, ${result.usage.reportedTokens} reported tokens, ${result.usage.estimatedTokens} estimated tokens, ${result.usage.inferenceRequests} inference requests`);
   rows.push("", "Work units:");
   for (const unit of operation.units) {
     rows.push(`  ${unit.id}: ${unit.status}${unit.dependsOn.length ? ` (after ${unit.dependsOn.join(", ")})` : ""}${unit.required === false ? " (advisory)" : ""}`);

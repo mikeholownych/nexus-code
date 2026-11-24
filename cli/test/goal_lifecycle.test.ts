@@ -10,7 +10,7 @@ import { findSlash } from "../src/slash/catalog.js";
 import { replReadOnlyAllowed } from "../src/repl.js";
 import { applyRequirementUpdates, createLedger } from "../src/core/objective.js";
 import { newOperation } from "../src/core/operation.js";
-import { OperationStore, type WorkUnitExecutor } from "../src/core/operation_runner.js";
+import { OperationStore, currentBootId, type WorkUnitExecutor } from "../src/core/operation_runner.js";
 import type { ResourceDescriptor } from "../src/core/resources.js";
 import type { HarnessConfig } from "../src/types.js";
 import { TeamOrchestrator } from "../src/team.js";
@@ -175,6 +175,71 @@ test("multiple eligible goals require an explicit id and descoping requires sepa
     assert.equal(proposed.requirements[0].operatorAccepted, undefined);
     const accepted = orchestrator.updateDescoping("accept", "R1", undefined, "goal-one");
     assert.equal(accepted.requirements[0].operatorAccepted, true);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("a stale goal from an earlier host boot resumes paused with a visible reason", async () => {
+  const f = fixture();
+  try {
+    const boot = currentBootId();
+    if (!boot) return; // environment cannot prove boot identity
+    const team = new TeamOrchestrator(f.config, { id: "goal-stale-boot", independentReview: true, resources: f.resources });
+    const operation = team.plan("full", "Resume safely after restart");
+    operation.status = "RUNNING";
+    operation.activeBootId = "old-boot-id";
+    operation.activePid = 99999999;
+    operation.activeHost = "old-host";
+    f.store.save(operation);
+    const task = f.store.manager.loadTaskState(operation.id, f.workspace);
+    task.objective = createLedger(operation.objective);
+    f.store.manager.saveTaskState(task);
+
+    const orchestrator = new GoalOrchestrator(f.config, { store: f.store, executor: acceptingExecutor(), resources: f.resources });
+    const listed = orchestrator.list().find((goal) => goal.id === operation.id);
+    assert.equal(listed?.status, "PAUSED");
+    assert.match(listed?.reason ?? "", /earlier host boot|earlier process/);
+
+    const resumed = await orchestrator.resume(operation.id);
+    // Completion still requires ledger closure/review/verifier; stale pause must not be silently auto-resumed.
+    assert.equal(resumed.operation.status, "COMPLETE");
+    assert.equal(resumed.status, "BLOCKED");
+    assert.match(resumed.reason ?? "", /Requirements remain open/);
+    const saved = f.store.load(operation.id);
+    assert.notEqual(saved.activeBootId, "old-boot-id");
+    assert.equal(saved.pauseReason, undefined);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("a stale goal from an earlier same-boot process resumes paused with a visible reason", async () => {
+  const f = fixture();
+  try {
+    const boot = currentBootId();
+    const team = new TeamOrchestrator(f.config, { id: "goal-stale-pid", independentReview: true, resources: f.resources });
+    const operation = team.plan("full", "Resume safely after process restart");
+    operation.status = "RUNNING";
+    if (boot) operation.activeBootId = boot;
+    operation.activePid = 99999999; // dead pid on same host
+    operation.activeHost = os.hostname();
+    f.store.save(operation);
+    const task = f.store.manager.loadTaskState(operation.id, f.workspace);
+    task.objective = createLedger(operation.objective);
+    f.store.manager.saveTaskState(task);
+
+    const orchestrator = new GoalOrchestrator(f.config, { store: f.store, executor: acceptingExecutor(), resources: f.resources });
+    const listed = orchestrator.list().find((goal) => goal.id === operation.id);
+    assert.equal(listed?.status, "PAUSED");
+    assert.match(listed?.reason ?? "", /no longer running|earlier process/);
+
+    const resumed = await orchestrator.resume(operation.id);
+    assert.equal(resumed.operation.status, "COMPLETE");
+    assert.equal(resumed.status, "BLOCKED");
+    assert.match(resumed.reason ?? "", /Requirements remain open/);
+    const saved = f.store.load(operation.id);
+    assert.equal(saved.pauseReason, undefined);
   } finally {
     f.cleanup();
   }

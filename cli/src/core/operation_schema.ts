@@ -226,6 +226,18 @@ export function validateOperationState(state: DurableOperationState): void {
   if (state.messageSeq !== undefined && (!Number.isInteger(state.messageSeq) || state.messageSeq < 0)) {
     throw new InvalidOperationStateError(`operation ${state.id}: messageSeq must be a non-negative integer (got ${String(state.messageSeq)})`);
   }
+  if (state.activeBootId !== undefined && (typeof state.activeBootId !== "string" || !state.activeBootId)) {
+    throw new InvalidOperationStateError(`operation ${state.id}: activeBootId must be a non-empty string`);
+  }
+  if (state.activePid !== undefined && (!Number.isInteger(state.activePid) || state.activePid <= 0)) {
+    throw new InvalidOperationStateError(`operation ${state.id}: activePid must be a positive integer`);
+  }
+  if (state.activeHost !== undefined && typeof state.activeHost !== "string") {
+    throw new InvalidOperationStateError(`operation ${state.id}: activeHost must be a string`);
+  }
+  if (state.pauseReason !== undefined && typeof state.pauseReason !== "string") {
+    throw new InvalidOperationStateError(`operation ${state.id}: pauseReason must be a string`);
+  }
   if (state.integrations !== undefined) {
     if (!Array.isArray(state.integrations)) throw new InvalidOperationStateError(`operation ${state.id}: integrations is not an array`);
     for (const receipt of state.integrations) {

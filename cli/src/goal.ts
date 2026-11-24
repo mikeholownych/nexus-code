@@ -1,7 +1,7 @@
 /** Durable engineering goals are existing team operations with a pinned ObjectiveLedger. */
 import { randomUUID } from "node:crypto";
 import { acceptDescoping, applyRequirementUpdates, createLedger, recordAttempt, requirementDone, type ObjectiveLedger, type VerificationAttempt } from "./core/objective.js";
-import { OperationRunner, AgentWorkUnitExecutor, OperationLockedError, OperationStore, driveOperation, type WorkUnitExecutor } from "./core/operation_runner.js";
+import { OperationRunner, AgentWorkUnitExecutor, OperationLockedError, OperationStore, driveOperation, currentBootId, type WorkUnitExecutor } from "./core/operation_runner.js";
 import { TeamOrchestrator } from "./team.js";
 import type { DurableOperationState, OperationEvent, WorkUnit } from "./core/operation.js";
 import type { ResourceDescriptor } from "./core/resources.js";
@@ -10,12 +10,20 @@ import type { HarnessConfig } from "./types.js";
 export const GOAL_ID_PREFIX = "goal-";
 export type GoalStatus = "RUNNING" | "WAITING" | "PAUSED" | "BLOCKED" | "COMPLETE" | "CANCELLED";
 
+export interface GoalUsage {
+  agentRuns: number;
+  reportedTokens: number;
+  estimatedTokens: number;
+  inferenceRequests: number;
+}
+
 export interface GoalResult {
   id: string;
   status: GoalStatus;
   operation: DurableOperationState;
   ledger?: ObjectiveLedger;
   reason?: string;
+  usage?: GoalUsage;
 }
 
 export interface GoalRunnerOptions {
@@ -47,9 +55,33 @@ function deterministicVerificationPassed(operation: DurableOperationState): bool
   return tester?.status === "COMPLETE" && tester.result?.verification?.status === "PASSED" && tester.result.verification.hasExecutedTests && tester.result.verification.definitionBound !== false;
 }
 
-export function goalStatus(operation: DurableOperationState, ledger?: ObjectiveLedger): { status: GoalStatus; reason?: string } {
+import * as os from "node:os";
+
+function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (err: any) { return err?.code === "EPERM"; }
+}
+
+function staleDriverReason(operation: DurableOperationState, bootId = currentBootId()): string | undefined {
+  if (!["RUNNING", "WAITING", "BLOCKED"].includes(operation.status)) return undefined;
+  const reasons: string[] = [];
+  if (bootId && operation.activeBootId && operation.activeBootId !== bootId) reasons.push(`earlier host boot (${operation.activeBootId.slice(0, 12)})`);
+  if (operation.activePid !== undefined && operation.activeHost === os.hostname() && !processAlive(operation.activePid)) {
+    reasons.push(`earlier process (pid ${operation.activePid}) is no longer running`);
+  }
+  if (reasons.length === 0 && operation.activePid === undefined && operation.activeBootId === undefined) {
+    reasons.push("an earlier process left it active without driver identity metadata");
+  }
+  if (reasons.length === 0) return undefined;
+  return operation.pauseReason?.startsWith("Paused on resume:")
+    ? operation.pauseReason
+    : `Paused on resume: this goal was left active by ${reasons.join("; ")}. It was not cleanly paused before this process started. Resume it explicitly after inspecting its state.`;
+}
+
+export function goalStatus(operation: DurableOperationState, ledger?: ObjectiveLedger, bootId = currentBootId()): { status: GoalStatus; reason?: string } {
   if (operation.status === "CANCELLED") return { status: "CANCELLED" };
-  if (operation.status === "PAUSED") return { status: "PAUSED" };
+  const stale = staleDriverReason(operation, bootId);
+  if (operation.status === "PAUSED" || stale) return { status: "PAUSED", ...(operation.pauseReason || stale ? { reason: operation.pauseReason ?? stale } : {}) };
   if (operation.status === "WAITING") return { status: "WAITING" };
   if (operation.status === "RUNNING") return { status: "RUNNING" };
   if (operation.status === "BLOCKED") return { status: "BLOCKED", reason: "A required work unit or operator decision is blocked." };
@@ -200,13 +232,31 @@ export class GoalOrchestrator {
     this.store.manager.saveTaskState(task);
   }
 
+  private usage(operation: DurableOperationState): GoalUsage {
+    const usage: GoalUsage = { agentRuns: 0, reportedTokens: 0, estimatedTokens: 0, inferenceRequests: 0 };
+    for (const unit of operation.units) {
+      usage.agentRuns += unit.runs;
+      if (!unit.agentTaskId) continue;
+      try {
+        const stats = this.store.manager.loadTaskState(unit.agentTaskId, this.config.workspace).tokenStats;
+        if (!stats) continue;
+        if (typeof stats.requests === "number" && stats.requests > 0 && stats.reportedRequests === stats.requests) usage.reportedTokens += stats.total;
+        else usage.estimatedTokens += stats.total;
+        usage.inferenceRequests += stats.requests ?? 0;
+      } catch {
+        // Missing child accounting remains unmeasured; no estimate is fabricated.
+      }
+    }
+    return usage;
+  }
+
   private result(operation: DurableOperationState): GoalResult {
     const release = this.store.acquire(operation.id);
     try {
       const fresh = this.store.load(operation.id);
       const ledger = foldUnitLedgers(fresh, this.store, this.config.workspace);
       const state = goalStatus(fresh, ledger);
-      return { id: fresh.id, status: state.status, operation: fresh, ...(ledger ? { ledger } : {}), ...(state.reason ? { reason: state.reason } : {}) };
+      return { id: fresh.id, status: state.status, operation: fresh, usage: this.usage(fresh), ...(ledger ? { ledger } : {}), ...(state.reason ? { reason: state.reason } : {}) };
     } finally {
       release();
     }
@@ -228,6 +278,10 @@ export class GoalOrchestrator {
       maxInProcessWaitMs: this.options.maxInProcessWaitMs,
     });
     const operation = team.plan("full", text);
+    const bootId = currentBootId();
+    if (bootId) operation.activeBootId = bootId;
+    operation.activePid = process.pid;
+    operation.activeHost = os.hostname();
     const reviewer = operation.units.find((unit) => unit.id === "review");
     if (!reviewer || !operation.units.some((unit) => unit.id === "verify")) throw new Error("goal workflow is missing its verification or independent review unit");
     // Independent acceptance review must inspect the post-verification candidate, including any test changes.
@@ -258,7 +312,10 @@ export class GoalOrchestrator {
       ...(this.options.maxInProcessWaitMs !== undefined ? { maxInProcessWaitMs: this.options.maxInProcessWaitMs } : {}),
       entry: "existing",
       prepare: (fresh) => {
-        if (fresh.status === "PAUSED") fresh.status = fresh.wait ? "WAITING" : "RUNNING";
+        if (fresh.status === "PAUSED") {
+          fresh.status = fresh.wait ? "WAITING" : "RUNNING";
+          delete fresh.pauseReason;
+        }
       },
     });
     return this.result(result);
@@ -292,7 +349,15 @@ export class GoalOrchestrator {
     let unchanged = false;
     try {
       operation = this.store.load(selected.id);
-      if (["COMPLETE", "CANCELLED", "PAUSED"].includes(operation.status)) unchanged = true;
+      const stale = staleDriverReason(operation);
+      if (stale) {
+        operation.status = "PAUSED";
+        operation.pauseReason = stale;
+        delete operation.wait;
+        delete operation.blocked;
+        this.store.save(operation);
+        unchanged = true;
+      } else if (["COMPLETE", "CANCELLED", "PAUSED"].includes(operation.status)) unchanged = true;
       else if (operation.units.some((unit) => unit.status === "RUNNING")) {
         throw new Error(`goal ${operation.id} is executing a work unit; let it settle, then pause at the next safe boundary`);
       } else {
@@ -303,6 +368,7 @@ export class GoalOrchestrator {
           ...(this.options.onEvent ? { onEvent: this.options.onEvent } : {}),
         });
         runner.scheduler.pause();
+        operation.pauseReason = "Paused by operator at a safe boundary.";
         this.store.save(operation);
       }
     } finally { release(); }
