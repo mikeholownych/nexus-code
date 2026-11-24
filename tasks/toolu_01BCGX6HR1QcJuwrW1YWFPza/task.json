@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01BCGX6HR1QcJuwrW1YWFPza",
+  "agent_id": "a0eeab406c46b4559",
+  "subagent_type": "reviewer",
+  "task_description": "Review PR #777 VR-2 follow-ups",
+  "token_usage": {
+    "input_tokens": 42,
+    "cache_creation_tokens": 47949,
+    "cache_read_tokens": 777219,
+    "output_tokens": 10080,
+    "api_call_count": 21
+  },
+  "started_at": "2026-11-24T09:29:15.8325464Z",
+  "completed_at": "2026-11-24T09:40:56.02966618Z"
+}

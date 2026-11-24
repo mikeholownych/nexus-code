@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01HhzQA4RwkngLHdFCWgxbFb",
+  "agent_id": "ae29f643905427be2",
+  "subagent_type": "reviewer",
+  "task_description": "Review PRs #774 and #775",
+  "token_usage": {
+    "input_tokens": 60,
+    "cache_creation_tokens": 68775,
+    "cache_read_tokens": 1373922,
+    "output_tokens": 13240,
+    "api_call_count": 30
+  },
+  "started_at": "2026-11-24T09:24:20.936814091Z",
+  "completed_at": "2026-11-24T09:41:42.051364634Z"
+}
