@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01RHUhvUYEonVEQJfzxwVorY",
+  "agent_id": "a558e367ba3840735",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement MT-2 slice 2 registry",
+  "token_usage": {
+    "input_tokens": 92,
+    "cache_creation_tokens": 148790,
+    "cache_read_tokens": 5354458,
+    "output_tokens": 45716,
+    "api_call_count": 46
+  },
+  "started_at": "2026-11-24T23:11:52.124482858Z",
+  "completed_at": "2026-11-24T23:28:00.68839414Z"
+}

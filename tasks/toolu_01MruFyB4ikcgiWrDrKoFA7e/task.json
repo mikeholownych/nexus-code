@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01MruFyB4ikcgiWrDrKoFA7e",
+  "agent_id": "af3a026529107ec07",
+  "subagent_type": "reviewer",
+  "task_description": "Hostile re-check of merged HK-1 hooks",
+  "token_usage": {
+    "input_tokens": 88,
+    "cache_creation_tokens": 140317,
+    "cache_read_tokens": 4251192,
+    "output_tokens": 44052,
+    "api_call_count": 44
+  },
+  "started_at": "2026-11-24T23:12:08.264744223Z",
+  "completed_at": "2026-11-24T23:20:37.891939376Z"
+}

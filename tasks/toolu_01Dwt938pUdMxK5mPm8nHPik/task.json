@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Dwt938pUdMxK5mPm8nHPik",
+  "agent_id": "a387832c0d2d19d84",
+  "subagent_type": "reviewer",
+  "task_description": "Review PR #798 HK-3 plugin trust",
+  "token_usage": {
+    "input_tokens": 58,
+    "cache_creation_tokens": 84652,
+    "cache_read_tokens": 1761070,
+    "output_tokens": 22364,
+    "api_call_count": 29
+  },
+  "started_at": "2026-11-24T23:12:38.060586407Z",
+  "completed_at": "2026-11-24T23:27:58.31652857Z"
+}
