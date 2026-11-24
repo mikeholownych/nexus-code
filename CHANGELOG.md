@@ -17,6 +17,7 @@ Inventory of work already on `release/v1.3.0` toward v1.3.0 (version strings sti
 - Managed policy tiers, audit export/verify, flight hash chain, telemetry transparency and opt-out, admin strict mode and allowlists (GV-1–GV-5).
 - LSP lifecycle, bounds, position encodings and project roots (LS-1, LS-2).
 - Experimental detached jobs: a supervised Linux runner, isolated worktrees, unattended policy, bounded budgets, receipts, recovery, and operator commands (BG-1).
+- Experimental unattended schedules (BG-2): `nexus schedule add|list|status|remove|pause|resume|run-now` with `--cron`, `--every` and `--at` (UTC); the runner starts each run as an unattended job through the same path as `nexus job start`. A schedule needs a trusted workspace, fixes its permission level when added and is a path the agent's file tools refuse; missed runs are counted and reported (an optional single catch-up job with `--on-missed run-once`, never a burst), overlapping runs are skipped and recorded, and a clock stepped backwards never runs a slot twice. The job receipt gains `schedule_occurrence` and a filled-in `missed` (additive, version 1); new schedule file schema `docs/protocol/schedule-v1.schema.json` and [`docs/SCHEDULES.md`](docs/SCHEDULES.md).
 - CI CLI-suite shard fan-out under stable required check names.
 - Experimental unix-socket transport for the sidecar (PF-3): `sidecar.js --listen` binds a socket (mode 0600) in a private 0700 directory and prints its path on one stdout line; other clients attach with a per-start random token from a 0600 descriptor file, as one controller or as read-only observers, and may detach and attach again. A wrong, missing or late token is refused with one fixed line before any command is parsed. No client can grant allow-always or change the mode over the socket, and `--listen` is refused under auto approval. No TCP, HTTP or WebSocket listener. Protocol stays 1 (new error codes `UNAUTHORIZED`, `NOT_CONTROLLER`, `NOT_PERMITTED`); `docs/PROTOCOL.md` "Socket transport", `examples/attach/`.
 - Command hooks (HK-1): `pre-tool` and `post-tool` programs declared in `~/.config/nexus/hooks.json` or an approved `<workspace>/.nexus/hooks.json`; a hook can deny a tool call and can never approve one or change its input. Approving project hooks needs a person at a terminal and covers the workspace scripts the hooks run. `nexus hooks list|approve|revoke|test`, a `hooks.config` doctor finding, `docs/HOOKS.md`.
@@ -25,7 +26,7 @@ Inventory of work already on `release/v1.3.0` toward v1.3.0 (version strings sti
 - Parallel resource admission for operations (PA-1 partial); staged PA-4 workflow surfaces as documented under `docs/v1.3.0/`.
 
 ### Not yet in Unreleased (still open on the plan)
-- PF-3 (UDS transport), HK-2 (plugins) and the other hook events of HK-1, BG-2 (schedules), PA-2 and remaining PA-1/PA-4 items. Context-maturity and WP-P10-02 remain Codex-owned.
+- PF-3 (UDS transport), HK-2 (plugins) and the other hook events of HK-1, PA-2 and remaining PA-1/PA-4 items. Context-maturity and WP-P10-02 remain Codex-owned.
 
 ## [v1.2.2] - 2026-11-21
 

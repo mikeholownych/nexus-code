@@ -51,6 +51,7 @@ In accordance with **REQ-PER-101**, the root state directory `~/.nexus` and ever
 | **Job Receipts** | `~/.nexus/runner/jobs/<jobId>/receipt.json` | Receipt `nexus-job-receipt` (schema 1) written when a detached job ends | `0600` (dir `0700`) |
 | **Runner Files** | `~/.nexus/runner/runner.json`, `inbox/<requestId>.json`, `jobs/<jobId>/{spec,worker,result}.json` | The runner record, client requests, and a job's frozen spec, worker record and worker result (version 1 each); any other version or an unknown key is refused | `0600` (dir `0700`) |
 | **Job Logs** | `~/.nexus/runner/jobs/<jobId>/events.ndjson`, `stderr.log` | A job's event log (secrets redacted, 16 MiB) and its worker's stderr; removed 30 days after the job ended | `0600` (dir `0700`) |
+| **Schedules** | `~/.nexus/runner/nexus-schedules/<id>.json`, `<id>.latest.json`, `<id>.missed-<time>.json` | Schedule record `nexus-schedule`, its newest-result pointer and a missed-run receipt (version 1 each); any other version, an unknown or repeated key, a link, a foreign owner or loose permissions is refused and the schedule never runs | `0600` (dir `0700`) |
 
 ### Schema 2 publication and recovery
 

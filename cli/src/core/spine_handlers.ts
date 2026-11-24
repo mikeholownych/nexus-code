@@ -233,7 +233,9 @@ export function setupSpineHandlersImpl(this: any): void {
               ? human.message
               : decidedBy.tier !== "default"
                 ? `Managed policy disables automatic approvals here. ${describeSource(decidedBy)}`
-                : `Run with --yes or --mode auto to explicitly select automatic approvals. ${describeSource(decidedBy)}`;
+                : this.config.surface === "unattended"
+                  ? "An unattended run never approves a command. Only the operator's own verifier (the exact --verifier command set when the job or schedule was made) runs without approval; this command is not it."
+                  : `Run with --yes or --mode auto to explicitly select automatic approvals. ${describeSource(decidedBy)}`;
             const error = (!onConfirm && this.approvalPolicy.requiresDecision("exec", policyContext))
               ? `Error: Verifier '${verifierCommand}' requires operator approval (exec), but no operator is present (headless execution). ${guidance}`
               : `Verification Oracle: verifier execution was not approved by operator (${verifierCommand}).`;
