@@ -63,14 +63,23 @@ test("cron: invalid strings are refused with a reason that names the field", () 
 });
 
 test("cron: slots closer than five minutes are refused like an interval below the floor (validateTrigger), the rest are accepted", () => {
-  for (const expr of ["* * * * *", "*/4 * * * *", "0,2 * * * *", "0-4 3 * * *", "1,58 0,23 * * *"]) {
+  for (const expr of ["* * * * *", "*/4 * * * *", "0,2 * * * *", "0,4 * * * *", "0-4 3 * * *", "1,58 0,23 * * *",
+    // across midnight, with the day fields restricted: the wrap is still one or a few minutes
+    "59,0 23,0 1,2 * *", "59,0 23,0 * * 1,2", "58,2 23,0 * 1 1-5", "59,1 23,0 28-31,1 * *", "59,0 23,0 31,1 * *", "59,0 23,0 28,29 2 *", "59,0 23,0 * 12,1 *"]) {
     assert.throws(() => validateTrigger({ kind: "cron", expr }), (error: unknown) => error instanceof ScheduleSpecError && /at least 5 minutes apart/.test(error.message), expr);
   }
-  for (const expr of ["*/5 * * * *", "0,5 * * * *", "58,3 * * * *", "0 3 * * 1-5", "59 23 * * 1", "56 23 * * 1,2", "0 0,12 1 * *"]) {
+  for (const expr of ["*/5 * * * *", "0,5 * * * *", "58,3 * * * *", "0 3 * * 1-5", "59 23 * * 1", "56 23 * * 1,2", "0 0,12 1 * *", "0 0 31 * *", "59,0 23,0 1,3 * *", "59,0 23,0 * * 1,3", "59,0 23,0 29 2 *", "59 23 31 12 *", "0 0 1 1,2 *"]) {
     assert.doesNotThrow(() => validateTrigger({ kind: "cron", expr }), expr);
   }
   // The pure slot functions still accept a one-minute expression: the floor is a rule of what may be scheduled.
   assert.equal(nextAfter(cron("* * * * *"), 0, at("2026-01-01T00:00:30Z")) , at("2026-01-01T00:01:00Z"));
+});
+
+test("cron: an expression that can never match a date (31 February, 31 April) is refused with that reason", () => {
+  for (const expr of ["0 0 31 2 *", "0 0 30 2 *", "0 0 31 4 *", "0 0 31 6,9,11 *", "0 0 30,31 2 *"]) {
+    assert.throws(() => validateTrigger({ kind: "cron", expr }), (error: unknown) => error instanceof ScheduleSpecError && /never matches a date/.test(error.message), expr);
+  }
+  for (const expr of ["0 0 29 2 *", "0 0 31 1,2 *", "0 0 30 2,3 *"]) assert.doesNotThrow(() => validateTrigger({ kind: "cron", expr }), expr);
 });
 
 test("cron: next slots across hours, days, month ends, years and leap days", () => {
