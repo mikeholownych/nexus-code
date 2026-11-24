@@ -13,7 +13,7 @@ import { execFileSync } from "node:child_process";
 import type { AutonomousAgent } from "../src/agent.js";
 import { readExtensionTrust } from "../src/core/content_trust.js";
 import { makeRepo, trustWorkspace } from "./helpers/fixtures.js";
-import { approveProjectHooks, dispatch, hookAgent, loggingHook, runsOf, writeOperatorHooks, writeProjectHooks, type HookAgentOptions } from "./helpers/hooks_fixture.js";
+import { approveProjectHooks, deniedBy, dispatch, hookAgent, loggingHook, runsOf, writeOperatorHooks, writeProjectHooks, type HookAgentOptions } from "./helpers/hooks_fixture.js";
 
 let home = "", previousHome: string | undefined, repo = "", stateDir = "", scripts = "", log = "";
 let agents: AutonomousAgent[] = [];
@@ -58,7 +58,7 @@ test("an unapproved project hooks file does not run, and the notice names the ap
   assert.equal(receipt.status, "COMPLETED", JSON.stringify(receipt).slice(0, 400));
   assert.equal(receipt.hooks, undefined);
   assert.deepEqual(runsOf(log), [], "the repository's program was not started");
-  assert.deepEqual(hookNotices(), [`nexus: project hooks in ${file()} are not approved; review them and run \`nexus hooks approve\``]);
+  assert.deepEqual(hookNotices(), [`nexus: project hooks in ${file()} are not approved; review them and run \`nexus hooks approve\` in a terminal`]);
   // Told once, not on every call.
   await dispatch(agent, "write_file", WRITE);
   assert.equal(hookNotices().length, 1);
@@ -81,7 +81,7 @@ test("approved, it runs; one byte changed, it does not run again and the notice 
   const approved = await dispatch(agent, "write_file", WRITE);
   assert.equal(approved.status, "DENIED");
   assert.equal(approved.denialReason, "HOOK_DENIED");
-  assert.equal(approved.error, "[hook project-guard (project)] project says no");
+  assert.equal(approved.error, deniedBy("project-guard", "project", "project says no"));
   assert.equal(approved.hooks[0].source, "project");
   assert.equal(runsOf(log).length, 1);
   assert.deepEqual(hookNotices(), []);
@@ -92,7 +92,7 @@ test("approved, it runs; one byte changed, it does not run again and the notice 
   assert.equal(changed.status, "COMPLETED", "the changed file is not in force");
   assert.equal(changed.hooks, undefined);
   assert.equal(runsOf(log).length, 1, "the program was not started again");
-  assert.deepEqual(hookNotices(), [`nexus: project hooks in ${file()} are not approved (changed since approval); review them and run \`nexus hooks approve\``]);
+  assert.deepEqual(hookNotices(), [`nexus: project hooks in ${file()} are not approved (.nexus/hooks.json changed since approval); review them and run \`nexus hooks approve\` in a terminal`]);
 
   // Approving the new bytes puts it back in force. (A whole-second modification time, so it can be put back exactly.)
   fs.rmSync(path.join(repo, "out.txt"));
@@ -183,7 +183,7 @@ test("a project file cannot remove or outvote the operator's hooks", async () =>
 
   const receipt = await dispatch(agentFor(), "write_file", WRITE);
   assert.equal(receipt.status, "DENIED");
-  assert.equal(receipt.error, "[hook operator-guard (operator)] operator says no");
+  assert.equal(receipt.error, deniedBy("operator-guard", "operator", "operator says no"));
   assert.deepEqual(receipt.hooks.map((run: any) => [run.source, run.name, run.decision]), [["operator", "operator-guard", "deny"], ["project", "operator-guard", "skipped"]]);
   assert.equal(runsOf(log).length, 0);
   assert.equal(fs.existsSync(path.join(repo, "out.txt")), false);

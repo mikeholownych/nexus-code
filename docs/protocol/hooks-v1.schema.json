@@ -11,6 +11,13 @@
           "description": "ISO 8601 time of the approval.",
           "type": "string"
         },
+        "files": {
+          "description": "Files inside the workspace that the approved content runs, each with the SHA-256 of its bytes when it was\napproved. The approval holds only while every one of them is unchanged and no other is named.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ExtensionTrustFile"
+          }
+        },
         "key": {
           "description": "The approved item inside the scope (a path relative to the workspace).",
           "type": "string"
@@ -38,6 +45,22 @@
         "scope",
         "sha256",
         "summary"
+      ]
+    },
+    "ExtensionTrustFile": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Relative to the workspace.",
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
       ]
     },
     "ExtensionTrustStore": {

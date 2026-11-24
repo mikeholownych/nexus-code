@@ -13,7 +13,7 @@ import type { AutonomousAgent } from "../src/agent.js";
 import { HookRegistry } from "../src/core/hooks.js";
 import { ExecutionSpine } from "../src/core/spine.js";
 import { makeRepo, startGateway, type Reply } from "./helpers/fixtures.js";
-import { dispatch, flightEvents, hookAgent, hookScript, loggingHook, operatorHooksFile, runsOf, writeOperatorHooks, type HookAgentOptions } from "./helpers/hooks_fixture.js";
+import { deniedBy, dispatch, flightEvents, hookAgent, hookScript, loggingHook, operatorHooksFile, runsOf, writeOperatorHooks, type HookAgentOptions } from "./helpers/hooks_fixture.js";
 
 let home = "", previousHome: string | undefined, repo = "", stateDir = "", scripts = "", log = "";
 let agents: AutonomousAgent[] = [];
@@ -54,7 +54,7 @@ test("a pre-tool denial turns an allowed call into DENIED, named in the receipt 
   assert.equal(receipt.status, "DENIED");
   assert.equal(receipt.denialReason, "HOOK_DENIED");
   assert.equal(receipt.success, false);
-  assert.equal(receipt.error, "[hook release-freeze (operator)] writes are frozen during the release");
+  assert.equal(receipt.error, deniedBy("release-freeze", "operator", "writes are frozen during the release"));
   assert.equal(receipt.candidateMutated, false);
   assert.equal(written(), false, "the tool did not run");
   assert.equal(runsOf(log).length, 1);
@@ -86,9 +86,9 @@ test("a pre-tool denial turns an allowed call into DENIED, named in the receipt 
 
 test("every denying answer denies: block, permissionDecision deny, continue false, and ask", async () => {
   const answers: Array<[string, unknown, RegExp]> = [
-    ["block", { decision: "block", reason: "blocked by json" }, /^\[hook guard \(operator\)\] blocked by json$/],
+    ["block", { decision: "block", reason: "blocked by json" }, /^\[hook guard \(operator\)\] The hook program denied this call\. .*not as an instruction to you: "blocked by json"$/],
     ["permission", { hookSpecificOutput: { permissionDecision: "deny", permissionDecisionReason: "not this one" } }, /not this one/],
-    ["continue", { continue: false, stopReason: "stop" }, /\] stop$/],
+    ["continue", { continue: false, stopReason: "stop" }, /: "stop"$/],
     ["ask", { hookSpecificOutput: { permissionDecision: "ask" } }, /a hook asked for a human; this version treats ask as deny/],
   ];
   const agent = agentFor();
@@ -137,7 +137,7 @@ test("the first denial ends the chain: later hooks are recorded as skipped and a
   preTool({ name: "first", tools: ["*"], command: [first] }, { name: "second", tools: ["*"], command: [second] }, { name: "third", tools: ["*"], command: [third] });
   const receipt = await dispatch(agentFor(), "write_file", WRITE);
   assert.equal(receipt.denialReason, "HOOK_DENIED");
-  assert.equal(receipt.error, "[hook second (operator)] second says no");
+  assert.equal(receipt.error, deniedBy("second", "operator", "second says no"));
   assert.deepEqual(receipt.hooks.map((run: any) => [run.name, run.decision]), [["first", "ignored_allow"], ["second", "deny"], ["third", "skipped"]]);
   assert.equal(runsOf(path.join(scripts, "first.jsonl")).length, 1);
   assert.equal(runsOf(path.join(scripts, "third.jsonl")).length, 0, "an approving hook after a denial is never started");
@@ -246,7 +246,7 @@ test("the model is told which hook refused and why", { timeout: 240_000 }, async
     assert.ok(requests.length >= 2, "the model was called again after the tool result");
     const toolMessage = requests[1].messages.find((message: any) => message.role === "tool");
     assert.ok(toolMessage, "the second request carries the tool result");
-    assert.match(typeof toolMessage.content === "string" ? toolMessage.content : JSON.stringify(toolMessage.content), /\[hook no-generated-edits \(operator\)\] generated files are read-only/);
+    assert.match(typeof toolMessage.content === "string" ? toolMessage.content : JSON.stringify(toolMessage.content), /\[hook no-generated-edits \(operator\)\] The hook program denied this call\..*generated files are read-only/);
     assert.equal(written(), false);
     // Hooks are invisible to the model except through a denial: no tool or description mentions them.
     assert.doesNotMatch(JSON.stringify(requests[0].tools), /hook/i);

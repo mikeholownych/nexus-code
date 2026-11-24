@@ -48,7 +48,7 @@ test("examples/hooks/run.sh installs the hook and shows it deny a forced push, t
     assert.match(run.stdout, /operator\s+\S+\/\.config\/nexus\/hooks\.json\s+active/);
     assert.match(run.stdout, /pre-tool\s+no-force-push\s+tools: run_command\s+timeout: 10s/);
     assert.match(run.stdout, /--- an ordinary push: the hook has no objection\n\s+operator\s+no-force-push\s+none\s+exit 0\ndecision: no objection/);
-    assert.match(run.stdout, /decision: DENY \(HOOK_DENIED\) \[hook no-force-push \(operator\)\] force pushes are not allowed from an agent session/);
+    assert.match(run.stdout, /decision: DENY \(HOOK_DENIED\) \[hook no-force-push \(operator\)\] The hook program denied this call\..*"force pushes are not allowed from an agent session/);
     assert.match(run.stdout, /denied, as it should be \(exit status 2\)\n$/);
     assert.deepEqual(fs.readdirSync(scratch), ["nexus"], "the script wrote nothing into the HOME it was started with");
   } finally {

@@ -1,7 +1,7 @@
 /**
  * `nexus hooks`: list the command hooks in force, approve or revoke a project's hooks file, and try the configured
- * hooks against a sample tool call (HK-1). Approving records the SHA-256 of the exact bytes shown; nothing here can
- * approve a file unseen (no `--yes`): a terminal is asked, and anything else must name the hash it approves.
+ * hooks against a sample tool call (HK-1). Approving records the SHA-256 of the exact bytes shown, and of the workspace
+ * files the hooks run. It is the act of a person: there is no `--yes`, and without a terminal nothing is approved.
  */
 import * as path from "node:path";
 import type { Command } from "commander";
@@ -48,6 +48,10 @@ interface ListedSource {
   problem?: string;
   hooks: Array<{ event: HookEvent; name: string; tools: string[]; command: string | string[]; timeout_secs: number }>;
   unknown_tools?: string[];
+  /** Project only: the workspace files its commands run, whose bytes an approval covers. */
+  covered_files?: Array<{ path: string; sha256: string }>;
+  /** Project only, status `changed`: what differs from the approval. */
+  changed?: string[];
 }
 
 function listed(source: "operator" | "project", file: string, loaded: LoadedHooksFile, status: ListedSource["status"]): ListedSource {
@@ -68,7 +72,13 @@ export function listHookSources(sources: HookSources): ListedSource[] {
   const operator = sources.operator.loaded;
   return [
     listed("operator", sources.operator.path, operator, operator.state === "absent" ? "absent" : operator.state === "ok" ? "active" : "invalid"),
-    listed("project", sources.project.path, sources.project.loaded, sources.project.status),
+    {
+      ...listed("project", sources.project.path, sources.project.loaded, sources.project.status),
+      // The project's own reason (a command that cannot be pinned) when the file itself parsed.
+      ...(sources.project.problem ? { problem: sources.project.problem } : {}),
+      ...(sources.project.files.length ? { covered_files: sources.project.files } : {}),
+      ...(sources.project.changed ? { changed: sources.project.changed } : {}),
+    },
   ];
 }
 
@@ -80,6 +90,8 @@ function printSource(entry: ListedSource): void {
     console.log(`  ${hook.event}  ${pc.bold(hook.name)}  tools: ${hook.tools.join(", ")}  timeout: ${hook.timeout_secs}s`);
     console.log(`    ${commandText(hook.command)}`);
   }
+  for (const file of entry.covered_files ?? []) console.log(pc.dim(`  covers ${file.path}  sha256 ${file.sha256}`));
+  if (entry.changed) console.log(pc.yellow(`  changed since approval: ${entry.changed.join(", ")}`));
   if (entry.unknown_tools) console.log(pc.yellow(`  no built-in tool is named ${entry.unknown_tools.join(", ")}: a hook that lists only such names never runs`));
 }
 
@@ -102,7 +114,7 @@ export function registerHookCommands(program: Command, deps: HookCliDeps = {}): 
         for (const entry of entries) printSource(entry);
         if (sources.trustProblem) console.log(pc.yellow(`The approval store ${extensionTrustStorePath()} is not used: ${sources.trustProblem}. Nothing it approved runs.`));
         if (entries[0].status === "invalid") console.log(pc.red("The operator's hooks file is invalid: every tool call is denied until it is fixed or moved aside."));
-        if (entries[1].status === "not_approved" || entries[1].status === "changed") console.log(`The project's hooks do not run${entries[1].status === "changed" ? " (the file changed since it was approved)" : ""}. Review them, then run \`nexus hooks approve\`.`);
+        if (entries[1].status === "not_approved" || entries[1].status === "changed") console.log(`The project's hooks do not run${entries[1].status === "changed" ? ` (${entries[1].changed?.join(", ")} changed since the approval)` : ""}. Review them, then run \`nexus hooks approve\` in a terminal.`);
       }
       // An invalid operator file stops all work, so a script that lists hooks should notice.
       if (entries[0].status === "invalid") process.exitCode = 1;
@@ -112,7 +124,7 @@ export function registerHookCommands(program: Command, deps: HookCliDeps = {}): 
     .command("approve")
     .description("Approve this workspace's .nexus/hooks.json as it is now (a later change needs a new approval)")
     .option("-w, --workspace <path>", "Workspace directory (default: current directory)")
-    .option("--sha256 <hex>", "Approve only if the file has this SHA-256 (required when there is no terminal to ask)")
+    .option("--sha256 <hex>", "Approve only if the file has this SHA-256 (you are still asked; approving needs a terminal)")
     .action(async (options: { workspace?: string; sha256?: string }) => {
       const { project } = inspectHookSources({ workspace: workspaceOf(options), readOnly: false });
       const refuse = (message: string, code = 1) => {
@@ -120,24 +132,26 @@ export function registerHookCommands(program: Command, deps: HookCliDeps = {}): 
         process.exitCode = code;
       };
       if (project.loaded.state === "absent") return refuse(`There is no ${project.path}.`);
-      if (project.loaded.state === "invalid") return refuse(`${project.path} is not a valid hooks file and cannot be approved: ${hookLine(project.loaded.problem)}`);
+      if (project.loaded.state === "invalid" || project.status === "invalid") return refuse(`${project.path} is not a valid hooks file and cannot be approved: ${hookLine(project.problem ?? "")}`);
       const { sha256, file } = project.loaded;
       const entry = listed("project", project.path, project.loaded, project.status);
       console.log(`${project.path}\nsha256 ${sha256}\nThese programs would run with your authority, outside the sandbox, on the tool calls they name:`);
       for (const hook of entry.hooks) console.log(`  ${hook.event}  ${hook.name}  tools: ${hook.tools.join(", ")}\n    ${commandText(hook.command)}`);
       if (!entry.hooks.length) console.log("  (no hooks)");
+      if (project.files.length) console.log("The approval also covers these workspace files they run, as they are now (a change to one needs a new approval):");
+      for (const covered of project.files) console.log(`  ${covered.path}  sha256 ${covered.sha256}`);
 
-      const pinned = options.sha256?.trim().toLowerCase();
-      if (pinned !== undefined) {
-        if (pinned !== sha256) return refuse(`Not approved: --sha256 does not match the file, whose SHA-256 is ${sha256}.`, 2);
-      } else if (!interactive()) {
-        return refuse(`Not approved: there is no terminal to ask on. Review the file, then run \`nexus hooks approve --sha256 ${sha256}\`.`, 2);
-      } else if (!(await confirm("Approve these hooks for this workspace? [y/N] "))) {
-        return refuse("Not approved.");
+      // Approving is the act of a person: a tool call of the agent has no terminal, and must not be able to approve
+      // hooks for itself by naming a hash.
+      if (!interactive()) {
+        return refuse("Not approved: approving hooks needs a person at a terminal (standard input and output are not both a terminal). Review the file, then run `nexus hooks approve` yourself in a terminal.", 2);
       }
-      // The hash recorded is of the bytes that were read and shown above, not of the file as it may be now.
+      const pinned = options.sha256?.trim().toLowerCase();
+      if (pinned !== undefined && pinned !== sha256) return refuse(`Not approved: --sha256 does not match the file, whose SHA-256 is ${sha256}.`, 2);
+      if (!(await confirm("Approve these hooks for this workspace? [y/N] "))) return refuse("Not approved.");
+      // What is recorded is what was read and shown above, not the files as they may be now.
       const count = hooksOf(file).length;
-      approveExtension({ kind: "project-hooks", scope: project.id.scope, key: project.id.key, sha256, approvedAt: new Date().toISOString(), summary: `${count} hook${count === 1 ? "" : "s"}` });
+      approveExtension({ kind: "project-hooks", scope: project.id.scope, key: project.id.key, sha256, approvedAt: new Date().toISOString(), summary: `${count} hook${count === 1 ? "" : "s"}`, ...(project.files.length ? { files: project.files } : {}) });
       console.log(`Approved for ${project.id.scope}. Undo with \`nexus hooks revoke\`.`);
     });
 

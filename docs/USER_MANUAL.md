@@ -700,7 +700,7 @@ Release notes: `docs/releases/v1.2.0.md`. These changes affect existing workflow
 
 A hook is a program you name that Nexus runs before (`pre-tool`) or after (`post-tool`) a tool call. A pre-tool hook can deny the call: exit status 2, or a `block`/`deny` answer. No hook can approve a call or change its arguments; an "allow" is recorded and ignored, and approval prompts, read-only mode, verification-file protection and managed policy decide exactly as they do without hooks. A hook that fails, hangs or answers unreadably denies the call.
 
-Your hooks go in `~/.config/nexus/hooks.json`. A repository may ship `.nexus/hooks.json`; it runs only after you approve its exact content, and a changed file needs a new approval. If your own hooks file is invalid, every tool call is denied until you fix it.
+Your hooks go in `~/.config/nexus/hooks.json`. A repository may ship `.nexus/hooks.json`; it runs only after you approve its exact content yourself in a terminal (the approval also covers the workspace scripts it runs), and a change to any of them needs a new approval. If your own hooks file is invalid, every tool call is denied until you fix it.
 
 ```bash
 nexus hooks list

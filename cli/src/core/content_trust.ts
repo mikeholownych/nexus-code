@@ -28,6 +28,17 @@ export interface ExtensionTrustEntry {
   approvedAt: string;
   /** One line shown when approvals are listed. */
   summary: string;
+  /**
+   * Files inside the workspace that the approved content runs, each with the SHA-256 of its bytes when it was
+   * approved. The approval holds only while every one of them is unchanged and no other is named.
+   */
+  files?: ExtensionTrustFile[];
+}
+
+export interface ExtensionTrustFile {
+  /** Relative to the workspace. */
+  path: string;
+  sha256: string;
 }
 
 /** The document in `extension_trust.json`. */
@@ -53,11 +64,19 @@ const same = (a: ExtensionTrustId, b: ExtensionTrustId) => a.kind === b.kind && 
 
 function entryOf(raw: unknown): ExtensionTrustEntry | undefined {
   if (!isRecord(raw)) return undefined;
-  const { kind, scope, key, sha256, approvedAt, summary } = raw;
+  const { kind, scope, key, sha256, approvedAt, summary, files } = raw;
   if (typeof kind !== "string" || !KINDS.includes(kind)) return undefined;
   if (typeof scope !== "string" || typeof key !== "string" || typeof approvedAt !== "string" || typeof summary !== "string") return undefined;
   if (typeof sha256 !== "string" || !/^[0-9a-f]{64}$/.test(sha256)) return undefined;
-  return { kind: kind as ExtensionTrustKind, scope, key, sha256, approvedAt, summary };
+  const entry: ExtensionTrustEntry = { kind: kind as ExtensionTrustKind, scope, key, sha256, approvedAt, summary };
+  if (files === undefined) return entry;
+  if (!Array.isArray(files)) return undefined;
+  const covered: ExtensionTrustFile[] = [];
+  for (const file of files) {
+    if (!isRecord(file) || typeof file.path !== "string" || typeof file.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(file.sha256)) return undefined;
+    covered.push({ path: file.path, sha256: file.sha256 });
+  }
+  return { ...entry, files: covered };
 }
 
 /**
@@ -77,6 +96,11 @@ export function readExtensionTrust(storePath = extensionTrustStorePath()): { ent
   } catch (error) {
     return { entries: [], problem: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/** The approval recorded for `id`, if any. */
+export function extensionTrustEntry(entries: readonly ExtensionTrustEntry[], id: ExtensionTrustId): ExtensionTrustEntry | undefined {
+  return entries.find((entry) => same(entry, id));
 }
 
 /** How `currentSha256` (undefined: there is no content now) stands against the approval recorded for `id`. */

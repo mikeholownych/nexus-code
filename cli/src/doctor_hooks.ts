@@ -29,7 +29,7 @@ export function diagnoseHooks(workspace: string, home: string): HooksDiagnosis {
   }
   const problems: string[] = [];
   if (project.status === "not_approved") problems.push(`${project.path}: not approved, so its hooks do not run`);
-  if (project.status === "changed") problems.push(`${project.path}: changed since it was approved, so its hooks do not run`);
+  if (project.status === "changed") problems.push(`${project.path}: ${project.changed?.join(", ")} changed since the approval, so its hooks do not run`);
   if (project.status === "invalid") problems.push(`${project.path}: not a valid hooks file, so its hooks do not run (${project.problem})`);
   if (sources.trustProblem) problems.push(`${path.join(config, "extension_trust.json")}: the approval store is not used (${sources.trustProblem}); nothing it approved runs`);
   for (const entry of [operator, project]) {
@@ -43,7 +43,7 @@ export function diagnoseHooks(workspace: string, home: string): HooksDiagnosis {
       status: "warn",
       explanation: `${problems.length} command hook problem(s): hooks you may be counting on are not running. ${note}`,
       evidence,
-      action: project.status === "not_approved" || project.status === "changed" ? `Review ${project.path}, then run \`nexus hooks approve -w ${workspace}\`.` : "Run `nexus hooks list` and correct what it reports.",
+      action: project.status === "not_approved" || project.status === "changed" ? `Review ${project.path}, then run \`nexus hooks approve -w ${workspace}\` in a terminal.` : "Run `nexus hooks list` and correct what it reports.",
     };
   }
   if (!count) return { status: "skip", explanation: "No command hooks are configured (optional).", evidence };

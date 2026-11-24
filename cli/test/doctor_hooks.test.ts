@@ -40,12 +40,12 @@ function projectHooks(document: unknown): string {
   return file;
 }
 const approve = (file: string) => approveExtension({ kind: "project-hooks", scope: workspace, key: path.join(".nexus", "hooks.json"), sha256: createHash("sha256").update(fs.readFileSync(file)).digest("hex"), approvedAt: new Date().toISOString(), summary: "t" }, store());
-const guard = (tools = ["run_command"]) => ({ version: 1, hooks: { "pre-tool": [{ name: "guard", tools, command: "exit 0" }] } });
+const guard = (tools = ["run_command"]) => ({ version: 1, hooks: { "pre-tool": [{ name: "guard", tools, command: ["/bin/true"] }] } });
 
 test("no hooks: skipped; hooks in force: pass, with what is in force", () => {
   assert.deepEqual(diagnoseHooks(workspace, home), { status: "skip", explanation: "No command hooks are configured (optional).", evidence: [] });
   const operator = operatorHooks(guard());
-  const project = projectHooks({ version: 1, hooks: { "post-tool": [{ name: "audit", tools: ["*"], command: "exit 0" }] } });
+  const project = projectHooks({ version: 1, hooks: { "post-tool": [{ name: "audit", tools: ["*"], command: ["/bin/true"] }] } });
   approve(project);
   const diagnosis = diagnoseHooks(workspace, home);
   assert.equal(diagnosis.status, "pass");
@@ -72,14 +72,14 @@ test("project hooks that are declared and not in force are a warning with the co
   const unapproved = diagnoseHooks(workspace, home);
   assert.equal(unapproved.status, "warn");
   assert.deepEqual(unapproved.evidence, [`${project}: not approved, so its hooks do not run`]);
-  assert.equal(unapproved.action, `Review ${project}, then run \`nexus hooks approve -w ${workspace}\`.`);
+  assert.equal(unapproved.action, `Review ${project}, then run \`nexus hooks approve -w ${workspace}\` in a terminal.`);
 
   approve(project);
   assert.equal(diagnoseHooks(workspace, home).status, "pass");
   fs.appendFileSync(project, "\n");
   const changed = diagnoseHooks(workspace, home);
   assert.equal(changed.status, "warn");
-  assert.match(changed.evidence[0], /changed since it was approved, so its hooks do not run/);
+  assert.match(changed.evidence[0], /\.nexus\/hooks\.json changed since the approval, so its hooks do not run/);
 
   fs.writeFileSync(project, '{"version":1,"hooks":{"stop":[]}}');
   const invalid = diagnoseHooks(workspace, home);
