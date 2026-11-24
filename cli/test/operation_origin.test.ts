@@ -15,10 +15,10 @@ import { CURRENT_OPERATION_SCHEMA_VERSION, InvalidOperationStateError, migrateOp
 
 const state = (): DurableOperationState => newOperation("op-origin", "objective", [{ id: "u", title: "u", prompt: "p" }], [], Date.parse("2026-11-24T10:00:00.000Z"));
 
-test("the operation document is version 5 and an attended operation has no origin", () => {
-  assert.equal(CURRENT_OPERATION_SCHEMA_VERSION, 5);
+test("the operation document is version 6 and an attended operation has no origin", () => {
+  assert.equal(CURRENT_OPERATION_SCHEMA_VERSION, 6);
   const attended = state();
-  assert.equal(attended.schemaVersion, 5);
+  assert.equal(attended.schemaVersion, 6);
   assert.equal("origin" in attended, false);
   assert.doesNotThrow(() => validateOperationState(attended));
 });
@@ -54,9 +54,9 @@ test("a job origin survives a save and load, and a damaged one is refused", (t) 
 test("a version 4 record is upgraded by its version alone, and a record from a newer build is refused, not read", () => {
   const v4 = { ...state(), schemaVersion: 4 };
   const migrated = migrateOperationState(JSON.parse(JSON.stringify(v4)));
-  assert.equal(migrated.schemaVersion, 5);
+  assert.equal(migrated.schemaVersion, 6);
   assert.deepEqual({ ...migrated, schemaVersion: 4 }, JSON.parse(JSON.stringify(v4)), "nothing but the version changed");
   assert.equal(migrated.origin, undefined, "an older record is never stamped after the fact");
-  // What a version 4 build does with a version 5 record is this same rule, one version earlier: it refuses it.
+  // A build at the previous supported version refuses this record instead of rewriting it.
   assert.throws(() => migrateOperationState({ ...state(), schemaVersion: CURRENT_OPERATION_SCHEMA_VERSION + 1 }), UnsupportedOperationSchemaError);
 });
