@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M868GF7V6ZEZ3N2X3CGCV3AR",
+  "strategy": "manual-commit",
+  "branch": "codex/context-maturity-v130",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "docs/research/context-engineering/CONTEXT-MATURITY-SYSTEM.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 7850,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 1041024,
+    "output_tokens": 3156,
+    "api_call_count": 10
+  },
+  "redaction": {
+    "replacements": 2685,
+    "layers": {
+      "betterleaks": 860,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 136,
+      "credentialed_uri": 122,
+      "entropy": 1991,
+      "key_context": 0,
+      "provider_token": 25,
+      "shell_stdin": 0
+    }
+  }
+}
