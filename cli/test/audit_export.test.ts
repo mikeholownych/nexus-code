@@ -8,6 +8,7 @@ import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { AUDIT_FILE_ROLES, auditExitCode } from "../src/audit_contract.js";
 import { AUDIT_STANDARD_REDACTION_NOTE, AuditExportError, auditIdProblem, exportAuditBundle, renderAuditExportText, type AuditExportRequest } from "../src/audit_export.js";
 import { AUDIT_UNSIGNED_CAVEAT, auditWorkspaceSha256, readChainedLogRecords } from "../src/core/audit_bundle.js";
@@ -608,3 +609,60 @@ test("characterisation: redaction at save can break the chain of the verificatio
   assert.deepEqual(verified.result.findings.map((finding) => [finding.kind, finding.path]), [["log_not_intact_at_export", ATTEMPTS]]);
   assert.deepEqual(verified.result.notes, []);
 });
+
+test("a repository whose own Git configuration names a program is not hashed: the binding is unavailable and nothing runs", { skip: process.platform !== "linux" }, () => {
+  // Each case is a way a checkout can make Git run a command while it hashes a changed file. The marker file is the proof.
+  const cases: Array<[string, (workspace: string, command: string) => void]> = [
+    ["a clean filter", (workspace, command) => {
+      fs.writeFileSync(path.join(workspace, ".gitattributes"), "* filter=planted\n");
+      git(workspace, "config", "filter.planted.clean", command);
+    }],
+    ["a filter named only in .git/info/attributes", (workspace, command) => {
+      fs.mkdirSync(path.join(workspace, ".git", "info"), { recursive: true });
+      fs.writeFileSync(path.join(workspace, ".git", "info", "attributes"), "* filter=planted\n");
+      git(workspace, "config", "filter.planted.clean", command);
+    }],
+    ["a filter defined in an included file", (workspace, command) => {
+      fs.writeFileSync(path.join(workspace, ".gitattributes"), "* filter=planted\n");
+      const included = path.join(workspace, ".git", "planted.inc");
+      // Quoted: an unquoted `;` starts a comment in a Git configuration file and would cut the command short.
+      fs.writeFileSync(included, `[filter "planted"]\n\tclean = "${command}"\n`);
+      git(workspace, "config", "include.path", included);
+    }],
+    ["a file-system monitor", (workspace, command) => git(workspace, "config", "core.fsmonitor", command)],
+    ["an attributes file named by the repository", (workspace, command) => {
+      const attributes = path.join(workspace, ".git", "planted.attributes");
+      fs.writeFileSync(attributes, "* filter=planted\n");
+      git(workspace, "config", "core.attributesFile", attributes);
+      git(workspace, "config", "filter.planted.clean", command);
+    }],
+  ];
+  for (const [name, plant] of cases) {
+    const subject = savedSubject({ flight: false });
+    if (!fs.existsSync(path.join(subject.workspace, ".git"))) git(subject.workspace, "init", "-q");
+    fs.writeFileSync(path.join(subject.workspace, "tracked.txt"), "tracked\n");
+    git(subject.workspace, "add", "-A");
+    git(subject.workspace, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "base");
+    setReceiptCandidateId(subject, "0".repeat(64));
+    // The tracked file keeps its content and size and gets a new modification time: Git cannot tell whether it changed
+    // without hashing it again, and hashing is what runs a content filter. (A file whose size changed is known to be
+    // modified without being read.) Done before the plant: the test's own Git commands would otherwise run the
+    // planted program themselves.
+    const later = new Date(Date.now() + 5_000);
+    fs.utimesSync(path.join(subject.workspace, "tracked.txt"), later, later);
+    const marker = path.join(subject.root, "ran");
+    plant(subject.workspace, `sh -c 'echo ran > ${marker}; cat'`);
+    assert.equal(fs.existsSync(marker), false, `${name}: planting ran the command`);
+
+    const exported = exportChecked(subject.request({ out: path.join(subject.root, "out", "hostile") }));
+    const binding = JSON.parse(bundleTexts(exported.written.dir)["receipts/candidate-binding.json"]);
+    assert.equal(fs.existsSync(marker), false, `${name}: the configured command ran`);
+    assert.equal(binding.status, "unavailable", name);
+    assert.equal(binding.unavailable_reason, "workspace_configures_git_programs", name);
+    assert.equal(binding.current_candidate_id, null, name);
+  }
+});
+
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+}

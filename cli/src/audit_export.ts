@@ -30,6 +30,7 @@
  * every workspace), not another task's files. Flight logs carry no task id, so they are either named by the operator
  * or chosen by a time window, which is a heuristic and is recorded as such.
  */
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -69,6 +70,33 @@ import { SessionManager, defaultSessionsDir, defaultTaskStateDir, type DurableTa
 import { buildSessionExport, evidenceProvenance } from "./session_export.js";
 
 export type AuditStore = "tasks" | "sessions";
+
+/**
+ * Git configuration keys that name a program Git runs, or that redirect where it looks, while it reads a working tree.
+ * An export is run on a workspace its operator may not trust, and computing the candidate identity makes Git hash
+ * changed files: a content filter or a file-system monitor defined by the repository itself would then run with the
+ * exporter's rights.
+ */
+const GIT_PROGRAM_KEYS = "^(filter\\..*|core\\.(fsmonitor|attributesfile|worktree|hookspath|sshcommand|gitproxy)|diff\\..*\\.(textconv|command)|diff\\.external)$";
+
+/**
+ * Whether the repository at `workspacePath` sets any such key in its own configuration (`.git/config`, a worktree's,
+ * and whatever those include). The operator's system and global configuration is theirs to trust. Reading configuration
+ * runs none of these programs. A listing that cannot be read counts as yes.
+ */
+function repositoryConfiguresPrograms(workspacePath: string): boolean {
+  const inside = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: workspacePath, encoding: "utf8", timeout: 10_000 });
+  if (inside.status !== 0 || inside.stdout.trim() !== "true") return false; // not a Git working tree: no Git command is run on it
+  const listed = spawnSync("git", ["config", "--show-scope", "-z", "--get-regexp", GIT_PROGRAM_KEYS], { cwd: workspacePath, encoding: "utf8", timeout: 10_000 });
+  if (listed.status === 1 && !listed.stdout) return false;
+  if (listed.status !== 0) return true;
+  // Records are `scope NUL key LF value NUL`.
+  const fields = listed.stdout.split("\0");
+  for (let index = 0; index + 1 < fields.length; index += 2) {
+    if (fields[index] !== "system" && fields[index] !== "global" && fields[index] !== "command") return true;
+  }
+  return false;
+}
 
 /** A flight log is copied whole up to this size; above it the bundle holds the longest prefix of complete records that fits. */
 export const AUDIT_FLIGHT_COPY_BYTES = 16 * 1024 * 1024;
@@ -644,6 +672,7 @@ export function exportAuditBundle(request: AuditExportRequest): AuditExport {
     try {
       if (workspacePath === null) throw new Error("workspace_not_recorded");
       if (verifyCheckout(workspacePath).reason) throw new Error("workspace_checkout_untrusted");
+      if (repositoryConfiguresPrograms(workspacePath)) throw new Error("workspace_configures_git_programs");
       candidateBinding.current_candidate_id = computeCandidateIdentitySync(workspacePath, {
         maxEntries: AUDIT_CANDIDATE_ENTRIES,
         maxTotalBytes: AUDIT_CANDIDATE_BYTES,
@@ -655,6 +684,7 @@ export function exportAuditBundle(request: AuditExportRequest): AuditExport {
         ? "candidate_scan_limit_exceeded"
         : /GitTimeoutError/.test(errorCode(error)) ? "git_timeout"
           : /does not exist/.test(message) ? "workspace_missing"
+            : message === "workspace_configures_git_programs" ? "workspace_configures_git_programs"
             : message === "workspace_checkout_untrusted" || /Refusing to compute the candidate identity/.test(message) ? "workspace_checkout_untrusted"
               : "candidate_identity_unavailable";
       warnings.push("Current workspace candidate identity could not be computed; validation receipt bindings are inconclusive.");
