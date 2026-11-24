@@ -63,7 +63,7 @@ function buildConfig(options: any): HarnessConfig {
 }
 import { registerOperationCommands } from "./operation_cli.js";
 import { registerBackgroundCommands } from "./background_cli.js";
-import { registerScheduleCommands } from "./schedule_command.js";
+import { registerScheduleCommands } from "./schedule_cli.js";
 import { requireManagedPolicyAtStartup } from "./core/policy_runtime.js";
 import { registerPolicyCommands } from "./policy_cli.js";
 import { managedPolicy, verifyFlagRefusal } from "./core/policy_runtime.js";

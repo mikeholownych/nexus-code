@@ -293,7 +293,7 @@ export function strictObject(label: string, value: unknown, required: readonly s
   return object;
 }
 
-function text(label: string, value: unknown, max: number, pattern?: RegExp): string {
+export function text(label: string, value: unknown, max: number, pattern?: RegExp): string {
   if (typeof value !== "string" || !value || value.length > max || (pattern && !pattern.test(value))) throw new RunnerStoreError(`${label} is not valid.`);
   return value;
 }
@@ -303,12 +303,12 @@ export function timestamp(label: string, value: unknown): string {
   return value;
 }
 
-function integer(label: string, value: unknown, min: number, max: number): number {
+export function integer(label: string, value: unknown, min: number, max: number): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < min || value > max) throw new RunnerStoreError(`${label} must be an integer from ${min} to ${max}.`);
   return value;
 }
 
-function oneOf<T extends string>(label: string, value: unknown, allowed: readonly T[]): T {
+export function oneOf<T extends string>(label: string, value: unknown, allowed: readonly T[]): T {
   if (typeof value !== "string" || !allowed.includes(value as T)) throw new RunnerStoreError(`${label} must be one of ${allowed.join(", ")}.`);
   return value as T;
 }

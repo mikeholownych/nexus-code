@@ -1,0 +1,507 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "nexus schedule files v1",
+  "description": "Generated from ScheduleFileDocument in cli/src/core/schedule_store.ts by cli/scripts/gen_schedule_schema.mjs. Do not edit by hand. One of the files under runner/nexus-schedules/, told apart by `format`: a schedule record (nexus-schedule), the pointer to its newest result (nexus-schedule-latest) or the receipt of a gap of missed runs (nexus-schedule-missed). The schema describes shape only; the readers (parseScheduleRecord and the others) also refuse unknown keys, repeated keys and out-of-range values.",
+  "$ref": "#/$defs/ScheduleFileDocument",
+  "$defs": {
+    "JobBudgets": {
+      "type": "object",
+      "properties": {
+        "maxInferenceSubmissions": {
+          "type": "number"
+        },
+        "maxToolInvocations": {
+          "type": "number"
+        },
+        "maxTotalSteps": {
+          "description": "Objective-wide, counted across attempts.",
+          "type": "number"
+        },
+        "maxTurnMinutes": {
+          "description": "One attempt's turn deadline.",
+          "type": "number"
+        },
+        "timeoutMinutes": {
+          "description": "The whole job, from `createdAt`; `deadlineAt` is derived from it once.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "maxInferenceSubmissions",
+        "maxToolInvocations",
+        "maxTotalSteps",
+        "maxTurnMinutes",
+        "timeoutMinutes"
+      ]
+    },
+    "JobPolicy": {
+      "description": "What an unattended job may do to the fresh worktree it runs in. Nothing else is expressible.",
+      "enum": [
+        "read-only",
+        "worktree-write"
+      ]
+    },
+    "JobProvider": {
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      }
+    },
+    "ScheduleFileDocument": {
+      "description": "The documents `docs/protocol/schedule-v<N>.schema.json` describes.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ScheduleMissedReceipt"
+        },
+        {
+          "$ref": "#/$defs/SchedulePointer"
+        },
+        {
+          "$ref": "#/$defs/ScheduleRecord"
+        }
+      ]
+    },
+    "ScheduleFire": {
+      "type": "object",
+      "properties": {
+        "dueAt": {
+          "description": "The slot the job stands for; for a catch-up, the last slot that was missed.",
+          "type": "string"
+        },
+        "firedAt": {
+          "type": "string"
+        },
+        "jobId": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ScheduleFireKind"
+        },
+        "missed": {
+          "description": "Slots that were missed just before this fire and are reported with it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScheduleMissedSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "dueAt",
+        "firedAt",
+        "jobId",
+        "kind",
+        "missed"
+      ]
+    },
+    "ScheduleFireKind": {
+      "enum": [
+        "catch_up",
+        "scheduled"
+      ]
+    },
+    "ScheduleMissReason": {
+      "description": "Why a slot did not run: the runner was not running (or the host was asleep), the previous run still ran, or the run was refused.",
+      "enum": [
+        "overlap",
+        "refused",
+        "runner_not_running"
+      ]
+    },
+    "ScheduleMissedGap": {
+      "description": "One reported gap: `count` slots from `first` to `last` that did not run. `truncated`: `count` is a lower bound.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "number"
+        },
+        "detail": {
+          "description": "For `refused`: why.",
+          "type": "string"
+        },
+        "first": {
+          "type": "string"
+        },
+        "last": {
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/ScheduleMissReason"
+        },
+        "reportedAt": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true
+        }
+      },
+      "required": [
+        "count",
+        "first",
+        "last",
+        "reason",
+        "reportedAt"
+      ]
+    },
+    "ScheduleMissedReceipt": {
+      "description": "`nexus-schedules/<id>.missed-<time>.json`: one gap, reported once.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "description": "What the runner did about it: started a catch-up job (and which), or nothing.",
+          "enum": [
+            "catch_up",
+            "none"
+          ]
+        },
+        "count": {
+          "type": "number"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "first": {
+          "type": "string"
+        },
+        "format": {
+          "const": "nexus-schedule-missed"
+        },
+        "jobId": {
+          "type": "string"
+        },
+        "last": {
+          "type": "string"
+        },
+        "outcome": {
+          "const": "MISSED"
+        },
+        "reason": {
+          "$ref": "#/$defs/ScheduleMissReason"
+        },
+        "reportedAt": {
+          "type": "string"
+        },
+        "scheduleId": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true
+        },
+        "version": {
+          "const": 1
+        }
+      },
+      "required": [
+        "action",
+        "count",
+        "first",
+        "format",
+        "last",
+        "outcome",
+        "reason",
+        "reportedAt",
+        "scheduleId",
+        "version"
+      ]
+    },
+    "ScheduleMissedSummary": {
+      "description": "What a job's receipt says about the gap that came before it.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "number"
+        },
+        "first": {
+          "type": "string"
+        },
+        "last": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true
+        }
+      },
+      "required": [
+        "count",
+        "first",
+        "last"
+      ]
+    },
+    "ScheduleOnMissed": {
+      "enum": [
+        "report",
+        "run-once"
+      ]
+    },
+    "ScheduleOutcome": {
+      "enum": [
+        "BLOCKED",
+        "CANCELLED",
+        "COMPLETE",
+        "FAILED",
+        "MISSED",
+        "REFUSED",
+        "SKIPPED_OVERLAP",
+        "TIMED_OUT"
+      ]
+    },
+    "SchedulePointer": {
+      "description": "`nexus-schedules/<id>.latest.json`: where the newest result is.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "format": {
+          "const": "nexus-schedule-latest"
+        },
+        "integrationBranch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "jobId": {
+          "type": "string"
+        },
+        "outcome": {
+          "type": "string"
+        },
+        "receipt": {
+          "description": "Absolute path of the job's receipt.",
+          "type": "string"
+        },
+        "scheduleId": {
+          "type": "string"
+        },
+        "version": {
+          "const": 1
+        }
+      },
+      "required": [
+        "at",
+        "format",
+        "integrationBranch",
+        "jobId",
+        "outcome",
+        "receipt",
+        "scheduleId",
+        "version"
+      ]
+    },
+    "ScheduleRecord": {
+      "description": "`nexus-schedules/<id>.json`.",
+      "type": "object",
+      "properties": {
+        "budgets": {
+          "$ref": "#/$defs/JobBudgets"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "deliverables": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "format": {
+          "const": "nexus-schedule"
+        },
+        "id": {
+          "type": "string"
+        },
+        "onMissed": {
+          "$ref": "#/$defs/ScheduleOnMissed"
+        },
+        "policy": {
+          "description": "Fixed by the operator at creation. Nothing the job does can change it.",
+          "$ref": "#/$defs/JobPolicy"
+        },
+        "provider": {
+          "$ref": "#/$defs/JobProvider"
+        },
+        "remainingRuns": {
+          "description": "Runs left; null is no limit; 0 disables.",
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/ScheduleState"
+        },
+        "task": {
+          "type": "object",
+          "properties": {
+            "prompt": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "prompt"
+          ]
+        },
+        "trigger": {
+          "$ref": "#/$defs/ScheduleTrigger"
+        },
+        "verifier": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version": {
+          "const": 1
+        },
+        "workspace": {
+          "description": "Real path of the repository, fixed at creation; it must be listed as trusted by the operator.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "budgets",
+        "createdAt",
+        "deliverables",
+        "enabled",
+        "format",
+        "id",
+        "onMissed",
+        "policy",
+        "provider",
+        "remainingRuns",
+        "state",
+        "task",
+        "trigger",
+        "verifier",
+        "version",
+        "workspace"
+      ]
+    },
+    "ScheduleState": {
+      "type": "object",
+      "properties": {
+        "clockSteps": {
+          "description": "Times the clock was found behind where the runner last saw it.",
+          "type": "number"
+        },
+        "lastDueAt": {
+          "type": "string"
+        },
+        "lastFire": {
+          "$ref": "#/$defs/ScheduleFire"
+        },
+        "lastOutcome": {
+          "$ref": "#/$defs/ScheduleOutcome"
+        },
+        "lastTickAt": {
+          "description": "The last time the runner looked at this schedule: a clock that is behind it has stepped backwards.",
+          "type": "string"
+        },
+        "missed": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ScheduleMissedGap"
+          }
+        },
+        "missedCount": {
+          "description": "Slots reported missed over the schedule's life.",
+          "type": "number"
+        },
+        "nextDueAt": {
+          "description": "The next slot, or null for a `once` that has fired or a schedule with no slot left.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "clockSteps",
+        "missed",
+        "missedCount",
+        "nextDueAt"
+      ]
+    },
+    "ScheduleTrigger": {
+      "description": "BG-2: when a schedule is due. Pure: no clock, no file, no process. Triggers are `cron` (five fields), `every` (a\nfixed number of seconds) and `once` (one instant). Every time is UTC: there is no time zone, so there is no daylight\nsaving shift, and a day always has 24 hours. Leap seconds do not exist here (Unix time), so a cron minute is always\n60 seconds. Leap days are real: `0 0 29 2 *` fires on 29 February only.\n\nA slot is one instant a trigger names. `nextAfter` gives the first slot strictly after an instant; it is the only\nway the runner advances a schedule, so a slot can never be produced twice.",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "at": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "once"
+            }
+          },
+          "required": [
+            "at",
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "expr": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "cron"
+            }
+          },
+          "required": [
+            "expr",
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "every"
+            },
+            "seconds": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "kind",
+            "seconds"
+          ]
+        }
+      ]
+    }
+  }
+}

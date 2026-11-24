@@ -170,6 +170,8 @@ const DEFAULT_PROTECTED_PATHS = [
   "extension_trust.json",
   // HK-1: the operator's own hooks file (~/.config/nexus/hooks.json): the agent must not write the operator's hooks.
   "nexus/hooks.json",
+  // BG-2: the operator's schedules (runner/nexus-schedules/ and its lock): the agent a schedule starts must not create or edit a schedule.
+  "nexus-schedules*",
   ".env*",
   "id_rsa*",
   "id_ed25519*",

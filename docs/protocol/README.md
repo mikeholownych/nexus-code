@@ -118,4 +118,13 @@ node scripts/gen_job_receipt_schema.mjs --check
 
 Their ledgers are `JOB_VERSIONS.json`, `RUNNER_FILE_VERSIONS.json`, `JOB_RECEIPT_VERSIONS.json` and `JOB_STATUS_VERSIONS.json`, entries `{ "schema_version", "schemaSha256", "note" }`, newest last, under the same rule as the run-result ledger with `JOB_RECORD_VERSION`, `RUNNER_FILE_VERSION`, `JOB_RECEIPT_SCHEMA_VERSION` and `JOB_STATUS_SCHEMA_VERSION`. The job record and the runner's files carry their version in the member `version`; the ledgers key it as `schema_version` like every other ledger here. Their version rule is the policy document's: the readers (`parseJobRecord`, `parseRunnerRequest` and the rest) refuse any other version and any key they do not know, so every added, removed or changed member bumps the version. A receipt and a status document are reports for other tools, so an added optional member keeps their version. `cli/test/runner_store.test.ts` and `cli/test/job_receipt_schema.test.ts` run the comparisons and validate sample documents.
 
+`schedule-v1.schema.json` (`ScheduleFileDocument` in `cli/src/core/schedule_store.ts`: a schedule record, its latest-result pointer or a missed-run receipt, told apart by `format`) is generated the same way and has its own ledger:
+
+```sh
+node scripts/gen_schedule_schema.mjs           # rewrite docs/protocol/schedule-v1.schema.json
+node scripts/gen_schedule_schema.mjs --check   # exit 1 when the schema or its ledger is stale
+```
+
+`SCHEDULE_VERSIONS.json` keys `SCHEDULE_FILE_VERSION` under the policy document's rule: the readers refuse any other version and any unknown key, so every added, removed or changed member bumps it. The job receipt's `schedule_occurrence` (optional) and `missed` (null or `{count, first, last, truncated?}`) came with BG-2 under the receipt rule above: an added optional member keeps the version, and `missed` had been reserved as always null. `cli/test/schedule_schema.test.ts` runs the comparison and validates every file a schedule produces.
+
 These schemas describe shape only. In the job record, in a start request and in the receipt `unattended` is the constant `true`: a job is a run with no operator present, and its receipt's `approval_mode` is `review` or `read-only`, never `auto`.
