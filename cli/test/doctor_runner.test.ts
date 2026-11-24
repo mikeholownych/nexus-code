@@ -42,12 +42,12 @@ test("doctor identifies a non-terminal job with no live runner or worker", async
       deliverables: [],
       provider: {},
       budgets: { ...DEFAULT_JOB_BUDGETS },
-    });
+    }, new Date("2026-11-24T12:00:00.000Z"));
     writeJob(world.paths, record);
     const result = await world.run(["doctor", "--json", "--timeout", "1000"]);
     const check = findings(result.stdout).get("runner.stuck");
     assert.equal(check?.status, "warn");
-    assert.match(check.explanation, new RegExp(record.id));
+    assert.ok(check.evidence.some((item: string) => item.includes(record.id)), "the evidence names the stranded job");
   } finally {
     await world.cleanup();
   }

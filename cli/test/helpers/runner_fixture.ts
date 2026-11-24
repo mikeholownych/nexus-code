@@ -161,7 +161,7 @@ export interface Bench {
   /** A valid read-only submission for the bench's repository. */
   submission(overrides?: Partial<JobSubmission>, spec?: Record<string, unknown>): { job: JobSubmission; spec: Record<string, unknown> };
   /** Writes a start request and returns the job id. */
-  submit(overrides?: Partial<JobSubmission>): string;
+  submit(overrides?: Partial<JobSubmission>, at?: Date): string;
   /** Ticks `runner` until `done` holds. */
   drive(runner: JobRunner, done: () => boolean, timeoutMs?: number): Promise<void>;
   job(id: string): JobRecord;
@@ -213,9 +213,9 @@ export function bench(repoDir: string): Bench {
       return made;
     },
     submission,
-    submit: (overrides) => {
+    submit: (overrides, at) => {
       const { job: submitted, spec } = submission(overrides);
-      submitRequest(paths, { kind: "start", job: submitted, spec });
+      submitRequest(paths, { kind: "start", job: submitted, spec }, at);
       return submitted.id;
     },
     drive: async (runner, done, timeoutMs = 60_000) => {

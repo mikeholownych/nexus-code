@@ -23,8 +23,8 @@ test("after a reboot a running job resumes without using a crash resume, and a j
     const T0 = Date.parse("2026-11-24T10:00:00.000Z");
     const before = b.runner({ identity: boot("boot-A"), now: () => new Date(T0), maxJobs: 2 });
     before.start();
-    const long = b.submit();
-    const short = b.submit({ budgets: { maxTotalSteps: 200, maxToolInvocations: 300, maxInferenceSubmissions: 300, maxTurnMinutes: 1, timeoutMinutes: 1 } });
+    const long = b.submit({}, new Date(T0));
+    const short = b.submit({ budgets: { maxTotalSteps: 200, maxToolInvocations: 300, maxInferenceSubmissions: 300, maxTurnMinutes: 1, timeoutMinutes: 1 } }, new Date(T0));
     await b.drive(before, () => b.workers.length === 2);
     for (const id of [long, short]) {
       assert.equal(b.job(id).state, "STARTING");

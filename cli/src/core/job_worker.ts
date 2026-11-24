@@ -166,7 +166,7 @@ export async function runJobWorker(id: string, options: JobWorkerOptions = {}): 
         executor: new AgentWorkUnitExecutor({
           baseConfig: config,
           createAgent: (agentConfig, depth, agentOptions) => {
-            const agent = new AutonomousAgent(agentConfig, depth, undefined, agentOptions);
+            const agent = new AutonomousAgent(agentConfig, depth, undefined, { durable: true, role: agentOptions?.role, unitId: agentOptions?.unitId });
             agent.setApprovalPolicy(new UnattendedApprovalPolicy(job.policy));
             // Nobody reads this process's terminal: its output goes nowhere, and the event log gets the notices.
             (agent as unknown as { ui: unknown }).ui = new Proxy({}, { get: () => () => {} });
