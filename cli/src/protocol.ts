@@ -72,8 +72,10 @@ export const MAX_SLASH_OUTPUT = 32_000;
 /**
  * `UNSUPPORTED_PROTOCOL`: `initialize` named a version range that shares no version with the sidecar's.
  * `EXPERIMENTAL_DISABLED`: an experimental feature was used on a connection that did not enable it at `initialize`.
+ * Socket transport only (docs/PROTOCOL.md, "Socket transport"): `UNAUTHORIZED`: the attach was refused (the reason is never given);
+ * `NOT_CONTROLLER`: an observer sent a command; `NOT_PERMITTED`: the controller sent a command a socket client may not send.
  */
-export type ErrorCode = "BAD_REQUEST" | "BUSY" | "NO_PENDING_APPROVAL" | "NOT_FOUND" | "INTERNAL" | "NO_PROVIDER" | "UNSUPPORTED_PROTOCOL" | "EXPERIMENTAL_DISABLED";
+export type ErrorCode = "BAD_REQUEST" | "BUSY" | "NO_PENDING_APPROVAL" | "NOT_FOUND" | "INTERNAL" | "NO_PROVIDER" | "UNSUPPORTED_PROTOCOL" | "EXPERIMENTAL_DISABLED" | "UNAUTHORIZED" | "NOT_CONTROLLER" | "NOT_PERMITTED";
 
 /** Lines of a file diff shown in the transcript; the full diff is in the tool call's detail record. */
 export const DIFF_PREVIEW_LINES = 40;
