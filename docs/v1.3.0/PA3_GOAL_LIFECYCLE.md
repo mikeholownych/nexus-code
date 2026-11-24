@@ -54,9 +54,13 @@ scope changes unavailable in read-only mode.
 
 - Goal decomposition currently reuses the existing full team graph; arbitrary requirement-to-work-unit mapping is not
   exposed by `/goal`. Use `/batch` when an operator needs an authored work-unit DAG.
+- Token usage roll-up is reported in goal results and `/goal` output (agent runs, total/reported/estimated tokens,
+  inference requests). When `operation.policy.maxTotalTokens` is set, the driver pauses the goal at a safe boundary
+  before starting new work once rolled-up child task token totals reach the cap; the pause reason names the measured
+  total and cap. Resume continues after the operator raises the cap, inspects, or cancels. Enforcement is skipped only
+  when child accounting cannot be measured (no store/workspace).
 - PA-3 stretch gaps remain to be audited/implemented: stall counting by failure fingerprint (not turn count) at the
-  goal/operation semantics level where applicable, optional token budget roll-up/cap enforcement from sub-operations
-  (usage roll-up is reported; no cap enforcement yet), and full PA-3 acceptance qualification. `/team` remains
+  goal/operation semantics level where applicable, and full PA-3 acceptance qualification. `/team` remains
   experimental until PA-1 and PA-2 are complete.
 - Restart-specific interrupted-effect reconciliation beyond stale-boot pause still requires qualification.
 - No inference-provider or homelab-ai changes are required. Provider-neutral end-to-end qualification remains separate.

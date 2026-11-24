@@ -15,6 +15,8 @@ export interface GoalUsage {
   reportedTokens: number;
   estimatedTokens: number;
   inferenceRequests: number;
+  totalTokens: number;
+  maxTotalTokens?: number;
 }
 
 export interface GoalResult {
@@ -233,7 +235,7 @@ export class GoalOrchestrator {
   }
 
   private usage(operation: DurableOperationState): GoalUsage {
-    const usage: GoalUsage = { agentRuns: 0, reportedTokens: 0, estimatedTokens: 0, inferenceRequests: 0 };
+    const usage: GoalUsage = { agentRuns: 0, reportedTokens: 0, estimatedTokens: 0, inferenceRequests: 0, totalTokens: 0 };
     for (const unit of operation.units) {
       usage.agentRuns += unit.runs;
       if (!unit.agentTaskId) continue;
@@ -242,11 +244,13 @@ export class GoalOrchestrator {
         if (!stats) continue;
         if (typeof stats.requests === "number" && stats.requests > 0 && stats.reportedRequests === stats.requests) usage.reportedTokens += stats.total;
         else usage.estimatedTokens += stats.total;
+        usage.totalTokens += stats.total;
         usage.inferenceRequests += stats.requests ?? 0;
       } catch {
         // Missing child accounting remains unmeasured; no estimate is fabricated.
       }
     }
+    if (operation.policy.maxTotalTokens !== undefined) usage.maxTotalTokens = operation.policy.maxTotalTokens;
     return usage;
   }
 
@@ -334,6 +338,7 @@ export class GoalOrchestrator {
         result = await new OperationRunner(fresh, {
           executor: this.executor,
           workspace: this.config.workspace,
+          store: this.store,
           persist: (state) => this.store.save(state),
           ...(this.options.onEvent ? { onEvent: this.options.onEvent } : {}),
         }).run(AbortSignal.abort());
@@ -364,6 +369,7 @@ export class GoalOrchestrator {
         const runner = new OperationRunner(operation, {
           executor: this.executor,
           workspace: this.config.workspace,
+          store: this.store,
           persist: (state) => this.store.save(state),
           ...(this.options.onEvent ? { onEvent: this.options.onEvent } : {}),
         });
