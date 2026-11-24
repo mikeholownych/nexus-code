@@ -83,7 +83,15 @@
           "type": "string"
         },
         "missed": {
-          "type": "null"
+          "description": "Slots the schedule missed before this job (it was down, or asleep); null when none, and for a job started by hand.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobReceiptMissed"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "operation_id": {
           "type": "string"
@@ -120,6 +128,10 @@
             }
           ]
         },
+        "schedule_occurrence": {
+          "description": "The slot of the schedule this job stands for (for a catch-up, the last slot that was missed); absent for a job started by hand.",
+          "type": "string"
+        },
         "schema_version": {
           "const": 1
         },
@@ -147,6 +159,7 @@
           }
         },
         "verifier": {
+          "description": "The operator's verifier and what became of it: `status` is the run the operation recorded (PASSED, FAILED, TIMED_OUT, ...)\nor NOT_RUN when no unit recorded one; `detail` says what NOT_RUN means. Absent on a receipt written before BG-2.",
           "anyOf": [
             {
               "type": "object",
@@ -154,8 +167,14 @@
                 "command": {
                   "type": "string"
                 },
+                "detail": {
+                  "type": "string"
+                },
                 "source": {
                   "const": "operator"
+                },
+                "status": {
+                  "type": "string"
                 }
               },
               "required": [
@@ -216,6 +235,29 @@
         "decide",
         "id",
         "question"
+      ]
+    },
+    "JobReceiptMissed": {
+      "description": "Slots a schedule missed just before this job started (BG-2): `truncated` marks `count` as a lower bound.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "number"
+        },
+        "first": {
+          "type": "string"
+        },
+        "last": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true
+        }
+      },
+      "required": [
+        "count",
+        "first",
+        "last"
       ]
     },
     "JobReceiptUnit": {

@@ -12,26 +12,26 @@ import * as path from "node:path";
 import type { Command } from "commander";
 import pc from "picocolors";
 import { getBuildIdentity } from "./build_identity.js";
-import { normalizeTrustedDeliverableFiles } from "./config.js";
-import { chooseJobIds, JobRunner, loadJobOperation, readReceipt, readRunnerInfo, requestRefusal, RunnerBusyError, runnerAlive, specDigest, submissionProblem, submitRequest, unattendedSpec } from "./core/job_runner.js";
+import { JobRunner, loadJobOperation, readReceipt, readRunnerInfo, requestRefusal, RunnerBusyError, runnerAlive, submitRequest } from "./core/job_runner.js";
 import { buildJobStatus } from "./core/job_receipt.js";
+import { buildJobSubmission, promptSpec } from "./core/job_submission.js";
 import { EVENT_LOG_LIMIT, runJobWorker } from "./core/job_worker.js";
-import { DEFAULT_JOB_BUDGETS, isTerminal, listJobs, parseJobBudgets, parseJobSubmission, readJob, runnerPaths, RunnerStoreError, type JobBudgets, type JobRecord, type JobSubmission, type RunnerPaths } from "./core/runner_store.js";
+import { DEFAULT_JOB_BUDGETS, isTerminal, listJobs, parseJobBudgets, readJob, runnerPaths, RunnerStoreError, type JobBudgets, type JobRecord, type JobSubmission, type RunnerPaths } from "./core/runner_store.js";
 import { OperationSpecError, validateOperationSpec } from "./operation_cli.js";
 import { safeTerminal } from "./ui.js";
 import { gitOut } from "./worktrunk/git.js";
 
 /** How long a client waits for the runner to accept a request. */
-const ACK_WAIT_MS = 10_000;
+export const ACK_WAIT_MS = 10_000;
 /** How long `job stop` waits for the job to end (the runner's grace before SIGKILL is 30 s). */
 const STOP_WAIT_MS = 40_000;
 
 const NO_RUNNER = "no runner is running; start it with `systemctl --user start nexus-runner` or run `nexus runner serve` under your own supervisor (docs/RUNNER.md)";
 
 /** Something the operator must change: reported on stderr, exit 2. */
-class BackgroundUsageError extends Error {}
+export class BackgroundUsageError extends Error {}
 
-function action<T extends unknown[]>(run: (...args: T) => void | Promise<void>): (...args: T) => Promise<void> {
+export function action<T extends unknown[]>(run: (...args: T) => void | Promise<void>): (...args: T) => Promise<void> {
   return async (...args: T) => {
     try {
       await run(...args);
@@ -44,7 +44,7 @@ function action<T extends unknown[]>(run: (...args: T) => void | Promise<void>):
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function waitFor<T>(read: () => T | undefined, timeoutMs: number): Promise<T | undefined> {
+export async function waitFor<T>(read: () => T | undefined, timeoutMs: number): Promise<T | undefined> {
   for (const deadline = Date.now() + timeoutMs; ;) {
     const value = read();
     if (value !== undefined || Date.now() > deadline) return value;
@@ -52,12 +52,12 @@ async function waitFor<T>(read: () => T | undefined, timeoutMs: number): Promise
   }
 }
 
-function requireRunner(paths: RunnerPaths): void {
+export function requireRunner(paths: RunnerPaths): void {
   if (!runnerAlive(paths)) throw new BackgroundUsageError(NO_RUNNER);
 }
 
 /** The job's budgets from the command line; unset flags take the unattended defaults. The command line's floor for both deadlines is one minute. */
-function budgetsFrom(options: Record<string, unknown>): JobBudgets {
+export function budgetsFrom(options: Record<string, unknown>): JobBudgets {
   const number = (flag: string, key: keyof JobBudgets, min: number): number => {
     const raw = options[key];
     if (raw === undefined) return DEFAULT_JOB_BUDGETS[key];
@@ -78,7 +78,7 @@ function readSpec(specPath: string | undefined, prompt: string | undefined, writ
   if ((specPath === undefined) === (prompt === undefined)) throw new BackgroundUsageError("Give either an operation spec file or --prompt <text>, not both.");
   if (prompt !== undefined) {
     if (!prompt.trim()) throw new BackgroundUsageError("--prompt needs a task.");
-    return { objective: prompt, units: [{ id: "task", title: "task", role: writable ? "implementer" : "researcher", prompt }] };
+    return promptSpec(prompt, writable);
   }
   try {
     return JSON.parse(fs.readFileSync(path.resolve(specPath!), "utf8"));
@@ -91,7 +91,7 @@ function readSpec(specPath: string | undefined, prompt: string | undefined, writ
 const REFUSED_GLOBAL_FLAGS: ReadonlyArray<[string, string]> = [["yes", "--yes"], ["mode", "--mode"], ["approve", "--approve"], ["readOnly", "--read-only"], ["sandbox", "--sandbox"], ["sandboxNetwork", "--sandbox-network"], ["dryRun", "--dry-run"]];
 
 /** `nexus --yes job start ...` parses: the flag belongs to the top-level command. It is refused here, never ignored. */
-function refuseModeFlags(command: Command): void {
+export function refuseModeFlags(command: Command): void {
   const globals = command.parent?.parent?.opts() ?? {};
   for (const [key, flag] of REFUSED_GLOBAL_FLAGS) {
     if (globals[key] !== undefined && globals[key] !== false) throw new BackgroundUsageError(`${flag} does not apply to a background job and is refused: a job runs unattended, read-only or (with --allow-worktree-write) writing only inside its own fresh worktree, and never in auto mode.`);
@@ -113,37 +113,18 @@ function prepareSubmission(specPath: string | undefined, options: Record<string,
   const policy = options.allowWorktreeWrite ? "worktree-write" : "read-only";
   const given = readSpec(specPath, options.prompt, policy === "worktree-write");
   validateOperationSpec(given);
-  let chosen: ReturnType<typeof chooseJobIds>;
-  try {
-    chosen = chooseJobIds(workspace, given.units.map((unit) => unit.id));
-  } catch (error: any) {
-    throw new BackgroundUsageError(`A background job runs in a fresh Git worktree: ${String(error?.message ?? error)}.`);
-  }
-  const { baseCommit, ...ids } = chosen;
-  const spec = unattendedSpec(given, { ...ids, baseCommit });
-  let deliverables: string[];
-  try {
-    deliverables = normalizeTrustedDeliverableFiles(workspace, options.deliverableFile);
-  } catch (error: any) {
-    throw new BackgroundUsageError(String(error?.message ?? error));
-  }
   const verifier = options.verifier === undefined ? null : String(options.verifier).trim();
   if (verifier === "") throw new BackgroundUsageError("--verifier needs a command.");
-  const job = parseJobSubmission({
-    ...ids,
+  const { job, spec } = buildJobSubmission({
     workspace,
-    baseCommit,
-    specSha256: specDigest(spec),
-    origin: { kind: "cli" },
-    unattended: true,
+    given,
     policy,
     verifier,
-    deliverables,
+    deliverableFiles: options.deliverableFile,
     provider: Object.fromEntries((["endpoint", "model", "provider"] as const).flatMap((key) => (options[key] ? [[key, String(options[key])]] : []))),
     budgets: budgetsFrom(options),
+    origin: { kind: "cli" },
   });
-  const problem = submissionProblem(job, spec);
-  if (problem) throw new BackgroundUsageError(problem);
   return { job, spec, dirty: gitOut(workspace, ["status", "--porcelain"], { allowFailure: true }).trim() !== "" };
 }
 

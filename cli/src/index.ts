@@ -64,6 +64,7 @@ function buildConfig(options: any): HarnessConfig {
 }
 import { registerOperationCommands } from "./operation_cli.js";
 import { registerBackgroundCommands } from "./background_cli.js";
+import { registerScheduleCommands } from "./schedule_cli.js";
 import { requireManagedPolicyAtStartup } from "./core/policy_runtime.js";
 import { registerPolicyCommands } from "./policy_cli.js";
 import { managedPolicy, verifyFlagRefusal } from "./core/policy_runtime.js";
@@ -1621,6 +1622,7 @@ program
 
 registerOperationCommands(program);
 registerBackgroundCommands(program);
+registerScheduleCommands(program);
 registerProviderCommands(program);
 registerHookCommands(program);
 // GV-1: `nexus policy show|check` (src/policy_cli.ts). Read-only, and it runs when a managed file is broken.
