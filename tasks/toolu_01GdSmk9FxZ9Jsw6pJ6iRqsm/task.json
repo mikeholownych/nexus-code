@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01GdSmk9FxZ9Jsw6pJ6iRqsm",
+  "agent_id": "a86c4e72b61f31d6b",
+  "subagent_type": "reviewer",
+  "task_description": "Re-review PR #799 BG-2 fixes",
+  "token_usage": {
+    "input_tokens": 110,
+    "cache_creation_tokens": 104939,
+    "cache_read_tokens": 4066633,
+    "output_tokens": 28322,
+    "api_call_count": 55
+  },
+  "started_at": "2026-11-24T22:15:13.608975134Z",
+  "completed_at": "2026-11-24T22:31:58.430219204Z"
+}
