@@ -8,11 +8,11 @@
  * Rules, in the order they are applied on load:
  *
  *   1. A record this build understands (current version) is validated and used as-is.
- *   2. A v1 to v4 record (or one that predates the field, which reads as v1) is upgraded in memory by changing
+ *   2. A v1 to v5 record (or one that predates the field, which reads as v1) is upgraded in memory by changing
  *      only the schema version. v4 adds explicit execution reservations; older parallel records are clamped to serial.
- *      v5 adds `origin` (a detached job drives the operation) and verified merge arbitration (PA-2:
- *      `git.integrationVerifiers`, `mergedChecks` on a receipt, `INTEGRATION_REJECTED`). The version is bumped so an
- *      older build refuses such a record instead of rewriting it without those fields or integrating without checks.
+ *      v5 adds `origin` (a detached job drives the operation). v6 adds verified merge arbitration (PA-2:
+ *      `git.integrationVerifiers`, `mergedChecks` on a receipt, `INTEGRATION_REJECTED`). The version is bumped so a
+ *      version-5 build refuses a record that may depend on cumulative merged-tree verification.
  *   3. A record from a newer build is refused. It is not corrupt: a build that wrote it can still read it, and
  *      quarantining it would destroy evidence. It is also never interpreted as if it were current.
  *
@@ -24,7 +24,7 @@ import { specialistInputsProblem } from "./specialist_profiles.js";
 import { parseBoundaryRules } from "./boundary_rules.js";
 
 /** The operation document version this build writes. Independent of the task-store envelope version. */
-export const CURRENT_OPERATION_SCHEMA_VERSION = 5;
+export const CURRENT_OPERATION_SCHEMA_VERSION = 6;
 
 /** The operation document version every released 1.0.0 build wrote. */
 export const LEGACY_OPERATION_SCHEMA_VERSION = 1;

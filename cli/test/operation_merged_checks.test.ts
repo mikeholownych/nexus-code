@@ -390,6 +390,7 @@ test("hostile: a passing verifier that changes the merged tree is rejected and t
 
 test("hostile: a later verifier cannot erase an earlier verifier's tree mutation", async () => {
   const f = fixture();
+  write(f.prepare("u1"), "u1.txt", "one\n");
   assert.equal((await f.integrate("u1", "test -f file.txt")).kind, "integrated");
   const tip = f.ops.currentTip();
   write(f.prepare("u2"), "u2.txt", "two\n");

@@ -47,7 +47,7 @@ Host-side Git in a unit's worktree and in the integration worktree runs against 
 
 ## Compatibility
 
-Operation document version **5**. Versions 1 to 4 load by changing the version alone (after the `.pre-migration-v<N>` copy); nothing is pinned or re-checked after the fact. A build that writes version 4 refuses a version 5 record, so it cannot resume one and integrate without the cumulative checks. Damaged `git.integrationVerifiers` or `mergedChecks` are refused at load.
+Operation document version **6**. Versions 1 to 5 load by changing the version alone (after the `.pre-migration-v<N>` copy); nothing is pinned or re-checked after the fact. Version 5 added detached-job `origin`; version 6 adds PA-2 merged-verification evidence. A version-5 build refuses a version-6 record, so it cannot resume one and integrate without the cumulative checks. Damaged `git.integrationVerifiers` or `mergedChecks` are refused at load.
 
 ## Not covered
 
