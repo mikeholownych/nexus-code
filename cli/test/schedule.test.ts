@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createScheduleId, listSchedules, nextDueAt, parseScheduleRecord, removeSchedule, schedulePaths, writeSchedule } from "../src/schedule.js";
+import { applyMissedRuns, createScheduleId, evaluateDueSchedules, listSchedules, nextDueAt, parseScheduleRecord, removeSchedule, schedulePaths, writeSchedule } from "../src/schedule.js";
 
 function tmpRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "nexus-sched-"));
@@ -54,4 +54,29 @@ test("BG-2 schedule: cron shape validated; check limits bounded", () => {
   assert.equal(rec.trigger.kind, "cron");
   assert.equal(rec.check?.maxOutputBytes, 32768);
   assert.throws(() => parseScheduleRecord({ ...rec, check: { command: "x", timeoutSeconds: 31, maxToolCalls: 20, maxOutputBytes: 32768 } }), /timeoutSeconds/);
+});
+
+test("BG-2 schedule: missed runs are reported, not silently skipped", () => {
+  const rec = parseScheduleRecord({
+    format: "nexus-schedule", version: 1, id: "sched-miss", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+    workspace: "/tmp/ws", objective: "x", trigger: { kind: "every", minutes: 10 }, policy: "read-only", unattended: true,
+    missedRuns: 0, enabled: true, nextDueAt: "2026-01-01T00:00:00.000Z",
+  });
+  const evald = evaluateDueSchedules([rec], Date.parse("2026-01-01T00:35:00.000Z"));
+  assert.equal(evald.due.length, 1);
+  assert.equal(evald.due[0].missedRuns, 3);
+  assert.equal(evald.due[0].reason, "missed");
+  const applied = applyMissedRuns([rec], Date.parse("2026-01-01T00:35:00.000Z"));
+  assert.equal(applied[0].missedRuns, 3);
+});
+
+test("BG-2 schedule: cron runtime evaluation is explicitly unsupported", () => {
+  const rec = parseScheduleRecord({
+    format: "nexus-schedule", version: 1, id: "sched-cron", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+    workspace: "/tmp/ws", objective: "x", trigger: { kind: "cron", expression: "*/5 * * * *" }, policy: "read-only", unattended: true,
+    missedRuns: 0, enabled: true, nextDueAt: "2026-01-01T00:00:00.000Z",
+  });
+  const evald = evaluateDueSchedules([rec], Date.parse("2026-01-01T01:00:00.000Z"));
+  assert.deepEqual(evald.unsupported, ["sched-cron"]);
+  assert.equal(evald.due.length, 0);
 });

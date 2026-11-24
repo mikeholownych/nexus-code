@@ -267,3 +267,52 @@ export function nextDueAt(record: Pick<ScheduleRecord, "trigger">, fromMs: numbe
   // Cron evaluation requires a parser; keep deterministic placeholder null so callers can report unsupported explicitly.
   return null;
 }
+
+export interface DueSchedule {
+  id: string;
+  dueAt: string;
+  missedRuns: number;
+  reason: "due" | "missed";
+}
+
+function intervalMs(record: ScheduleRecord): number | null {
+  if (record.trigger.kind === "every") return record.trigger.minutes * 60_000;
+  return null;
+}
+
+/**
+ * Deterministic due/missed reporting. Does not execute jobs. For once/every schedules, computes how many
+ * intervals were missed since nextDueAt. Cron schedules are reported as unsupported for runtime evaluation.
+ */
+export function evaluateDueSchedules(records: ScheduleRecord[], nowMs: number): { due: DueSchedule[]; unsupported: string[] } {
+  const due: DueSchedule[] = [];
+  const unsupported: string[] = [];
+  for (const rec of records) {
+    if (!rec.enabled) continue;
+    if (rec.remainingRuns !== undefined && rec.remainingRuns !== null && rec.remainingRuns <= 0) continue;
+    if (rec.trigger.kind === "cron") { unsupported.push(rec.id); continue; }
+    const dueAt = rec.nextDueAt ? Date.parse(rec.nextDueAt) : NaN;
+    if (!Number.isFinite(dueAt)) continue;
+    if (dueAt > nowMs) continue;
+    const interval = intervalMs(rec);
+    let missed = 0;
+    if (interval && interval > 0) {
+      missed = Math.max(0, Math.floor((nowMs - dueAt) / interval));
+    } else if (rec.trigger.kind === "once") {
+      missed = nowMs > dueAt ? 1 : 0;
+    }
+    due.push({ id: rec.id, dueAt: new Date(dueAt).toISOString(), missedRuns: missed, reason: missed > 0 ? "missed" : "due" });
+  }
+  return { due: due.sort((a, b) => a.dueAt.localeCompare(b.dueAt)), unsupported };
+}
+
+/** Apply missed-run accounting to records (in-memory). Does not enqueue jobs. */
+export function applyMissedRuns(records: ScheduleRecord[], nowMs: number): ScheduleRecord[] {
+  const { due } = evaluateDueSchedules(records, nowMs);
+  const byId = new Map(due.map((d) => [d.id, d]));
+  return records.map((r) => {
+    const d = byId.get(r.id);
+    if (!d || d.missedRuns <= 0) return r;
+    return { ...r, missedRuns: r.missedRuns + d.missedRuns, updatedAt: new Date(nowMs).toISOString() };
+  });
+}

@@ -9,7 +9,7 @@ import pc from "picocolors";
 import { validateOperationSpec, OperationSpecError } from "./operation_cli.js";
 import { submitRequest, requestRefusal, chooseJobIds, specDigest, unattendedSpec, submissionProblem } from "./core/job_runner.js";
 import { parseJobBudgets, readJob, runnerPaths, RunnerStoreError, type JobSubmission, DEFAULT_JOB_BUDGETS } from "./core/runner_store.js";
-import { createScheduleId, listSchedules, nextDueAt, parseScheduleRecord, readSchedule, removeSchedule, schedulePaths, writeSchedule, type ScheduleRecord } from "./schedule.js";
+import { applyMissedRuns, createScheduleId, evaluateDueSchedules, listSchedules, nextDueAt, parseScheduleRecord, readSchedule, removeSchedule, schedulePaths, writeSchedule, type ScheduleRecord } from "./schedule.js";
 import { normalizeTrustedDeliverableFiles } from "./config.js";
 import { gitOut } from "./worktrunk/git.js";
 import { safeTerminal } from "./ui.js";
@@ -113,13 +113,24 @@ export function registerScheduleCommands(program: Command): void {
   schedule.command("list")
     .option("-j, --json", "JSON output")
     .action(action(async (options: any) => {
-      const recs = listSchedules(schedulePaths());
-      if (options.json) { console.log(JSON.stringify(recs, null, 2)); return; }
+      const paths = schedulePaths();
+      const raw = listSchedules(paths);
+      const now = Date.now();
+      const evald = evaluateDueSchedules(raw, now);
+      const recs = applyMissedRuns(raw, now);
+      // Persist missed-run accounting (reporting, not silent skip).
+      for (const r of recs) {
+        const before = raw.find(x => x.id === r.id);
+        if (before && before.missedRuns !== r.missedRuns) writeSchedule(paths, r);
+      }
+      if (options.json) { console.log(JSON.stringify({ schedules: recs, due: evald.due, unsupportedCron: evald.unsupported }, null, 2)); return; }
       if (!recs.length) { console.log("No schedules."); return; }
       for (const r of recs) {
         console.log(`${r.id.padEnd(20)} ${r.enabled ? "enabled" : "disabled"} ${r.policy.padEnd(14)} next=${r.nextDueAt ?? "-"} missed=${r.missedRuns} last=${r.lastOutcome ?? "-"}`);
         console.log(pc.dim(`  ${safeTerminal(r.workspace)} :: ${safeTerminal(r.objective)}`));
       }
+      if (evald.due.length) console.log(pc.yellow(`Due/missed schedules: ${evald.due.map(d => `${d.id}(${d.reason},missed=${d.missedRuns})`).join(", ")}`));
+      if (evald.unsupported.length) console.log(pc.yellow(`Cron runtime evaluation not wired for: ${evald.unsupported.join(", ")}`));
     }));
 
   schedule.command("add")
