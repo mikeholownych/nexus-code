@@ -14,6 +14,7 @@ import {
 } from "./capabilities.js";
 import type { SkillAttribution } from "./skill_activation.js";
 import { sandboxDenialEvent, sandboxEngineLabel, type SandboxDenialEvent } from "../sandbox_events.js";
+import type { HookRunSummary } from "./hooks.js";
 
 export interface InvocationRequest {
   /** Unique invocation identity (assigned if omitted) (EXEC-002) */
@@ -93,6 +94,8 @@ export interface CandidateMutationEvent {
 export interface ContextAdmissionDecision {
   admitted: boolean;
   reason?: string;
+  /** Typed reason of a refusal, copied to the receipt's `denialReason`. */
+  denialReason?: string;
   tokenCount?: number;
 }
 
@@ -139,6 +142,14 @@ export interface ExecutionReceipt {
   skillName?: string;
   /** SHA-256 of the skill body that was activated (WP-GS-02) */
   skillContentDigest?: string;
+  /** HK-1: the command hooks that ran for this invocation, in order. Evidence only; never an approval. */
+  hooks?: HookRunSummary[];
+}
+
+/** The hook runs the context admission and evidence stages left in `context.metadata.hookRuns`, on a copy of the receipt. */
+function withHookRuns(receipt: ExecutionReceipt, context: InvocationContext): ExecutionReceipt {
+  const runs = context.metadata?.hookRuns;
+  return Array.isArray(runs) && runs.length ? { ...receipt, hooks: [...runs] } : receipt;
 }
 
 function withSkillAttribution(receipt: ExecutionReceipt, request: InvocationRequest): ExecutionReceipt {
@@ -338,13 +349,14 @@ export class ExecutionSpine {
     const toolName = request.toolName;
     const targetResources = extractTargetResources(toolName, request.args || {});
     const finish = async (receipt: ExecutionReceipt): Promise<ExecutionReceipt> => {
-      const attributed = withSkillAttribution(receipt, request);
+      const attributed = withHookRuns(withSkillAttribution(receipt, request), context);
       try {
         await this.hooks.evidenceEmission(attributed);
       } catch {
         // Degraded-mode per FAIL-003
       }
-      return attributed;
+      // Again, for the runs the evidence stage added (post-tool hooks).
+      return withHookRuns(attributed, context);
     };
 
     // Stage 1: Request Ingestion & Normalization
@@ -409,6 +421,7 @@ export class ExecutionSpine {
           durationMs: 0,
           candidateMutated: false,
           status: "DENIED",
+          ...(contextDecision.denialReason ? { denialReason: contextDecision.denialReason } : {}),
           timestamp: new Date().toISOString(),
           simulated: Boolean(context.dryRun),
         };

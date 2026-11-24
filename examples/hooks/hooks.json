@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "hooks": {
+    "pre-tool": [
+      {
+        "name": "no-force-push",
+        "tools": ["run_command"],
+        "command": ["~/.config/nexus/hooks/deny-force-push.sh"],
+        "timeout_secs": 10
+      }
+    ]
+  }
+}

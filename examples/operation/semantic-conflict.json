@@ -1,0 +1,13 @@
+{
+  "id": "example-semantic-conflict",
+  "objective": "Report distances in kilometres, and add a label helper with its own test.",
+  "git": { "isolate": true },
+  "policy": {
+    "maxConcurrentUnits": 2,
+    "executionBudget": { "cpuMilli": 2000, "memoryBytes": 2147483648 }
+  },
+  "units": [
+    { "id": "kilometres", "title": "Switch the unit to km", "prompt": "Change the distance unit in config.js from metres to kilometres and add a test for the formatter.", "executionResources": { "cpuMilli": 1000, "memoryBytes": 1073741824 } },
+    { "id": "label", "title": "Add a label helper", "prompt": "Add label.js, which formats a distance with the configured unit, and a test for it.", "executionResources": { "cpuMilli": 1000, "memoryBytes": 1073741824 } }
+  ]
+}
