@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M85M4RPABP76M9DH52397HH6",
+  "session_id": "01a1f54f-2cb2-7201-ad27-acf2d9bbd90e",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-24T01:54:49.026052716Z",
+  "branch": "v1/p10-03-audit-followups",
+  "checkpoints_count": 6,
+  "save_step_count": 1,
+  "files_touched": [
+    "cli/src/audit_contract.ts",
+    "cli/src/core/audit_bundle.ts",
+    "cli/test/audit_bundle.test.ts",
+    "cli/test/audit_command.test.ts",
+    "cli/test/audit_schema.test.ts",
+    "docs/AUDIT.md",
+    "docs/protocol/AUDIT_VERIFY_RESULT_VERSIONS.json",
+    "docs/protocol/audit-verify-result-v1.schema.json"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6-luna",
+  "turn_id": "5724049b7038",
+  "checkpoint_transcript_start": 101288,
+  "transcript_lines_at_start": 101288,
+  "compact_transcript_start": 14924,
+  "token_usage": {
+    "input_tokens": 28154,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 4492672,
+    "output_tokens": 9463,
+    "api_call_count": 40
+  },
+  "redaction": {
+    "replacements": 2431,
+    "layers": {
+      "betterleaks": 804,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 130,
+      "credentialed_uri": 114,
+      "entropy": 1779,
+      "key_context": 0,
+      "provider_token": 25,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 58
+  }
+}
