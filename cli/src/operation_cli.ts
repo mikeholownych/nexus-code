@@ -311,6 +311,23 @@ export function registerOperationCommands(program: Command): void {
       .option("--discover", "Read provider /v1/models metadata (capabilities, context, serving capacity)")
       .option("-j, --json", "Print the final operation state as JSON");
 
+  common(op.command("validate").argument("<spec>", "Operation spec JSON file"))
+    .description("Validate an operation spec without starting work")
+    .action(operationAction(async (specPath: string, options: any) => {
+      let spec: OperationSpec;
+      try {
+        spec = JSON.parse(fs.readFileSync(path.resolve(specPath), "utf-8")) as OperationSpec;
+      } catch (error: any) {
+        throw new OperationSpecError(`cannot read operation spec ${specPath}: ${String(error?.message ?? error)}`);
+      }
+      validateOperationSpec(spec);
+      if (options.json) console.log(JSON.stringify({ valid: true, objective: spec.objective, units: spec.units.map((u) => ({ id: u.id, dependsOn: u.dependsOn ?? [] })) }, null, 2));
+      else {
+        console.log(pc.green(`Operation spec is valid: ${safeTerminal(spec.objective)}`));
+        for (const unit of spec.units) console.log(`  ${safeTerminal(unit.id)}${unit.dependsOn?.length ? pc.dim(` ← ${safeTerminal(unit.dependsOn.join(", "))}`) : ""}`);
+      }
+    }));
+
   common(op.command("run").argument("<spec>", "Operation spec JSON file"))
     .description("Start an operation from a work-unit spec")
     .action(operationAction(async (specPath: string, options: any) => {
