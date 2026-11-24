@@ -22,6 +22,9 @@ Inventory of work already on `release/v1.3.0` toward v1.3.0 (version strings sti
 - Experimental unix-socket transport for the sidecar (PF-3): `sidecar.js --listen` binds a socket (mode 0600) in a private 0700 directory and prints its path on one stdout line; other clients attach with a per-start random token from a 0600 descriptor file, as one controller or as read-only observers, and may detach and attach again. A wrong, missing or late token is refused with one fixed line before any command is parsed. No client can grant allow-always or change the mode over the socket, and `--listen` is refused under auto approval. No TCP, HTTP or WebSocket listener. Protocol stays 1 (new error codes `UNAUTHORIZED`, `NOT_CONTROLLER`, `NOT_PERMITTED`); `docs/PROTOCOL.md` "Socket transport", `examples/attach/`.
 - Command hooks (HK-1): `pre-tool` and `post-tool` programs declared in `~/.config/nexus/hooks.json` or an approved `<workspace>/.nexus/hooks.json`; a hook can deny a tool call and can never approve one or change its input. Approving project hooks needs a person at a terminal and covers the workspace scripts the hooks run. `nexus hooks list|approve|revoke|test`, a `hooks.config` doctor finding, `docs/HOOKS.md`.
 
+### Fixed
+- BG-2 schedule recovery after a crash between job submit and schedule update: restore `lastFire`, decrement `remainingRuns`, and disable at zero so `--max-runs 1` cannot fire again; treat an in-flight job for the same slot as recovery, not overlap.
+
 ### Changed
 - Parallel resource admission for operations (PA-1 partial); staged PA-4 workflow surfaces as documented under `docs/v1.3.0/`.
 
