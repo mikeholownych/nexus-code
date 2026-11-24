@@ -8,5 +8,10 @@
     "schema_version": 2,
     "schemaSha256": "16536bda0748f5749d0ec63b579b602f5dfc550301c78fa77e0ea92c814a9b29",
     "note": "Add the ACP `_nexus/verify` request and result contract, plus retrieval of its session-bound verification receipt through `_nexus/receipt/get`. The caller supplies only an active session id; verifier settings are fixed by the operator. This is an additive adapter-schema version; the previous published schema remains unchanged."
+  },
+  {
+    "schema_version": 3,
+    "schemaSha256": "c36c6a1cdc3a09d7e7b9a5de9885b6d14f5f9a97c82753bbe81f20e1c89e471a",
+    "note": "Add the objective inference-submission budget stop reason and continuation usage fields to the ACP turn-result contract. Additive adapter-schema version; v1 and v2 remain unchanged."
   }
 ]

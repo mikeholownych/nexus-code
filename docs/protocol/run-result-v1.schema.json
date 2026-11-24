@@ -1103,6 +1103,7 @@
         "CONTEXT_CAPACITY_EXCEEDED",
         "CONTEXT_EVIDENCE_NOT_RETAINED",
         "INFERENCE_FAILED",
+        "INFERENCE_SUBMISSION_BUDGET_EXHAUSTED",
         "NEEDS_INPUT",
         "NO_APPLICABLE_VERIFIER",
         "NO_TESTS_EXECUTED",
@@ -1151,6 +1152,17 @@
           "properties": {
             "cumulativeSteps": {
               "description": "Steps run on this objective across all its turns (observability; never a limit).",
+              "type": "number"
+            },
+            "inferenceSubmissionHistoryComplete": {
+              "description": "False means earlier requests predate this counter or the persisted counter was malformed.",
+              "type": "boolean"
+            },
+            "inferenceSubmissions": {
+              "description": "Inference requests admitted for this objective, including provider retries.",
+              "type": "number"
+            },
+            "maxInferenceSubmissions": {
               "type": "number"
             },
             "maxToolInvocations": {
