@@ -7,7 +7,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Command } from "commander";
-import { describeSource, type EffectivePolicy, type PolicySource } from "./core/managed_policy.js";
+import { describeSource, POLICY_KEYS, type EffectivePolicy, type PolicySource } from "./core/managed_policy.js";
 import { loadManagedTiers, ManagedPolicyError, MANAGED_POLICY_EXIT_CODE, type LoadedPolicy, type TierInspection } from "./core/managed_policy_load.js";
 import { approvalHint, printableRefusal, processPolicyHost, type PolicyHost, type WorkspaceTrustFacts } from "./core/policy_runtime.js";
 import { envTrustRequested, isWorkspaceListed, realWorkspace } from "./workspace_trust.js";
@@ -153,12 +153,18 @@ export interface PolicyFileCheck {
 
 /**
  * A parse error quotes the token it could not accept. `policy check` is pointed at any file the caller names, so a
- * quoted token that does not look like a policy key (lower-case words joined by dots and underscores) is cut to a few
- * characters: enough to find the place, not enough to read the file through its errors.
+ * quoted token is cut to a few characters (enough to find the place, not enough to read the file through its errors)
+ * unless it is short or is a dotted name under one of the policy's own tables, which is what a mistyped key looks
+ * like. Quotes are taken in order, pair by pair: `expected '=' after the key 'x'` holds two tokens, `=` and `x`.
  */
+/** Quoted examples that the loader's own messages contain; they are not text of the file. */
+const MESSAGE_EXAMPLES = new Set(["command:/absolute/path", "url:https://origin", "sha256:<64 hex digits>", "file:/absolute/path"]);
+
 function withoutFileText(detail: string): string {
-  return detail.replace(/(['"`])([^'"`]{9,})\1/g, (all, quote: string, text: string) =>
-    /^[a-z][a-z_.]{0,63}$/.test(text) ? all : `${quote}${text.slice(0, 8)}…${quote}`);
+  const tables = new Set(Object.keys(POLICY_KEYS));
+  const policyName = (text: string): boolean => /^[a-z_]+(\.[a-z_]+){0,3}$/.test(text) && text.length <= 48 && tables.has(text.split(".")[0]);
+  return detail.replace(/(['"`])(.*?)\1/gs, (all, quote: string, text: string) =>
+    text.length < 9 || policyName(text) || MESSAGE_EXAMPLES.has(text) ? all : `${quote}${text.slice(0, 8)}…${quote}`);
 }
 
 /**

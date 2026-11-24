@@ -263,6 +263,14 @@ test("policy check does not read a file out through its errors: a rejected token
     const shown = JSON.stringify(result) + renderPolicyFileCheck(result);
     assert.equal(shown.includes(secret), false, shown);
     assert.equal(shown.includes(secret.slice(0, 12)), false, "no more than a few characters of a rejected token are shown");
+    // The message that names a key with no `=` holds two quoted tokens; the second is the file's text.
+    const bare = path.join(dir, "bare");
+    fs.writeFileSync(bare, `schema_version = 1\ndbpassword_hunter_abcdefghij\n${"x".repeat(5000)}\n`);
+    const bareShown = JSON.stringify(checkPolicyFile(bare)) + renderPolicyFileCheck(checkPolicyFile(bare));
+    assert.equal(bareShown.includes("dbpassword_hunter"), false, bareShown.slice(0, 300));
+    const long = path.join(dir, "long");
+    fs.writeFileSync(long, `${"y".repeat(5000)}\n`);
+    assert.ok(JSON.stringify(checkPolicyFile(long)).length < 600, "a long line is not echoed");
     // A mistyped policy key is still named in full: that is what the command is for.
     const typo = path.join(dir, "policy.toml");
     fs.writeFileSync(typo, "schema_version = 1\n[approval]\nstrictt = true\n");
