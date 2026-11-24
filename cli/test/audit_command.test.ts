@@ -115,9 +115,9 @@ test("the round trip through the commands: export a saved task, verify it, alter
 
   assert.equal(text.code, 0, text.stderr);
   assert.equal(text.stderr, "");
-  assert.ok(text.stdout.startsWith(`INTACT BY HASH ONLY: all 11 files match the manifest. ${AUDIT_UNSIGNED_CAVEAT} To rule that out, compare the manifest hash ${hash} with one recorded at export.\n`), text.stdout);
+  assert.ok(text.stdout.startsWith(`INTACT BY HASH ONLY: all 12 files match the manifest. ${AUDIT_UNSIGNED_CAVEAT} To rule that out, compare the manifest hash ${hash} with one recorded at export.\n`), text.stdout);
   const document = consume(json);
-  assert.deepEqual([json.code, document.result, document.manifest_sha256, document.signature, document.files], [0, "intact_unsigned", hash, "absent", { listed: 11, matched: 11 }]);
+  assert.deepEqual([json.code, document.result, document.manifest_sha256, document.signature, document.files], [0, "intact_unsigned", hash, "absent", { listed: 12, matched: 12 }]);
   assert.equal(expected.code, 0);
   assert.match(expected.stdout, /The manifest hash [0-9a-f]{64} is the one you expected/);
   assert.deepEqual([unexpected.code, consume(unexpected).findings.map((finding: any) => finding.kind)], [1, ["manifest_sha256_mismatch"]]);
@@ -129,7 +129,7 @@ test("the round trip through the commands: export a saved task, verify it, alter
     assert.deepEqual([...new Set(result.findings.map((finding: any) => finding.path))], [file.path], "exactly the altered file is named");
     const finding = result.findings.find((entry: any) => entry.kind === "file_altered");
     assert.deepEqual([finding.expected_sha256, finding.expected_bytes], [file.sha256, file.bytes]);
-    assert.equal(result.files.matched, 10);
+    assert.equal(result.files.matched, 11);
   }
   // And as a person sees it.
   const seen = await runAudit(["verify", altered[0].copy]);
