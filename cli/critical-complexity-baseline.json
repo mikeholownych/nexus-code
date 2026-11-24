@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "baselineRevision": "4d9996d485c2db866918c110d35e1c1a1d3b2911",
+  "policy": "Compare only named critical functions to the exact release baseline. Fail on increased cyclomatic complexity or control nesting. Report line count for context without enforcing a repository-wide size threshold.",
+  "functions": [
+    { "file": "cli/src/core/run_turn.ts", "name": "runTurnImpl" },
+    { "file": "cli/src/core/dispatch_tool_call.ts", "name": "dispatchToolCallImpl" },
+    { "file": "cli/src/agent.ts", "owner": "AutonomousAgent", "name": "runSubagent" },
+    { "file": "cli/src/agent.ts", "owner": "AutonomousAgent", "name": "compactNowImpl" },
+    { "file": "cli/src/core/operation_runner.ts", "name": "driveOperation" }
+  ]
+}
