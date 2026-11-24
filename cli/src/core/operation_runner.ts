@@ -713,6 +713,8 @@ export interface DriveOptions extends Omit<OperationRunnerOptions, "persist"> {
    *   loaded before another driver finished cannot be written back over its result. `prepare` adjusts the fresh copy.
    */
   entry?: "new" | "existing";
+  /** The CLI is immediately driving after applying an operator decision in this process. */
+  resumeAfterDecision?: boolean;
   prepare?: (fresh: DurableOperationState) => void;
 }
 
@@ -729,7 +731,12 @@ function processAlive(pid: number): boolean {
 }
 
 function pauseForStaleDriver(state: DurableOperationState, bootId: string | undefined, store: OperationStore): string | undefined {
-  if (!["RUNNING", "WAITING", "BLOCKED"].includes(state.status)) return undefined;
+  if (!["RUNNING", "WAITING"].includes(state.status)) return undefined;
+  // A newly persisted plan is RUNNING before its first assignment, but has no prior driver identity. There is no
+  // interrupted execution to reconcile yet, so let its first driver start it instead of treating the plan as stale.
+  if (state.status === "RUNNING" && state.units.every((unit) =>
+    unit.status === "WAITING_ON_DEPENDENCY" && unit.runs === 0 && unit.agentTaskId === undefined
+  )) return undefined;
   const host = os.hostname();
   const liveLock = store.activeLock(state.id);
   if (liveLock) return undefined; // another live driver owns it; caller should not drive concurrently
@@ -759,7 +766,7 @@ function pauseForStaleDriver(state: DurableOperationState, bootId: string | unde
 }
 
 export async function driveOperation(state: DurableOperationState, opts: DriveOptions): Promise<DurableOperationState> {
-  const { store, signal, entry, prepare, ...runnerOpts } = opts;
+  const { store, signal, entry, prepare, resumeAfterDecision, ...runnerOpts } = opts;
   const release = store.acquire(state.id);
   try {
     if (entry === "new") {
@@ -769,6 +776,14 @@ export async function driveOperation(state: DurableOperationState, opts: DriveOp
     }
     const bootId = currentBootId();
     if (entry === "existing") {
+      // `operation decide` records the operator's choice, then resumes under a new driver lock in this same process.
+      // Refresh the identity for that handoff so the process that presented the decision is not mistaken for a second
+      // crash. If this process dies during resumed work, its identity is stale on the next load.
+      if (resumeAfterDecision && state.status !== "COMPLETE" && state.status !== "CANCELLED") {
+        if (bootId) state.activeBootId = bootId;
+        state.activePid = process.pid;
+        state.activeHost = os.hostname();
+      }
       pauseForStaleDriver(state, bootId, store);
     }
     prepare?.(state);
