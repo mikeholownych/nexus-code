@@ -208,7 +208,7 @@ test("a checkpoint choice is never made for the embedder: the turn is cancelled"
 
 test("the client has no raw send: its public methods are the documented ones", () => {
   const methods = Object.getOwnPropertyNames(SidecarClient.prototype).filter((name) => name !== "constructor").sort();
-  const internal = ["answerApproval", "keepStderr", "nextId", "onExit", "request", "settle", "takeLine", "write"];
+  const internal = ["answerApproval", "failInput", "failOutput", "keepStderr", "nextId", "onExit", "request", "settle", "takeLine", "write"];
   assert.deepEqual(methods.filter((name) => !internal.includes(name)), ["cancel", "hello", "initialize", "off", "on", "pid", "prompt", "receipt", "shutdown", "stderrTail"]);
 });
 

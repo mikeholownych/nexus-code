@@ -39,6 +39,10 @@ try {
   });
 
   console.log(`outcome: ${result.turn.outcome}`);
+  if (result.turn.outcome !== "VERIFIED") {
+    const detail = result.turn.detail ? `: ${result.turn.detail}` : "";
+    console.error(`verification: ${result.turn.reason ?? "no verification reason was recorded"}${detail}`);
+  }
   process.exitCode = result.turn.outcome === "VERIFIED" ? 0 : 1;
 } finally {
   await client?.shutdown();
