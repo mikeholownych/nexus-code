@@ -259,6 +259,11 @@ export interface OperationPolicy {
   maxConcurrentUnits?: number;
   /** Operator-declared aggregate reservations for parallel work; these are admission weights, not OS-enforced quotas. */
   executionBudget?: ExecutionResourceRequest;
+  /**
+   * Optional cap on rolled-up tokens consumed by agent sub-operations (reported + estimated). When reached, the
+   * operation pauses before starting new work so the operator can inspect, raise the cap, or cancel.
+   */
+  maxTotalTokens?: number;
 }
 
 /** Explicit execution reservation. Missing values are unknown, never inferred from provider or model identity. */

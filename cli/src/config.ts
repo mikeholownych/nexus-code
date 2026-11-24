@@ -623,6 +623,7 @@ export function configuredOperationPolicy(setting: (key: string) => string | und
     ["NEXUS_OPERATION_UNKNOWN_RESUME_BUDGET", "unknownResumeBudget", 0],
     ["NEXUS_OPERATION_MAX_RUNS_PER_UNIT", "maxRunsPerUnit", 1],
     ["NEXUS_OPERATION_MIN_WAIT_MS", "minWaitMs", 1],
+    ["NEXUS_OPERATION_MAX_TOTAL_TOKENS", "maxTotalTokens", 1],
   ] as const;
   const policy: NonNullable<HarnessConfig["operationPolicy"]> = {};
   for (const [key, property, minimum] of fields) {
@@ -648,6 +649,9 @@ export function configuredOperationPolicy(setting: (key: string) => string | und
     }
     if ((property === "maxWaitMs" || property === "minWaitMs") && value > maxTimerDelayMs) {
       throw new Error(`Invalid ${key}='${raw}': must not exceed Node's timer limit (${maxTimerDelayMs} ms).`);
+    }
+    if (property === "maxTotalTokens" && value > 10_000_000_000) {
+      throw new Error(`Invalid ${key}='${raw}': expected a safe integer from 1 to 10000000000.`);
     }
     policy[property] = value;
   }
@@ -737,6 +741,7 @@ function parseOperationPolicy(raw: unknown): HarnessConfig["operationPolicy"] {
     ["unknownResumeBudget", 0],
     ["maxRunsPerUnit", 1],
     ["minWaitMs", 1],
+    ["maxTotalTokens", 1],
   ] as const;
   for (const key of Object.keys(rawPolicy)) {
     if (!fields.some(([field]) => field === key)) throw new Error(`Unsupported Nexus config.json operationPolicy field '${key}'.`);
@@ -749,6 +754,9 @@ function parseOperationPolicy(raw: unknown): HarnessConfig["operationPolicy"] {
     }
     if ((field === "maxWaitMs" || field === "minWaitMs") && value > 2_147_483_647) {
       throw new Error(`Invalid Nexus config.json operationPolicy.${field}: must not exceed Node's timer limit (2147483647 ms).`);
+    }
+    if (field === "maxTotalTokens" && value > 10_000_000_000) {
+      throw new Error(`Invalid Nexus config.json operationPolicy.${field}: expected a safe integer from 1 to 10000000000.`);
     }
     policy[field] = value;
   }
@@ -775,6 +783,12 @@ export function mergeOperationPolicy(
     }
     if ((field === "maxWaitMs" || field === "minWaitMs") && value > maxTimerDelayMs) {
       throw new Error(`Invalid operation policy ${field}: must not exceed Node's timer limit (${maxTimerDelayMs} ms).`);
+    }
+  }
+  if (effective.maxTotalTokens !== undefined) {
+    const value = effective.maxTotalTokens;
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > 10_000_000_000) {
+      throw new Error("Invalid operation policy maxTotalTokens: expected a safe integer from 1 to 10000000000.");
     }
   }
   const { maxWaitMs, minWaitMs } = effective;

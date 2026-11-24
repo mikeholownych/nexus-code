@@ -137,6 +137,7 @@ export interface HarnessConfig {
     unknownResumeBudget: number;
     maxRunsPerUnit: number;
     minWaitMs: number;
+    maxTotalTokens: number;
   }>;
   /** Execute one model/tool cycle and pause deterministically for operator confirmation (WP-1106). */
   step?: boolean;
