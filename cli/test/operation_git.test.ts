@@ -1232,3 +1232,35 @@ test("an unbound verifier pass is carried into the integration receipt and not r
     assert.equal(integrated.receipt.tests?.definitionBound, false);
   }
 });
+
+test("PA-2: a mechanically clean merge that breaks an already-integrated unit's verifier is rejected", async () => {
+  const root = repo();
+  fs.writeFileSync(path.join(root, "check.sh"), "#!/bin/sh\ntest \"$(cat value.txt)\" = \"ok\"\n");
+  git(root, ["add", "check.sh"]);
+  git(root, ["commit", "-qm", "add verifier"]);
+  fs.writeFileSync(path.join(root, "value.txt"), "ok\n");
+  git(root, ["add", "value.txt"]);
+  git(root, ["commit", "-qm", "base value"]);
+
+  const p = plan(root);
+  const s = newOperationGitState(p);
+  ensureIntegrationWorktree(p, s);
+  const ops = new OperationGit(p, s, { verifyTimeoutSecs: 30, integrations: () => s.integrations ?? [] });
+  (s as any).integrations = [];
+
+  const a = ops.prepareUnit(unit("u1"));
+  fs.writeFileSync(path.join(a.workspace, "a.txt"), "a\n");
+  const v1 = { command: "sh ./check.sh", status: "PASSED", hasExecutedTests: true };
+  const first = await ops.integrate(unit("u1"), completed({ verification: v1 }), { tests: v1 });
+  assert.equal(first.kind, "integrated");
+  if (first.kind === "integrated") (s as any).integrations.push(first.receipt);
+  const tipAfterFirst = ops.currentTip();
+
+  const b = ops.prepareUnit(unit("u2"));
+  fs.writeFileSync(path.join(b.workspace, "value.txt"), "broken\n");
+  const second = await ops.integrate(unit("u2"), completed({ verification: { command: "true", status: "PASSED", hasExecutedTests: true } }), { tests: { command: "true", status: "PASSED", hasExecutedTests: true } });
+  assert.equal(second.kind, "failed");
+  if (second.kind === "failed") assert.match(second.reason, /integration verification failed on the merged tree|integration verification failed/);
+  assert.equal(ops.currentTip(), tipAfterFirst, "semantic conflict must not move integration tip");
+  assert.equal(fs.readFileSync(path.join(p.integrationWorktree, "value.txt"), "utf8"), "ok\n");
+});

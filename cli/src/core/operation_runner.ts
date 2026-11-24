@@ -125,7 +125,7 @@ export class OperationRunner {
     this.registry = new ResourceRegistry(state.resources, state.conditions, this.clock, (e) => this.onRegistryEvent(e));
     this.revalidator = new OperationRevalidator(opts.executor, this.registry, opts.onDiagnostic);
     this.scheduler = new ConvergenceScheduler(state, this.registry, () => this.clock.now(), opts.onEvent, opts.onDiagnostic);
-    this.git = state.git?.isolate ? new OperationGit(planFromState(state), state.git) : undefined;
+    this.git = state.git?.isolate ? new OperationGit(planFromState(state), state.git, { integrations: () => this.state.integrations ?? [] }) : undefined;
   }
 
   async run(signal?: AbortSignal): Promise<DurableOperationState> {
