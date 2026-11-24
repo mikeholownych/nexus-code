@@ -1266,3 +1266,18 @@ test("PA-2: a mechanically clean merge that breaks an already-integrated unit's 
   assert.equal(ops.currentTip(), tipAfterFirst, "semantic conflict must not move integration tip");
   assert.equal(fs.readFileSync(path.join(p.integrationWorktree, "value.txt"), "utf8"), "ok\n");
 });
+
+test("prepareUnit stamps durable ownerId and integration receipts carry it (PA-1 follow-up)", async () => {
+  const root = repo();
+  const p = plan(root);
+  const s = newOperationGitState(p);
+  ensureIntegrationWorktree(p, s);
+  const ops = new OperationGit(p, s, { verifyTimeoutSecs: 30 });
+  const prepared = ops.prepareUnit(unit("u1"), { ownerId: "op-owner:u1:999" });
+  assert.equal(prepared.ownerId ?? ops.unitState("u1")?.ownerId, "op-owner:u1:999");
+  assert.equal(ops.unitState("u1")?.ownerId, "op-owner:u1:999");
+  fs.writeFileSync(path.join(s.units.u1.worktree, "u1.txt"), "one\n");
+  const integrated = await ops.integrate(unit("u1"), completed({ verification: { command: "true", status: "PASSED", hasExecutedTests: true } }), { tests: { command: "true", status: "PASSED", hasExecutedTests: true } });
+  assert.equal(integrated.kind, "integrated");
+  if (integrated.kind === "integrated") assert.equal(integrated.receipt.ownerId, "op-owner:u1:999");
+});
