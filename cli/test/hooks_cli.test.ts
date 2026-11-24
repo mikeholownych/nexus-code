@@ -33,6 +33,7 @@ afterEach(() => {
 });
 
 interface Run { out: string; exitCode: number; asked: string[]; shownBeforeAsking: string }
+const stripAnsi = (text: string): string => text.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
 
 /** One `nexus hooks ...` invocation in this process. `answer` undefined: there is no terminal to ask on. */
 async function nexusHooks(args: string[], answer?: boolean): Promise<Run> {
@@ -52,7 +53,7 @@ async function nexusHooks(args: string[], answer?: boolean): Promise<Run> {
       confirm: async (question) => { asked.push(question); shownBeforeAsking = lines.join("\n"); return Boolean(answer); },
     });
     await program.parseAsync(["node", "nexus", "hooks", ...args]);
-    return { out: lines.join("\n"), exitCode: Number(process.exitCode ?? 0), asked, shownBeforeAsking };
+    return { out: stripAnsi(lines.join("\n")), exitCode: Number(process.exitCode ?? 0), asked, shownBeforeAsking: stripAnsi(shownBeforeAsking) };
   } finally {
     console.log = previous.log;
     console.error = previous.error;
