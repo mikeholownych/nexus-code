@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01GFYkvESNCgFeANyzBNkjDK",
+  "agent_id": "af618beb0e1728157",
+  "subagent_type": "reviewer",
+  "task_description": "Review PR #783 policy follow-ups",
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 29020,
+    "cache_read_tokens": 356443,
+    "output_tokens": 5824,
+    "api_call_count": 13
+  },
+  "started_at": "2026-11-24T14:50:08.306750889Z",
+  "completed_at": "2026-11-24T14:53:01.810534359Z"
+}

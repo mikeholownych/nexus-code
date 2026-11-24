@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01CmKcQ5hZxR7NbBh9S46Lse",
+  "agent_id": "a113015cb5d57f7c1",
+  "subagent_type": "reviewer",
+  "task_description": "Review PR #782 HK-1 hooks",
+  "token_usage": {
+    "input_tokens": 88,
+    "cache_creation_tokens": 119634,
+    "cache_read_tokens": 3674009,
+    "output_tokens": 24931,
+    "api_call_count": 44
+  },
+  "started_at": "2026-11-24T14:43:52.134225357Z",
+  "completed_at": "2026-11-24T14:54:51.972973431Z"
+}
