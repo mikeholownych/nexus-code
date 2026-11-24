@@ -61,7 +61,7 @@ scope changes unavailable in read-only mode.
   the cap cannot be enforced from a partial sum; the pause reason identifies unavailable usage. Resume continues
   after the operator repairs the record, raises or removes the cap, or cancels. This is a safe-boundary limit: one
   already-running batch can consume more than the configured cap before the next check.
-- PA-3 stall counting is fingerprint-based at operation unit execution: repeated failures with the same stable fingerprint count toward `policy.maxStallsPerFingerprint` (default 3), not raw turn count. A stall blocks the unit with `NOT_CONVERGING`; retry/revise/replace/reset clears the fingerprint count.
+- PA-3 stall counting is fingerprint-based at operation unit execution: repeated failures with the same stable fingerprint count toward `policy.maxStallsPerFingerprint` (default 3), not raw turn count. A stall blocks the unit with `NOT_CONVERGING`. `retry` preserves fingerprint counts (the same fingerprint across retries is the stall signal); `revise`/`replace`/`set_inputs`/`lift_context_budget`/`assign` clear them.
 - Full PA-3 acceptance qualification remains open (stale-goal pause, verifier-receipt completion, token budget, and fingerprint-stall behavior need end-to-end qualification). `/team` remains experimental until PA-1 and PA-2 are complete.
 - Restart-specific interrupted-effect reconciliation beyond stale-boot pause still requires qualification.
 - No inference-provider or homelab-ai changes are required. Provider-neutral end-to-end qualification remains separate.

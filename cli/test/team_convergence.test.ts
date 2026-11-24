@@ -202,6 +202,7 @@ describe("/team truthful outcome", () => {
         maxRunsPerUnit: 8,
         maxStallsPerFingerprint: 3,
         minWaitMs: 250,
+        maxStallsPerFingerprint: 3,
       });
     }, {
       operationPolicy: { maxWaitMs: 3_600_000, unknownResumeBudget: 0, maxRunsPerUnit: 8, minWaitMs: 250 },

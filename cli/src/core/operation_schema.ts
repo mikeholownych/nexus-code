@@ -181,6 +181,17 @@ export function validateOperationState(state: DurableOperationState): void {
       const problem = unresolvedAssumptionsProblem(unit.unresolvedAssumptions);
       if (problem) throw new InvalidOperationStateError(`operation ${state.id}: unit '${unit.id}': ${problem}`);
     }
+    if (unit.failureStalls !== undefined) {
+      if (!unit.failureStalls || typeof unit.failureStalls !== "object" || Array.isArray(unit.failureStalls)) {
+        throw new InvalidOperationStateError(`operation ${state.id}: unit '${unit.id}': failureStalls must be an object`);
+      }
+      for (const [fp, rec] of Object.entries(unit.failureStalls as Record<string, any>)) {
+        if (!fp) throw new InvalidOperationStateError(`operation ${state.id}: unit '${unit.id}': failureStalls has an empty fingerprint`);
+        if (!rec || typeof rec !== "object" || Array.isArray(rec) || !Number.isSafeInteger(rec.count) || rec.count < 1 || rec.count > 1000 || typeof rec.lastAt !== "string" || typeof rec.reason !== "string") {
+          throw new InvalidOperationStateError(`operation ${state.id}: unit '${unit.id}': failureStalls['${fp}'] is invalid`);
+        }
+      }
+    }
     validateAppliedDecisions(state.id, `unit '${unit.id}'`, unit.decisions);
     if (unit.blocked !== undefined) {
       const options = unit.blocked?.decision?.options;
@@ -211,6 +222,9 @@ export function validateOperationState(state: DurableOperationState): void {
     }
   }
   validateConcurrency(state.id, "policy.maxConcurrentUnits", state.policy.maxConcurrentUnits);
+  if (state.policy.maxStallsPerFingerprint !== undefined && (!Number.isSafeInteger(state.policy.maxStallsPerFingerprint) || state.policy.maxStallsPerFingerprint < 1 || state.policy.maxStallsPerFingerprint > 100)) {
+    throw new InvalidOperationStateError(`operation ${state.id}: policy.maxStallsPerFingerprint must be a safe integer from 1 to 100 (got ${String(state.policy.maxStallsPerFingerprint)})`);
+  }
   if (state.policy.executionBudget !== undefined) validateExecutionResources(state.id, "policy.executionBudget", state.policy.executionBudget);
   const hasResourceDeclarations = state.policy.executionBudget !== undefined || state.units.some((unit) => unit.executionResources !== undefined);
   if (hasResourceDeclarations) {
