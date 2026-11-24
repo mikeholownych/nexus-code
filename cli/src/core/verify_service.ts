@@ -132,22 +132,36 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-/** Every process below `root`, from one process listing. */
-function descendants(root: number): number[] {
+/** How many listings a kill takes at most while it stops a process tree; each one after the first only catches late forks. */
+const KILL_LISTING_PASSES = 6;
+
+/** Every process below any of `roots`, from one process listing. */
+function descendants(roots: readonly number[]): number[] {
   const listing = spawnSync("ps", ["-A", "-o", "pid=,ppid="], { encoding: "utf8", timeout: 5_000 });
   const children = new Map<number, number[]>();
   for (const line of (listing.stdout ?? "").split("\n")) {
     const [pid, parent] = line.trim().split(/\s+/).map(Number);
     if (pid > 0 && parent > 0) children.set(parent, [...(children.get(parent) ?? []), pid]);
   }
-  const found: number[] = [];
-  for (const queue = [root]; queue.length;) {
+  const found = new Set<number>();
+  for (const queue = [...roots]; queue.length;) {
     for (const pid of children.get(queue.shift()!) ?? []) {
-      found.push(pid);
+      if (found.has(pid)) continue;
+      found.add(pid);
       queue.push(pid);
     }
   }
-  return found;
+  return [...found];
+}
+
+/** When the kernel started `pid` (field 22 of its stat line), or undefined when it is gone or this is not Linux. */
+function startedAt(pid: number): string | undefined {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -169,18 +183,43 @@ function forkRunner(workerModule: URL, killGraceMs: number): VerifyRunner {
     let settled = false;
     // A verifier runs under `timeout`, which leaves the worker's process group, so the group alone does not reach it:
     // every descendant is signalled by its own pid.
+    // Every process seen below the worker, with the time it started. A sandbox whose parent dies on SIGTERM while it
+    // ignores the signal itself is handed to init: no later listing finds it under the worker, so it is remembered
+    // here, and the start time tells it from an unrelated process that was given the same pid since.
+    const seen = new Map<number, string>();
     const signalTree = (name: NodeJS.Signals, worker = true) => {
       if (child.pid === undefined) return;
-      // The worker runs its verifiers one after another, synchronously: the moment one dies it starts the next, and
-      // it cannot notice a signal in between. Killed after its children, it could start one more in the gap, and that
-      // one would be left running with no parent until its own deadline. So a worker that is to die is frozen first:
-      // it starts nothing while its children are listed and killed.
-      const freeze = worker && name === "SIGKILL";
-      if (freeze) try { process.kill(child.pid, "SIGSTOP"); } catch { /* already gone */ }
-      for (const pid of [...descendants(child.pid), ...(worker ? [child.pid] : [])]) {
-        try { process.kill(pid, name); } catch { /* already gone */ }
+      const send = (pid: number, signal: NodeJS.Signals) => { try { process.kill(pid, signal); } catch { /* already gone */ } };
+      const survivors = () => [...seen].filter(([pid, started]) => startedAt(pid) === started).map(([pid]) => pid);
+      const list = () => {
+        const roots = [child.pid!, ...survivors()];
+        const found = [...new Set([...roots.slice(1), ...descendants(roots)])];
+        for (const pid of found) if (!seen.has(pid)) { const started = startedAt(pid); if (started !== undefined) seen.set(pid, started); }
+        return found;
+      };
+      // One listing cannot promise that nothing is missed: a process on the list may fork after it was listed (timeout
+      // starting the sandbox, the sandbox starting its inner process), and a newcomer whose parent then dies of the
+      // signal is handed to init unseen. So the tree is stopped first, from the top down, one listing at a time: a
+      // stopped process starts nothing, and each further listing can only add what was started before its parent
+      // stopped. The worker is stopped too, since the moment a verifier dies it may start the next.
+      send(child.pid, "SIGSTOP");
+      const stopped = new Set<number>();
+      let targets = list();
+      for (let pass = 0; pass < KILL_LISTING_PASSES; pass++) {
+        const fresh = targets.filter((pid) => !stopped.has(pid));
+        if (!fresh.length) break;
+        for (const pid of fresh) { send(pid, "SIGSTOP"); stopped.add(pid); }
+        targets = list();
       }
-      if (worker) try { process.kill(-child.pid, name); } catch { /* already gone */ }
+      for (const pid of stopped) send(pid, name);
+      if (worker) {
+        send(child.pid, name);
+        send(-child.pid, name);
+      }
+      // What was not killed goes on: a process handles SIGTERM only once it runs again, and a spared worker has its
+      // scratch trees to remove.
+      if (name !== "SIGKILL") for (const pid of stopped) send(pid, "SIGCONT");
+      if (name !== "SIGKILL" || !worker) send(child.pid, "SIGCONT");
     };
     const onAbort = () => {
       // SIGTERM ends the running verifier, which lets the worker remove its scratch trees and exit.
@@ -197,6 +236,8 @@ function forkRunner(workerModule: URL, killGraceMs: number): VerifyRunner {
       if (settled) return;
       settled = true;
       clearTimeout(killTimer);
+      // A cancelled worker can exit while something it started lives on: the later stages will not run now.
+      if (signal.aborted) signalTree("SIGKILL", false);
       signal.removeEventListener("abort", onAbort);
       process.removeListener("exit", onProcessExit);
       resolve(final);
