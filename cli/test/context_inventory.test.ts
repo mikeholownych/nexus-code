@@ -29,7 +29,7 @@ import { AutonomousAgent } from "../src/agent.js";
 import { calculateContextBudget } from "../src/tokens.js";
 import { inspectWorkspaceGitSafety } from "../src/core/workspace_git_safety.js";
 
-const input = (sourceLocation: string, scope: "session" | "repository" = "session", content = "sensitive source text") => ({
+const input = (sourceLocation: string, scope: "turn" | "session" | "task" | "repository" | "profile" | "user" = "session", content = "sensitive source text") => ({
   sourceType: "note", sourceLocation, scope, content, trust: "persisted_unverified" as const,
   retention: "session", inclusionReason: "explicit test fixture", retrievalMethod: "fixture",
 });
@@ -468,12 +468,65 @@ test("assessment keeps dimensions separate and reports insufficient evidence", (
   assert.equal(assessContextMaturity(catalogOnly, { hasDurableKnowledge: true, hasActiveSkills: false }).dimensions.find((item) => item.dimension === "compounding_value")?.level, 1,
     "a stored memory catalog alone does not establish carried forward use");
 
+  const request = (sourceRefs: string[]) => ({
+    ...input("task:inference-request:one", "session"),
+    sourceType: "inference_request_manifest",
+    scope: "task" as const,
+    sourceRefs,
+  });
   const carried = buildContextInventory({ sources: [{
     name: "session", status: "ok", durationMs: 1,
-    items: [{ ...input("session:summary", "session"), sourceType: "compaction_summary" }],
+    items: [
+      { ...input("session:message:0:system", "session"), sourceType: "compaction_summary", sourceRefs: ["archive:record:one"] },
+      request(["request:message:0"]),
+    ],
   }] });
   assert.equal(assessContextMaturity(carried, { hasDurableKnowledge: false, hasActiveSkills: false }).dimensions.find((item) => item.dimension === "compounding_value")?.level, 2,
-    "a carried compaction summary is observable cross-turn context evidence");
+    "a source-linked compaction summary in a captured inference request demonstrates reuse, not value or correctness");
+
+  const storedButNotDispatched = buildContextInventory({ sources: [{
+    name: "session", status: "ok", durationMs: 1,
+    items: [{ ...input("session:message:0:system", "session"), sourceType: "compaction_summary", sourceRefs: ["archive:record:one"] }, request(["request:message:1"])],
+  }] });
+  assert.equal(assessContextMaturity(storedButNotDispatched, { hasDurableKnowledge: false, hasActiveSkills: false }).dimensions.find((item) => item.dimension === "compounding_value")?.level, 1,
+    "a stored summary without a matching request position is not reported as carried reuse");
+
+  const oneMeasuredSource = buildContextInventory({ sources: [{ name: "one", status: "ok", durationMs: 1, items: [input("one")] }] });
+  assert.equal(assessContextMaturity(oneMeasuredSource, { hasDurableKnowledge: false, hasActiveSkills: false }).dimensions.find((item) => item.dimension === "retrieval_speed")?.level, null,
+    "one timing sample from one source is not a retrieval-speed maturity rating");
+
+  const linkedSources = buildContextInventory({ sources: [{
+    name: "request", status: "ok", durationMs: 2,
+    items: [
+      { ...input("request:system", "session"), sourceType: "system_context", sourceRefs: ["request:message:0"] },
+      { ...input("request:skill", "profile"), sourceType: "skill_note", sourceRefs: ["request:message:0"] },
+      request(["request:message:0"]),
+    ],
+  }] });
+  assert.equal(assessContextMaturity(linkedSources, { hasDurableKnowledge: false, hasActiveSkills: true }).dimensions.find((item) => item.dimension === "navigability")?.level, 2,
+    "navigability requires multiple distinct source types linked to an observed request");
+  assert.equal(assessContextMaturity(linkedSources, { hasDurableKnowledge: false, hasActiveSkills: true }).dimensions.find((item) => item.dimension === "retrieval_speed")?.level, null,
+    "multiple item types measured in one source read are not multiple source timings");
+
+  const oneLinkedSource = buildContextInventory({ sources: [{
+    name: "request", status: "ok", durationMs: 1,
+    items: [{ ...input("request:system", "session"), sourceType: "system_context", sourceRefs: ["request:message:0"] }, request(["request:message:0"])],
+  }] });
+  assert.equal(assessContextMaturity(oneLinkedSource, { hasDurableKnowledge: false, hasActiveSkills: false }).dimensions.find((item) => item.dimension === "navigability")?.level, 1,
+    "one linked context category does not demonstrate shared multi-source navigation");
+
+  const freshnessMeasured = buildContextInventory({
+    workspaceState: { comparison: "unchanged", invalidatedRepositoryItemIds: [] },
+    sources: [
+      { name: "repo", status: "ok", durationMs: 1, items: [{ ...input("repo:state", "repository"), freshness: "current", freshnessRule: "live repository state" }] },
+      { name: "task", status: "ok", durationMs: 1, items: [{ ...input("task:objective"), freshness: "current", freshnessRule: "live task ledger" }] },
+    ],
+  });
+  const freshnessAssessment = assessContextMaturity(freshnessMeasured, { hasDurableKnowledge: false, hasActiveSkills: false });
+  assert.equal(freshnessAssessment.dimensions.find((item) => item.dimension === "freshness")?.level, 2,
+    "freshness requires complete source coverage and a comparable workspace capture");
+  assert.equal(freshnessAssessment.dimensions.find((item) => item.dimension === "retrieval_speed")?.level, 2,
+    "retrieval speed requires timings from at least two source readers");
 });
 
 test("context command is discoverable and dispatched through the common REPL/TUI route", async () => {

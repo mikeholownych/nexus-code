@@ -594,10 +594,19 @@ const STAGES: Record<ContextMaturityLevel, string> = {
 /** Rule-based, per-dimension assessment; it does not use model judgment and has no aggregate score. */
 export function assessContextMaturity(snapshot: ContextInventorySnapshot, evidence: { hasDurableKnowledge: boolean; hasActiveSkills: boolean }): ContextMaturityAssessment {
   const inventoryExists = snapshot.items.length > 0;
-  const requestManifestCount = snapshot.items.filter((item) => item.sourceType === "inference_request_manifest").length;
+  const requestManifests = snapshot.items.filter((item) => item.sourceType === "inference_request_manifest");
+  const requestManifestCount = requestManifests.length;
+  const dispatchedContextItems = snapshot.items.filter((item) => item.sourceType !== "inference_request_manifest" && requestManifests.some((manifest) => {
+    if (item.sourceRefs?.some((reference) => manifest.sourceRefs?.includes(reference))) return true;
+    const position = /(?:^|:)message:(\d+)(?::|$)/.exec(item.sourceLocation)?.[1];
+    return position !== undefined && manifest.sourceRefs?.includes(`request:message:${position}`) === true;
+  }));
+  const dispatchedSourceTypes = new Set(dispatchedContextItems.map((item) => item.sourceType));
   const allFreshnessKnown = inventoryExists && snapshot.items.every((item) => item.freshness !== "unknown");
-  const hasMeasuredSourceLatency = snapshot.sourceMeasurements.some((source) => source.durationMs > 0);
-  const carriedMemoryObserved = snapshot.items.some((item) => item.sourceType === "durable_note" || item.sourceType === "compaction_summary" || item.sourceType === "compaction_provenance");
+  const measuredSourceCount = snapshot.sourceMeasurements.filter((source) => source.durationMeasured !== false && source.status === "ok" && source.durationMs > 0).length;
+  const hasFreshnessComparison = snapshot.workspaceState?.comparison === "changed" || snapshot.workspaceState?.comparison === "unchanged";
+  const memoryItems = snapshot.items.filter((item) => ["durable_note", "compaction_summary", "compaction_provenance", "durable_knowledge"].includes(item.sourceType));
+  const carriedMemoryObserved = memoryItems.some((item) => item.sourceRefs?.length && dispatchedContextItems.some((dispatched) => dispatched.id === item.id));
   const dimension = (value: Omit<ContextMaturityDimension, "stage">): ContextMaturityDimension => ({ ...value, stage: value.level === null ? null : STAGES[value.level] });
   return {
     schemaVersion: 1,
@@ -605,9 +614,9 @@ export function assessContextMaturity(snapshot: ContextInventorySnapshot, eviden
     basis: "deterministic_client_evidence",
     dimensions: [
       dimension({
-        dimension: "navigability", level: inventoryExists ? 2 : null,
+        dimension: "navigability", level: requestManifestCount === 0 ? null : dispatchedSourceTypes.size >= 2 ? 2 : 1,
         evidence: [
-          { reference: "cli/src/core/context_inventory.ts:inventorySourcesFromMessages", finding: `${snapshot.items.length} source-linked context item(s) are represented without storing their content.`, status: inventoryExists ? "observed" : "unknown" },
+          { reference: "cli/src/core/context_inventory.ts:inventorySourcesFromMessages", finding: `${dispatchedContextItems.length} source item(s) were linked by message position or source reference to a captured request; ${dispatchedSourceTypes.size} distinct source type(s) were observed in dispatched context.`, status: requestManifestCount ? "observed" : "unknown" },
           { reference: "cli/src/agent.ts:submitGuardingLength", finding: requestManifestCount ? `${requestManifestCount} content-free client-side inference-request manifest item(s) were observed; each records request message positions and effective tool-schema positions.` : "Conversation replay and pinned task context exist; no persisted request manifest was observed in this capture.", status: requestManifestCount ? "observed" : "unknown" },
           ...(evidence.hasActiveSkills ? [{ reference: "cli/src/skills.ts:SkillManager.getPromptSection", finding: "Path and trust metadata exist for skills; active prompt inclusion is not represented in the persisted message inventory.", status: "observed" as const }] : []),
         ],
@@ -616,9 +625,9 @@ export function assessContextMaturity(snapshot: ContextInventorySnapshot, eviden
         nextImprovement: "Link request-position references to stable source records while preserving bounded, content-free session evidence.",
       }),
       dimension({
-        dimension: "retrieval_speed", level: hasMeasuredSourceLatency ? 2 : null,
+        dimension: "retrieval_speed", level: measuredSourceCount >= 2 ? 2 : null,
         evidence: [
-          { reference: "cli/src/core/context_inventory.ts:buildContextInventory", finding: hasMeasuredSourceLatency ? "Source and total inventory-assembly durations are recorded for this capture; they are not inference latency measurements." : "No source retrieval duration was measured in this snapshot.", status: hasMeasuredSourceLatency ? "measured" : "unknown" },
+          { reference: "cli/src/core/context_inventory.ts:buildContextInventory", finding: measuredSourceCount >= 2 ? `${measuredSourceCount} source retrieval duration(s) and a total inventory-assembly duration are measured in this capture; these are not inference latency measurements or a latency distribution.` : `${measuredSourceCount} eligible source retrieval duration(s) were measured; at least two are required for an exploratory rating.`, status: measuredSourceCount ? "measured" : "unknown" },
           { reference: "cli/src/agent.ts:admitContext", finding: "Context admission enforces token estimates and output/tool reserves; this is budget evidence, not a retrieval latency SLO.", status: "observed" },
         ],
         unmetCriteria: ["Repeated per-inference source latency and timeout measurements.", "A defined retrieval latency budget/SLO and measured failure rate."],
@@ -626,7 +635,7 @@ export function assessContextMaturity(snapshot: ContextInventorySnapshot, eviden
         nextImprovement: "Instrument each request's source assembly and evaluate latency distributions before setting an SLO.",
       }),
       dimension({
-        dimension: "freshness", level: inventoryExists ? allFreshnessKnown ? 2 : 1 : null,
+        dimension: "freshness", level: !inventoryExists ? null : snapshot.coverage === "complete" && hasFreshnessComparison && allFreshnessKnown ? 2 : snapshot.items.some((item) => item.freshness === "unknown") ? 1 : null,
         evidence: [
           { reference: "cli/src/core/context_inventory.ts:ContextFreshness", finding: `${snapshot.items.filter((item) => item.freshness === "unknown").length} item(s) have unknown freshness; no current-state claim is inferred from persistence.`, status: "observed" },
           { reference: "cli/src/core/context_inventory.ts:compareWorkspaceState", finding: snapshot.workspaceState ? `Workspace comparison is ${snapshot.workspaceState.comparison}; ${snapshot.workspaceState.invalidatedRepositoryItemIds.length} prior repository-scoped item(s) require revalidation.` : "No workspace fingerprint comparison was available in this inventory.", status: snapshot.workspaceState?.comparison === "unavailable" ? "unknown" : "observed" },
@@ -636,14 +645,14 @@ export function assessContextMaturity(snapshot: ContextInventorySnapshot, eviden
         nextImprovement: "Measure change-to-invalidation latency and add source-specific freshness identities for context outside the repository candidate.",
       }),
       dimension({
-        dimension: "compounding_value", level: carriedMemoryObserved ? 2 : inventoryExists ? 1 : null,
+        dimension: "compounding_value", level: carriedMemoryObserved ? 2 : memoryItems.length > 0 ? 1 : null,
         evidence: [
-          { reference: "cli/src/session.ts:SessionManager.saveSession", finding: carriedMemoryObserved ? "A durable note or compaction link is carried in the observed session context; it remains unverified memory, not evidence." : "No durable note or compaction link was observed in carried session context.", status: carriedMemoryObserved ? "observed" : "unknown" },
+          { reference: "cli/src/session.ts:SessionManager.saveSession", finding: carriedMemoryObserved ? "A durable memory item with source references was linked to a captured inference request; this demonstrates reuse, not correctness or improved outcomes." : memoryItems.length ? "Durable memory records exist, but none was linked to a captured inference request in this inventory." : "No durable note or compaction link was observed in carried session context.", status: memoryItems.length ? "observed" : "unknown" },
           { reference: "cli/src/knowledge.ts:KnowledgeGraph", finding: evidence.hasDurableKnowledge ? "Workspace knowledge entries exist, but this diagnostic cannot prove exact inference-time inclusion or task value; persisted entries remain unverified memory, not evidence." : "No durable project knowledge entry was observed for this session.", status: evidence.hasDurableKnowledge ? "observed" : "unknown" },
         ],
         unmetCriteria: ["Observed reuse of promoted knowledge across turns with source links.", "Held-out evidence that accumulated context improves task quality or time without harming correctness."],
         knownLimitations: ["A persisted summary or knowledge entry is not proof of correctness; no improvement claim is made."],
-        nextImprovement: "Add a reviewed, provenance-preserving promotion path only after memory safety tests cover poisoning, scope, and deletion.",
+        nextImprovement: "Run a held-out comparison of carried memory against no-memory execution, using deterministic verification and source-linked provenance.",
       }),
     ],
   };
