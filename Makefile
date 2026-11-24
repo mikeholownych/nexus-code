@@ -23,6 +23,7 @@ check:
 
 # PR-required static gates. rustfmt is diff-scoped (scripts/check_fmt.sh) because the core has legacy drift.
 lint: typecheck
+	cli/node_modules/.bin/tsx cli/scripts/check_critical_complexity.ts
 	cargo clippy --locked --manifest-path core/Cargo.toml --all-targets -- -D warnings
 	$(MAKE) fmt-check
 
