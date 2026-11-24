@@ -328,3 +328,46 @@ test("goal pauses before dispatch when prior child token accounting is unavailab
     f.cleanup();
   }
 });
+
+test("PA-3: repeated same-fingerprint unit failures block as NOT_CONVERGING (fingerprint stall, not turn count)", async () => {
+  const f = fixture();
+  try {
+    let calls = 0;
+    const executor: WorkUnitExecutor = {
+      run: async () => {
+        calls++;
+        return {
+          kind: "failed",
+          cause: "EXECUTION_FAILED",
+          reason: "same deterministic failure",
+          question: "retry?",
+          options: [{ label: "retry", action: { kind: "retry" } }],
+        };
+      },
+    };
+    const operation = newOperation("g-fp", "obj", [{ id: "u1", prompt: "work" }], f.resources, Date.now(), {
+      maxConcurrentUnits: 1,
+      maxRunsPerUnit: 10,
+      maxStallsPerFingerprint: 3,
+    });
+    const { OperationRunner } = await import("../src/core/operation_runner.js");
+    let runner = new OperationRunner(operation, { executor, persist: (s) => f.store.save(s) });
+    let final = await runner.run();
+    // Each failure blocks; operator retries - fingerprint count accumulates across retries.
+    for (let i = 0; i < 5 && final.units[0].blocked?.decision.cause !== "NOT_CONVERGING"; i++) {
+      const decision = final.units[0].blocked?.decision;
+      const retry = decision?.options.find((o) => o.action.kind === "retry");
+      if (!retry) break;
+      runner.scheduler.resolve(decision!.id, retry.id);
+      f.store.save(runner.state);
+      runner = new OperationRunner(f.store.load(operation.id), { executor, persist: (s) => f.store.save(s) });
+      final = await runner.run();
+    }
+    assert.equal(final.units[0].status, "BLOCKED");
+    assert.equal(final.units[0].blocked?.decision.cause, "NOT_CONVERGING");
+    assert.match(final.units[0].blocked?.reason ?? "", /fingerprint|stall/i);
+    assert.equal(calls, 3, "should stop after fingerprint stall limit, not maxRunsPerUnit");
+  } finally {
+    f.cleanup();
+  }
+});
