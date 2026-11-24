@@ -195,7 +195,7 @@ export class OperationGit {
    */
   constructor(
     private readonly plan: OperationGitPlan,
-    readonly state: OperationGitState,
+    private readonly state: OperationGitState,
     private readonly options: { verifyTimeoutSecs?: number; sandbox?: boolean | string; integrations?: () => readonly IntegrationReceipt[] } = {},
   ) {
     this.hooksDir = path.join(plan.baseDir, "no-hooks");
