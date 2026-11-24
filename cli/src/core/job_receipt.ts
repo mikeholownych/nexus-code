@@ -119,13 +119,14 @@ function verifierState(operation: DurableOperationState | undefined): { status: 
   const recorded = (operation?.units ?? []).flatMap((unit) => [unit.failedRun?.verification, unit.result?.verification]).filter((v) => v !== undefined);
   const last = recorded[recorded.length - 1];
   if (last) return { status: last.status };
-  // REGRESSION_FREE means the verifier passed; independence failed. Prefer an explicit recorded run when present; if a
-  // older record only left the reason text, still do not claim NOT_RUN.
+  // A blocked unit whose turn ended after the verifier ran says how (the run is recorded only when it established a result).
   for (const unit of operation?.units ?? []) {
-    const text = [unit.blocked?.reason, unit.result?.outcome, unit.failedRun?.reason].filter(Boolean).join(" ");
-    if (/\bREGRESSION_FREE\b/.test(text)) {
-      return { status: "PASSED", detail: "verifier passed; the job ended REGRESSION_FREE (tests did not show the change independently)" };
-    }
+    const code = unitReason(unit);
+    const text = unit.blocked?.reason.replace(/^[^:]*: /, "") ?? "";
+    if (code === "REGRESSION_FREE") return { status: "PASSED", detail: `the verifier passed but did not establish the change (REGRESSION_FREE): ${text}`.slice(0, 300) };
+    if (code === "NO_TESTS_EXECUTED") return { status: "PASSED", detail: "the verifier passed but executed no tests (NO_TESTS_EXECUTED)" };
+    if (code === "VERIFIER_FAILED") return { status: "FAILED" };
+    if (code === "VERIFIER_TIMED_OUT") return { status: "TIMED_OUT" };
   }
   return { status: "NOT_RUN", detail: "no unit recorded a verifier run: the verifier was not run (a read-only run does not run it, or the job ended before completion was attempted)" };
 }
@@ -142,7 +143,8 @@ function summarize(job: JobRecord, operation: DurableOperationState | undefined,
 function withVerifierNote(summary: string, job: JobRecord, operation: DurableOperationState | undefined, end: JobEnd): string {
   if (job.verifier === null || end.outcome === "COMPLETE") return summary;
   const state = verifierState(operation);
-  if (state.status === "PASSED") return summary;
+  if (state.status === "PASSED" && !state.detail) return summary;
+  if (state.status === "PASSED") return `${summary} Verifier passed without establishing the change: ${job.verifier.slice(0, 80)}.`.slice(0, 700);
   const note = state.status === "NOT_RUN" ? ` Verifier not run: ${job.verifier.slice(0, 80)}.` : ` Verifier ${state.status.toLowerCase().replace(/_/g, " ")}: ${job.verifier.slice(0, 80)}.`;
   return `${summary}${note}`.slice(0, 700);
 }

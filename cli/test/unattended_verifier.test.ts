@@ -13,9 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AutonomousAgent } from "../src/agent.js";
 import { UnattendedApprovalPolicy } from "../src/core/unattended.js";
-import { submissionProblem } from "../src/core/job_runner.js";
-import { buildJobSubmission, promptSpec, verifierProblem } from "../src/core/job_submission.js";
-import { DEFAULT_JOB_BUDGETS } from "../src/core/runner_store.js";
+import { verifierProblem } from "../src/core/job_submission.js";
 import { makeRepo } from "./helpers/fixtures.js";
 import { hookAgent } from "./helpers/hooks_fixture.js";
 import { toml } from "./helpers/policy_enforcement.js";
@@ -90,19 +88,25 @@ test("an operator verifier string is held to what an interactive command is held
   fs.rmSync(path.join(home, ".config", "nexus", "command_rules.json"));
 });
 
-test("submissionProblem applies verifierProblem to a hand-written inbox request", () => {
-  const repo = fs.realpathSync(makeRepo({}));
+test("a hand-written inbox request cannot carry a verifier that `job start` or `schedule add` would refuse", async () => {
+  // Guard: submissionProblem calls verifierProblem, so the runner refuses the request itself.
+  const { bench } = await import("./helpers/runner_fixture.js");
+  const repo = fs.realpathSync(makeRepo({ "README.md": "x\n" }));
   temp.push(repo);
-  const ok = buildJobSubmission({
-    workspace: repo,
-    given: promptSpec("look", false),
-    policy: "read-only",
-    verifier: "node --test",
-    deliverableFiles: [],
-    provider: {},
-    budgets: { ...DEFAULT_JOB_BUDGETS },
-    origin: { kind: "cli" },
-  });
-  assert.equal(submissionProblem(ok.job, ok.spec), undefined);
-  assert.match(submissionProblem({ ...ok.job, verifier: "rm -rf /" }, ok.spec) ?? "", /refused by the security policy/);
+  const b = bench(repo);
+  try {
+    const runner = b.runner({ schedules: false });
+    fs.mkdirSync(b.paths.root, { recursive: true, mode: 0o700 });
+    runner.start();
+    const bad = b.submit({ verifier: "rm -rf /", policy: "worktree-write" });
+    const good = b.submit({ verifier: "node --test", policy: "worktree-write" });
+    runner.tick();
+    const why = fs.readdirSync(b.paths.rejected).filter((name) => name.endsWith(".why")).map((name) => fs.readFileSync(path.join(b.paths.rejected, name), "utf8"));
+    assert.equal(why.length, 1, why.join("\n"));
+    assert.match(why[0], /refused by the security policy/);
+    assert.equal(b.job(good).state === "QUEUED" || b.job(good).state === "STARTING", true);
+    assert.throws(() => b.job(bad), /no job/);
+  } finally {
+    await b.cleanup();
+  }
 });

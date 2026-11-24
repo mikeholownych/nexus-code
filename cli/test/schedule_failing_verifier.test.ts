@@ -154,3 +154,33 @@ test("a read-only schedule with a verifier does not run it, and the receipt says
     fs.rmSync(repo, { recursive: true, force: true });
   }
 });
+
+test("a passing verifier that did not cover the change is reported as having run: REGRESSION_FREE, never NOT_RUN", { timeout: 290_000, skip: isSandboxAvailable("auto") ? false : "worktree-write needs a sandbox engine" }, async () => {
+  const world = runnerWorld();
+  const repo = fs.realpathSync(makeRepo({
+    "package.json": JSON.stringify({ name: "seeded", scripts: { test: "node --test" } }, null, 2),
+    "ok.test.js": "import test from 'node:test';\nimport assert from 'node:assert/strict';\ntest('ok', () => assert.equal(1, 1));\n",
+  }));
+  const gw = await startGateway((n) =>
+    n === 1
+      ? { kind: "tools", calls: [{ name: "write_file", args: { path: "extra.js", content: "export const extra = 1;\n" } }] }
+      : { kind: "tools", calls: [{ name: "task_completed", args: { summary: "added extra.js" } }] },
+  );
+  try {
+    await trustRepo(world, repo);
+    await addSchedule(world, repo, "Add extra.js.", "--name", "cover", "--every", "5m", "--allow-worktree-write", "--verifier", "node --test", "--deliverable-file", "extra.js", "-e", gw.url, "-m", "m");
+    await world.startRunner();
+    reseed(world, "cover", 6);
+    const job = await firstJobOf(world, "cover");
+    await world.waitJob(job.id, ["BLOCKED", "COMPLETE", "FAILED", "CANCELLED", "TIMED_OUT"], 240_000);
+    const receipt = readReceipt(world.paths, job.id)!;
+    assert.deepEqual(validate(receipt, receiptSchema, receiptSchema), []);
+    assert.equal(receipt.verifier?.status, "PASSED", JSON.stringify(receipt));
+    assert.match(receipt.verifier?.detail ?? "", /did not cover/);
+    assert.doesNotMatch(receipt.summary, /Verifier not run/);
+  } finally {
+    await world.cleanup();
+    await gw.close();
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});

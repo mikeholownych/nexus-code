@@ -24,7 +24,6 @@ Inventory of work already on `release/v1.3.0` toward v1.3.0 (version strings sti
 
 ### Fixed
 - BG-2 schedule recovery after a crash between job submit and schedule update: restore `lastFire`, decrement `remainingRuns`, and disable at zero so `--max-runs 1` cannot fire again; treat an in-flight job for the same slot as recovery, not overlap.
-- BG-2 follow-ups from #799 review: receipts no longer claim `NOT_RUN` after a passing verifier ends `REGRESSION_FREE`; cron five-minute floor counts midnight wrap when consecutive matching days exist (e.g. `59,0 23,0 1,2 * *`); never-matching crons such as `0 0 31 2 *` are refused in `validateTrigger`; inbox `submissionProblem` applies the same `verifierProblem` checks as schedule add/fire; docs note that model-written inputs under the operator verifier run without a further approval.
 
 ### Changed
 - Parallel resource admission for operations (PA-1 partial); staged PA-4 workflow surfaces as documented under `docs/v1.3.0/`.

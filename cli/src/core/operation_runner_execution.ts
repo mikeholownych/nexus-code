@@ -660,9 +660,8 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       if (outcome.kind === "completed") return { ...outcome, verification };
       // A failed attempt whose verifier did not pass is evidence too: a dependent failure_debugger works from it while
       // the unit waits on the operator (the scheduler lets that role run on such a dependency). An attempt that failed
-      // for another reason with a passing verifier is not failure evidence — except REGRESSION_FREE, where the verifier
-      // did pass and receipts must not report NOT_RUN.
-      if (outcome.kind === "failed" && (verification.status !== "PASSED" || /\bREGRESSION_FREE\b/.test(outcome.reason))) {
+      // for another reason with a passing verifier is not failure evidence.
+      if (outcome.kind === "failed" && verification.status !== "PASSED") {
         return { ...outcome, failedRun: { summary: redactForPersistence(summary ?? turn.detail ?? outcome.reason).slice(0, SPECIALIST_SUMMARY_MAX), verification } };
       }
       return outcome;

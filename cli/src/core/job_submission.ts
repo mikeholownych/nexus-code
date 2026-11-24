@@ -4,12 +4,12 @@
  * spec form, the operator's own verifier and deliverables, and the runner's own refusal rules.
  */
 import { normalizeTrustedDeliverableFiles } from "../config.js";
+import { verifierProblem } from "./verifier_check.js";
 import { validateOperationSpec } from "../operation_cli.js";
 import { chooseJobIds, specDigest, submissionProblem, unattendedSpec } from "./job_runner.js";
 import { parseJobSubmission, RunnerStoreError, type JobBudgets, type JobOrigin, type JobPolicy, type JobProvider, type JobSubmission } from "./runner_store.js";
-import { verifierProblem } from "./verifier_command.js";
 
-export { verifierProblem } from "./verifier_command.js";
+export { verifierProblem };
 
 export interface JobSubmissionInput {
   /** Real path of the repository. */
