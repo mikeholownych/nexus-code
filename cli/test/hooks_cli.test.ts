@@ -341,6 +341,14 @@ test("a project command that refers into the workspace by anything but a pinned 
     [["env", "sh", "./guard.sh"], /env only starts another program, which hides what the hook runs/],
     [["/usr/bin/env", "node", "guard.js"], /only starts another program/],
     [["busybox", "sh", "./guard.sh"], /only starts another program/],
+    // Nested launchers: rules apply past argv[0], otherwise these approved with files:[] and ran replaced code.
+    [["nice", "bash", "-c", "exec ./guard.sh"], /nice only starts another program|argument "-c" gives bash code/],
+    [["timeout", "5", "python3", "-c", "open('pwned','w').write('x')"], /timeout only starts another program|argument "-c" gives python3 code/],
+    [["nohup", "node", "-e", "require('fs').writeFileSync('pwned','x')"], /nohup only starts another program|argument "-e" gives node code/],
+    [["stdbuf", "-oL", "bash", "-c", "./guard.sh"], /stdbuf only starts another program|argument "-c" gives bash code/],
+    [["ionice", "-c2", "bash", "-c", "exec ./guard.sh"], /ionice only starts another program|argument "-c" gives bash code/],
+    // An unknown prefix still cannot hide an interpreter's inline code.
+    [["unshare", "--fork", "bash", "-c", "exec ./guard.sh"], /argument "-c" gives bash code/],
     [["/bin/cat", "."], /argument "\.": "\." is a directory/],
     [["/bin/cat", "--file=hookdir"], /argument "--file=hookdir": "hookdir" is a directory/],
     [["/bin/cat", "-fhookdir"], /argument "-fhookdir": "hookdir" is a directory/],

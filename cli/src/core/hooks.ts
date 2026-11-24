@@ -303,8 +303,11 @@ function onPath(name: string): string | undefined {
 
 /** Programs that run code given on their command line: for these, inline-code and module-loading options are refused. */
 const INTERPRETERS = /^(?:sh|bash|zsh|dash|ksh|fish|node|nodejs|bun|deno|python|perl|ruby|php|pwsh)[0-9.]*$/;
-/** Programs that only start another program, which would hide what a hook really runs. */
-const WRAPPERS = /^(?:env|busybox)$/;
+/**
+ * Programs that only start another program (or nest an interpreter), which would hide what a hook really runs. Matched
+ * at every argv index: `["nice","bash","-c",…]` must not slip past rules that only inspected argv[0].
+ */
+const WRAPPERS = /^(?:env|busybox|nice|timeout|nohup|stdbuf|ionice|time|chrt|taskset)$/;
 /** Interpreter options whose value is code to load: accepted only when that value is a pinned workspace file. */
 const LOADER_OPTIONS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader"]);
 /** Interpreter options that take code, or the name of code to find, on the command line. */
@@ -315,6 +318,12 @@ const INLINE_OPTIONS = /^--(?:eval|print|command|encodedcommand)(?:=|$)/i;
  */
 const INLINE_LETTERS = /[ceimpr]/i;
 const NAME_FILES = "A project hook names a program and files; inline code is not accepted. Put the logic in one script file and name it directly";
+
+/** Basename of a command word for WRAPPERS / INTERPRETERS: strips a directory and a trailing version suffix already in the regex. */
+function commandBase(word: string): string {
+  const named = word.startsWith("~/") ? path.join(os.homedir(), word.slice(2)) : word;
+  return path.basename(named);
+}
 
 /** SHA-256 of files already hashed, by the identity of their content on disk, so an unchanged file is not read again. */
 const hashed = new Map<string, string>();
@@ -382,7 +391,29 @@ export function coveredProjectFiles(file: HooksFile, workspace: string): { files
       const refuse = (problem: string) => ({ problem: `${at}: ${problem}. ${NAME_FILES}` });
       // A shell string can reach any file by any spelling; only an argument list says which files are run.
       if (!Array.isArray(hook.command)) return { problem: `${at}: a project hook's command must be an array (it is run without a shell), so that the files it runs can be pinned` };
-      const [program, ...args] = hook.command;
+      const argv = hook.command;
+      // Wrapper and interpreter rules apply at every index: a prefix launcher must not hide bash -c / node -e.
+      for (let word = 0; word < argv.length; word++) {
+        const token = argv[word];
+        const base = commandBase(token);
+        if (WRAPPERS.test(base)) return refuse(`${token} only starts another program, which hides what the hook runs`);
+        if (!INTERPRETERS.test(base)) continue;
+        for (let i = word + 1; i < argv.length; i++) {
+          const arg = argv[i];
+          const shown = JSON.stringify(arg);
+          const [option, attached] = arg.startsWith("--") && arg.includes("=") ? [arg.slice(0, arg.indexOf("=")), arg.slice(arg.indexOf("=") + 1)] : [arg, undefined];
+          if (LOADER_OPTIONS.has(option)) {
+            const value = attached ?? argv[i + 1] ?? "";
+            if (reference(value) !== "pinned") return refuse(`argument ${shown} loads ${JSON.stringify(value)}, which is not a file in the workspace that can be pinned`);
+            if (attached === undefined) i++;
+            continue;
+          }
+          if (INLINE_OPTIONS.test(arg) || (/^-[^-]/.test(arg) && INLINE_LETTERS.test(arg)) || ((base.startsWith("deno") || base.startsWith("bun")) && arg === "eval")) {
+            return refuse(`argument ${shown} gives ${token} code, or the name of code, on the command line`);
+          }
+        }
+      }
+      const [program, ...args] = argv;
       const named = program.startsWith("~/") ? path.join(os.homedir(), program.slice(2)) : program;
       const resolved = named.includes("/") ? path.resolve(workspace, named) : onPath(named);
       if (resolved !== undefined) {
@@ -403,25 +434,9 @@ export function coveredProjectFiles(file: HooksFile, workspace: string): { files
           if (problem) return { problem: `${at}: ${problem}` };
         }
       }
-      const base = path.basename(named);
-      if (WRAPPERS.test(base)) return refuse(`${program} only starts another program, which hides what the hook runs`);
-      const interpreter = INTERPRETERS.test(base);
       for (let i = 0; i < args.length; i++) {
         const arg = args[i];
         const shown = JSON.stringify(arg);
-        if (interpreter) {
-          const [option, attached] = arg.startsWith("--") && arg.includes("=") ? [arg.slice(0, arg.indexOf("=")), arg.slice(arg.indexOf("=") + 1)] : [arg, undefined];
-          if (LOADER_OPTIONS.has(option)) {
-            // Code to load: only a workspace file that is pinned. A module name would be found in the workspace unpinned.
-            const value = attached ?? args[i + 1] ?? "";
-            if (reference(value) !== "pinned") return refuse(`argument ${shown} loads ${JSON.stringify(value)}, which is not a file in the workspace that can be pinned`);
-            if (attached === undefined) i++;
-            continue;
-          }
-          if (INLINE_OPTIONS.test(arg) || (/^-[^-]/.test(arg) && INLINE_LETTERS.test(arg)) || ((base.startsWith("deno") || base.startsWith("bun")) && arg === "eval")) {
-            return refuse(`argument ${shown} gives ${program} code, or the name of code, on the command line`);
-          }
-        }
         // The argument itself, then the value of `--option=value` and of `-ovalue`.
         const values = [arg, ...(arg.startsWith("-") && arg.includes("=") ? [arg.slice(arg.indexOf("=") + 1)] : []), ...(/^-[^-=]./.test(arg) ? [arg.slice(2)] : [])];
         for (const value of values) {

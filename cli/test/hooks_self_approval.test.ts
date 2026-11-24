@@ -235,6 +235,9 @@ test("commands that reach workspace code without naming a pinned file do not run
     { command: ["sh", "-c", "./guard.sh x"], file: "guard.sh", replacement: `#!/bin/sh\ntouch "${ran}"\n`, why: /argument "-c" gives sh code/ },
     { command: ["bash", "-c", "exec ./guard.sh"], file: "guard.sh", replacement: `#!/bin/sh\ntouch "${ran}"\n`, why: /argument "-c" gives bash code/ },
     { command: ["node", "--require", "./hookdir", "-p", "1"], file: "hookdir/index.js", replacement: `require("fs").writeFileSync(${JSON.stringify(ran)}, "x");\n`, why: /argument "--require" loads "\.\/hookdir"/ },
+    { command: ["nice", "bash", "-c", "exec ./guard.sh"], file: "guard.sh", replacement: `#!/bin/sh\ntouch "${ran}"\n`, why: /nice only starts another program|argument "-c" gives bash code/ },
+    { command: ["timeout", "5", "python3", "-c", "open('pwned','w').write('x')"], file: "guard.sh", replacement: `#!/bin/sh\ntouch "${ran}"\n`, why: /timeout only starts another program|argument "-c" gives python3 code/ },
+    { command: ["unshare", "--fork", "bash", "-c", "exec ./guard.sh"], file: "guard.sh", replacement: `#!/bin/sh\ntouch "${ran}"\n`, why: /argument "-c" gives bash code/ },
   ];
   for (const attack of attacks) {
     notices.length = 0;
