@@ -344,8 +344,9 @@ export class OperationRunner {
           }
           const snapshotOf = failedDeps[0];
           const snapshotRun = snapshotOf ? this.scheduler.unit(snapshotOf).failedRun!.at : undefined;
+          const ownerId = this.git.state.units[unit.id]?.ownerId ?? `${this.state.id}:${unit.id}:${process.pid}`;
           const prepared = this.git.prepareUnit(unit, {
-            restart: Boolean(unit.pendingDecision?.restart), ...(snapshotOf ? { snapshotOf, snapshotRun } : {}),
+            restart: Boolean(unit.pendingDecision?.restart), ...(snapshotOf ? { snapshotOf, snapshotRun } : {}), ownerId,
           });
           workspace = prepared.workspace;
           // The conversation (observations, tool results) is about the discarded candidate: start a new one.

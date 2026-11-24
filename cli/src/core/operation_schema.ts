@@ -247,6 +247,16 @@ export function validateOperationState(state: DurableOperationState): void {
       if (!receipt || typeof receipt.unitId !== "string" || typeof receipt.integratedCommit !== "string") {
         throw new InvalidOperationStateError(`operation ${state.id}: an integration receipt is missing its unitId or integratedCommit`);
       }
+      if ((receipt as any).ownerId !== undefined && (typeof (receipt as any).ownerId !== "string" || !(receipt as any).ownerId)) {
+        throw new InvalidOperationStateError(`operation ${state.id}: integration receipt '${receipt.unitId}' ownerId must be a non-empty string`);
+      }
+    }
+  }
+  if (state.git?.units) {
+    for (const [unitId, entry] of Object.entries(state.git.units)) {
+      if ((entry as any).ownerId !== undefined && (typeof (entry as any).ownerId !== "string" || !(entry as any).ownerId)) {
+        throw new InvalidOperationStateError(`operation ${state.id}: git unit '${unitId}' ownerId must be a non-empty string`);
+      }
     }
   }
 }

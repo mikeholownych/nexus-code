@@ -296,6 +296,8 @@ export interface OperationGitUnit {
   snapshotOf?: string;
   /** The `failedRun.at` of the dependency run this snapshot was taken from; a newer failure takes a fresh snapshot. */
   snapshotRun?: string;
+  /** Durable owner identity for the worktree/unit while it is active or retained. */
+  ownerId?: string;
 }
 
 /** Opt-in Git isolation for an operation (`spec.git.isolate`). */
@@ -369,6 +371,8 @@ export interface IntegrationReceipt {
   tests?: { command: string; status: string; hasExecutedTests: boolean; definitionBound?: false };
   /** 1-based merge order within the operation, assigned by the runner. */
   sequence?: number;
+  /** Durable owner identity for the unit/worktree that produced this integration. */
+  ownerId?: string;
 }
 
 export interface DurableOperationState {
