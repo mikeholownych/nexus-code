@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01RYf9vt4wfBo1XpB2vQeekE",
+  "agent_id": "ac814f9f6c073b4b8",
+  "subagent_type": "reviewer",
+  "task_description": "Review PR #770 kill tree fix",
+  "token_usage": {
+    "input_tokens": 38,
+    "cache_creation_tokens": 43721,
+    "cache_read_tokens": 629197,
+    "output_tokens": 9871,
+    "api_call_count": 19
+  },
+  "started_at": "2026-11-24T04:43:57.226657372Z",
+  "completed_at": "2026-11-24T04:57:34.277888245Z"
+}
