@@ -32,6 +32,7 @@ import { TaskStateNotFoundError } from "./core/state.js";
 import { buildConfig as buildConfigOrThrow, loadEnvironment, operatorConfigLoadError, withoutProjectEnvironment } from "./config.js";
 import { describeTarget, registerProviderCommands } from "./provider_cli.js";
 import { registerHookCommands } from "./hooks_cli.js";
+import { registerPluginPackageCommands } from "./plugins_cli.js";
 import { UsageLedger } from "./usage.js";
 import { DOCTOR_EXIT, DOCTOR_SCHEMA_VERSION, doctorExitCode, renderDoctorJson, renderDoctorText, runDoctor, runRepairs } from "./doctor.js";
 import { promptWorkspaceTrust } from "./startup_trust.js";
@@ -395,7 +396,7 @@ program
   .option("--fallback <urls>", "Comma-separated fallback LLM endpoints if primary is unavailable")
   .option("--context-limit <tokens>", "Context window limit in tokens; below the provider's advertised capacity it is kept, above it the advertised capacity applies (default: advertised capacity, else 65536)")
   .option("--dry-run", "Simulate file modifications without writing changes to disk")
-  .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
+  .option("--sandbox [mode]", "Isolate command execution (auto|bwrap|docker|none or [engine]:workspace|:read-only|:network; default: auto)")
   .option("--sandbox-network", "With --sandbox: let sandboxed commands and the sandboxed native worker use the network (off by default; also NEXUS_SANDBOX_NETWORK=1 in the operator environment)")
   .option("--worktree", "Isolate execution inside an ephemeral git worktree under .nexus/worktrees/<task-id>")
   .option("--worktree-branch <name>", "Run inside the named git worktree for this branch (created if missing); kept after the run, merge it with `nexus worktree merge`")
@@ -437,7 +438,7 @@ program
   .option("--context-limit <tokens>", "Context window limit in tokens; below the provider's advertised capacity it is kept, above it the advertised capacity applies (default: advertised capacity, else 65536)")
   .option("--dry-run", "Simulate file modifications without writing changes to disk")
   .option("--read-only", "Reject all mutating tool executions and commands")
-  .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
+  .option("--sandbox [mode]", "Isolate command execution (auto|bwrap|docker|none or [engine]:workspace|:read-only|:network; default: auto)")
   .option("--sandbox-network", "With --sandbox: let sandboxed commands and the sandboxed native worker use the network (off by default; also NEXUS_SANDBOX_NETWORK=1 in the operator environment)")
   .option("--worktree", "Isolate execution inside an ephemeral git worktree under .nexus/worktrees/<task-id>")
   .option("--worktree-branch <name>", "Run inside the named git worktree for this branch (created if missing); kept after the run, merge it with `nexus worktree merge`")
@@ -487,7 +488,7 @@ program
   .option("-y, --yes", "Run non-interactively without approval prompts (forces auto mode)")
   .option("--approve", "Require human approval before destructive actions (forces review mode)")
   .option("--mode <mode>", "Execution mode: auto, review, or read-only (default: review; folder trust does not change it)")
-  .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
+  .option("--sandbox [mode]", "Isolate command execution (auto|bwrap|docker|none or [engine]:workspace|:read-only|:network; default: auto)")
   .option("--sandbox-network", "With --sandbox: let sandboxed commands and the sandboxed native worker use the network (off by default; also NEXUS_SANDBOX_NETWORK=1 in the operator environment)")
   .option("--worktree", "Isolate execution inside an ephemeral git worktree under .nexus/worktrees/<task-id>")
   .option("--worktree-branch <name>", "Run inside the named git worktree for this branch (created if missing); kept after the run, merge it with `nexus worktree merge`")
@@ -1087,92 +1088,97 @@ program
     mcp.shutdownAll();
   });
 
-const pluginsCmd = program.command("plugins").description("List, trust, or revoke workspace plugin approvals (HK-3 per-plugin trust)");
-pluginsCmd
-  .command("list")
-  .description("List loaded custom plugins and lifecycle hooks")
-  .option("-w, --workspace <path>", "Workspace directory")
-  .option("-j, --json", "Print as JSON")
-  .action(async (options: any) => {
-    const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
-    const pm = new PluginManager(ws);
-    const { untrustedWorkspaceExtensions } = await import("./workspace_trust.js");
-    for (const file of untrustedWorkspaceExtensions(ws).filter((f) => !/(^|[\\/])\.?mcp\.json$/.test(f))) {
-      console.log(pc.yellow(`Not loaded (workspace not trusted; run \`nexus trust\`): ${file}`));
-    }
-    await pm.loadPlugins();
-    const plugins = pm.listPlugins();
-    const records = pm.getPluginTrustRecords();
-    if (options.json) { console.log(JSON.stringify({ plugins, records }, null, 2)); return; }
-    if (plugins.length === 0) console.log(pc.yellow("\nNo active plugins loaded.\n"));
-    else {
-      console.log(pc.bold(pc.cyan("\n=== Loaded Custom Plugins ===\n")));
-      for (const p of plugins) console.log(`• ${pc.bold(pc.green(p.name))}: ${p.description} (custom tools: ${p.customToolCount})\n`);
-    }
-    const blocked = records.filter((r) => r.status !== "global" && r.status !== "trusted");
-    if (blocked.length) {
-      console.log(pc.bold(pc.yellow("=== Workspace plugins not loaded (require per-plugin approval) ===\n")));
-      for (const r of blocked) {
-        console.log(`• ${pc.yellow(r.status)} ${r.path}${r.sha256 ? pc.dim(` sha256 ${r.sha256}`) : ""}`);
-        if (r.reason) console.log(`  ${pc.dim(r.reason)}`);
+{
+  const pluginsCmd = program
+    .command("plugins")
+    .description("Loaded JS plugins, package install (HK-2), or workspace plugin trust (HK-3)");
+  pluginsCmd
+    .command("list")
+    .description("List loaded custom plugins and lifecycle hooks")
+    .option("-w, --workspace <path>", "Workspace directory")
+    .option("-j, --json", "Print as JSON")
+    .action(async (options: any) => {
+      const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
+      const pm = new PluginManager(ws);
+      const { untrustedWorkspaceExtensions } = await import("./workspace_trust.js");
+      for (const file of untrustedWorkspaceExtensions(ws).filter((f) => !/(^|[\\/])\.?mcp\.json$/.test(f))) {
+        console.log(pc.yellow(`Not loaded (workspace not trusted; run \`nexus trust\`): ${file}`));
       }
-      console.log();
-    }
+      await pm.loadPlugins();
+      const plugins = pm.listPlugins();
+      const records = pm.getPluginTrustRecords();
+      if (options.json) { console.log(JSON.stringify({ plugins, records }, null, 2)); return; }
+      if (plugins.length === 0) console.log(pc.yellow("\nNo active plugins loaded.\n"));
+      else {
+        console.log(pc.bold(pc.cyan("\n=== Loaded Custom Plugins ===\n")));
+        for (const p of plugins) console.log(`• ${pc.bold(pc.green(p.name))}: ${p.description} (custom tools: ${p.customToolCount})\n`);
+      }
+      const blocked = records.filter((r) => r.status !== "global" && r.status !== "trusted");
+      if (blocked.length) {
+        console.log(pc.bold(pc.yellow("=== Workspace plugins not loaded (require per-plugin approval) ===\n")));
+        for (const r of blocked) {
+          console.log(`• ${pc.yellow(r.status)} ${r.path}${r.sha256 ? pc.dim(` sha256 ${r.sha256}`) : ""}`);
+          if (r.reason) console.log(`  ${pc.dim(r.reason)}`);
+        }
+        console.log();
+      }
+    });
+  pluginsCmd
+    .command("trust <pluginPath>")
+    .description("Approve a workspace plugin by its exact bytes (HK-3; a changed file needs a new approval)")
+    .option("-w, --workspace <path>", "Workspace directory")
+    .option("--sha256 <hex>", "Approve only if the file has this SHA-256 (you are still asked; approving needs a terminal)")
+    .action(async (pluginPath: string, options: any) => {
+      const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
+      const abs = path.resolve(ws, pluginPath);
+      if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) { console.error(pc.red(`Not a file: ${abs}`)); process.exitCode = 1; return; }
+      const { workspacePluginTrustId, pluginFileSha256 } = await import("./plugins.js");
+      const { approveExtension } = await import("./core/content_trust.js");
+      const { isWorkspaceFile } = await import("./workspace_trust.js");
+      if (!isWorkspaceFile(ws, abs)) { console.error(pc.red(`Plugin must be a real file inside the workspace: ${abs}`)); process.exitCode = 1; return; }
+      const sha256 = pluginFileSha256(abs);
+      const id = workspacePluginTrustId(ws, abs);
+      console.log(`${abs}\nsha256 ${sha256}\nThis workspace plugin would run with full process authority (HK-3/D18: in-process, deprecated).`);
+      const interactive = Boolean(process.stdin.isTTY) && Boolean(process.stdout.isTTY);
+      if (!interactive) {
+        console.error(pc.red("Not approved: approving a workspace plugin needs a person at a terminal. Review the file, then run `nexus plugins trust` yourself in a terminal."));
+        process.exitCode = 2;
+        return;
+      }
+      const pinned = options.sha256?.trim().toLowerCase();
+      if (pinned !== undefined && pinned !== sha256) {
+        console.error(pc.red(`Not approved: --sha256 does not match the file, whose SHA-256 is ${sha256}.`));
+        process.exitCode = 2;
+        return;
+      }
+      const readline = await import("node:readline/promises");
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      let ok = false;
+      try { ok = /^y(es)?$/i.test((await rl.question("Approve this workspace plugin for this workspace? [y/N] ")).trim()); }
+      finally { rl.close(); }
+      if (!ok) { console.error(pc.red("Not approved.")); process.exitCode = 1; return; }
+      approveExtension({ kind: "workspace-plugin", scope: id.scope, key: id.key, sha256, approvedAt: new Date().toISOString(), summary: path.basename(abs) });
+      console.log(`Approved workspace plugin: ${abs}\nsha256 ${sha256}\nUndo with \`nexus plugins revoke ${pluginPath}\`.`);
+    });
+  pluginsCmd
+    .command("revoke <pluginPath>")
+    .description("Withdraw approval for a workspace plugin")
+    .option("-w, --workspace <path>", "Workspace directory")
+    .action(async (pluginPath: string, options: any) => {
+      const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
+      const abs = path.resolve(ws, pluginPath);
+      const { workspacePluginTrustId } = await import("./plugins.js");
+      const { revokeExtension } = await import("./core/content_trust.js");
+      const id = workspacePluginTrustId(ws, abs);
+      console.log(revokeExtension(id) ? `No longer approved: ${abs}` : `There was no approval for ${abs}.`);
+    });
+  registerPluginPackageCommands(pluginsCmd);
+  // default: list
+  pluginsCmd.action(async (_opts: any, cmd: any) => {
+    const list = cmd.commands.find((c: any) => c.name() === "list");
+    if (list) await list.parseAsync(["node", "nexus", "plugins", "list", ...process.argv.slice(3).filter((a: string) => a !== "list")]);
   });
-pluginsCmd
-  .command("trust <pluginPath>")
-  .description("Approve a workspace plugin by its exact bytes (HK-3; a changed file needs a new approval)")
-  .option("-w, --workspace <path>", "Workspace directory")
-  .option("--sha256 <hex>", "Approve only if the file has this SHA-256 (you are still asked; approving needs a terminal)")
-  .action(async (pluginPath: string, options: any) => {
-    const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
-    const abs = path.resolve(ws, pluginPath);
-    if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) { console.error(pc.red(`Not a file: ${abs}`)); process.exitCode = 1; return; }
-    const { workspacePluginTrustId, pluginFileSha256 } = await import("./plugins.js");
-    const { approveExtension } = await import("./core/content_trust.js");
-    const { isWorkspaceFile } = await import("./workspace_trust.js");
-    if (!isWorkspaceFile(ws, abs)) { console.error(pc.red(`Plugin must be a real file inside the workspace: ${abs}`)); process.exitCode = 1; return; }
-    const sha256 = pluginFileSha256(abs);
-    const id = workspacePluginTrustId(ws, abs);
-    console.log(`${abs}\nsha256 ${sha256}\nThis workspace plugin would run with full process authority (HK-3/D18: in-process, deprecated).`);
-    const interactive = Boolean(process.stdin.isTTY) && Boolean(process.stdout.isTTY);
-    if (!interactive) {
-      console.error(pc.red("Not approved: approving a workspace plugin needs a person at a terminal. Review the file, then run `nexus plugins trust` yourself in a terminal."));
-      process.exitCode = 2;
-      return;
-    }
-    const pinned = options.sha256?.trim().toLowerCase();
-    if (pinned !== undefined && pinned !== sha256) {
-      console.error(pc.red(`Not approved: --sha256 does not match the file, whose SHA-256 is ${sha256}.`));
-      process.exitCode = 2;
-      return;
-    }
-    const readline = await import("node:readline/promises");
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    let ok = false;
-    try { ok = /^y(es)?$/i.test((await rl.question("Approve this workspace plugin for this workspace? [y/N] ")).trim()); }
-    finally { rl.close(); }
-    if (!ok) { console.error(pc.red("Not approved.")); process.exitCode = 1; return; }
-    approveExtension({ kind: "workspace-plugin", scope: id.scope, key: id.key, sha256, approvedAt: new Date().toISOString(), summary: path.basename(abs) });
-    console.log(`Approved workspace plugin: ${abs}\nsha256 ${sha256}\nUndo with \`nexus plugins revoke ${pluginPath}\`.`);
-  });
-pluginsCmd
-  .command("revoke <pluginPath>")
-  .description("Withdraw approval for a workspace plugin")
-  .option("-w, --workspace <path>", "Workspace directory")
-  .action(async (pluginPath: string, options: any) => {
-    const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
-    const abs = path.resolve(ws, pluginPath);
-    const { workspacePluginTrustId } = await import("./plugins.js");
-    const { revokeExtension } = await import("./core/content_trust.js");
-    const id = workspacePluginTrustId(ws, abs);
-    console.log(revokeExtension(id) ? `No longer approved: ${abs}` : `There was no approval for ${abs}.`);
-  });
-// default: list
-pluginsCmd.action(async (_opts: any, cmd: any) => {
-  const list = cmd.commands.find((c: any) => c.name() === "list");
-  if (list) await list.parseAsync(["node", "nexus", "plugins", "list", ...process.argv.slice(3).filter((a: string) => a !== "list")]);
-});
+}
 
 program
   .command("trust [path]")
