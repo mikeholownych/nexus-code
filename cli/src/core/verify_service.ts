@@ -171,6 +171,12 @@ function forkRunner(workerModule: URL, killGraceMs: number): VerifyRunner {
     // every descendant is signalled by its own pid.
     const signalTree = (name: NodeJS.Signals, worker = true) => {
       if (child.pid === undefined) return;
+      // The worker runs its verifiers one after another, synchronously: the moment one dies it starts the next, and
+      // it cannot notice a signal in between. Killed after its children, it could start one more in the gap, and that
+      // one would be left running with no parent until its own deadline. So a worker that is to die is frozen first:
+      // it starts nothing while its children are listed and killed.
+      const freeze = worker && name === "SIGKILL";
+      if (freeze) try { process.kill(child.pid, "SIGSTOP"); } catch { /* already gone */ }
       for (const pid of [...descendants(child.pid), ...(worker ? [child.pid] : [])]) {
         try { process.kill(pid, name); } catch { /* already gone */ }
       }
