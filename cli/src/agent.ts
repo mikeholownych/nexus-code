@@ -10,6 +10,7 @@ import { CapabilityRegistry, createDefaultRegistry, changesWorkspace, type Effec
 import { fenceSuspected, scanForInjection } from "./core/injection_scanner.js";
 import { ApprovalPolicy, defaultApprovalPolicy, ApprovalMode } from "./core/approval_policy.js";
 import { ExecutionSpine, ExecutionReceipt } from "./core/spine.js";
+import { HookRegistry } from "./core/hooks.js";
 import { extensionCapability, isExtensionCapability } from "./core/extension_capabilities.js";
 import { SkillActivationRegistry } from "./core/skill_activation.js";
 import { AuthorityAdmissionEngine } from "./core/authority.js";
@@ -594,6 +595,23 @@ export class AutonomousAgent {
         },
       },
     });
+    // HK-1: command hooks, on the two spine stages that can only refuse (pre-tool) or observe (post-tool). The spine
+    // is reached after the dispatcher's gates approved a call, and its authority stage still runs after the hooks.
+    const commandHooks = new HookRegistry({
+      workspace: () => this.config.workspace,
+      readOnly: () => this.isReadOnly(),
+      permissionMode: () => this.getApprovalMode(),
+      sessionId: () => this.currentTaskId,
+      notify: (text) => {
+        if (this.depth !== 0) return;
+        if (this.observer?.onNotice) this.observer.onNotice(text);
+        else console.warn(pc.yellow(text));
+      },
+      record: (step, callId, tool, run) => this.flightRecorder?.recordHookRun(step, callId, tool, run),
+      redact: (value) => InformationFlowBoundary.getGlobalInstance().redactForTelemetry(value),
+    });
+    this.spine.setHook("contextAdmission", commandHooks.preToolAdmission);
+    this.spine.setHook("evidenceEmission", commandHooks.postToolEmission);
     if (depth === 0 || this.role === "implementer" || this.role === "tester") {
       this.capabilityRegistry.register(REQUIREMENTS_CAPABILITY);
       this.capabilityRegistry.register(READ_OBJECTIVE_CAPABILITY);

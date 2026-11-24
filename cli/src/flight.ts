@@ -8,6 +8,7 @@ import { ensureGitExclude } from "./core/git_exclude.js";
 import { persistableEndpoint } from "./core/endpoint_identity.js";
 import { describeChain, linkRecord, verifyChain, type ChainLink, type ChainVerdict } from "./core/hash_chain.js";
 import type { SandboxDenialEvent } from "./sandbox_events.js";
+import type { HookRunSummary } from "./core/hooks.js";
 
 export type FlightEventType =
   | "session_start"
@@ -19,6 +20,7 @@ export type FlightEventType =
   | "durable_state"
   | "file_diff"
   | "middleware_rewrite"
+  | "hook_run"
   | "sandbox_denial"
   | "sandbox_violation"
   | "sandbox_unavailable"
@@ -327,6 +329,11 @@ export class FlightRecorder {
     }
   ): FlightEvent {
     return this.appendEvent("middleware_rewrite", step, payload);
+  }
+
+  /** HK-1: one command hook run. The summary only: a hook's output can repeat tool arguments and is not kept. */
+  public recordHookRun(step: number | undefined, callId: string, toolName: string, run: HookRunSummary): FlightEvent {
+    return this.appendEvent("hook_run", step, { callId, toolName, ...run });
   }
 }
 

@@ -63,6 +63,20 @@ export function hookLine(text: string, limit = REASON_LIMIT): string {
   return line.length > limit ? `${line.slice(0, limit - 1)}…` : line;
 }
 
+/** The hooks running now, each as "kill its process group". One process listener serves them all, however many run. */
+const running = new Set<() => void>();
+let exitListening = false;
+function killOnProcessExit(kill: () => void): () => void {
+  if (!exitListening) {
+    exitListening = true;
+    process.on("exit", () => {
+      for (const each of running) each();
+    });
+  }
+  running.add(kill);
+  return () => running.delete(kill);
+}
+
 /** Runs the hook to its end. Never rejects: every way a run can go wrong is a `failure` on the result. */
 export function runHookProcess(request: HookProcessRequest): Promise<HookProcessResult> {
   return new Promise((resolve) => {
@@ -112,7 +126,7 @@ export function runHookProcess(request: HookProcessRequest): Promise<HookProcess
       clearTimeout(deadline);
       clearTimeout(killTimer);
       clearTimeout(drainTimer);
-      process.removeListener("exit", onProcessExit);
+      forget();
       child.stdout?.destroy();
       child.stderr?.destroy();
       resolve({
@@ -146,7 +160,7 @@ export function runHookProcess(request: HookProcessRequest): Promise<HookProcess
       }
     };
     const deadline = setTimeout(() => stop("timeout"), request.timeoutMs);
-    process.once("exit", onProcessExit);
+    const forget = killOnProcessExit(onProcessExit);
 
     child.stdout!.on("data", (chunk: Buffer) => {
       if (failure) return;
