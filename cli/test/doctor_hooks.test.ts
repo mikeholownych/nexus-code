@@ -58,7 +58,8 @@ test("an invalid operator file is a failure that says every tool call is denied"
   const diagnosis = diagnoseHooks(workspace, home);
   assert.equal(diagnosis.status, "fail");
   assert.match(diagnosis.explanation, /every tool call is denied until it is fixed/);
-  assert.match(diagnosis.evidence[0], new RegExp(`^${operator.replace(/[.]/g, "\\.")}: line 1, column \\d+: duplicate key "pre-tool"`));
+  assert.ok(diagnosis.evidence[0].startsWith(`${operator}: line 1, column `));
+  assert.ok(diagnosis.evidence[0].includes('duplicate key "pre-tool"'));
   assert.match(diagnosis.action ?? "", /Fix .*hooks\.json or move it aside/);
 
   fs.writeFileSync(operator, JSON.stringify(guard()));
