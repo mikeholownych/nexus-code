@@ -291,17 +291,27 @@ test("the clock stepping backwards: no slot already run is run again, and the sc
 test("a job already made for a slot (the runner died after submitting it) is not made again", async () => {
   const w = world();
   try {
-    w.put();
+    w.put({ remainingRuns: 1 });
     w.clock.ms = T0 + HOUR + 1_000;
     w.runner.tick();
     assert.equal(w.jobs().length, 1);
-    // The schedule's own bookkeeping is lost: the record goes back to before the fire.
-    const record = w.schedule();
-    w.put({ ...record, state: newScheduleState(iso(T0 + HOUR)) });
-    await settle(w, ended(w));
+    const job = w.jobs()[0];
+    // Crash window: the job is on disk (still running), but the schedule update never landed.
+    w.put({ remainingRuns: 1, enabled: true, state: newScheduleState(iso(T0 + HOUR)) });
     w.runner.tick();
     assert.equal(w.jobs().length, 1, "the slot already has its job");
-    assert.equal(w.schedule().state.nextDueAt, iso(T0 + 2 * HOUR));
+    const recovered = w.schedule();
+    assert.equal(recovered.state.nextDueAt, iso(T0 + 2 * HOUR));
+    assert.equal(recovered.state.lastFire?.jobId, job.id);
+    assert.equal(recovered.state.lastFire?.dueAt, iso(T0 + HOUR));
+    assert.equal(recovered.state.lastFire?.kind, "scheduled");
+    assert.equal(recovered.remainingRuns, 0, "max-runs bookkeeping is reconciled on recovery");
+    assert.equal(recovered.enabled, false, "a max-runs 1 schedule disables after the recovered fire");
+    await settle(w, ended(w));
+    // A later slot must not start another job under the stale remainingRuns.
+    w.clock.ms = T0 + 2 * HOUR + 1_000;
+    w.runner.tick();
+    assert.equal(w.jobs().length, 1);
   } finally { await w.cleanup(); }
 });
 
