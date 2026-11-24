@@ -82,27 +82,27 @@ export default {
   name: "metric-logger",
   description: "Logs timing metrics and custom alerts for builds",
 
-  // Lifecycle Hooks
-  async onTurnStart(prompt, workspace) {
+  // Lifecycle hooks take a single context object (not positional arguments).
+  async onTurnStart({ prompt, workspace }) {
     console.log(`[Plugin] Turn starting on workspace: ${workspace}`);
   },
 
-  async onToolCall(toolName, args) {
-    if (toolName === "run_command" && args.command.includes("cargo build")) {
+  async onToolCall({ toolName, args }) {
+    if (toolName === "run_command" && String(args.command ?? "").includes("cargo build")) {
       console.log("[Plugin] Cargo build detected!");
     }
   },
 
-  async onToolResult(toolName, result) {
+  async onToolResult({ toolName, result }) {
     // Inspect tool outputs
   },
 
-  async onTurnEnd(workspace) {
+  async onTurnEnd({ summary, isFinished }) {
     // Cleanup or post-turn actions
   },
 
-  // Custom Tools
-  tools: [
+  // Custom tools
+  customTools: [
     {
       definition: {
         type: "function",
@@ -119,7 +119,6 @@ export default {
         }
       },
       async handler(args) {
-        // Execute custom integration logic
         return {
           success: true,
           output: `Alert sent: ${args.message}`
@@ -129,3 +128,17 @@ export default {
   ]
 };
 ```
+
+### Installed packages (HK-2)
+
+A distributable plugin package is a directory with `nexus-plugin.json` at its root. Install records a tree digest so
+`verify` detects modification. There is no marketplace and no auto-update.
+
+```text
+nexus plugins install <local-dir>
+nexus plugins list-installed
+nexus plugins verify [name]
+nexus plugins remove <name>
+```
+
+`nexus plugins` with no subcommand still lists **loaded** JS modules from the plugin search path (unchanged).
