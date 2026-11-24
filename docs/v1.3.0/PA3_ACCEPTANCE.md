@@ -6,34 +6,39 @@
 - Stall counting by failure fingerprint, not turn count.
 - Completion decided only by a verifier receipt; a model "I am done" does not complete a goal.
 - Optional token budget rolling up from sub-operations.
-- `/team` remains experimental until PA-1 and PA-2.
+- `/team` leaves experimental only after PA-1 and PA-2.
 
-## Measured on release-branch head (this worktree base)
+## Measured on release-branch head
 
-Base: `origin/release/v1.3.0` @ `592bb0ad` (includes merged #788; does **not** include open PR #789 fingerprint-stall slice).
+Base: `origin/release/v1.3.0` @ `2a28fca89` (includes merged #787 PA-1, #788/#790 PA-2, #789 fingerprint stalls).
 
 Commands (isolated HOME):
 
-- `npm --prefix cli run build` — **pass**
-- `HOME=$(mktemp -d) node --import tsx --test test/goal_lifecycle.test.ts` (cli) — **9 pass / 0 fail**
+- `npm --prefix cli run build` — **pass** (prior slice verification; tip includes schema v7)
+- `HOME=$(mktemp -d) node --import tsx --test test/goal_lifecycle.test.ts` (cli) — **10 pass / 0 fail** (includes fingerprint-stall case)
 
-Observed coverage from existing deterministic tests in `cli/test/goal_lifecycle.test.ts`:
+Observed coverage from deterministic tests in `cli/test/goal_lifecycle.test.ts`:
 
-- stale goal from earlier boot/process resumes paused with visible reason (PA-3 stale-driver cases) — **pass**.
-- goal pauses at a safe boundary when token budget cap is exhausted — **pass**.
-- goal pauses before dispatch when prior child token accounting is unavailable — **pass**.
-- goal lifecycle/verifier-receipt-related tests present in suite — **pass** as part of 9/9.
+- stale goal from earlier boot/process resumes paused with visible reason — **pass**
+- goal pauses at a safe boundary when token budget cap is exhausted — **pass**
+- goal pauses before dispatch when prior child token accounting is unavailable — **pass**
+- PA-3: repeated same-fingerprint unit failures block as `NOT_CONVERGING` (fingerprint stall, not turn count) — **pass**
+- goal lifecycle/verifier-receipt completion gates — **pass** as part of the suite
 
-## Open slice dependency
+Supporting unit docs: `docs/v1.3.0/PA3_GOAL_LIFECYCLE.md` (retry preserves fingerprint counts; revise/replace/assign/set_inputs/lift clear them; schema v7).
 
-- PR [#789](https://github.com/mikeholownych/nexus-code/pull/789) (`feat(operation): PA-3 fingerprint-based stall counting`) is OPEN, not merged; at review time required checks were not green (test-matrix/shards failing) and review requested changes. It adds fingerprint-stall unit counting and a deterministic regression; once merged and CI-green on release branch, PA-3 fingerprint-stall acceptance evidence should be recorded against release-branch head.
+## PA-1 / PA-2 gate for `/team`
+
+- PA-1 owner receipts and operation visibility: landed (#787).
+- PA-2 verified merge arbitration + semantic-conflict qualification: landed (#785/#788/#790).
+- `/team` may leave the experimental catalogue label once this acceptance record is on tip (see slash catalogue change in the same PR if present).
 
 ## Gaps / not claimed
 
-- Full PA-3 end-to-end acceptance qualification is **not complete** until #789 (or equivalent) is merged and release-branch CI is green with fingerprint-stall coverage included.
-- `/team` remains experimental until PA-1 and PA-2 are complete and accepted.
-- No merge/tag/publish performed by this agent.
+- Restart-specific interrupted-effect reconciliation beyond stale-driver pause still requires separate qualification.
+- Provider-neutral end-to-end / live-gateway qualification remains separate.
+- No merge/tag/publish performed solely from this record; tag remains owner-gated.
 
 ## Reference coding
 
-XERJ unavailable: `nexus-cli` corpus not indexed on this node; `git grep` fallback used. No XERJ feedback submitted.
+XERJ unavailable for this refresh pass on the acceptance doc itself; prior PA-3 slices recorded opencode goal boot-id patterns. `git grep` used as fallback. No XERJ feedback submitted for this docs-only refresh.

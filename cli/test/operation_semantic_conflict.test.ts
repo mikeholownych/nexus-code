@@ -331,15 +331,15 @@ function v4Record(): Record<string, any> {
   return { ...JSON.parse(JSON.stringify(state)), schemaVersion: 4 };
 }
 
-test("schema: this build writes operation document version 6, and a version 5 record loads with only the version changed", () => {
-  assert.equal(CURRENT_OPERATION_SCHEMA_VERSION, 6);
+test("schema: this build writes operation document version 7, and a version 6 record loads with only the version changed", () => {
+  assert.equal(CURRENT_OPERATION_SCHEMA_VERSION, 7);
   const v4 = v4Record();
-  v4.schemaVersion = 5;
+  v4.schemaVersion = 6;
   v4.origin = { kind: "job", jobId: "job-pa2", unattended: true };
   const before = JSON.parse(JSON.stringify(v4));
   const migrated = migrateOperationState(v4);
-  assert.equal(migrated.schemaVersion, 6);
-  assert.deepEqual({ ...migrated, schemaVersion: 5 }, before, "the migration changed more than the schema version");
+  assert.equal(migrated.schemaVersion, 7);
+  assert.deepEqual({ ...migrated, schemaVersion: 6 }, before, "the migration changed more than the schema version");
   assert.deepEqual(v4, before, "the migration mutated its input");
   assert.equal(migrated.git!.integrationVerifiers, undefined, "nothing is pinned after the fact");
 
@@ -351,7 +351,7 @@ test("schema: this build writes operation document version 6, and a version 5 re
 
 test("schema: a record from a newer build is refused, never interpreted", (t) => {
   const newer = { ...v4Record(), schemaVersion: CURRENT_OPERATION_SCHEMA_VERSION + 1 };
-  assert.throws(() => migrateOperationState(newer), (error: Error) => error instanceof UnsupportedOperationSchemaError && /schema 7 is newer than this build supports \(6\)/.test(error.message));
+  assert.throws(() => migrateOperationState(newer), (error: Error) => error instanceof UnsupportedOperationSchemaError && /schema 8 is newer than this build supports \(7\)/.test(error.message));
 
   // Through the store too, and the record is left in place (not quarantined, not rewritten).
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pa2-home-"));
