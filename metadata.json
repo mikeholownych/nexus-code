@@ -22,28 +22,28 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 6,
-    "cache_creation_tokens": 5724,
-    "cache_read_tokens": 296779,
-    "output_tokens": 3160,
-    "api_call_count": 2,
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0,
     "subagent_tokens": {
-      "input_tokens": 108,
-      "cache_creation_tokens": 635456,
-      "cache_read_tokens": 11053608,
-      "output_tokens": 65347,
-      "api_call_count": 53
+      "input_tokens": 28,
+      "cache_creation_tokens": 38309,
+      "cache_read_tokens": 5117305,
+      "output_tokens": 28135,
+      "api_call_count": 14
     }
   },
   "redaction": {
-    "replacements": 1625,
+    "replacements": 1626,
     "layers": {
       "betterleaks": 5,
       "connection_string": 0,
       "credential_key": 0,
       "credential_value": 46,
       "credentialed_uri": 3,
-      "entropy": 1568,
+      "entropy": 1569,
       "key_context": 0,
       "provider_token": 8,
       "shell_stdin": 0

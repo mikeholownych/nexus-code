@@ -3,7 +3,7 @@
   "checkpoint_id": "01M872HX377JB04RGXVQF8NX8B",
   "session_id": "43bcbb67-2cff-4fa8-a05e-f8aa598df73b",
   "strategy": "manual-commit",
-  "created_at": "2026-11-24T15:25:20.918699792Z",
+  "created_at": "2026-11-24T15:25:58.411909341Z",
   "branch": "v1/mt2-characterization",
   "checkpoints_count": 1,
   "files_touched": [
@@ -17,32 +17,32 @@
   "agent": "Claude Code",
   "model": "claude-fable-5-2",
   "turn_id": "846723e1aae4",
-  "checkpoint_transcript_start": 39848,
-  "transcript_lines_at_start": 39848,
-  "compact_transcript_start": 4466,
+  "checkpoint_transcript_start": 39912,
+  "transcript_lines_at_start": 39912,
+  "compact_transcript_start": 4470,
   "token_usage": {
-    "input_tokens": 6,
-    "cache_creation_tokens": 5724,
-    "cache_read_tokens": 296779,
-    "output_tokens": 3160,
-    "api_call_count": 2,
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0,
     "subagent_tokens": {
-      "input_tokens": 108,
-      "cache_creation_tokens": 635456,
-      "cache_read_tokens": 11053608,
-      "output_tokens": 65347,
-      "api_call_count": 53
+      "input_tokens": 28,
+      "cache_creation_tokens": 38309,
+      "cache_read_tokens": 5117305,
+      "output_tokens": 28135,
+      "api_call_count": 14
     }
   },
   "redaction": {
-    "replacements": 1625,
+    "replacements": 1626,
     "layers": {
       "betterleaks": 5,
       "connection_string": 0,
       "credential_key": 0,
       "credential_value": 46,
       "credentialed_uri": 3,
-      "entropy": 1568,
+      "entropy": 1569,
       "key_context": 0,
       "provider_token": 8,
       "shell_stdin": 0
