@@ -87,6 +87,8 @@ import { isHarnessNote, withHarnessProvenance } from "./harness_notes.js";
 import { persistableEndpoint } from "./core/endpoint_identity.js";
 import { clampAlwaysApproval } from "./core/managed_policy.js";
 import { SessionSocketServer, listeningLine } from "./session_socket.js";
+import { socketRuntimeDir } from "./core/socket_files.js";
+import { hideDirectoryFromSandbox } from "./sandbox.js";
 
 export interface SidecarOptions {
   app: ApplicationCore;
@@ -183,6 +185,10 @@ export class SidecarServer {
       return safe ? [encodeEvent(safe)] : [];
     });
     return { common: lines([this.helloEvent(), this.sessionStateEvent()]), controller: lines([this.pendingApproval?.event]) };
+  }
+
+  socketMayDriveTurns(): boolean {
+    return this.app.getAgent().getApprovalMode() !== "auto" && !this.alwaysApprove;
   }
 
   start(): void {
@@ -1654,7 +1660,12 @@ async function main(argv: string[]): Promise<void> {
   if (options.listen) {
     // A socket client must never reach a session that approves everything: refuse before anything is bound.
     if (app.getAgent().getApprovalMode() === "auto") throw new Error("--listen is refused under auto approval (-y, --mode auto); use review or read-only");
-    hub = new SessionSocketServer({ session: server, onError: report });
+    const dir = socketRuntimeDir();
+    // The model can read and write the workspace, so a token kept there is no secret from it.
+    if (isPathInside(fs.realpathSync(dir), fs.realpathSync(config.workspace))) throw new Error(`--listen is refused: the socket directory ${dir} is inside the workspace`);
+    // Under --sandbox no command may see the descriptor, wherever XDG_RUNTIME_DIR points.
+    hideDirectoryFromSandbox(dir);
+    hub = new SessionSocketServer({ session: server, dir, onError: report });
   }
   const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
   input.on("line", (line) => {
@@ -1671,6 +1682,12 @@ async function main(argv: string[]): Promise<void> {
     for (const signal of ["SIGTERM", "SIGINT"] as const) process.once(signal, requestShutdown);
     protocolWrite(listeningLine(await hub.listen()));
   }
+}
+
+/** Whether `inner` is `outer` or below it (both already resolved). */
+function isPathInside(inner: string, outer: string): boolean {
+  const relative = path.relative(outer, inner);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 /** True when argv[1] names this module, comparing real paths so a symlinked launcher still counts. */

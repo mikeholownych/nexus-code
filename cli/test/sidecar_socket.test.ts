@@ -12,6 +12,7 @@ import { ApplicationCore } from "../src/core/app.js";
 import { SidecarServer } from "../src/sidecar.js";
 import { SessionSocketServer } from "../src/session_socket.js";
 import { readDescriptor, socketRuntimeDir } from "../src/core/socket_files.js";
+import { isBwrapAvailable } from "../src/sandbox.js";
 import { startGateway, makeRepo, makeHome, waitUntil, type Reply } from "./helpers/fixtures.js";
 
 const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -167,6 +168,35 @@ describe("a live session behind the socket", () => {
   });
 });
 
+describe("a session that starts approving everything later", () => {
+  test("after the stdio owner switches to auto, socket prompts are NOT_PERMITTED; cancel still works", async () => {
+    await withHub(writeTurn, async ({ socket, token, server, repo, stdio }) => {
+      const controller = await attach(socket, token, "control");
+      await server.handleLine(JSON.stringify({ v: 1, type: "slash", id: "m1", command: "/mode", args: "auto" }));
+      assert.equal(stdio.filter((e) => e.type === "session.state").at(-1).mode, "auto", "the owner's switch took effect");
+      controller.send({ type: "prompt.submit", id: "t1", text: "make x" });
+      controller.send({ type: "steer", id: "s1", text: "also y" });
+      await controller.until((e) => e.filter((x) => x.code === "NOT_PERMITTED").length === 2, "both refused");
+      await new Promise((r) => setTimeout(r, 150));
+      assert.equal(fs.existsSync(path.join(repo, "x.txt")), false, "no turn ran");
+      assert.equal(stdio.some((e) => e.type === "approval.request" || e.type === "tool.start"), false);
+    });
+  });
+
+  test("after the stdio owner grants allow-always, socket prompts are NOT_PERMITTED", async () => {
+    await withHub(writeTurn, async ({ socket, token, server, repo, stdio }) => {
+      const controller = await attach(socket, token, "control");
+      await server.handleLine(JSON.stringify({ v: 1, type: "prompt.submit", id: "t0", text: "make x" }));
+      await waitUntil(() => stdio.some((e) => e.type === "approval.request"));
+      await server.handleLine(JSON.stringify({ v: 1, type: "approve", id: stdio.find((e) => e.type === "approval.request").id, always: true }));
+      await server.idle();
+      assert.equal(fs.existsSync(path.join(repo, "x.txt")), true);
+      controller.send({ type: "prompt.submit", id: "t1", text: "again" });
+      await controller.until((e) => e.some((x) => x.code === "NOT_PERMITTED"), "refused");
+    });
+  });
+});
+
 // ------------------------------------------------------------------ the sidecar process
 
 function spawnSidecar(args: string[], env: Record<string, string>) {
@@ -260,6 +290,60 @@ describe("sidecar --listen", () => {
       await gw.close();
       fs.rmSync(repo, { recursive: true, force: true });
       fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("is refused when the socket directory is inside the workspace, and binds nothing", async () => {
+    const gw = await startGateway(() => ({ kind: "text", content: "x" }));
+    const repo = makeRepo();
+    const home = makeHome();
+    const runtime = path.join(repo, "run");
+    fs.mkdirSync(runtime, { mode: 0o700 });
+    const proc = spawnSidecar(["-w", repo, "-e", gw.url, "-m", "m", "--listen"], { HOME: home, XDG_RUNTIME_DIR: runtime });
+    try {
+      assert.notEqual(await proc.exited, 0);
+      assert.match(proc.stderr(), /inside the workspace/);
+      assert.equal(proc.lines().some((l) => l.includes('"type":"listening"')), false);
+      assert.deepEqual(fs.readdirSync(path.join(runtime, "nexus")), [], "nothing was bound");
+    } finally {
+      proc.child.kill("SIGKILL");
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("under --sandbox a model command cannot read the descriptor, even with XDG_RUNTIME_DIR outside /run/user and /tmp", { skip: isBwrapAvailable() ? false : "bwrap is not installed on this host" }, async () => {
+    const repo = makeRepo();
+    const home = makeHome();
+    const runtime = fs.mkdtempSync("/var/tmp/nexus-sock-run-");
+    let descriptorPath = "";
+    const gw = await startGateway((n) => n === 1
+      ? { kind: "tools", calls: [{ name: "run_command", args: { command: `cat ${descriptorPath}/*.json; ls ${descriptorPath}` } }] }
+      : { kind: "text", content: "done" });
+    const proc = spawnSidecar(["-w", repo, "-e", gw.url, "-m", "m", "--listen", "--sandbox", "bwrap"], { HOME: home, XDG_RUNTIME_DIR: runtime });
+    try {
+      await waitUntil(() => proc.lines().some((l) => l.includes('"type":"listening"')), 30000);
+      const listening = JSON.parse(proc.lines().find((l) => l.includes('"type":"listening"'))!);
+      descriptorPath = path.dirname(listening.descriptor);
+      const { token } = readDescriptor(listening.descriptor);
+      proc.child.stdin.write(`${JSON.stringify({ v: 1, type: "prompt.submit", id: "t1", text: "look" })}\n`);
+      await waitUntil(() => proc.lines().some((l) => l.includes('"type":"approval.request"')), 30000);
+      const request = JSON.parse(proc.lines().find((l) => l.includes('"type":"approval.request"'))!);
+      proc.child.stdin.write(`${JSON.stringify({ v: 1, type: "approve", id: request.id, always: false })}\n`);
+      await waitUntil(() => proc.lines().some((l) => l.includes('"type":"turn.result"')), 30000);
+      const end = proc.lines().map((l) => JSON.parse(l)).find((e) => e.type === "tool.end");
+      proc.child.stdin.write(`${JSON.stringify({ v: 1, type: "tool.detail", id: "d1", evidence: end.evidence })}\n`);
+      await waitUntil(() => proc.lines().some((l) => l.includes('"type":"tool.detail"')), 30000);
+      const output = proc.lines().filter((l) => !l.includes('"type":"listening"')).join("\n");
+      assert.equal(output.includes(token), false, "the token reached the model's command output");
+      assert.equal(output.includes(path.basename(listening.descriptor)), false, "the descriptor was listed");
+    } finally {
+      proc.child.kill("SIGKILL");
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(runtime, { recursive: true, force: true });
     }
   });
 

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync, spawn } from "node:child_process";
 import { buildCommandEnvironment } from "../src/command_env.js";
-import { wrapSandboxedCommand, isBwrapAvailable, sandboxHomeMounts, setSandboxNetworkFlag, sandboxNetworkNotice, sandboxWorkspaceOverlays } from "../src/sandbox.js";
+import { wrapSandboxedCommand, isBwrapAvailable, sandboxHomeMounts, setSandboxNetworkFlag, sandboxNetworkNotice, sandboxWorkspaceOverlays, hideDirectoryFromSandbox, wrapSandboxedWorker } from "../src/sandbox.js";
 
 const SKIP = isBwrapAvailable() ? false : "bwrap is not installed on this host";
 
@@ -253,3 +253,65 @@ function hostSleepPids(duration: string): number[] {
   const out = spawnSync("pgrep", ["-x", "sleep", "-a"], { encoding: "utf8" }).stdout;
   return out.split("\n").filter((l) => l.endsWith(`sleep ${duration}`)).map((l) => Number(l.split(" ")[0]));
 }
+
+describe("the control socket's directory is hidden from sandboxed commands (PF-3)", () => {
+  /** A directory that holds a token descriptor, next to (not under) the home and the workspace. */
+  function socketDirectory(parent: string): string {
+    const dir = fs.mkdtempSync(path.join(parent, "nexus-sock-"));
+    fs.writeFileSync(path.join(dir, "s-0123456789abcdef.json"), "SENTINEL-TOKEN");
+    cleanup.push(dir);
+    return dir;
+  }
+  const masks = (argv: readonly string[], dir: string): boolean => argv.some((arg, i) => arg === "--tmpfs" && argv[i + 1] === dir);
+
+  test("the write-mode profile masks the directory wherever it is: /var/tmp, under $HOME, inside the workspace", () => {
+    const { home, workspace } = throwawayHome();
+    const elsewhere = socketDirectory("/var/tmp");
+    const underHome = fs.mkdtempSync(path.join(home, "run-"));
+    const insideWorkspace = fs.mkdtempSync(path.join(workspace, "run-"));
+    for (const dir of [elsewhere, underHome, insideWorkspace]) {
+      const wrapped = wrapSandboxedCommand("true", workspace, { mode: "bwrap", hideDirectories: [dir] });
+      assert.ok(masks(wrapped.argv!, fs.realpathSync(dir)), `--tmpfs ${dir}`);
+    }
+    assert.ok(!masks(wrapSandboxedCommand("true", workspace, { mode: "bwrap" }).argv!, elsewhere), "no mask without a request");
+  });
+
+  test("the read-only profile masks it where its synthetic root could show it: under $HOME or inside the workspace", () => {
+    const { home, workspace } = throwawayHome();
+    const underHome = fs.mkdtempSync(path.join(home, "run-"));
+    const insideWorkspace = fs.mkdtempSync(path.join(workspace, "run-"));
+    for (const dir of [underHome, insideWorkspace]) {
+      const wrapped = wrapSandboxedCommand("true", workspace, { mode: "bwrap", readOnlyHost: true, workspaceFd: 3, network: false, hideDirectories: [dir] });
+      assert.ok(masks(wrapped.argv!, fs.realpathSync(dir)), `--tmpfs ${dir}`);
+    }
+  });
+
+  test("a directory registered for the process is masked in commands and in the sandboxed worker's launch", () => {
+    const { workspace } = throwawayHome();
+    const dir = socketDirectory("/var/tmp");
+    hideDirectoryFromSandbox(dir);
+    assert.ok(masks(wrapSandboxedCommand("true", workspace, { mode: "bwrap" }).argv!, fs.realpathSync(dir)));
+    const worker = wrapSandboxedWorker(process.execPath, [], workspace, { engines: ["bwrap"] });
+    if (worker.sandboxed) assert.ok(masks(worker.args, fs.realpathSync(dir)), "the worker box hides it too");
+  });
+
+  test("a sandboxed command cannot read the descriptor; the same command can without the mask", { skip: SKIP }, () => {
+    const { workspace } = throwawayHome();
+    const dir = socketDirectory("/var/tmp");
+    const file = path.join(dir, "s-0123456789abcdef.json");
+    const open = sandboxRun(`cat ${file} 2>&1; ls ${dir} 2>&1`, workspace);
+    assert.match(open.stdout, /SENTINEL-TOKEN/, "control: with no mask the sandbox shows a /var/tmp file");
+    const hidden = sandboxRun(`cat ${file} 2>&1; ls ${dir} 2>&1`, workspace, { hideDirectories: [dir] });
+    assert.doesNotMatch(hidden.stdout, /SENTINEL-TOKEN/);
+    assert.match(hidden.stdout, /No such file/, "the file is absent, not merely unreadable");
+    assert.doesNotMatch(hidden.stdout.replace(/cat: .*\n/, ""), /s-0123456789abcdef/, "the directory lists empty");
+  });
+
+  test("a directory inside the workspace is masked too, and the workspace stays usable", { skip: SKIP }, () => {
+    const { workspace } = throwawayHome();
+    const dir = socketDirectory(workspace);
+    const hidden = sandboxRun(`cat ${path.join(dir, "s-0123456789abcdef.json")} 2>&1; echo ok > out.txt && cat out.txt`, workspace, { hideDirectories: [dir] });
+    assert.doesNotMatch(hidden.stdout, /SENTINEL-TOKEN/);
+    assert.match(hidden.stdout, /ok/);
+  });
+});

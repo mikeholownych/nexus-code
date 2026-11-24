@@ -27,7 +27,10 @@ import {
 export const SOCKET_MAX_PREATTACH_BYTES = 4096;
 export const SOCKET_MAX_LINE_BYTES = ACP_MAX_LINE_BYTES;
 export const SOCKET_MAX_CONNECTIONS = 8;
-export const SOCKET_ATTACH_TIMEOUT_MS = 5000;
+/** A connection that has not attached within this long is refused, so idle sockets cannot hold the pre-auth slots. */
+export const SOCKET_ATTACH_TIMEOUT_MS = 2000;
+/** Connections that have not yet attached; more are told BUSY, so a flood of idle sockets cannot fill all eight. */
+export const SOCKET_MAX_PREAUTH = 4;
 /** A connection with more than this queued for writing is dropped; a slow observer must not stall the session. */
 export const SOCKET_MAX_OUTBOUND_BYTES = 8 * 1024 * 1024;
 
@@ -43,6 +46,11 @@ export interface SocketSession {
   handleLine(line: string): Promise<void>;
   /** Protocol lines that bring a new client up to date: `hello`, the current `session.state`, a pending `approval.request`. */
   attachSnapshot(): { common: string[]; controller: string[] };
+  /**
+   * False while the session approves everything (auto mode, or allow-always granted from stdio after start): a socket
+   * client may then not start or steer work, because nothing would ask a person before it ran.
+   */
+  socketMayDriveTurns(): boolean;
 }
 
 export interface SessionSocketOptions {
@@ -60,10 +68,17 @@ export interface SocketInfo {
   descriptor: string;
 }
 
-/** The commands a controller may send over the socket. `initialize` is answered by the hub; everything else here is forwarded. */
+/**
+ * The commands a controller may send over the socket: what it takes to drive a turn and give a person's yes or no to
+ * one approval, and to read results. `initialize` is answered by the hub; everything else here is forwarded.
+ * Not here, on purpose: `answer` and `checkpoint.choice` (a decision about a requirement or about persisting sensitive
+ * content is the owner's, on stdio), `slash`, `shutdown`, `model.*`, `models.list` and `provider.*`.
+ */
 const CONTROLLER_COMMANDS: ReadonlySet<SidecarCommand["type"]> = new Set([
-  "prompt.submit", "steer", "cancel", "approve", "deny", "answer", "checkpoint.choice", "receipt", "tool.detail",
+  "prompt.submit", "steer", "cancel", "approve", "deny", "receipt", "tool.detail",
 ]);
+/** Commands that put work in motion: refused while the session approves everything. */
+const WORK_COMMANDS: ReadonlySet<SidecarCommand["type"]> = new Set(["prompt.submit", "steer"]);
 
 /** The one refusal for every failed attach: it must not tell a guesser which part was wrong. */
 const REFUSAL = encodeEvent({ type: "error", code: "UNAUTHORIZED", message: "attach refused" });
@@ -156,7 +171,8 @@ export class SessionSocketServer {
   // ------------------------------------------------------------------ connections
 
   private accept(socket: net.Socket): void {
-    if (this.connections.size >= SOCKET_MAX_CONNECTIONS) {
+    const attaching = [...this.connections].filter((connection) => !connection.role).length;
+    if (this.connections.size >= SOCKET_MAX_CONNECTIONS || attaching >= SOCKET_MAX_PREAUTH) {
       socket.on("error", () => {});
       socket.end(encodeEvent({ type: "error", code: "BUSY", message: "too many connections" }), () => socket.destroy());
       return;
@@ -281,6 +297,9 @@ export class SessionSocketServer {
     }
     if (command.type === "approve" && command.always) {
       return this.send(connection, "NOT_PERMITTED", "allow-always is not available over the socket; approve once", command.id);
+    }
+    if (WORK_COMMANDS.has(command.type) && !this.session.socketMayDriveTurns()) {
+      return this.send(connection, "NOT_PERMITTED", "this session approves everything, so it cannot be driven over the socket", id);
     }
     this.session.handleLine(text).catch((error) => this.options.onError?.(error));
   }

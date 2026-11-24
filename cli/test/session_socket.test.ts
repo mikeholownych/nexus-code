@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  SOCKET_MAX_CONNECTIONS, SOCKET_MAX_LINE_BYTES, SessionSocketServer, type SocketSession,
+  SOCKET_ATTACH_TIMEOUT_MS, SOCKET_MAX_CONNECTIONS, SOCKET_MAX_LINE_BYTES, SOCKET_MAX_PREAUTH, SessionSocketServer, type SocketSession,
 } from "../src/session_socket.js";
 import { newToken, readDescriptor, socketRuntimeDir, sweepStaleSockets, tokenMatches } from "../src/core/socket_files.js";
 
@@ -33,6 +33,8 @@ function tmp(): string {
 /** The sidecar stand-in: records what the hub forwards. */
 class FakeSession implements SocketSession {
   forwarded: string[] = [];
+  mayDrive = true;
+  socketMayDriveTurns(): boolean { return this.mayDrive; }
   async handleLine(line: string): Promise<void> { this.forwarded.push(line); }
   attachSnapshot() {
     return {
@@ -260,6 +262,8 @@ test("approve once is forwarded; allow-always, auto mode and every authority-rai
     { type: "slash", id: "s3", command: "/cd", args: "/" },
     { type: "provider.connect", id: "p1", provider: "x", method: "api-key", key: "sk-secret" },
     { type: "provider.disconnect", id: "p2", provider: "x" },
+    { type: "answer", id: "q1", question: "0123456789ab", option: "approve" },
+    { type: "checkpoint.choice", id: "k1", choice: "allow_sensitive" },
     { type: "model.select", id: "m1", provider: "x", model: "y" },
     { type: "models.list", id: "m2" },
     { type: "shutdown" },
@@ -325,14 +329,50 @@ test("oversized lines after attach get BAD_REQUEST, the third closes the connect
 });
 
 test("the ninth connection is told BUSY and closed", async () => {
-  const r = await rig({ attachTimeoutMs: 5000 });
-  const holders: Client[] = [];
-  for (let i = 0; i < SOCKET_MAX_CONNECTIONS; i++) holders.push(await connect(r.socket));
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  const r = await rig();
+  for (let i = 0; i < SOCKET_MAX_CONNECTIONS; i++) await attached(r, "observe");
   const extra = await connect(r.socket);
   await extra.closed();
   assert.equal(extra.parsed()[0].code, "BUSY");
   assert.equal(r.server.connectionCount, SOCKET_MAX_CONNECTIONS);
+});
+
+test("idle unauthenticated connections cannot fill the table: past four, a connection is told BUSY, and a real attach still works", async () => {
+  const r = await rig({ attachTimeoutMs: 5000 });
+  const idle: Client[] = [];
+  for (let i = 0; i < SOCKET_MAX_PREAUTH; i++) idle.push(await connect(r.socket));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const extra = await connect(r.socket);
+  await extra.closed();
+  assert.equal(extra.parsed()[0].code, "BUSY");
+  // The idle ones are not drained: one of them attaching still works, and frees its pre-auth slot.
+  idle[0].send(attachLine(r.token, "control"));
+  await idle[0].until(() => idle[0].lines.length >= 3, "an idle connection to attach");
+  assert.equal(idle[0].parsed()[0].type, "attached");
+  const next = await connect(r.socket);
+  next.send(attachLine(r.token, "observe"));
+  await next.until(() => next.lines.length >= 3, "a new attach after a slot freed");
+});
+
+test("the default pre-attach deadline is two seconds", () => {
+  assert.equal(SOCKET_ATTACH_TIMEOUT_MS, 2000);
+  assert.equal(SOCKET_MAX_PREAUTH, 4);
+});
+
+test("while the session approves everything, prompt and steer are NOT_PERMITTED; cancel, deny and reads still work", async () => {
+  const r = await rig();
+  const controller = await attached(r, "control");
+  r.session.mayDrive = false;
+  controller.send(JSON.stringify({ v: 1, type: "prompt.submit", id: "p1", text: "run" }));
+  controller.send(JSON.stringify({ v: 1, type: "steer", id: "s1", text: "go left" }));
+  await controller.until(() => controller.lines.length === 4 + 2, "two refusals");
+  assert.deepEqual(controller.parsed().slice(4).map((e) => e.code), ["NOT_PERMITTED", "NOT_PERMITTED"]);
+  assert.deepEqual(r.session.forwarded, []);
+  for (const line of [{ type: "cancel" }, { type: "deny", id: "approval-1" }, { type: "receipt", id: "r1" }]) controller.send(JSON.stringify({ v: 1, ...line }));
+  await controller.until(() => r.session.forwarded.length === 3, "cancel, deny and receipt to be forwarded");
+  r.session.mayDrive = true;
+  controller.send(JSON.stringify({ v: 1, type: "prompt.submit", id: "p2", text: "run" }));
+  await controller.until(() => r.session.forwarded.length === 4, "prompt forwarded again");
 });
 
 // ------------------------------------------------------------------ directories and paths
