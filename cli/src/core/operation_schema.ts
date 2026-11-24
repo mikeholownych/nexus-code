@@ -291,6 +291,9 @@ export const MAX_TOTAL_TOKENS = 10_000_000_000;
 export function validateOperationPolicy(policy: Partial<OperationPolicy>): void {
   validateConcurrency("(new)", "policy.maxConcurrentUnits", policy.maxConcurrentUnits);
   if (policy.executionBudget !== undefined) validateExecutionResources("(new)", "policy.executionBudget", policy.executionBudget);
+  if (policy.maxStallsPerFingerprint !== undefined && (!Number.isSafeInteger(policy.maxStallsPerFingerprint) || policy.maxStallsPerFingerprint < 1 || policy.maxStallsPerFingerprint > 100)) {
+    throw new InvalidOperationStateError(`(new): policy.maxStallsPerFingerprint must be a safe integer from 1 to 100 (got ${String(policy.maxStallsPerFingerprint)})`);
+  }
   if (policy.maxTotalTokens !== undefined && (!Number.isSafeInteger(policy.maxTotalTokens) || policy.maxTotalTokens < 1 || policy.maxTotalTokens > MAX_TOTAL_TOKENS)) {
     throw new InvalidOperationStateError(`(new): policy.maxTotalTokens must be a safe integer from 1 to ${MAX_TOTAL_TOKENS} (got ${String(policy.maxTotalTokens)})`);
   }

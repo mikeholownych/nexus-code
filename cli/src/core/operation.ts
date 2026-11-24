@@ -196,6 +196,8 @@ export interface WorkUnit {
   renderedInputsHash?: string;
   /** Results the executor refused (for example a specialist output that failed its contract), most recent last. */
   rejectedOutputs?: StoredRejectedOutput[];
+  /** Consecutive failures by stable fingerprint. Used for PA-3 stall detection; not turn count. */
+  failureStalls?: Record<string, { count: number; lastAt: string; reason: string }>;
   /** What the unit's start prompt was estimated to need, and the budget it was checked against. */
   context?: {
     estimatedPromptTokens: number;
@@ -250,6 +252,8 @@ export interface OperationPolicy {
   unknownResumeBudget: number;
   /** Runs of one unit before the scheduler stops retrying it. */
   maxRunsPerUnit: number;
+  /** Consecutive failures with the same fingerprint before the scheduler treats the unit as stalled (not turn count). */
+  maxStallsPerFingerprint?: number;
   /** Floor between WAITING wake-ups. */
   minWaitMs: number;
   /**
@@ -278,6 +282,7 @@ export const DEFAULT_OPERATION_POLICY: OperationPolicy = {
   maxWaitMs: 12 * 60 * 60_000,
   unknownResumeBudget: 2,
   maxRunsPerUnit: 25,
+  maxStallsPerFingerprint: 3,
   minWaitMs: 1_000,
 };
 
