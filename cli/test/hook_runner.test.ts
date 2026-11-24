@@ -216,6 +216,8 @@ test("a hook that exits while something it started holds its output open is a fa
     started.push({ pid, started: startedAt(pid) });
     assert.deepEqual({ exit: holding.exit, failure: holding.failure }, { exit: 0, failure: "output_left_open" });
     assert.equal(reduceHookOutput(holding).denialReason, "HOOK_FAILED");
+    // The answer was refused, so what the hook left running in its process group is ended, not orphaned.
+    await eventually(() => startedAt(pid) !== started[0].started, "the process the hook left behind to be gone");
 
     // Detached from the output, the background process is the hook's own business.
     const detached = await runHookProcess({ command: `sleep 300 >/dev/null 2>&1 & echo $! > "${pidFile}"; echo ok`, cwd: dir, env: env(dir), stdin: "{}", timeoutMs: 60_000, drainMs: 500 });

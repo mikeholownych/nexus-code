@@ -200,10 +200,10 @@ test("approve refuses a missing, invalid or unpinnable file; a change after appr
   // What cannot be pinned cannot be approved: a shell string, a program that is not there, a path or link out.
   fs.symlinkSync("/bin/true", path.join(workspace, "linked-out"));
   const unpinnable: Array<[unknown, RegExp]> = [
-    ["./check.sh", /a project hook's command must be an array \(it is run without a shell\), so that the files it runs can be pinned/],
+    ["./check.sh", /a project hook's command must be an array \(it is run without a shell\)/],
     [["./not-there.sh"], /\.\/not-there\.sh does not exist/],
     [["../outside.sh"], /\.\.\/outside\.sh is a relative path that leaves the workspace/],
-    [["./linked-out"], /\.\/linked-out is a symbolic link out of the workspace/],
+    [["./linked-out"], /"\.\/linked-out" is a symbolic link out of the workspace/],
   ];
   for (const [command, pattern] of unpinnable) {
     projectHooks(guard(command as string));
@@ -314,81 +314,125 @@ test("a person can be asked only when standard input and standard output are bot
   assert.equal(isInteractiveTerminal({}, {}), false);
 });
 
-test("a project command that refers into the workspace by anything but a pinned file cannot be approved", async () => {
+const RULE = /A project hook is either a script file in the workspace run directly \(\["\.\/guard\.sh"\]\), or one of sh, bash, dash, zsh, node, python3, perl, ruby followed by a script file in the workspace\. Any other command belongs in your own hooks file \(~\/\.config\/nexus\/hooks\.json\)/;
+
+test("a project command outside the allowlist cannot be approved and lists as invalid", async () => {
+  workspaceScript("g.sh");
   workspaceScript("guard.sh");
+  workspaceScript("guard.js", "// js");
   workspaceScript("pre.js", "// preload");
   workspaceScript("hookdir/index.js", "// entry");
+  fs.writeFileSync(path.join(workspace, "package.json"), '{"scripts":{"x":"sh g.sh"}}');
   fs.symlinkSync("nowhere", path.join(workspace, "dangling"));
+  const NOT_LISTED = /is not a script in the workspace and not one of the interpreters a project hook may name/;
+  const OPTION = /is not one a project hook may pass to \S+ before its script/;
   const refused: Array<[string[], RegExp]> = [
-    // The four forms of the review, each of which ran replaced content after an approval.
-    [["node", "hookdir"], /argument "hookdir": "hookdir" is a directory \(or not a regular file\) in the workspace, whose content cannot be pinned/],
-    [["sh", "-c", "./guard.sh x"], /argument "-c" gives sh code, or the name of code, on the command line/],
-    [["bash", "-c", "exec ./guard.sh"], /argument "-c" gives bash code/],
-    [["node", "--require", "dotenv/config", "guard.js"], /argument "--require" loads "dotenv\/config", which is not a file in the workspace that can be pinned/],
-    // Their relatives.
-    [["node", "--require=hookdir", "x"], /argument "--require=hookdir" loads "hookdir", which is not a file/],
-    [["node", "-r", "./missing.js"], /argument "-r" loads "\.\/missing\.js"/],
-    [["node", "--import=some-module"], /loads "some-module"/],
-    [["node", "-e", "require('./pre.js')"], /argument "-e" gives node code/],
-    [["node", "-pe", "1"], /argument "-pe" gives node code/],
-    [["node", "--eval=1"], /argument "--eval=1" gives node code/],
-    [["node", "--print", "1"], /argument "--print" gives node code/],
-    [["bash", "-lc", "./guard.sh"], /argument "-lc" gives bash code/],
-    [["python3", "-m", "hookdir"], /argument "-m" gives python3 code/],
-    [["python3.12", "-cimport os"], /argument "-cimport os" gives python3\.12 code/],
-    [["/usr/bin/perl", "-Mstrict", "x"], /argument "-Mstrict" gives \/usr\/bin\/perl code/],
-    [["deno", "eval", "1"], /argument "eval" gives deno code/],
-    [["env", "sh", "./guard.sh"], /env only starts another program, which hides what the hook runs/],
-    [["/usr/bin/env", "node", "guard.js"], /only starts another program/],
-    [["busybox", "sh", "./guard.sh"], /only starts another program/],
-    // Nested launchers: rules apply past argv[0], otherwise these approved with files:[] and ran replaced code.
-    [["nice", "bash", "-c", "exec ./guard.sh"], /nice only starts another program|argument "-c" gives bash code/],
-    [["timeout", "5", "python3", "-c", "open('pwned','w').write('x')"], /timeout only starts another program|argument "-c" gives python3 code/],
-    [["nohup", "node", "-e", "require('fs').writeFileSync('pwned','x')"], /nohup only starts another program|argument "-e" gives node code/],
-    [["stdbuf", "-oL", "bash", "-c", "./guard.sh"], /stdbuf only starts another program|argument "-c" gives bash code/],
-    [["ionice", "-c2", "bash", "-c", "exec ./guard.sh"], /ionice only starts another program|argument "-c" gives bash code/],
-    // An unknown prefix still cannot hide an interpreter's inline code.
-    [["unshare", "--fork", "bash", "-c", "exec ./guard.sh"], /argument "-c" gives bash code/],
-    [["/bin/cat", "."], /argument "\.": "\." is a directory/],
-    [["/bin/cat", "--file=hookdir"], /argument "--file=hookdir": "hookdir" is a directory/],
-    [["/bin/cat", "-fhookdir"], /argument "-fhookdir": "hookdir" is a directory/],
-    [["/bin/cat", path.join(workspace, "hookdir")], /is a directory/],
-    [["/bin/cat", "dangling"], /argument "dangling": "dangling" is in the workspace and cannot be read as a regular file/],
+    // The commands of the hostile check: each was approved with no file covered, and then ran edited workspace code.
+    [["script", "-qec", "sh g.sh", "/dev/null"], NOT_LISTED],
+    [["awk", 'BEGIN{system("sh g.sh")}'], NOT_LISTED],
+    [["node", "--run", "x"], /option "--run" is not one a project hook may pass to node before its script/],
+    [["npm", "run", "x"], NOT_LISTED],
+    [["npx", "x"], NOT_LISTED],
+    // Shells and interpreters that are not on the list, with and without inline code.
+    [["ash", "g.sh"], NOT_LISTED], [["csh", "g.sh"], NOT_LISTED], [["tcsh", "g.sh"], NOT_LISTED], [["mksh", "g.sh"], NOT_LISTED], [["rbash", "g.sh"], NOT_LISTED],
+    [["ksh", "g.sh"], NOT_LISTED], [["fish", "g.sh"], NOT_LISTED], [["php", "g.sh"], NOT_LISTED], [["deno", "run", "guard.js"], NOT_LISTED], [["bun", "guard.js"], NOT_LISTED],
+    [["lua5.4", "-e", "os.execute('sh g.sh')"], NOT_LISTED],
+    [["Rscript", "-e", "system('sh g.sh')"], NOT_LISTED],
+    // Programs that start another program.
+    [["su", "-c", "sh g.sh"], NOT_LISTED], [["runuser", "-c", "sh g.sh"], NOT_LISTED], [["sudo", "sh", "g.sh"], NOT_LISTED],
+    [["env", "sh", "g.sh"], NOT_LISTED], [["/usr/bin/env", "node", "guard.js"], NOT_LISTED], [["busybox", "sh", "g.sh"], NOT_LISTED],
+    [["xargs", "sh", "g.sh"], NOT_LISTED], [["nice", "bash", "-c", "sh g.sh"], NOT_LISTED], [["timeout", "5", "bash", "-c", "sh g.sh"], NOT_LISTED],
+    [["setsid", "sh", "g.sh"], NOT_LISTED], [["flock", "x", "sh", "g.sh"], NOT_LISTED], [["unshare", "sh", "g.sh"], NOT_LISTED],
+    [["make", "x"], NOT_LISTED], [["git", "status"], NOT_LISTED], [["jq", "."], NOT_LISTED],
+    // Any other installed program, however harmless: a project file does not get to choose programs.
+    [["/usr/bin/true"], NOT_LISTED], [["/bin/cat", "guard.sh"], NOT_LISTED], [["true"], NOT_LISTED],
+    // A listed interpreter with anything but its harmless options before the script.
+    [["sh", "-c", "./guard.sh x"], OPTION], [["bash", "-c", "exec ./guard.sh"], OPTION], [["sh", "--", "-c", "sh g.sh"], OPTION],
+    [["bash", "-ec", "sh g.sh"], OPTION], [["bash", "-lc", "./guard.sh"], OPTION], [["bash", "--command=sh g.sh"], OPTION],
+    [["bash", "--rcfile", "g.sh", "guard.sh"], OPTION], [["bash", "--init-file=g.sh", "guard.sh"], OPTION], [["bash", "-i", "guard.sh"], OPTION],
+    [["sh", "-s", "guard.sh"], OPTION], [["zsh", "-c", "x"], OPTION], [["dash", "-c", "x"], OPTION],
+    [["node", "-e", "require('./pre.js')"], OPTION], [["node", "--eval=1"], OPTION], [["node", "-p", "1"], OPTION], [["node", "--print", "1"], OPTION],
+    [["node", "--require", "./pre.js", "guard.js"], OPTION], [["node", "--require=./pre.js", "guard.js"], OPTION], [["node", "-r", "pre.js", "guard.js"], OPTION],
+    [["node", "--import=./pre.js", "guard.js"], OPTION], [["node", "--loader", "./pre.js", "guard.js"], OPTION], [["node", "--experimental-loader=./pre.js", "guard.js"], OPTION],
+    [["node", "--env-file=pre.js", "guard.js"], OPTION], [["node", "--test"], OPTION], [["node", "--watch", "guard.js"], OPTION], [["node", "-"], OPTION],
+    [["python3", "-c", "import os"], OPTION], [["python3", "-m", "hookdir"], OPTION], [["python3.12", "-cimport os"], OPTION], [["python", "-i", "guard.sh"], OPTION],
+    [["perl", "-e", "system('sh g.sh')"], OPTION], [["perl", "-Mstrict", "guard.sh"], OPTION], [["perl", "-I.", "guard.sh"], OPTION],
+    [["ruby", "-e", "system('sh g.sh')"], OPTION], [["ruby", "-r./pre", "guard.sh"], OPTION],
+    // A listed interpreter whose script is not a regular file of the workspace.
+    [["node", "hookdir"], /"hookdir" is a directory \(or not a regular file\) in the workspace, whose content cannot be pinned/],
+    [["node", "."], /"\." is a directory/],
+    [["bash", "not-there.sh"], /"not-there\.sh" after bash is not an existing file in the workspace/],
+    [["bash", "/etc/profile"], /"\/etc\/profile" after bash is not an existing file in the workspace/],
+    [["bash", "dangling"], /"dangling" is in the workspace and cannot be read as a regular file/],
+    [["bash"], /bash is not followed by a script file/], [["bash", "-e"], /bash is not followed by a script file/],
+    // After the script: a workspace path that cannot be pinned.
+    [["./guard.sh", "hookdir"], /argument "hookdir": "hookdir" is a directory/],
+    [["bash", "guard.sh", "--dir=hookdir"], /argument "--dir=hookdir": "hookdir" is a directory/],
+    [["bash", "guard.sh", "-dhookdir"], /argument "-dhookdir": "hookdir" is a directory/],
+    [["./guard.sh", "dangling"], /argument "dangling": "dangling" is in the workspace and cannot be read as a regular file/],
   ];
   for (const [command, pattern] of refused) {
     projectHooks(guard(command));
     const answer = await nexusHooks(["approve", "-w", workspace], true);
     assert.equal(answer.exitCode, 1, JSON.stringify(command));
     assert.match(answer.out, pattern, JSON.stringify(command));
-    assert.match(answer.out, /A project hook names a program and files; inline code is not accepted\. Put the logic in one script file and name it directly/, JSON.stringify(command));
+    assert.match(answer.out, RULE, JSON.stringify(command));
     assert.deepEqual(answer.asked, [], JSON.stringify(command));
-    assert.equal((await listJson()).sources[1].status, "invalid", JSON.stringify(command));
+    const listing = (await listJson()).sources[1];
+    assert.equal(listing.status, "invalid", JSON.stringify(command));
+    assert.equal(listing.covered_files, undefined, JSON.stringify(command));
   }
   assert.deepEqual(readExtensionTrust().entries, []);
 
-  // The operator's own file is not held to this: it is not pinned, and its author is the operator.
-  operatorHooks(guard(["sh", "-c", "exit 0"]));
-  assert.equal((await listJson()).sources[0].status, "active");
+  // The operator's own file is not held to this: its author is the operator.
+  for (const command of [["sh", "-c", "exit 0"], ["script", "-qec", "true", "/dev/null"], ["/usr/bin/true"]]) {
+    operatorHooks(guard(command));
+    assert.equal((await listJson()).sources[0].status, "active", JSON.stringify(command));
+  }
 });
 
-test("ordinary project commands are accepted, and every workspace file they name is covered", async () => {
+test("an interpreter that resolves into the workspace is not taken as the installed one", async () => {
+  workspaceScript("guard.sh");
+  workspaceScript("bin/bash", "exit 0");
+  const previous = process.env.PATH;
+  process.env.PATH = `${path.join(workspace, "bin")}${path.delimiter}${previous ?? ""}`;
+  try {
+    projectHooks(guard(["bash", "guard.sh"]));
+    const listing = (await listJson()).sources[1];
+    assert.equal(listing.status, "invalid");
+    assert.match(listing.problem, /bash resolves to a file inside the workspace \(.*\/bin\/bash\); name it by its path there to run it as a script/);
+  } finally {
+    process.env.PATH = previous;
+  }
+  // Named by its path it is a script of the workspace like any other, and pinned.
+  projectHooks(guard(["./bin/bash", "guard.sh"]));
+  assert.deepEqual((await listJson()).sources[1].covered_files.map((file: any) => file.path), ["bin/bash", "guard.sh"]);
+});
+
+test("the two accepted forms, and every workspace file they name is covered", async () => {
   workspaceScript("guard.sh");
   workspaceScript("guard.js", "// js");
+  workspaceScript("guard.py", "pass");
   workspaceScript("scripts/guard.js", "// js");
-  workspaceScript("pre.js", "// preload");
   workspaceScript("rules.txt", "rule");
   const accepted: Array<[string[], string[]]> = [
     [["./guard.sh"], ["guard.sh"]],
+    [[path.join(workspace, "guard.sh")], ["guard.sh"]],
+    [["scripts/../guard.sh"], ["guard.sh"]],
     [["bash", "./guard.sh"], ["guard.sh"]],
+    [["/bin/sh", "./guard.sh"], ["guard.sh"]],
+    [["sh", "-eu", "guard.sh"], ["guard.sh"]],
+    [["bash", "-eux", "--posix", "--norc", "--noprofile", "guard.sh"], ["guard.sh"]],
     [["node", "guard.js"], ["guard.js"]],
-    [["node", "scripts/guard.js", "--flag"], ["scripts/guard.js"]],
-    [["/usr/bin/true"], []],
-    [["/usr/bin/true", "--level", "3", "not-a-file", "../outside", "/etc/hostname"], []],
-    [["node", "--require=./pre.js", "guard.js"], ["guard.js", "pre.js"]],
-    [["node", "--require", "./pre.js", "guard.js"], ["guard.js", "pre.js"]],
-    [["node", "-r", "pre.js", "guard.js", "--rules=rules.txt"], ["guard.js", "pre.js", "rules.txt"]],
-    [["/usr/bin/grep", "-q", "--file=rules.txt", "-frules.txt"], ["rules.txt"]],
-    [["./guard.sh", "-c", "anything"], ["guard.sh"]],
+    [["node", "--no-warnings", "scripts/guard.js", "--flag"], ["scripts/guard.js"]],
+    [["python3", "-I", "-B", "guard.py"], ["guard.py"]],
+    [["python3.12", "-Bu", "guard.py"], ["guard.py"]],
+    [["perl", "-w", "guard.sh"], ["guard.sh"]],
+    [["ruby", "-w", "guard.sh"], ["guard.sh"]],
+    // After the script, arguments are the script's own: options of any spelling, and files that are pinned.
+    [["./guard.sh", "-c", "anything", "--eval=1", "not-a-file", "../outside", "/etc/hostname"], ["guard.sh"]],
+    [["bash", "guard.sh", "rules.txt", "--rules=rules.txt", "-frules.txt"], ["guard.sh", "rules.txt"]],
+    [["node", "guard.js", "--config", "scripts/guard.js"], ["guard.js", "scripts/guard.js"]],
   ];
   for (const [command, files] of accepted) {
     projectHooks(guard(command));

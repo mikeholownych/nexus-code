@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { approveExtension } from "../src/core/content_trust.js";
+import { inspectHookSources } from "../src/core/hooks.js";
 import { runDoctor } from "../src/doctor.js";
 import { diagnoseHooks } from "../src/doctor_hooks.js";
 
@@ -36,10 +37,12 @@ function operatorHooks(document: unknown): string {
 function projectHooks(document: unknown): string {
   const file = path.join(workspace, ".nexus", "hooks.json");
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(document));
+  // A project hook must be a script of the workspace; the operator's may be any program.
+  fs.writeFileSync(path.join(workspace, "hook.sh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  fs.writeFileSync(file, JSON.stringify(document).replaceAll('["/bin/true"]', '["./hook.sh"]'));
   return file;
 }
-const approve = (file: string) => approveExtension({ kind: "project-hooks", scope: workspace, key: path.join(".nexus", "hooks.json"), sha256: createHash("sha256").update(fs.readFileSync(file)).digest("hex"), approvedAt: new Date().toISOString(), summary: "t" }, store());
+const approve = (file: string) => approveExtension({ kind: "project-hooks", scope: workspace, key: path.join(".nexus", "hooks.json"), sha256: createHash("sha256").update(fs.readFileSync(file)).digest("hex"), approvedAt: new Date().toISOString(), summary: "t", files: inspectHookSources({ workspace, readOnly: false }).project.files }, store());
 const guard = (tools = ["run_command"]) => ({ version: 1, hooks: { "pre-tool": [{ name: "guard", tools, command: ["/bin/true"] }] } });
 
 test("no hooks: skipped; hooks in force: pass, with what is in force", () => {

@@ -65,6 +65,37 @@ export function forbiddenDeletion(workspace: string, target: string): string | n
   return null;
 }
 
+/** How many entries a directory may hold for a deletion to be checked entry by entry. */
+const DELETION_SCAN_LIMIT = 5000;
+
+/**
+ * Why deleting the directory `target` is refused, or null: it holds a protected path, which deleting the directory
+ * would delete with it (the path check on `target` itself sees only the directory's own name). A directory too large
+ * to look through is refused as well: what cannot be checked is not deleted in one call.
+ */
+export function protectedBelow(workspace: string, target: string, isProtected: (candidate: string) => boolean): string | null {
+  const root = path.resolve(workspace, target.trim());
+  let seen = 0;
+  const pending = [root];
+  while (pending.length) {
+    const dir = pending.pop()!;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      // Not a directory (a file is checked by its own path), or unreadable (the engine will refuse or fail).
+      continue;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (++seen > DELETION_SCAN_LIMIT) return `Security Violation: '${target}' holds more than ${DELETION_SCAN_LIMIT} entries and cannot be checked for protected paths; delete it in parts`;
+      if (isProtected(full)) return `Security Violation: '${target}' contains the protected path '${path.relative(root, full)}' and cannot be deleted as a whole`;
+      if (entry.isDirectory()) pending.push(full);
+    }
+  }
+  return null;
+}
+
 /**
  * Parses and expands a standard IPv6 string into a 128-bit BigInt value.
  */
@@ -1363,7 +1394,7 @@ export class RustCoreBridge {
     }
 
     if (toolName === "delete_file") {
-      const refused = forbiddenDeletion(this.workspace, String(args.path || ""));
+      const refused = forbiddenDeletion(this.workspace, String(args.path || "")) ?? protectedBelow(this.workspace, String(args.path || ""), (candidate) => this.securityManager.isPathProtected(candidate).protected);
       if (refused) return { success: false, output: "", error: refused };
     }
 
