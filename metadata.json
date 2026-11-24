@@ -1,0 +1,51 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M870FRMZKDT0JKWCEY2E83AF",
+  "strategy": "manual-commit",
+  "branch": "v1/policy-followups",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "cli/src/core/managed_policy.ts",
+    "cli/src/policy_cli.ts",
+    "cli/test/managed_policy_merge.test.ts",
+    "cli/test/policy_cli.test.ts",
+    "docs/MANAGED_POLICY.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 56,
+    "cache_creation_tokens": 939930,
+    "cache_read_tokens": 22595993,
+    "output_tokens": 31893,
+    "api_call_count": 28,
+    "subagent_tokens": {
+      "input_tokens": 76,
+      "cache_creation_tokens": 279107,
+      "cache_read_tokens": 13599488,
+      "output_tokens": 25680,
+      "api_call_count": 40
+    }
+  },
+  "redaction": {
+    "replacements": 1558,
+    "layers": {
+      "betterleaks": 4,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 43,
+      "credentialed_uri": 3,
+      "entropy": 1508,
+      "key_context": 0,
+      "provider_token": 4,
+      "shell_stdin": 0
+    }
+  }
+}

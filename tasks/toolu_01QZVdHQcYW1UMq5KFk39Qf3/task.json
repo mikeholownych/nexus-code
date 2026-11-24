@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01QZVdHQcYW1UMq5KFk39Qf3",
+  "agent_id": "a317b41792fa50650",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement HK-1 hooks",
+  "token_usage": {
+    "input_tokens": 296,
+    "cache_creation_tokens": 428240,
+    "cache_read_tokens": 43365972,
+    "output_tokens": 213904,
+    "api_call_count": 148
+  },
+  "started_at": "2026-11-24T09:33:35.938454282Z",
+  "completed_at": "2026-11-24T10:54:41.313330604Z"
+}
