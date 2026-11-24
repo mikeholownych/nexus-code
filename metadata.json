@@ -1,0 +1,42 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M86D4PTRR2FQJSTYXFV6TE4C",
+  "strategy": "manual-commit",
+  "branch": "codex/p10-02-elapsed-budget",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "docs/assurance/POWER_OF_TEN_IMPLEMENTATION_PLAN.md",
+    "docs/protocol/RUN_RESULT_VERSIONS.json",
+    "docs/protocol/run-result-v1.schema.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 118114,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 5872000,
+    "output_tokens": 15738,
+    "api_call_count": 50
+  },
+  "redaction": {
+    "replacements": 2727,
+    "layers": {
+      "betterleaks": 874,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 139,
+      "credentialed_uri": 124,
+      "entropy": 2021,
+      "key_context": 0,
+      "provider_token": 25,
+      "shell_stdin": 0
+    }
+  }
+}
