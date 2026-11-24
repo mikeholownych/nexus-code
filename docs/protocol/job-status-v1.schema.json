@@ -224,7 +224,15 @@
           "type": "string"
         },
         "missed": {
-          "type": "null"
+          "description": "Slots the schedule missed before this job (it was down, or asleep); null when none, and for a job started by hand.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobReceiptMissed"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "operation_id": {
           "type": "string"
@@ -260,6 +268,10 @@
               "type": "null"
             }
           ]
+        },
+        "schedule_occurrence": {
+          "description": "The slot of the schedule this job stands for (for a catch-up, the last slot that was missed); absent for a job started by hand.",
+          "type": "string"
         },
         "schema_version": {
           "const": 1
@@ -357,6 +369,29 @@
         "decide",
         "id",
         "question"
+      ]
+    },
+    "JobReceiptMissed": {
+      "description": "Slots a schedule missed just before this job started (BG-2): `truncated` marks `count` as a lower bound.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "number"
+        },
+        "first": {
+          "type": "string"
+        },
+        "last": {
+          "type": "string"
+        },
+        "truncated": {
+          "const": true
+        }
+      },
+      "required": [
+        "count",
+        "first",
+        "last"
       ]
     },
     "JobReceiptUnit": {

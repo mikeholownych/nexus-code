@@ -26,11 +26,21 @@ export interface JobReceiptDecision {
   decide: string;
 }
 
+/** Slots a schedule missed just before this job started (BG-2): `truncated` marks `count` as a lower bound. */
+export interface JobReceiptMissed {
+  count: number;
+  first: string;
+  last: string;
+  truncated?: true;
+}
+
 export interface JobReceipt {
   format: "nexus-job-receipt";
   schema_version: typeof JOB_RECEIPT_SCHEMA_VERSION;
   job_id: string;
   schedule_id: string | null;
+  /** The slot of the schedule this job stands for (for a catch-up, the last slot that was missed); absent for a job started by hand. */
+  schedule_occurrence?: string;
   /** No operator was present: no call was approved by a person, and none was approved "always". */
   unattended: true;
   workspace: string;
@@ -51,7 +61,8 @@ export interface JobReceipt {
   summary: string;
   units: JobReceiptUnit[];
   pending_decisions: JobReceiptDecision[];
-  missed: null;
+  /** Slots the schedule missed before this job (it was down, or asleep); null when none, and for a job started by hand. */
+  missed: JobReceiptMissed | null;
 }
 
 /** The document `docs/protocol/job-receipt-v<N>.schema.json` describes. */
@@ -87,6 +98,8 @@ export interface JobEnd {
   /** One sentence for a job that ended outside the operation (a worker failure). */
   detail?: string;
   endedAt: string;
+  /** Slots the job's schedule missed just before it started. */
+  missed?: JobReceiptMissed | null;
 }
 
 const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
@@ -117,6 +130,7 @@ export function buildJobReceipt(job: JobRecord, operation: DurableOperationState
     schema_version: JOB_RECEIPT_SCHEMA_VERSION,
     job_id: job.id,
     schedule_id: job.origin.kind === "schedule" ? job.origin.scheduleId : null,
+    ...(job.origin.kind === "schedule" ? { schedule_occurrence: job.origin.dueAt } : {}),
     unattended: true,
     workspace: job.workspace,
     base_commit: job.baseCommit,
@@ -145,6 +159,6 @@ export function buildJobReceipt(job: JobRecord, operation: DurableOperationState
       question: decision.question,
       decide: `nexus operation decide ${job.operationId} ${shellQuote(decision.id)} <option> --no-resume -w ${shellQuote(job.workspace)}`,
     })),
-    missed: null,
+    missed: end.missed ?? null,
   };
 }

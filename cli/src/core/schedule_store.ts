@@ -40,7 +40,7 @@ export const SCHEDULE_ON_MISSED: readonly ScheduleOnMissed[] = ["run-once", "rep
 /** Why a slot did not run: the runner was not running (or the host was asleep), the previous run still ran, or the run was refused. */
 export type ScheduleMissReason = "runner_not_running" | "overlap" | "refused";
 export const SCHEDULE_MISS_REASONS: readonly ScheduleMissReason[] = ["runner_not_running", "overlap", "refused"];
-export type ScheduleFireKind = "scheduled" | "catch_up" | "run_now";
+export type ScheduleFireKind = "scheduled" | "catch_up";
 export type ScheduleOutcome = "COMPLETE" | "BLOCKED" | "FAILED" | "CANCELLED" | "TIMED_OUT" | "MISSED" | "SKIPPED_OVERLAP" | "REFUSED";
 export const SCHEDULE_OUTCOMES: readonly ScheduleOutcome[] = ["COMPLETE", "BLOCKED", "FAILED", "CANCELLED", "TIMED_OUT", "MISSED", "SKIPPED_OVERLAP", "REFUSED"];
 
@@ -224,7 +224,7 @@ function parseFire(label: string, value: unknown): ScheduleFire {
   return {
     jobId: text(`${label}.jobId`, f.jobId, 16, /^job-[0-9a-f]{12}$/),
     dueAt: timestamp(`${label}.dueAt`, f.dueAt),
-    kind: oneOf(`${label}.kind`, f.kind, ["scheduled", "catch_up", "run_now"] as const),
+    kind: oneOf(`${label}.kind`, f.kind, ["scheduled", "catch_up"] as const),
     firedAt: timestamp(`${label}.firedAt`, f.firedAt),
     missed: f.missed === null ? null : parseMissedSummary(`${label}.missed`, f.missed),
   };
