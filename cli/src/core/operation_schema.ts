@@ -8,11 +8,12 @@
  * Rules, in the order they are applied on load:
  *
  *   1. A record this build understands (current version) is validated and used as-is.
- *   2. A v1 to v5 record (or one that predates the field, which reads as v1) is upgraded in memory by changing
+ *   2. A v1 to v6 record (or one that predates the field, which reads as v1) is upgraded in memory by changing
  *      only the schema version. v4 adds explicit execution reservations; older parallel records are clamped to serial.
  *      v5 adds `origin` (a detached job drives the operation). v6 adds verified merge arbitration (PA-2:
  *      `git.integrationVerifiers`, `mergedChecks` on a receipt, `INTEGRATION_REJECTED`). The version is bumped so a
- *      version-5 build refuses a record that may depend on cumulative merged-tree verification.
+ *      version-5 build refuses a record that may depend on cumulative merged-tree verification. v7 adds the
+ *      persisted fingerprint-stall policy/state; older builds must refuse records that depend on that limit.
  *   3. A record from a newer build is refused. It is not corrupt: a build that wrote it can still read it, and
  *      quarantining it would destroy evidence. It is also never interpreted as if it were current.
  *
@@ -24,7 +25,7 @@ import { specialistInputsProblem } from "./specialist_profiles.js";
 import { parseBoundaryRules } from "./boundary_rules.js";
 
 /** The operation document version this build writes. Independent of the task-store envelope version. */
-export const CURRENT_OPERATION_SCHEMA_VERSION = 6;
+export const CURRENT_OPERATION_SCHEMA_VERSION = 7;
 
 /** The operation document version every released 1.0.0 build wrote. */
 export const LEGACY_OPERATION_SCHEMA_VERSION = 1;
@@ -142,6 +143,9 @@ export function validateOperationState(state: DurableOperationState): void {
   if (!state.policy || typeof state.policy !== "object" || Array.isArray(state.policy)) {
     throw new InvalidOperationStateError(`operation ${state.id}: policy is not an object`);
   }
+  if (state.policy.maxStallsPerFingerprint !== undefined && (!Number.isSafeInteger(state.policy.maxStallsPerFingerprint) || state.policy.maxStallsPerFingerprint < 1 || state.policy.maxStallsPerFingerprint > 100)) {
+    throw new InvalidOperationStateError(`operation ${state.id}: policy.maxStallsPerFingerprint must be a safe integer from 1 to 100 (got ${String(state.policy.maxStallsPerFingerprint)})`);
+  }
 
   // The stamp says no operator was present. One that is damaged is refused: it must not read as an attended run.
   if (state.origin !== undefined) {
@@ -182,6 +186,27 @@ export function validateOperationState(state: DurableOperationState): void {
     if (unit.unresolvedAssumptions !== undefined) {
       const problem = unresolvedAssumptionsProblem(unit.unresolvedAssumptions);
       if (problem) throw new InvalidOperationStateError(`operation ${state.id}: unit '${unit.id}': ${problem}`);
+    }
+    if (unit.failureStalls !== undefined) {
+      const stalls = unit.failureStalls;
+      if (!stalls || typeof stalls !== "object" || Array.isArray(stalls)) {
+        throw new InvalidOperationStateError(`operation ${state.id}: unit '${unit.id}': failureStalls must be an object`);
+      }
+      const entries = Object.entries(stalls);
+      if (entries.length > 1) {
+        throw new InvalidOperationStateError(`operation ${state.id}: unit '${unit.id}': failureStalls must contain at most one consecutive fingerprint`);
+      }
+      for (const [fingerprint, record] of entries) {
+        if (!fingerprint || fingerprint.length > 4096) {
+          throw new InvalidOperationStateError(`operation ${state.id}: unit '${unit.id}': failureStalls has an invalid fingerprint`);
+        }
+        if (!record || typeof record !== "object" || Array.isArray(record)
+            || !Number.isSafeInteger(record.count) || record.count < 1 || record.count > (state.policy.maxStallsPerFingerprint ?? 3)
+            || typeof record.lastAt !== "string" || !Number.isFinite(Date.parse(record.lastAt))
+            || typeof record.reason !== "string" || record.reason.length > 300) {
+          throw new InvalidOperationStateError(`operation ${state.id}: unit '${unit.id}': failureStalls['${fingerprint}'] is invalid`);
+        }
+      }
     }
     validateAppliedDecisions(state.id, `unit '${unit.id}'`, unit.decisions);
     if (unit.blocked !== undefined) {
@@ -319,6 +344,9 @@ export const MAX_TOTAL_TOKENS = 10_000_000_000;
 export function validateOperationPolicy(policy: Partial<OperationPolicy>): void {
   validateConcurrency("(new)", "policy.maxConcurrentUnits", policy.maxConcurrentUnits);
   if (policy.executionBudget !== undefined) validateExecutionResources("(new)", "policy.executionBudget", policy.executionBudget);
+  if (policy.maxStallsPerFingerprint !== undefined && (!Number.isSafeInteger(policy.maxStallsPerFingerprint) || policy.maxStallsPerFingerprint < 1 || policy.maxStallsPerFingerprint > 100)) {
+    throw new InvalidOperationStateError(`(new): policy.maxStallsPerFingerprint must be a safe integer from 1 to 100 (got ${String(policy.maxStallsPerFingerprint)})`);
+  }
   if (policy.maxTotalTokens !== undefined && (!Number.isSafeInteger(policy.maxTotalTokens) || policy.maxTotalTokens < 1 || policy.maxTotalTokens > MAX_TOTAL_TOKENS)) {
     throw new InvalidOperationStateError(`(new): policy.maxTotalTokens must be a safe integer from 1 to ${MAX_TOTAL_TOKENS} (got ${String(policy.maxTotalTokens)})`);
   }
