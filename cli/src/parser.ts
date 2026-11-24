@@ -1,9 +1,9 @@
 import { ToolCall, ChatMessage, ToolDefinition } from "./types.js";
-import { HARNESS_TOOLS } from "./tools.js";
+import { baselineTools } from "./core/tool_registry.js";
 import { defaultRegistry } from "./core/capabilities.js";
 import { unwrapSingleKeyWrapper, normalizeToolArguments, coerceToolArgumentTypes } from "./core/tool_arguments.js";
 
-const KNOWN_TOOLS = new Set<string>(HARNESS_TOOLS.map((t) => t.function.name));
+const KNOWN_TOOLS = new Set<string>(baselineTools.baselineDefinitions().map((t) => t.function.name));
 ["update_requirements", "task_completed", "manage_knowledge", "update_plan", "spawn_subagent"].forEach((t) => KNOWN_TOOLS.add(t));
 
 export type JsonRepairClass = "none" | "trailing" | "structural";

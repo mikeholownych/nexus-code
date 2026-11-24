@@ -12,6 +12,7 @@ import {
   CapabilityHandler,
   changesWorkspace,
 } from "./capabilities.js";
+import type { ToolRegistry } from "./tool_registry.js";
 import type { SkillAttribution } from "./skill_activation.js";
 import { sandboxDenialEvent, sandboxEngineLabel, type SandboxDenialEvent } from "../sandbox_events.js";
 import type { HookRunSummary } from "./hooks.js";
@@ -212,6 +213,8 @@ export interface SpineHooks {
 
 export interface SpineOptions {
   registry?: CapabilityRegistry;
+  /** The tool registry whose bindings say how a call of each tool runs (the agent's; its capabilities() is `registry`). */
+  tools?: ToolRegistry;
   hooks?: SpineHooks;
 }
 
@@ -289,11 +292,13 @@ export function dryRunMustSimulate(capability: Pick<CanonicalCapability, "mutati
 
 export class ExecutionSpine {
   private readonly registry: CapabilityRegistry;
+  private readonly tools?: ToolRegistry;
   private readonly hooks: Required<SpineHooks>;
   private readonly handlers = new Map<string, CapabilityHandler>();
 
   constructor(options: SpineOptions = {}) {
-    this.registry = options.registry || defaultRegistry;
+    this.tools = options.tools;
+    this.registry = options.registry || options.tools?.capabilities() || defaultRegistry;
     this.hooks = {
       authorityAdmission:
         options.hooks?.authorityAdmission || DEFAULT_SPINE_HOOKS.authorityAdmission,
@@ -332,6 +337,17 @@ export class ExecutionSpine {
 
   public getHandler(toolName: string): CapabilityHandler | undefined {
     return this.handlers.get(toolName);
+  }
+
+  /**
+   * The handler for a tool: the one registered on this spine, else the one its registered binding carries, else the one
+   * set on its capability (the bridge-backed tools, `registerBridgeCapabilities`). A tool with none runs through the
+   * context's default handler (extension tools) or the bridge, in `execute`.
+   */
+  private resolveHandler(toolName: string): CapabilityHandler | undefined {
+    const binding = this.tools?.resolve(toolName)?.binding;
+    const bound = binding?.kind === "native" ? binding.handler : undefined;
+    return this.handlers.get(toolName) || bound || this.registry.getHandler(toolName);
   }
 
   /**
@@ -576,10 +592,7 @@ export class ExecutionSpine {
     const t0 = Date.now();
     let result: ExecutionResult;
     try {
-      const handler =
-        this.handlers.get(toolName) ||
-        this.registry.getHandler(toolName) ||
-        capability.handler;
+      const handler = this.resolveHandler(toolName);
 
       if (context.dryRun && dryRunMustSimulate(capability)) {
         // These handlers may write persistent state or cause external effects. The workspace bridge cannot

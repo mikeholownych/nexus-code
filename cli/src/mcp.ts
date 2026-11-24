@@ -3,7 +3,8 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { ToolDefinition, ExecutionResult } from "./types.js";
-import { HARNESS_TOOLS, RustCoreBridge } from "./tools.js";
+import { RustCoreBridge } from "./tools.js";
+import { baselineTools } from "./core/tool_registry.js";
 import { isWorkspaceFile, isWorkspaceTrusted, WORKSPACE_MCP_FILES } from "./workspace_trust.js";
 import { permitsMcpServer, type EffectivePolicy, type McpServerDescriptor } from "./core/managed_policy.js";
 import { ManagedPolicyError } from "./core/managed_policy_load.js";
@@ -1109,8 +1110,7 @@ export class McpServer {
     }
 
     if (method === "tools/list") {
-      const tools = HARNESS_TOOLS
-        .filter((t) => t.function.name !== "spawn_subagent" && t.function.name !== "activate_skill")
+      const tools = baselineTools.serveMcpDefinitions()
         .map((t) => ({
           name: t.function.name,
           description: t.function.description,

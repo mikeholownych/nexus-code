@@ -5,13 +5,14 @@ import { randomUUID } from "node:crypto";
 import { assertValidContinuationBudget, ChatMessage, DEFAULT_CONTINUATION, EvaluationToolReceipt, HarnessConfig, MAX_CONTINUATION_STEPS, ToolCall, ToolDefinition } from "./types.js";
 import { LocalLlmClient } from "./client.js";
 import { normalizeToolArguments } from "./core/tool_arguments.js";
-import { HARNESS_TOOLS, RustCoreBridge } from "./tools.js";
-import { CapabilityRegistry, createDefaultRegistry, changesWorkspace, type EffectClass } from "./core/capabilities.js";
+import { RustCoreBridge } from "./tools.js";
+import { ToolRegistry, createToolRegistry } from "./core/tool_registry.js";
+import { CapabilityRegistry, changesWorkspace, type EffectClass } from "./core/capabilities.js";
 import { fenceSuspected, scanForInjection } from "./core/injection_scanner.js";
 import { ApprovalPolicy, defaultApprovalPolicy, ApprovalMode } from "./core/approval_policy.js";
 import { ExecutionSpine, ExecutionReceipt } from "./core/spine.js";
 import { HookRegistry } from "./core/hooks.js";
-import { extensionCapability, isExtensionCapability } from "./core/extension_capabilities.js";
+import { extensionCapability } from "./core/extension_capabilities.js";
 import { SkillActivationRegistry } from "./core/skill_activation.js";
 import { AuthorityAdmissionEngine } from "./core/authority.js";
 import type { AuthorityGrant } from "./core/authority.js";
@@ -39,7 +40,7 @@ import { WORKTREE_BINDING_VERSION } from "./core/state.js";
 import { argsFingerprint } from "./core/operation_identity.js";
 import { isSandboxAvailable } from "./sandbox.js";
 import { discoverVerifier, verifierTimeoutSecs } from "./tester.js";
-import { ENABLE_TOOLS_CAPABILITY, TOOL_GROUPS, groupsTriggeredBy, toolGroupOf } from "./core/tool_groups.js";
+import { ENABLE_TOOLS_CAPABILITY, groupsTriggeredBy } from "./core/tool_groups.js";
 import { snapshotTests, snapshotVerifierDefinition, type ChangeBaseline, type Independence } from "./core/independent_check.js";
 import { credentialOriginOf, InferenceError, TokenCountError } from "./client.js";
 import { TurnResult, VerificationEvidence, TypecheckEvidence, InterruptionRecord, InferenceFailure, CapacityRecord, ModelStop, ProviderRecoveryRecord, assertTurnResultInvariants, deepFreezeTurn, summarizeTurn, lifecycleStatusForTurn, turnSucceeded } from "./core/turn.js";
@@ -290,6 +291,7 @@ export class AutonomousAgent {
   private browser: BrowserDriver;
   private knowledge: KnowledgeGraph;
   public readonly capabilityRegistry: CapabilityRegistry;
+  private readonly toolRegistry: ToolRegistry;
   public readonly authorityEngine: AuthorityAdmissionEngine;
   public readonly spine: ExecutionSpine;
   public readonly candidateTracker: CandidateTracker;
@@ -496,7 +498,8 @@ export class AutonomousAgent {
       this.pluginManager.setFlightRecorder(this.flightRecorder);
     }
     this.candidateTracker = new CandidateTracker();
-    this.capabilityRegistry = createDefaultRegistry();
+    this.toolRegistry = createToolRegistry();
+    this.capabilityRegistry = this.toolRegistry.capabilities();
     this.authorityEngine = new AuthorityAdmissionEngine({
       readOnly: initialReadOnly,
       fullAccess: Boolean(config.fullAccess) && !initialReadOnly,
@@ -506,6 +509,7 @@ export class AutonomousAgent {
     });
     this.spine = new ExecutionSpine({
       registry: this.capabilityRegistry,
+      tools: this.toolRegistry,
       hooks: {
         authorityAdmission: this.authorityEngine.createAdmissionHook(),
         resourceConfinement: this.authorityEngine.createConfinementHook(),
@@ -613,13 +617,13 @@ export class AutonomousAgent {
     this.spine.setHook("contextAdmission", commandHooks.preToolAdmission);
     this.spine.setHook("evidenceEmission", commandHooks.postToolEmission);
     if (depth === 0 || this.role === "implementer" || this.role === "tester") {
-      this.capabilityRegistry.register(REQUIREMENTS_CAPABILITY);
-      this.capabilityRegistry.register(READ_OBJECTIVE_CAPABILITY);
+      this.toolRegistry.register({ spec: REQUIREMENTS_CAPABILITY, binding: { kind: "native" }, offer: "requirements" });
+      this.toolRegistry.register({ spec: READ_OBJECTIVE_CAPABILITY, binding: { kind: "native" }, offer: "objective" });
     }
-    this.capabilityRegistry.register(READ_FINDINGS_CAPABILITY);
-    this.capabilityRegistry.register(READ_ARCHIVE_CAPABILITY);
-    if (this.toolOutputMaskThreshold) this.capabilityRegistry.register(READ_TOOL_OUTPUT_CAPABILITY);
-    this.capabilityRegistry.register(ENABLE_TOOLS_CAPABILITY);
+    this.toolRegistry.register({ spec: READ_FINDINGS_CAPABILITY, binding: { kind: "native" }, offer: "always" });
+    this.toolRegistry.register({ spec: READ_ARCHIVE_CAPABILITY, binding: { kind: "native" }, offer: "always" });
+    if (this.toolOutputMaskThreshold) this.toolRegistry.register({ spec: READ_TOOL_OUTPUT_CAPABILITY, binding: { kind: "native" }, offer: "mask" });
+    this.toolRegistry.register({ spec: ENABLE_TOOLS_CAPABILITY, binding: { kind: "native" }, offer: "until-all-groups" });
     this.setupSpineHandlers();
     this.loadCommandRules();
     this.stateManager = new DurableStateManager({ workspacePaths: [this.primaryWorkspacePathIdentity] });
@@ -1121,12 +1125,10 @@ export class AutonomousAgent {
    * posture change may have removed tools. A name that already belongs to a built-in capability is never replaced.
    */
   private syncExtensionCapabilities(): void {
-    for (const capability of this.capabilityRegistry.listCapabilities()) {
-      if (isExtensionCapability(capability)) this.capabilityRegistry.unregister(capability.modelToolName);
-    }
+    this.toolRegistry.unregisterExtensions();
     const add = (definition: ToolDefinition, origin: Parameters<typeof extensionCapability>[1]): void => {
       if (this.capabilityRegistry.getByToolName(definition.function.name)) return;
-      this.capabilityRegistry.register(extensionCapability(definition, origin));
+      this.toolRegistry.register({ spec: extensionCapability(definition, origin), binding: { kind: "extension" }, offer: "always" });
     };
     for (const definition of this.mcpManager.getToolDefinitions()) {
       const server = this.mcpManager.getToolServer(definition.function.name);
@@ -1356,34 +1358,21 @@ export class AutonomousAgent {
 
   /** The tools for a given enabled-group set (the estimate uses the set the prompt will enable). */
   private effectiveTools(enabled: ReadonlySet<string>): ToolDefinition[] {
-    const hasSkills = (this.skillManager?.listSkills().length ?? 0) > 0;
-    const offered = HARNESS_TOOLS.filter((tool) => {
-      const name = tool.function.name;
-      if (name === "activate_skill") return hasSkills;
-      const group = toolGroupOf(name);
-      return !group || enabled.has(group);
-    });
-    const allEnabled = Object.keys(TOOL_GROUPS).every((group) => enabled.has(group));
-    let tools = [
-      ...offered,
-      ...(allEnabled ? [] : [ENABLE_TOOLS_CAPABILITY.toolDefinition as ToolDefinition]),
+    const allowed = roleToolAllowList(this.role);
+    const denied = roleToolDenyList(this.role);
+    const owner = this.depth === 0 || this.role === "implementer" || this.role === "tester";
+    return this.toolRegistry.modelTools({
+      enabledGroups: enabled,
+      hasSkills: (this.skillManager?.listSkills().length ?? 0) > 0,
       // Only with an objective ledger: without one update_requirements returns nothing and read_objective has nothing to
       // read, but offered anyway the model spent a step on each (eval debug-logs trace).
-      ...((this.depth === 0 || this.role === "implementer" || this.role === "tester") && this.objective ? [READ_OBJECTIVE_CAPABILITY.toolDefinition as ToolDefinition] : []),
-      ...(this.offersRequirements() ? [REQUIREMENTS_CAPABILITY.toolDefinition as ToolDefinition] : []),
-      READ_FINDINGS_CAPABILITY.toolDefinition as ToolDefinition,
-      READ_ARCHIVE_CAPABILITY.toolDefinition as ToolDefinition,
+      offerObjective: owner && Boolean(this.objective),
+      offerRequirements: this.offersRequirements(),
       // Keep the retrieval capability out of normal requests unless masking is enabled.
-      ...(this.toolOutputMaskThreshold ? [READ_TOOL_OUTPUT_CAPABILITY.toolDefinition as ToolDefinition] : []),
-      ...this.mcpManager.getToolDefinitions(),
-      ...this.pluginManager.getCustomToolDefinitions(),
-    ];
-    const allowed = roleToolAllowList(this.role);
-    if (allowed) tools = tools.filter((t) => allowed.has(t.function.name));
-    const denied = roleToolDenyList(this.role);
-    if (denied) tools = tools.filter((t) => !denied.has(t.function.name));
-    if (this.delegatedToolAllowList) tools = tools.filter((t) => this.delegatedToolAllowList!.has(t.function.name));
-    return tools;
+      maskOutput: Boolean(this.toolOutputMaskThreshold),
+      extensions: [...this.mcpManager.getToolDefinitions(), ...this.pluginManager.getCustomToolDefinitions()],
+      admits: (name) => (!allowed || allowed.has(name)) && !denied?.has(name) && (!this.delegatedToolAllowList || this.delegatedToolAllowList.has(name)),
+    });
   }
 
   public getMessages(): ChatMessage[] {
