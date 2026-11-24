@@ -244,3 +244,87 @@ test("a stale goal from an earlier same-boot process resumes paused with a visib
     f.cleanup();
   }
 });
+
+test("goal pauses at a safe boundary when token budget cap is exhausted", async () => {
+  const f = fixture();
+  try {
+    const team = new TeamOrchestrator(f.config, { id: "goal-budget-cap", independentReview: true, resources: f.resources });
+    const operation = team.plan("full", "Respect token budgets");
+    operation.policy.maxTotalTokens = 100;
+    // Simulate prior agent work that already consumed the budget.
+    operation.units[0].agentTaskId = "child-budget";
+    operation.units[0].runs = 1;
+    f.store.save(operation);
+    const task = f.store.manager.loadTaskState(operation.id, f.workspace);
+    task.objective = createLedger(operation.objective);
+    f.store.manager.saveTaskState(task);
+    const parentTask = f.store.manager.loadTaskState(operation.id, f.workspace);
+    const child = structuredClone(parentTask);
+    child.taskId = "child-budget";
+    child.sessionId = "child-budget";
+    child.id = "child-budget";
+    child.tokenStats = { prompt: 60, completion: 50, total: 110, requests: 1, reportedRequests: 1, estimatedRequests: 0 };
+    child.messages = [];
+    child.createdAt = parentTask.createdAt;
+    child.updatedAt = parentTask.updatedAt;
+    f.store.manager.saveTaskState(child);
+
+    const orchestrator = new GoalOrchestrator(f.config, { store: f.store, executor: acceptingExecutor(), resources: f.resources });
+    const result = await orchestrator.resume(operation.id);
+    assert.equal(result.status, "PAUSED");
+    assert.match(result.reason ?? "", /token budget exhausted/i);
+    assert.match(result.reason ?? "", /110 of 100/);
+    assert.equal(result.usage?.maxTotalTokens, 100);
+    assert.equal(result.usage?.totalTokens, 110);
+    const saved = f.store.load(operation.id);
+    assert.equal(saved.status, "PAUSED");
+    assert.match(saved.pauseReason ?? "", /maxTotalTokens|token budget/i);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("goal pauses before dispatch when prior child token accounting is unavailable", async () => {
+  const f = fixture();
+  let executions = 0;
+  try {
+    const team = new TeamOrchestrator(f.config, { id: "goal-budget-unknown", independentReview: true, resources: f.resources });
+    const operation = team.plan("full", "Do not run past an unmeasured token budget");
+    operation.policy.maxTotalTokens = 100;
+    operation.units[0].agentTaskId = "child-budget-unknown";
+    operation.units[0].runs = 1;
+    f.store.save(operation);
+    const task = f.store.manager.loadTaskState(operation.id, f.workspace);
+    task.objective = createLedger(operation.objective);
+    f.store.manager.saveTaskState(task);
+    const parentTask = f.store.manager.loadTaskState(operation.id, f.workspace);
+    const child = structuredClone(parentTask);
+    child.taskId = "child-budget-unknown";
+    child.sessionId = "child-budget-unknown";
+    child.id = "child-budget-unknown";
+    delete child.tokenStats;
+    child.messages = [];
+    child.createdAt = parentTask.createdAt;
+    child.updatedAt = parentTask.updatedAt;
+    f.store.manager.saveTaskState(child);
+
+    const executor = acceptingExecutor();
+    const run = executor.run.bind(executor);
+    executor.run = async (unit, resource, context) => {
+      executions++;
+      return run(unit, resource, context);
+    };
+    const orchestrator = new GoalOrchestrator(f.config, { store: f.store, executor, resources: f.resources });
+    const result = await orchestrator.resume(operation.id);
+    assert.equal(result.status, "PAUSED");
+    assert.match(result.reason ?? "", /token budget cannot be enforced|child token usage is unavailable/i);
+    assert.equal(executions, 0, "no new child work starts while prior token consumption is unknown");
+    assert.equal(result.usage?.tokenAccountingComplete, false);
+    assert.equal(result.usage?.totalTokens, 0, "unmeasured usage is not fabricated as a positive or complete total");
+    const saved = f.store.load(operation.id);
+    assert.equal(saved.status, "PAUSED");
+    assert.match(saved.pauseReason ?? "", /token usage is unavailable/i);
+  } finally {
+    f.cleanup();
+  }
+});

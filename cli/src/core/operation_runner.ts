@@ -90,6 +90,8 @@ export interface OperationRunnerOptions {
    */
   maxInProcessWaitMs?: number;
   maxIterations?: number;
+  /** Used for token-budget cap enforcement; when omitted, budget caps are not enforced. */
+  store?: OperationStore;
 }
 
 function planFromState(state: DurableOperationState): OperationGitPlan {
@@ -223,6 +225,18 @@ export class OperationRunner {
           ready.push(assignment);
         }
         if (!ready.length) continue;
+        const cap = this.state.policy.maxTotalTokens;
+        if (cap !== undefined) {
+          const total = this.rolledUpTokens();
+          if (total === undefined) {
+            this.pauseForUnmeasuredTokenBudget(cap);
+            return this.state;
+          }
+          if (total >= cap) {
+            this.pauseForTokenBudget(total, cap);
+            return this.state;
+          }
+        }
         const owed = new Map<string, OperationMessage[]>();
         for (const assignment of ready) {
           const messages = undeliveredFor(this.state, assignment.unit.id);
@@ -429,6 +443,66 @@ export class OperationRunner {
         options: [{ label: "retry", action: { kind: "retry" } }],
       };
     }
+  }
+
+  private rolledUpTokens(): number | undefined {
+    const cap = this.state.policy.maxTotalTokens;
+    if (cap === undefined) return undefined;
+    const store = this.opts.store;
+    const workspace = this.opts.workspace ?? this.state.git?.repoRoot;
+    const hasPriorRun = this.state.units.some((unit) => Boolean(unit.agentTaskId) || unit.runs > 0);
+    if (!store || !workspace) return hasPriorRun ? undefined : 0;
+    let total = 0;
+    for (const unit of this.state.units) {
+      if (!unit.agentTaskId) {
+        if (unit.runs > 0) return undefined;
+        continue;
+      }
+      try {
+        const stats = store.manager.loadTaskState(unit.agentTaskId, workspace).tokenStats;
+        if (!stats || !Number.isSafeInteger(stats.total) || stats.total < 0) return undefined;
+        total += stats.total;
+        if (!Number.isSafeInteger(total)) return undefined;
+      } catch {
+        return undefined;
+      }
+    }
+    return total;
+  }
+
+  private pauseForUnmeasuredTokenBudget(cap: number): boolean {
+    if (this.state.status === "COMPLETE" || this.state.status === "CANCELLED" || this.state.status === "PAUSED") return false;
+    const reason = `Paused: goal token budget cannot be enforced because child token usage is unavailable; inspect or repair the accounting before resuming (cap ${cap}).`;
+    this.state.status = "PAUSED";
+    this.state.pauseReason = reason;
+    delete this.state.wait;
+    delete this.state.blocked;
+    for (const unit of this.state.units) {
+      if (unit.status === "RUNNING") unit.status = "RUNNABLE";
+    }
+    this.state.updatedAt = new Date(this.clock.now()).toISOString();
+    this.scheduler.emit("OPERATION_PAUSED", reason, { detail: { reason: "token_budget_unmeasured", maxTotalTokens: cap } });
+    this.save();
+    return true;
+  }
+
+  private pauseForTokenBudget(total: number, cap: number): boolean {
+    if (this.state.status === "COMPLETE" || this.state.status === "CANCELLED" || this.state.status === "PAUSED") return false;
+    const reason = `Paused: goal token budget exhausted (${total} of ${cap} tokens consumed across agent runs). Raise policy.maxTotalTokens or cancel the goal.`;
+    this.state.status = "PAUSED";
+    this.state.pauseReason = reason;
+    delete this.state.wait;
+    delete this.state.blocked;
+    for (const unit of this.state.units) {
+      if (unit.status === "RUNNING") unit.status = "RUNNABLE";
+      if (unit.status === "BLOCKED" && unit.blocked) {
+        // Keep blocked decisions? No, pausing at safe boundary; blocked units remain blocked but operation paused.
+      }
+    }
+    this.state.updatedAt = new Date(this.clock.now()).toISOString();
+    this.scheduler.emit("OPERATION_PAUSED", reason, { detail: { reason: "token_budget", totalTokens: total, maxTotalTokens: cap } });
+    this.save();
+    return true;
   }
 
   private recordDelivery(unitId: string, messages?: OperationMessage[]): void {
@@ -800,7 +874,7 @@ export async function driveOperation(state: DurableOperationState, opts: DriveOp
       delete (state as any).activePid;
       delete (state as any).activeHost;
     }
-    const result = await new OperationRunner(state, { ...runnerOpts, persist: (s) => store.save(s) }).run(signal);
+    const result = await new OperationRunner(state, { ...runnerOpts, store, persist: (s) => store.save(s) }).run(signal);
     if (result.status === "COMPLETE" || result.status === "CANCELLED" || result.status === "PAUSED") {
       delete (result as any).activeBootId;
       delete (result as any).activePid;

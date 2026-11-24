@@ -238,6 +238,9 @@ export function validateOperationState(state: DurableOperationState): void {
   if (state.pauseReason !== undefined && typeof state.pauseReason !== "string") {
     throw new InvalidOperationStateError(`operation ${state.id}: pauseReason must be a string`);
   }
+  if (state.policy.maxTotalTokens !== undefined && (!Number.isSafeInteger(state.policy.maxTotalTokens) || state.policy.maxTotalTokens < 1 || state.policy.maxTotalTokens > MAX_TOTAL_TOKENS)) {
+    throw new InvalidOperationStateError(`operation ${state.id}: policy.maxTotalTokens must be a safe integer from 1 to ${MAX_TOTAL_TOKENS} (got ${String(state.policy.maxTotalTokens)})`);
+  }
   if (state.integrations !== undefined) {
     if (!Array.isArray(state.integrations)) throw new InvalidOperationStateError(`operation ${state.id}: integrations is not an array`);
     for (const receipt of state.integrations) {
@@ -269,10 +272,15 @@ function validateConcurrency(operationId: string, field: string, value: unknown)
   }
 }
 
+export const MAX_TOTAL_TOKENS = 10_000_000_000;
+
 /** The policy field this build adds; kept here so the scheduler and the loader agree on the default and the bound. */
 export function validateOperationPolicy(policy: Partial<OperationPolicy>): void {
   validateConcurrency("(new)", "policy.maxConcurrentUnits", policy.maxConcurrentUnits);
   if (policy.executionBudget !== undefined) validateExecutionResources("(new)", "policy.executionBudget", policy.executionBudget);
+  if (policy.maxTotalTokens !== undefined && (!Number.isSafeInteger(policy.maxTotalTokens) || policy.maxTotalTokens < 1 || policy.maxTotalTokens > MAX_TOTAL_TOKENS)) {
+    throw new InvalidOperationStateError(`(new): policy.maxTotalTokens must be a safe integer from 1 to ${MAX_TOTAL_TOKENS} (got ${String(policy.maxTotalTokens)})`);
+  }
 }
 
 export function validateExecutionResources(operationId: string, field: string, value: unknown): asserts value is { cpuMilli: number; memoryBytes: number } {
