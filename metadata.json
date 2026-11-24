@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M85V9ZR8N2Z4HF012B8Z3G8J",
+  "strategy": "manual-commit",
+  "branch": "codex/p10-plan-evidence",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "docs/assurance/POWER_OF_TEN_IMPLEMENTATION_PLAN.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2291,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 368640,
+    "output_tokens": 653,
+    "api_call_count": 5
+  },
+  "redaction": {
+    "replacements": 2456,
+    "layers": {
+      "betterleaks": 818,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 131,
+      "credentialed_uri": 116,
+      "entropy": 1794,
+      "key_context": 0,
+      "provider_token": 25,
+      "shell_stdin": 0
+    }
+  }
+}
