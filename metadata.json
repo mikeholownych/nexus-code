@@ -1,0 +1,42 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M8612G2YH13HHHEBEG7XCAQD",
+  "strategy": "manual-commit",
+  "branch": "codex/p10-03-audit-candidate-binding",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "cli/src/audit_export.ts",
+    "cli/test/audit_export.test.ts",
+    "docs/assurance/POWER_OF_TEN_IMPLEMENTATION_PLAN.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 163367,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 35160448,
+    "output_tokens": 28438,
+    "api_call_count": 204
+  },
+  "redaction": {
+    "replacements": 2474,
+    "layers": {
+      "betterleaks": 832,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 134,
+      "credentialed_uri": 118,
+      "entropy": 1800,
+      "key_context": 0,
+      "provider_token": 25,
+      "shell_stdin": 0
+    }
+  }
+}
