@@ -152,6 +152,16 @@ export interface PolicyFileCheck {
 }
 
 /**
+ * A parse error quotes the token it could not accept. `policy check` is pointed at any file the caller names, so a
+ * quoted token that does not look like a policy key (lower-case words joined by dots and underscores) is cut to a few
+ * characters: enough to find the place, not enough to read the file through its errors.
+ */
+function withoutFileText(detail: string): string {
+  return detail.replace(/(['"`])([^'"`]{9,})\1/g, (all, quote: string, text: string) =>
+    /^[a-z][a-z_.]{0,63}$/.test(text) ? all : `${quote}${text.slice(0, 8)}…${quote}`);
+}
+
+/**
  * Checks a candidate policy file before it is rolled out: a regular file, not a link, at most 64 KiB, valid UTF-8,
  * the strict grammar, known tables and keys, a supported `schema_version`. Owner and mode are not checked here: they
  * are properties of the installed file, and Nexus checks them where it is installed.
@@ -164,7 +174,7 @@ export function checkPolicyFile(file: string): PolicyFileCheck {
     return tiers.user ? { ...base, valid: true } : { ...base, valid: false, code: "absent", error: "the file does not exist" };
   } catch (error) {
     if (!(error instanceof ManagedPolicyError)) throw error;
-    return { ...base, valid: false, code: error.code, error: `${error.line === undefined ? "" : `line ${error.line}: `}${error.detail}`, ...(error.line === undefined ? {} : { line: error.line }) };
+    return { ...base, valid: false, code: error.code, error: `${error.line === undefined ? "" : `line ${error.line}: `}${withoutFileText(error.detail)}`, ...(error.line === undefined ? {} : { line: error.line }) };
   }
 }
 

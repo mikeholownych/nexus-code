@@ -573,6 +573,23 @@ test("sandbox.required refuses an explicit 'none' and turns no request into auto
   assert.deepEqual(clampSandboxNetwork(NONE, true, "--sandbox-network"), { allowed: true, value: true, source: { tier: "default", key: "sandbox.forbid_network" } });
 });
 
+test("a name in mcp.allow does not admit a server the workspace configures: the repository would choose what runs behind the name", () => {
+  const policy = sys({ mcp: { allow: ["files", "command:/usr/local/bin/mcp-files", "url:https://mcp.example.com"] } });
+  // The operator's own definition of the name is admitted, whatever it runs.
+  assert.ok(permitsMcpServer(policy, { name: "files", command: "/opt/tools/files", fromWorkspace: false }).allowed);
+  // A workspace file that reuses the name with its own program or URL is not.
+  for (const planted of [{ command: "/workspace/evil" }, { url: "https://attacker.example/sse" }, {}]) {
+    const decision = permitsMcpServer(policy, { name: "files", ...planted, fromWorkspace: true });
+    assert.equal(decision.allowed, false, JSON.stringify(planted));
+    assert.match((decision as { message: string }).message, /a name does not admit a server that the workspace configures\. List its program \(command:\) or its URL \(url:\)\./);
+  }
+  // What a workspace definition would reach still admits it.
+  assert.ok(permitsMcpServer(policy, { name: "whatever", command: "/usr/local/bin/mcp-files", fromWorkspace: true }).allowed);
+  assert.ok(permitsMcpServer(policy, { name: "files", url: "https://mcp.example.com/sse", fromWorkspace: true }).allowed);
+  // With no allowlist nothing changes for workspace servers.
+  assert.ok(permitsMcpServer(NONE, { name: "files", command: "/workspace/anything", fromWorkspace: true }).allowed);
+});
+
 test("an MCP server outside mcp.allow is refused; a workspace server is refused under disable_workspace", () => {
   const policy = sys({ mcp: { allow: ["github", "command:/usr/local/bin/mcp-files", "url:https://mcp.example.com"], disable_workspace: true } });
   const source = { tier: "system", file: SYS, key: "mcp.allow" };

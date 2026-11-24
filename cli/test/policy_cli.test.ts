@@ -250,3 +250,24 @@ describe("the real CLI", { concurrency: 4 }, () => {
     assert.deepEqual({ bytes: fs.readFileSync(file, "utf8"), mode: fs.statSync(file).mode, mtimeMs: fs.statSync(file).mtimeMs }, before);
   });
 });
+
+test("policy check does not read a file out through its errors: a rejected token that is not a policy key is cut short", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-policy-leak-"));
+  try {
+    // Not a policy at all: a credentials file someone points the command at.
+    const secret = "sk-live-9f3a7c1e5b2d4860aa11";
+    const file = path.join(dir, "credentials");
+    fs.writeFileSync(file, `${secret} = also-${secret}\nallow = ${secret}\n`);
+    const result = checkPolicyFile(file);
+    assert.equal(result.valid, false);
+    const shown = JSON.stringify(result) + renderPolicyFileCheck(result);
+    assert.equal(shown.includes(secret), false, shown);
+    assert.equal(shown.includes(secret.slice(0, 12)), false, "no more than a few characters of a rejected token are shown");
+    // A mistyped policy key is still named in full: that is what the command is for.
+    const typo = path.join(dir, "policy.toml");
+    fs.writeFileSync(typo, "schema_version = 1\n[approval]\nstrictt = true\n");
+    assert.match(JSON.stringify(checkPolicyFile(typo)), /strictt/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
