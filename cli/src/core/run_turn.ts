@@ -82,6 +82,7 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
     if (options.signal.aborted) this.requestCancel("external signal");
     else options.signal.addEventListener("abort", () => this.requestCancel("external signal"), { once: true });
   }
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   this.completionSummary = undefined;
   this.turnPersistenceFailures = this.initialStatePersistenceFailure ? [this.initialStatePersistenceFailure] : [];
   this.objectiveBudgetPersistenceFailure = undefined;
@@ -282,7 +283,16 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
       content: `Not executed: ${stopDetail ?? persistenceFailure ?? "tool invocation budget unavailable"}.`,
     });
 
+    let stopReason: TurnReason | undefined;
+    let stopDetail: string | undefined;
+    let timeBudgetExpired = false;
     const markInterrupted = (phase: InterruptionRecord["phase"], extra: Partial<InterruptionRecord> = {}) => {
+      if (timeBudgetExpired) {
+        stopReason = "TIME_BUDGET_EXHAUSTED";
+        stopDetail = `operator time limit ${budget!.maxTurnMinutes} min`;
+        interruption = null;
+        return;
+      }
       interruption = {
         requestedAt: turn.cancelRequestedAt || new Date().toISOString(),
         phase,
@@ -301,8 +311,11 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
     // survives resumes; the active invocation also has a finite wall-clock limit. Without continuation
     // (`--no-continuation`), the first segment boundary ends the turn (LIMIT_REACHED, legacy).
     const turnDeadline = budget && Number.isFinite(budget.maxTurnMinutes) ? Date.now() + budget.maxTurnMinutes * 60_000 : Number.POSITIVE_INFINITY;
-    let stopReason: TurnReason | undefined;
-    let stopDetail: string | undefined;
+    if (budget && Number.isFinite(turnDeadline)) {
+      deadlineTimer = setTimeout(() => {
+        if (this.requestCancel("time budget")) timeBudgetExpired = true;
+      }, Math.max(0, turnDeadline - Date.now()));
+    }
     let completionNudges = 0;
     // Recovery state (notes, stage, refusals) lives in the tracker: in the ledger when durable, so compaction cannot
     // remove it and resume restores it.
@@ -1120,6 +1133,7 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
 
       endStep();
     }
+    if (deadlineTimer) clearTimeout(deadlineTimer);
     turn.closing = true;
     this.closeSteeringConflicts();
     // Queued /compact: run now that the last step has settled, or cancelled with the turn.
@@ -1207,6 +1221,7 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
     this.ui.turnSummary(result, this.completionSummary);
     return result;
   } catch (err: any) {
+    if (deadlineTimer) clearTimeout(deadlineTimer);
     turn.closing = true;
     this.closeSteeringConflicts();
     if (this.compactionQueue.length) {
