@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01GBZZDseemGhaQ5u74D75ny",
+  "agent_id": "a83775bd5993166af",
+  "subagent_type": "reviewer",
+  "task_description": "Review PR #763 flight gaps",
+  "token_usage": {
+    "input_tokens": 60,
+    "cache_creation_tokens": 59755,
+    "cache_read_tokens": 1349633,
+    "output_tokens": 13686,
+    "api_call_count": 30
+  },
+  "started_at": "2026-11-24T01:24:25.227602732Z",
+  "completed_at": "2026-11-24T01:35:44.890490762Z"
+}

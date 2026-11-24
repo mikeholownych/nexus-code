@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Am51M9bLBiyDWqzoNeX5iJ",
+  "agent_id": "aa77b327dba41b9c2",
+  "subagent_type": "reviewer",
+  "task_description": "Review PR #766 complexity gate",
+  "token_usage": {
+    "input_tokens": 34,
+    "cache_creation_tokens": 44552,
+    "cache_read_tokens": 507145,
+    "output_tokens": 8531,
+    "api_call_count": 16
+  },
+  "started_at": "2026-11-24T03:07:26.789950642Z",
+  "completed_at": "2026-11-24T03:12:19.178503199Z"
+}
