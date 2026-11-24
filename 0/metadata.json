@@ -1,0 +1,44 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M85NR26HZ6JHCX6N70MKBRNT",
+  "session_id": "01a1f54f-2cb2-7201-ad27-acf2d9bbd90e",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-24T02:22:41.591378048Z",
+  "branch": "v1/p10-02-budget-scope-docs",
+  "checkpoints_count": 6,
+  "save_step_count": 1,
+  "files_touched": [
+    "docs/COMPACTION_AND_CONTINUITY.md",
+    "docs/assurance/POWER_OF_TEN_IMPLEMENTATION_PLAN.md"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6-luna",
+  "turn_id": "5724049b7038",
+  "checkpoint_transcript_start": 101561,
+  "transcript_lines_at_start": 101561,
+  "compact_transcript_start": 14964,
+  "token_usage": {
+    "input_tokens": 41624,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 12018048,
+    "output_tokens": 7960,
+    "api_call_count": 89
+  },
+  "redaction": {
+    "replacements": 2431,
+    "layers": {
+      "betterleaks": 804,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 130,
+      "credentialed_uri": 114,
+      "entropy": 1779,
+      "key_context": 0,
+      "provider_token": 25,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 58
+  }
+}
