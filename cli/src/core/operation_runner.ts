@@ -741,8 +741,11 @@ function pauseForStaleDriver(state: DurableOperationState, bootId: string | unde
   if (state.activePid !== undefined && state.activeHost === host && !processAlive(state.activePid)) {
     reasons.push(`earlier process (pid ${state.activePid}) is no longer running`);
   }
-  // Missing driver identity on an active operation written before this metadata existed is treated as stale.
-  if (reasons.length === 0 && state.activePid === undefined && state.activeBootId === undefined) {
+  // Missing driver identity on an active operation written before this metadata existed is treated as stale,
+  // but only when the operation shows evidence of having been driven before. Freshly-created operations have
+  // no driver identity until the first drive stamps it.
+  const previouslyDriven = state.events.length > 0 || state.units.some((u) => u.status !== "RUNNABLE" && u.status !== "WAITING_ON_DEPENDENCY");
+  if (reasons.length === 0 && state.activePid === undefined && state.activeBootId === undefined && previouslyDriven) {
     reasons.push("an earlier process left it active without driver identity metadata");
   }
   if (reasons.length === 0) return undefined;
