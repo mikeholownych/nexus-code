@@ -195,7 +195,7 @@ export class OperationGit {
    */
   constructor(
     private readonly plan: OperationGitPlan,
-    private readonly state: OperationGitState,
+    readonly state: OperationGitState,
     private readonly options: { verifyTimeoutSecs?: number; sandbox?: boolean | string; integrations?: () => readonly IntegrationReceipt[] } = {},
   ) {
     this.hooksDir = path.join(plan.baseDir, "no-hooks");
@@ -227,10 +227,11 @@ export class OperationGit {
    * Give the unit a worktree branched from the integration tip. A recorded worktree is reused so a retry or a resume
    * continues on the same files; an operator restart throws the old worktree and branch away first.
    */
-  prepareUnit(unit: WorkUnit, options: { restart?: boolean; snapshotOf?: string; snapshotRun?: string } = {}): UnitGitPreparation {
+  prepareUnit(unit: WorkUnit, options: { restart?: boolean; snapshotOf?: string; snapshotRun?: string; ownerId?: string } = {}): UnitGitPreparation {
     const recorded = this.state.units[unit.id];
     const branch = recorded?.branch ?? `nexus/op-${this.plan.key}/${gitSlug(unit.id)}`;
     const worktree = recorded?.worktree ?? path.join(this.plan.baseDir, "units", gitSlug(unit.id));
+    const ownerId = options.ownerId ?? recorded?.ownerId;
 
     // A snapshot belongs to one failed run of its dependency. When the dependency has failed again since, the old
     // checkout shows a candidate that no longer exists: discard it (it is diagnostic and never integrated).
@@ -253,6 +254,7 @@ export class OperationGit {
       if (!existing) {
         throw new Error(`worktree ${worktree} exists but is not recorded for unit ${unit.id}; remove it or restart the unit`);
       }
+      if (ownerId) this.state.units[unit.id] = { ...existing, ownerId };
       return { workspace: worktree, branch: existing.branch, reused: true };
     }
     if (fs.existsSync(worktree) && restart) gitResult(this.plan.repoRoot, ["worktree", "remove", "--force", worktree]);
@@ -288,6 +290,7 @@ export class OperationGit {
     this.state.units[unit.id] = {
       branch: restartBranch, worktree, baseCommit,
       ...(snapshotOf ? { snapshotOf } : {}), ...(snapshotRun ? { snapshotRun } : {}),
+      ...(ownerId ? { ownerId } : {}),
     };
     return { workspace: worktree, branch: restartBranch, reused: false, ...(staleSnapshot && snapshot ? { snapshotReplaced: true } : {}) };
   }
@@ -373,6 +376,7 @@ export class OperationGit {
           outcome: result.outcome,
           summary: result.summary,
           verification: "NO_CHANGES",
+          ...(entry.ownerId ? { ownerId: entry.ownerId } : {}),
           ...evidenceFields(evidence),
         },
       };
@@ -427,6 +431,7 @@ export class OperationGit {
           outcome: result.outcome,
           summary: result.summary,
           verification: posthoc ? (result.verification?.definitionBound === false ? "PASSED_POSTHOC_UNBOUND" : "PASSED_POSTHOC") : "ALREADY_MERGED",
+          ...(entry.ownerId ? { ownerId: entry.ownerId } : {}),
           ...evidenceFields(evidence),
           ...(posthoc ? { mergedChecks: posthoc.ran } : {}),
         },
@@ -489,6 +494,7 @@ export class OperationGit {
       outcome: result.outcome,
       summary: result.summary,
       verification: verification ? (result.verification?.definitionBound === false ? "PASSED_UNBOUND" : "PASSED") : "NOT_RUN",
+      ...(entry.ownerId ? { ownerId: entry.ownerId } : {}),
       ...evidenceFields(evidence),
       ...(verification ? { mergedChecks: verification.ran } : {}),
     };
