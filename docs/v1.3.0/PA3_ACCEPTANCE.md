@@ -26,7 +26,7 @@ Observed coverage from existing deterministic tests in `cli/test/goal_lifecycle.
 
 ## Open slice dependency
 
-- PR [#789](https://github.com/mikeholownych/nexus-code/pull/789) (`feat(operation): PA-3 fingerprint-based stall counting`) is OPEN, not merged; required checks were queued/in-progress during this qualification pass. It adds fingerprint-stall unit counting and a deterministic regression; once merged and CI-green on release branch, PA-3 fingerprint-stall acceptance evidence should be recorded against release-branch head.
+- PR [#789](https://github.com/mikeholownych/nexus-code/pull/789) (`feat(operation): PA-3 fingerprint-based stall counting`) is OPEN, not merged; at review time required checks were not green (test-matrix/shards failing) and review requested changes. It adds fingerprint-stall unit counting and a deterministic regression; once merged and CI-green on release branch, PA-3 fingerprint-stall acceptance evidence should be recorded against release-branch head.
 
 ## Gaps / not claimed
 
