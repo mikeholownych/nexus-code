@@ -242,6 +242,9 @@
                   },
                   "verification": {
                     "type": "string"
+                  },
+                  "ownerId": {
+                    "type": "string"
                   }
                 }
               },
@@ -275,8 +278,28 @@
                     "type": "string",
                     "enum": [
                       "agent-estimate",
-                      "operator-budget"
+                      "operator-budget",
+                      "role-ceiling"
                     ]
+                  }
+                }
+              },
+              "worktree": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "path",
+                  "branch"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "branch": {
+                    "type": "string"
+                  },
+                  "ownerId": {
+                    "type": "string"
                   }
                 }
               }
