@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01QkZCbELCFP3wBuXwKC1QbS",
+  "agent_id": "ad7fea4d7926ff2ab",
+  "subagent_type": "general-purpose",
+  "task_description": "Probe audit export git check",
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 83200,
+    "cache_read_tokens": 787155,
+    "output_tokens": 13387,
+    "api_call_count": 12
+  },
+  "started_at": "2026-11-24T08:54:16.938330526Z",
+  "completed_at": "2026-11-24T08:59:46.94144369Z"
+}

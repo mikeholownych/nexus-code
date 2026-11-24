@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01N2R6mSEvdLAdtfaL95zLiY",
+  "agent_id": "a7f6c6ae4e6b4a63f",
+  "subagent_type": "reviewer",
+  "task_description": "Review PR #772 git programs check",
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 76324,
+    "cache_read_tokens": 200906,
+    "output_tokens": 6988,
+    "api_call_count": 9
+  },
+  "started_at": "2026-11-24T07:12:34.280583875Z",
+  "completed_at": "2026-11-24T08:53:37.524119096Z"
+}

@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01LKorFqbfAV5TN1RfdJJp6h",
+  "agent_id": "a93f4edd322d83551",
+  "subagent_type": "reviewer",
+  "task_description": "Review PR #771 audit candidate binding",
+  "token_usage": {
+    "input_tokens": 46,
+    "cache_creation_tokens": 61361,
+    "cache_read_tokens": 1028985,
+    "output_tokens": 10056,
+    "api_call_count": 23
+  },
+  "started_at": "2026-11-24T05:43:57.96501734Z",
+  "completed_at": "2026-11-24T05:58:34.780741706Z"
+}
