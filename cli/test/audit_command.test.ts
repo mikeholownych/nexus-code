@@ -94,8 +94,8 @@ test("the round trip through the commands: export a saved task, verify it, alter
   assert.match(exported.stdout, /Record this value somewhere the bundle's holder cannot change it/);
   assert.ok(exported.stdout.includes(AUDIT_UNSIGNED_CAVEAT));
   assert.ok(exported.stdout.includes(AUDIT_STANDARD_REDACTION_NOTE));
-  assert.match(exported.stdout, /candidate binding: no_receipts \(see receipts\/candidate-binding\.json; not a verifier or acceptance result\)/);
-  assert.match(exported.stdout, /WARNING: No persisted validation receipts were available to bind to the current workspace candidate\./);
+  assert.match(exported.stdout, /candidate binding: partial \(see receipts\/candidate-binding\.json; not a verifier or acceptance result\)/);
+  assert.match(exported.stdout, /WARNING: Some persisted validation receipts could not be bound to the current workspace candidate or the report was truncated; see receipts\/candidate-binding\.json\./);
   assert.ok(!exported.stdout.includes("The subject was not at rest"), "a subject at rest has no at-rest warning");
 
   const altered = manifest.files.map((file) => {
