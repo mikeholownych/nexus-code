@@ -12,6 +12,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import type { AutonomousAgent } from "../src/agent.js";
 import { readExtensionTrust } from "../src/core/content_trust.js";
+import { HookRegistry } from "../src/core/hooks.js";
 import { makeRepo, trustWorkspace } from "./helpers/fixtures.js";
 import { approveProjectHooks, deniedBy, dispatch, hookAgent, loggingHook, runsOf, writeOperatorHooks, writeProjectHooks, type HookAgentOptions } from "./helpers/hooks_fixture.js";
 
@@ -110,6 +111,50 @@ test("approved, it runs; one byte changed, it does not run again and the notice 
   assert.deepEqual([after.size, after.mtimeNs, after.ino], [before.size, before.mtimeNs, before.ino], "the fixture: same size, modification time and inode");
   assert.equal((await dispatch(agent, "write_file", WRITE)).status, "COMPLETED");
   assert.equal(runsOf(log).length, 2);
+});
+
+test("a project hook changed while queued is rechecked and never starts from its stale command snapshot", async () => {
+  const script = path.join(repo, "guard.sh");
+  fs.writeFileSync(script, "#!/bin/sh\nexit 2\n", { mode: 0o755 });
+  writeProjectHooks(repo, { version: 1, hooks: { "pre-tool": [{ name: "project-guard", tools: ["write_file"], command: ["./guard.sh"] }] } });
+  approveProjectHooks(repo);
+
+  let releaseFirst!: () => void;
+  let markFirstStarted!: () => void;
+  const firstMayFinish = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const firstStarted = new Promise<void>((resolve) => { markFirstStarted = resolve; });
+  let runs = 0;
+  const registry = new HookRegistry({
+    workspace: () => repo,
+    readOnly: () => false,
+    permissionMode: () => "auto",
+    sessionId: () => "queued-trust-check",
+    notify: (notice) => notices.push(notice),
+    run: async () => {
+      runs++;
+      if (runs === 1) {
+        markFirstStarted();
+        await firstMayFinish;
+      }
+      return { exit: 0, signal: null, stdout: "", stderr: "", durationMs: 0 };
+    },
+  });
+  const admission = (invocationId: string) => registry.preToolAdmission(
+    { invocationId, toolName: "write_file", args: WRITE },
+    { workspaceRoot: repo, metadata: {} },
+  );
+
+  const first = admission("queued-first");
+  await firstStarted;
+  const second = admission("queued-second");
+  fs.writeFileSync(script, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  releaseFirst();
+
+  assert.equal((await first).admitted, true);
+  const changed = await second;
+  assert.equal(changed.admitted, false, "the queued call must not use a project hook whose pinned script changed");
+  assert.equal(runs, 1, "the stale project command never reaches the process runner");
+  assert.ok(notices.some((notice) => /guard\.sh changed/.test(notice)), JSON.stringify(notices));
 });
 
 test("an approved file that is removed and put back asks again", async () => {

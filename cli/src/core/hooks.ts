@@ -626,6 +626,15 @@ export class HookRegistry {
     return { sources };
   }
 
+  /** A hook queued behind another call must still be the declaration that is trusted now. */
+  private hookStillCurrent(event: HookEvent, source: HookSource, hook: HookDeclaration, toolName: string): boolean {
+    const resolved = this.resolve();
+    if (resolved.invalid) return false;
+    const expected = JSON.stringify(hook);
+    return resolved.sources.some((entry) => entry.source === source
+      && hooksFor(entry.file, event, toolName).some((current) => JSON.stringify(current) === expected));
+  }
+
   /** `budget.leftMs` is what the hooks of this call may still use; the run's own time is taken from it. */
   private async runOne(event: HookEvent, source: HookSource, hook: HookDeclaration, input: HookInput, budget: { leftMs: number }): Promise<{ summary: HookRunSummary; denialReason?: HookDenialReason }> {
     const base = { source, name: hook.name, event };
@@ -634,13 +643,29 @@ export class HookRegistry {
     }
     // One hook at a time for the whole agent: read-only tool calls are dispatched together, and their hooks would
     // otherwise overlap. A failed run must not hold the next one back.
-    const turn = this.last.then(() => (this.options.run ?? runHookProcess)({
-      command: hook.command,
-      cwd: input.cwd,
-      env: hookEnvironment({ event, name: hook.name, source, workspace: input.cwd }),
-      stdin: JSON.stringify(input),
-      timeoutMs: Math.min((hook.timeout_secs ?? HOOK_DEFAULT_TIMEOUT_SECS) * 1000, budget.leftMs),
-    }));
+    const turn = this.last.then(() => {
+      // Trust checks performed while collecting hooks can go stale while this call waits in the serialized queue.
+      // Re-resolve immediately before spawn so changed or removed project hooks fail closed instead of using a stale
+      // command snapshot.
+      if (!this.hookStillCurrent(event, source, hook, input.tool_name)) {
+        return {
+          exit: null,
+          signal: null,
+          stdout: "",
+          stderr: "",
+          failure: "spawn" as const,
+          detail: "the hook declaration or its approval changed while it waited in the execution queue",
+          durationMs: 0,
+        };
+      }
+      return (this.options.run ?? runHookProcess)({
+        command: hook.command,
+        cwd: input.cwd,
+        env: hookEnvironment({ event, name: hook.name, source, workspace: input.cwd }),
+        stdin: JSON.stringify(input),
+        timeoutMs: Math.min((hook.timeout_secs ?? HOOK_DEFAULT_TIMEOUT_SECS) * 1000, budget.leftMs),
+      });
+    });
     this.last = turn.catch(() => undefined);
     const result = await turn;
     budget.leftMs -= result.durationMs;
