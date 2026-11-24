@@ -52,9 +52,9 @@ export const DEFAULT_QUARANTINE_COOLDOWN_MINUTES = 15;
 
 /** A rate limiter for one trigger (one scope + id). Holds the sliding windows and the quarantine. */
 export class TriggerRateLimiter {
-  private readonly maxPerMinute: number;
-  private readonly maxPerHour: number;
-  private readonly maxPerDay: number;
+  private maxPerMinute: number;
+  private maxPerHour: number;
+  private maxPerDay: number;
   private readonly maxFailures: number;
   private readonly cooldownMinutes: number;
   private attempts: TriggerAttempt[] = [];
@@ -121,13 +121,24 @@ export class TriggerRateLimiter {
     this.consecutiveFailures = 0;
   }
 
-  /** Snapshot for persistence / tests. */
-  public snapshot(): { attempts: TriggerAttempt[]; quarantined?: TriggerQuarantine; consecutiveFailures: number } {
-    return { attempts: [...this.attempts], quarantined: this.quarantined, consecutiveFailures: this.consecutiveFailures };
+  /** Snapshot for persistence / tests. The per-trigger rate is persisted so a restored limiter enforces the
+   * configured limits again instead of falling back to a default. */
+  public snapshot(): { rate: TriggerRate; attempts: TriggerAttempt[]; quarantined?: TriggerQuarantine; consecutiveFailures: number } {
+    return {
+      rate: { maxPerMinute: this.maxPerMinute, maxPerHour: this.maxPerHour, maxPerDay: this.maxPerDay },
+      attempts: [...this.attempts],
+      quarantined: this.quarantined,
+      consecutiveFailures: this.consecutiveFailures,
+    };
   }
 
-  /** Restore from a snapshot (the firer reloads persisted state here). */
-  public restore(snapshot: { attempts?: TriggerAttempt[]; quarantined?: TriggerQuarantine; consecutiveFailures?: number }): void {
+  /** Restore from a snapshot (the firer reloads persisted state here). Re-applies the persisted rate when present. */
+  public restore(snapshot: { rate?: TriggerRate; attempts?: TriggerAttempt[]; quarantined?: TriggerQuarantine; consecutiveFailures?: number }): void {
+    if (snapshot.rate) {
+      this.maxPerMinute = snapshot.rate.maxPerMinute;
+      this.maxPerHour = snapshot.rate.maxPerHour;
+      this.maxPerDay = snapshot.rate.maxPerDay;
+    }
     this.attempts = snapshot.attempts ?? [];
     this.quarantined = snapshot.quarantined;
     this.consecutiveFailures = snapshot.consecutiveFailures ?? 0;
@@ -229,10 +240,10 @@ export class WorkspaceRateLimiter {
     };
   }
 
-  public restore(snapshot: { perTrigger?: Array<[string, { attempts?: TriggerAttempt[]; quarantined?: TriggerQuarantine; consecutiveFailures?: number }]>; workspaceAttempts?: TriggerAttempt[] }): void {
+  public restore(snapshot: { perTrigger?: Array<[string, ReturnType<TriggerRateLimiter["snapshot"]>]>; workspaceAttempts?: TriggerAttempt[] }): void {
     this.limiters.clear();
     for (const [id, s] of snapshot.perTrigger ?? []) {
-      const limiter = new TriggerRateLimiter({ maxPerMinute: 1, maxPerHour: 1, maxPerDay: 1 });
+      const limiter = new TriggerRateLimiter(s.rate ?? { maxPerMinute: 1, maxPerHour: 1, maxPerDay: 1 });
       limiter.restore(s);
       this.limiters.set(id, limiter);
     }

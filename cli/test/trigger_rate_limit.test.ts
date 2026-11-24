@@ -161,12 +161,34 @@ test("workspace rate limiter: per-trigger limiter plus workspace cap", () => {
 
 test("workspace restore recreates limiters with restored state", () => {
   const wl = new WorkspaceRateLimiter(DEFAULT_WORKSPACE_LIMITS);
-  const rate = defaultTriggerRate();
+  const rate = defaultTriggerRate(); // 5/min
+  const l = wl.limiterFor("a", rate);
+  l.checkAndRecord(advance(0));
+  l.checkAndRecord(advance(0)); // 2 used this minute
+  const snap = wl.snapshot();
+  const wl2 = new WorkspaceRateLimiter(DEFAULT_WORKSPACE_LIMITS);
+  wl2.restore(snap);
+  // old attempts fall out of the minute window; the configured 5/min cap is re-applied from the snapshot
+  const restored = wl2.limiterFor("a", rate);
+  restored.checkAndRecord(advance(minute + 1));
+  assert.equal(restored.checkAndRecord(advance(0)).admitted, true);
+  assert.equal(restored.checkAndRecord(advance(0)).admitted, true);
+});
+
+test("workspace restore preserves the configured rate beyond a single admission", () => {
+  const wl = new WorkspaceRateLimiter(DEFAULT_WORKSPACE_LIMITS);
+  const rate = { maxPerMinute: 2, maxPerHour: 10, maxPerDay: 100 };
   const l = wl.limiterFor("a", rate);
   l.checkAndRecord(advance(0));
   l.checkAndRecord(advance(0)); // cap 2/min reached for trigger a
   const snap = wl.snapshot();
   const wl2 = new WorkspaceRateLimiter(DEFAULT_WORKSPACE_LIMITS);
   wl2.restore(snap);
-  assert.equal(wl2.limiterFor("a", rate).checkAndRecord(advance(0)).admitted, false);
+  const restored = wl2.limiterFor("a", rate);
+  // old window expired: the restored 2/min cap admits the first fresh attempt
+  restored.checkAndRecord(advance(minute + 1));
+  // second fresh attempt admitted (2/min cap reached now)
+  assert.equal(restored.checkAndRecord(advance(0)).admitted, true);
+  // third fresh attempt denied: the restored cap is really 2/min, not a default
+  assert.equal(restored.checkAndRecord(advance(0)).admitted, false);
 });
