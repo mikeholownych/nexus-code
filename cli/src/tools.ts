@@ -15,6 +15,7 @@ import { FILE_EDIT_TOOLS } from "./file_diff.js";
 import { InformationFlowBoundary, matchesLocalOrigins, parseLocalOrigins } from "./core/egress.js";
 import { htmlToReadableText } from "./core/html_text.js";
 import { CapabilityRegistry, HARNESS_TOOLS, defaultRegistry } from "./core/capabilities.js";
+import { isBridgeBound } from "./core/tool_registry.js";
 import { isSafeReadOnlyCommand } from "./core/authority.js";
 import { buildCommandEnvironment } from "./command_env.js";
 import { getBuildIdentity } from "./build_identity.js";
@@ -1834,17 +1835,7 @@ export function registerBridgeCapabilities(
   bridge: RustCoreBridge
 ): void {
   for (const cap of registry.listCapabilities()) {
-    if (
-      cap.backend === "rust_rpc" ||
-      [
-        "fetch_web",
-        "search_web",
-        "lsp_hover",
-        "lsp_definition",
-        "lsp_diagnostics",
-        "run_tests",
-      ].includes(cap.modelToolName)
-    ) {
+    if (isBridgeBound(cap)) {
       registry.setHandler(cap.modelToolName, async (args, context) =>
         bridge.executeTool(cap.modelToolName, args, context?.metadata?.verificationAuthority)
       );
