@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01VbpBgdFNkDCgwyrZFgkNaW",
+  "agent_id": "a68722ec3460ba0de",
+  "subagent_type": "reviewer",
+  "task_description": "Re-review PR #782 hooks fixes",
+  "token_usage": {
+    "input_tokens": 106,
+    "cache_creation_tokens": 118417,
+    "cache_read_tokens": 3946949,
+    "output_tokens": 32381,
+    "api_call_count": 53
+  },
+  "started_at": "2026-11-24T15:12:34.352046925Z",
+  "completed_at": "2026-11-24T15:22:06.172917099Z"
+}

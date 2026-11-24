@@ -1,0 +1,52 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M872HX377JB04RGXVQF8NX8B",
+  "strategy": "manual-commit",
+  "branch": "v1/mt2-characterization",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cli/test/fixtures/model_tools_v1.json",
+    "cli/test/fixtures/tool_bindings_v1.json",
+    "cli/test/helpers/tool_characterization.ts",
+    "cli/test/mt1_core_import.test.ts",
+    "cli/test/tool_dispatch_characterization.test.ts",
+    "cli/test/tool_surface_characterization.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 5724,
+    "cache_read_tokens": 296779,
+    "output_tokens": 3160,
+    "api_call_count": 2,
+    "subagent_tokens": {
+      "input_tokens": 108,
+      "cache_creation_tokens": 635456,
+      "cache_read_tokens": 11053608,
+      "output_tokens": 65347,
+      "api_call_count": 53
+    }
+  },
+  "redaction": {
+    "replacements": 1625,
+    "layers": {
+      "betterleaks": 5,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 46,
+      "credentialed_uri": 3,
+      "entropy": 1568,
+      "key_context": 0,
+      "provider_token": 8,
+      "shell_stdin": 0
+    }
+  }
+}
