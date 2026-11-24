@@ -46,6 +46,8 @@ In accordance with **REQ-PER-101**, the root state directory `~/.nexus` and ever
 | **Audit Log** | `~/.nexus/audit.log` (`.1`..`.5`) | Security and tool execution audit log (rotated at 10 MB, 5 kept) | `0600` (dir `0700`) |
 | **Flight Logs** | `<workspace>/.nexus/flights/` | Per-workspace flight telemetry (excluded via `.git/info/exclude`) | `0600` (dir `0700`) |
 | **REPL History** | `~/.nexus_history` | Interactive shell input line history | `0600` |
+| **Runner Jobs** | `~/.nexus/runner/jobs/<jobId>/job.json` | Detached job record `nexus-job` (version 1); a record of another version, or with an unknown or repeated key, is refused and never run | `0600` (dir `0700`) |
+| **Job Receipts** | `~/.nexus/runner/jobs/<jobId>/receipt.json` | Receipt `nexus-job-receipt` (schema 1) written when a detached job ends | `0600` (dir `0700`) |
 
 ### Schema 2 publication and recovery
 
