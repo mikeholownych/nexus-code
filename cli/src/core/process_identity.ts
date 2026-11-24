@@ -89,3 +89,42 @@ export function descendants(roots: readonly number[]): number[] {
   }
   return [...found];
 }
+
+/** Alias kept for call sites that name the start-ticks field "startedAt". */
+export const startedAt = processStartTicks;
+
+/**
+ * The processes seen below one root, each with the time it started. A process whose parent died is handed to init and
+ * no later listing finds it under the root, so it is remembered here; the start time tells it from an unrelated
+ * process that was given the same pid since.
+ */
+export class ProcessTreeMemory {
+  private readonly seen = new Map<number, string>();
+
+  /** Lists what is below `root` (when it is still ours to search) and below everything remembered, and remembers it. */
+  remember(root: number | undefined): void {
+    const roots = [...(root === undefined ? [] : [root]), ...this.survivors()];
+    if (!roots.length) return;
+    for (const pid of descendants(roots)) {
+      if (this.seen.has(pid)) continue;
+      const started = startedAt(pid);
+      if (started !== undefined) this.seen.set(pid, started);
+    }
+  }
+
+  /** The remembered processes that are still the same processes. */
+  survivors(): number[] {
+    return [...this.seen].filter(([pid, started]) => startedAt(pid) === started).map(([pid]) => pid);
+  }
+
+  /** Signals every remembered process that is still the same process. */
+  signal(name: NodeJS.Signals): void {
+    for (const pid of this.survivors()) {
+      try {
+        process.kill(pid, name);
+      } catch {
+        // already gone
+      }
+    }
+  }
+}

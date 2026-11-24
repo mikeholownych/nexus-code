@@ -1,0 +1,310 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "nexus hooks v1",
+  "description": "Generated from HooksDocument in cli/src/core/hooks.ts by cli/scripts/gen_hooks_schema.mjs. Do not edit by hand. $defs.HooksFile is a hooks file (hooks.json), $defs.HookInput what a hook reads on standard input, $defs.HookOutput what it may print, $defs.ExtensionTrustStore the approval store (extension_trust.json). The schema describes shape only; Nexus's own reader is stricter (unknown and duplicate keys are refused; see docs/HOOKS.md).",
+  "$ref": "#/$defs/HooksDocument",
+  "$defs": {
+    "ExtensionTrustEntry": {
+      "type": "object",
+      "properties": {
+        "approvedAt": {
+          "description": "ISO 8601 time of the approval.",
+          "type": "string"
+        },
+        "files": {
+          "description": "Files inside the workspace that the approved content runs, each with the SHA-256 of its bytes when it was\napproved. The approval holds only while every one of them is unchanged and no other is named.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ExtensionTrustFile"
+          }
+        },
+        "key": {
+          "description": "The approved item inside the scope (a path relative to the workspace).",
+          "type": "string"
+        },
+        "kind": {
+          "const": "project-hooks"
+        },
+        "scope": {
+          "description": "The workspace's real path.",
+          "type": "string"
+        },
+        "sha256": {
+          "description": "SHA-256 of the approved bytes, 64 lowercase hexadecimal digits.",
+          "type": "string"
+        },
+        "summary": {
+          "description": "One line shown when approvals are listed.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "approvedAt",
+        "key",
+        "kind",
+        "scope",
+        "sha256",
+        "summary"
+      ]
+    },
+    "ExtensionTrustFile": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Relative to the workspace.",
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ]
+    },
+    "ExtensionTrustStore": {
+      "description": "The document in `extension_trust.json`.",
+      "type": "object",
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ExtensionTrustEntry"
+          }
+        },
+        "version": {
+          "const": 1
+        }
+      },
+      "required": [
+        "entries",
+        "version"
+      ]
+    },
+    "HookDeclaration": {
+      "description": "One hook of a hooks file.",
+      "type": "object",
+      "properties": {
+        "command": {
+          "description": "A string is run with `/bin/sh -c`; an array is executed directly, without a shell.",
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "name": {
+          "description": "`[A-Za-z0-9._-]{1,64}`, unique in its file. Shown in denials, receipts and the flight log.",
+          "type": "string"
+        },
+        "timeout_secs": {
+          "description": "1 to 60; 10 when omitted.",
+          "type": "number"
+        },
+        "tools": {
+          "description": "Exact Nexus tool names the hook runs for, or `[\"*\"]` for every tool. No patterns.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "command",
+        "name",
+        "tools"
+      ]
+    },
+    "HookInput": {
+      "description": "What a hook reads on standard input: one JSON object, then end of input.",
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "description": "The workspace, absolute.",
+          "type": "string"
+        },
+        "hook_event_name": {
+          "description": "The event under the name other tools' hook scripts expect.",
+          "enum": [
+            "PostToolUse",
+            "PreToolUse"
+          ]
+        },
+        "nexus_event": {
+          "enum": [
+            "post-tool",
+            "pre-tool"
+          ]
+        },
+        "permission_mode": {
+          "enum": [
+            "auto",
+            "read-only",
+            "review"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "tool_input": {
+          "description": "The tool's arguments as the gates approved them.",
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "tool_name": {
+          "description": "The Nexus tool name (`run_command`, `write_file`, ...).",
+          "type": "string"
+        },
+        "tool_response": {
+          "description": "`post-tool` only. `output` is cut at 32 KiB.",
+          "type": "object",
+          "properties": {
+            "error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "output": {
+              "type": "string"
+            },
+            "success": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "error",
+            "output",
+            "success"
+          ]
+        }
+      },
+      "required": [
+        "cwd",
+        "hook_event_name",
+        "nexus_event",
+        "permission_mode",
+        "session_id",
+        "tool_input",
+        "tool_name"
+      ]
+    },
+    "HookOutput": {
+      "description": "What a hook may print on standard output (a JSON object; empty output and plain text are also accepted). Only the\ndenying members have an effect, and only before a tool runs.",
+      "type": "object",
+      "properties": {
+        "additionalContext": {
+          "description": "Ignored."
+        },
+        "continue": {
+          "description": "`false` denies the call.",
+          "type": "boolean"
+        },
+        "decision": {
+          "description": "`block` and `deny` deny the call. `approve` and `allow` are ignored.",
+          "enum": [
+            "allow",
+            "approve",
+            "block",
+            "deny"
+          ]
+        },
+        "hookSpecificOutput": {
+          "type": "object",
+          "properties": {
+            "additionalContext": {
+              "description": "Ignored."
+            },
+            "permissionDecision": {
+              "description": "`deny` denies the call; `ask` also denies it in this version; `allow` is ignored.",
+              "enum": [
+                "allow",
+                "ask",
+                "deny"
+              ]
+            },
+            "permissionDecisionReason": {
+              "type": "string"
+            },
+            "updatedInput": {
+              "description": "Ignored: a hook cannot change a tool's input."
+            }
+          }
+        },
+        "reason": {
+          "type": "string"
+        },
+        "stopReason": {
+          "type": "string"
+        },
+        "suppressOutput": {
+          "description": "Ignored."
+        },
+        "systemMessage": {
+          "description": "Ignored."
+        },
+        "updatedInput": {
+          "description": "Ignored: a hook cannot change a tool's input."
+        }
+      }
+    },
+    "HooksDocument": {
+      "description": "Every document of the hooks contract: the declaration file, a hook's input and output, and the approval store.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExtensionTrustStore"
+        },
+        {
+          "$ref": "#/$defs/HookInput"
+        },
+        {
+          "$ref": "#/$defs/HookOutput"
+        },
+        {
+          "$ref": "#/$defs/HooksFile"
+        }
+      ]
+    },
+    "HooksFile": {
+      "description": "A hooks file (`~/.config/nexus/hooks.json` or `<workspace>/.nexus/hooks.json`).",
+      "type": "object",
+      "properties": {
+        "hooks": {
+          "type": "object",
+          "properties": {
+            "post-tool": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookDeclaration"
+              }
+            },
+            "pre-tool": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookDeclaration"
+              }
+            }
+          }
+        },
+        "version": {
+          "const": 1
+        }
+      },
+      "required": [
+        "hooks",
+        "version"
+      ]
+    }
+  }
+}

@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import type { HarnessConfig } from "../types.js";
 import { realRecoveryClock, type RecoveryClock } from "./provider_recovery.js";
-import { ConvergenceScheduler, type Assignment, type Decision, type DurableOperationState, type OperationEvent, type OperationMessage, type UnitRunResult, type WorkUnit } from "./operation.js";
+import { ConvergenceScheduler, type Assignment, type Decision, type DurableOperationState, type MergedCheck, type OperationEvent, type OperationMessage, type UnitRunResult, type WorkUnit } from "./operation.js";
 import { markDelivered, publishMessage, undeliveredFor } from "./operation_messages.js";
 import { OperationGit, ensureIntegrationWorktree, type OperationGitPlan } from "./operation_git.js";
 import { REQUIREMENTS_CAPABILITY, READ_OBJECTIVE_CAPABILITY } from "./objective.js";
@@ -67,6 +67,11 @@ export interface UnitRunContext {
 
 export interface WorkUnitExecutor {
   run(unit: WorkUnit, resource: ResourceDescriptor, ctx: UnitRunContext): Promise<UnitRunResult>;
+  /**
+   * Isolated operations (PA-2): the operator's verifier, pinned for the operation and run on every merged tree, and
+   * the session's sandbox setting, which confines those runs as it confines the units' own commands.
+   */
+  integrationPolicy?(): { verifier?: string; sandbox?: boolean | string };
   /** Side-effect-free reachability check used to revalidate endpoint-scope conditions on wake. */
   probe?(resource: ResourceDescriptor, signal?: AbortSignal): Promise<{ available: boolean; failure?: InferenceFailure }>;
   /** Re-reads provider catalogs, if enabled. */
@@ -108,6 +113,11 @@ function planFromState(state: DurableOperationState): OperationGitPlan {
   };
 }
 
+/** PA-2: how many verifiers held on the merged tree, for the operator's event line. */
+function mergedChecksNote(checks: readonly MergedCheck[] | undefined): string {
+  return checks?.length ? ` (${checks.length} merged-tree ${checks.length === 1 ? "check" : "checks"} passed)` : "";
+}
+
 export class OperationRunner {
   readonly registry: ResourceRegistry;
   readonly scheduler: ConvergenceScheduler;
@@ -125,7 +135,12 @@ export class OperationRunner {
     this.registry = new ResourceRegistry(state.resources, state.conditions, this.clock, (e) => this.onRegistryEvent(e));
     this.revalidator = new OperationRevalidator(opts.executor, this.registry, opts.onDiagnostic);
     this.scheduler = new ConvergenceScheduler(state, this.registry, () => this.clock.now(), opts.onEvent, opts.onDiagnostic);
-    this.git = state.git?.isolate ? new OperationGit(planFromState(state), state.git, { integrations: () => this.state.integrations ?? [] }) : undefined;
+    this.git = state.git?.isolate
+      ? new OperationGit(planFromState(state), state.git, {
+          integrations: () => this.state.integrations ?? [],
+          sandbox: opts.executor.integrationPolicy?.().sandbox,
+        })
+      : undefined;
   }
 
   async run(signal?: AbortSignal): Promise<DurableOperationState> {
@@ -148,6 +163,7 @@ export class OperationRunner {
       this.git?.disposeAllUnits();
       return this.state;
     }
+    this.pinIntegrationVerifier();
     if (this.git) {
       try {
         ensureIntegrationWorktree(planFromState(this.state), this.state.git!, {
@@ -583,6 +599,30 @@ export class OperationRunner {
     return next;
   }
 
+  /**
+   * PA-2: the operator's verifier is pinned in the record when the operation runs and only ever added to, so a resume
+   * started without it (or with another) still checks every merged tree with the ones given before.
+   */
+  private pinIntegrationVerifier(): void {
+    const verifier = this.opts.executor.integrationPolicy?.().verifier?.trim();
+    const git = this.state.git;
+    if (!git?.isolate || !verifier || git.integrationVerifiers?.includes(verifier)) return;
+    git.integrationVerifiers = [...(git.integrationVerifiers ?? []), verifier];
+  }
+
+  /**
+   * PA-2: a refused merge is recorded as its own event, naming the integrated units it collides with and the checks
+   * the runner ran. Returns the clause that names those units in the operator's decision.
+   */
+  private recordRejection(unit: WorkUnit, reason: string, detail: { conflictWith?: string[]; checks?: MergedCheck[]; files?: string[] }): string {
+    const others = detail.conflictWith ?? [];
+    this.scheduler.emit("INTEGRATION_REJECTED", `${unit.id} was not integrated: ${reason.split("\n")[0]}`, {
+      unitId: unit.id,
+      detail: { unitId: unit.id, conflictWith: others, ...(detail.checks ? { checks: detail.checks } : {}), ...(detail.files ? { files: detail.files } : {}) },
+    });
+    return others.length ? ` (${unit.id} against integrated ${others.join(", ")})` : "";
+  }
+
   /** Merges one completed unit into the operation branch and records the receipt, or returns the blocking decision. */
   private async integrateUnit(unit: WorkUnit, result: Extract<UnitRunResult, { kind: "completed" }>): Promise<UnitRunResult> {
     const candidate = this.candidateFor(unit);
@@ -591,17 +631,20 @@ export class OperationRunner {
       : undefined;
     const integration = await this.git!.integrate(unit, result, {
       sequence: (this.state.integrations?.length ?? 0) + 1,
+      integrated: this.state.integrations ?? [],
       ...(candidate ? { candidate } : {}),
       ...(tests ? { tests } : {}),
     });
     if (integration.kind === "conflict") {
       const files = integration.files.length ? ` (${integration.files.join(", ")})` : "";
+      const reason = `merging ${unit.id} into the operation branch conflicts${files}`;
+      const units = this.recordRejection(unit, reason, { conflictWith: integration.conflictWith, files: integration.files });
       return {
         kind: "failed",
         cause: "MERGE_CONFLICT",
-        reason: `merging ${unit.id} into the operation branch conflicts${files}`,
+        reason,
         question:
-          `${unit.title} completed, but its branch conflicts with the integrated work${files}. Merge ` +
+          `${unit.title} completed, but its branch conflicts with the integrated work${files}${units}. Merge ` +
           `${this.state.git?.integrationBranch} into the unit's branch (${this.git!.unitState(unit.id)?.worktree}), ` +
           `resolve and commit it there, then retry; or revise the unit, or stop?`,
         options: [
@@ -611,12 +654,20 @@ export class OperationRunner {
       };
     }
     if (integration.kind === "failed") {
+      // A merge the checks refused (or a verification-file takeover) is a decision about two units' work, not a retry-only fault.
+      const refused = integration.checks !== undefined || integration.conflictWith !== undefined;
+      const units = refused ? this.recordRejection(unit, integration.reason, integration) : "";
       return {
         kind: "failed",
         cause: "INTEGRATION_FAILED",
         reason: integration.reason,
-        question: `${unit.title} could not be integrated: ${integration.reason}. Retry the unit, or stop?`,
-        options: [{ label: "retry", action: { kind: "retry" } }],
+        question: refused
+          ? `${unit.title} was not integrated${units}: ${integration.reason}. The operation branch is as it was before the merge. Retry the unit, revise it, or stop?`
+          : `${unit.title} could not be integrated: ${integration.reason}. Retry the unit, or stop?`,
+        options: [
+          { label: "retry", action: { kind: "retry" } },
+          ...(refused ? [{ label: "revise the unit (note required)", action: { kind: "revise" as const } }] : []),
+        ],
       };
     }
     // ALREADY_INTEGRATED means a receipt for this unit already exists; appending a second one would double-count it.
@@ -629,7 +680,7 @@ export class OperationRunner {
         ? `${unit.id} integrated on ${integration.receipt.integratedCommit.slice(0, 12)} (not re-verified).`
         : integration.receipt.tests?.definitionBound === false
         ? `${unit.id} integrated on ${integration.receipt.integratedCommit.slice(0, 12)} (verifier passed, but its definition or test inputs could not be bound or verified unchanged: regression evidence only).`
-        : `${unit.id} integrated on ${integration.receipt.integratedCommit.slice(0, 12)}.`,
+        : `${unit.id} integrated on ${integration.receipt.integratedCommit.slice(0, 12)}${mergedChecksNote(integration.receipt.mergedChecks)}.`,
       { unitId: unit.id, detail: { integration: integration.receipt } },
     );
     this.save();

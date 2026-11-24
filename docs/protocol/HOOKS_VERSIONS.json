@@ -1,0 +1,12 @@
+[
+  {
+    "schema_version": 1,
+    "schemaSha256": "7c22122600a157162766265323abe8983b7a67b2668da6dcfe8fb6bcfe5b3583",
+    "note": "First published schema of the command-hook contract (HK-1), generated from HooksDocument in cli/src/core/hooks.ts on release/v1.3.0: the hooks file (events pre-tool and post-tool), a hook's standard input and standard output, and the approval store extension_trust.json (kind project-hooks). Nothing was published before it."
+  },
+  {
+    "schema_version": 1,
+    "schemaSha256": "910e96e745d70ca49b68746ae6f9a2f0b108cc7e38a6d19b6b133934935e4256",
+    "note": "Same version: an approval in extension_trust.json gains the optional member `files` (ExtensionTrustFile: path and sha256), the workspace files a project's hooks run, whose bytes the approval now covers. Additive: a store written before it has no `files`, and such an approval of hooks that run workspace files no longer matches, so those hooks ask for approval again. The hooks file, the hook input and the hook output are unchanged."
+  }
+]

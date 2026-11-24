@@ -126,7 +126,7 @@ test("the inbox: a request the runner cannot trust is moved aside with the reaso
     add("req-0000000000000010", /the spec is not in its job form/, document("req-0000000000000010", (r) => { delete r.spec.git; r.job.specSha256 = specDigest(r.spec); }));
     add("req-0000000000000006", /the spec does not match its recorded digest/, document("req-0000000000000006", (r) => { r.spec.objective = "something else"; }));
     add("req-0000000000000007", /the request id does not match its file name/, document("req-0000000000000008"));
-    add("req-0000000000000009", /duplicate key 'kind'/, `{"kind":"stop",${JSON.stringify(document("req-0000000000000009")).slice(1)}`);
+    add("req-0000000000000009", /duplicate key "kind"/, `{"kind":"stop",${JSON.stringify(document("req-0000000000000009")).slice(1)}`);
     add("req-000000000000000a", /request: unknown key 'alwaysApprove'/, document("req-000000000000000a", (r) => { r.alwaysApprove = true; }));
     add("req-000000000000000b", /unknown spec key 'sandbox'/, document("req-000000000000000b", (r) => { r.spec.sandbox = "none"; r.job.specSha256 = specDigest(r.spec); }));
     add("req-000000000000000c", /there is no job job-000000000000/, { format: "nexus-runner-request", version: RUNNER_FILE_VERSION, id: "req-000000000000000c", at: new Date().toISOString(), kind: "stop", jobId: "job-000000000000" });
