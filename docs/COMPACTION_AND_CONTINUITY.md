@@ -35,12 +35,15 @@ Use `--max-total-steps`, `NEXUS_MAX_TOTAL_STEPS`, `--max-turn-minutes` or `NEXUS
 or higher finite limit within the hard ceiling. `--no-continuation` is your explicit choice of a turn that ends at
 `--max-steps`.
 
-`NEXUS_MAX_INFERENCE_SUBMISSIONS` sets a finite objective-wide provider request ceiling (default 1,000; hard maximum
-10,000). Provider retries count before dispatch; availability probes do not. The consumed count and chosen ceiling persist
-with the objective, so a later run cannot raise an exhausted budget. Older saved objectives report earlier request
-history as unknown; only requests made after this counter was introduced are counted exactly. This ceiling currently
-covers the primary objective turn; delegated inference and durable operation work units still need shared accounting.
-Malformed persisted counters or ceilings stop before inference dispatch.
+`NEXUS_MAX_INFERENCE_SUBMISSIONS` sets a provider request ceiling (default 1,000; hard maximum 10,000). It can be set
+in a project `.env`, so a project may raise the default up to that hard maximum; on resume, the saved ceiling can only
+stay the same or decrease. The ceiling currently counts requests made by the primary turn's provider-recovery loop,
+including retries, before dispatch; availability probes do not count. It does **not** yet cap all provider use: context
+findings extraction, LLM compaction summaries and their requirement probes, delegated `spawn_subagent` calls, and
+durable operation work units do not share this counter. Without durable objective state, the counter is in-memory and
+resets on each turn. With durable objective state, the primary-turn count and ceiling persist with the objective.
+Older saved objectives report earlier request history as unknown; only requests made after this counter was introduced
+are counted exactly. Malformed persisted counters or ceilings stop before a counted inference dispatch.
 
 The model is never told that "steps are running out" unless you set a step limit. The live status line shows
 `step N` (and `step N of M` only under a limit you set).
