@@ -29,6 +29,8 @@ import { effortLevels } from "./core/models_snapshot.js";
 import { mcpConfigFiles } from "./mcp.js";
 import { isBwrapAvailable, sandboxHomeMounts, sandboxNetworkEnabled, sandboxWorkspaceOverlays } from "./sandbox.js";
 import { pluginDirs } from "./plugins.js";
+import { policyFindings, processPolicyReport } from "./policy_cli.js";
+import { USER_POLICY_FILE_NAME } from "./core/managed_policy_load.js";
 import { untrustedWorkspaceExtensions, WORKSPACE_MCP_FILES, isWorkspaceTrusted } from "./workspace_trust.js";
 import { BuildIdentity, getBuildIdentity } from "./build_identity.js";
 import { defaultSessionsDir } from "./session.js";
@@ -1241,6 +1243,14 @@ const pluginCheck: Check = async (ctx) => {
   return f("plugins.config", "extensions", found.length ? "pass" : "skip", found.length ? `${found.length} plugin module(s) found. ${note}` : "No plugins are installed (optional).", found.slice(0, 10));
 };
 
+/**
+ * GV-1: the managed policy as this process would apply it: one finding per tier and one for the result. A broken
+ * managed file is a failure here and never a reason for doctor not to run. No finding carries a repair: a policy file
+ * is the administrator's or the operator's statement, and doctor does not change it.
+ */
+const policyCheck: Check = async (ctx) =>
+  policyFindings(processPolicyReport(ctx.config?.workspace ?? process.cwd())).map((finding) => f(finding.id, "config", finding.status, finding.explanation, finding.evidence, finding.action));
+
 const CHECKS: Array<[string, Check]> = [
   ["install", installCheck],
   ["tui", tuiCheck],
@@ -1265,6 +1275,7 @@ const CHECKS: Array<[string, Check]> = [
   ["custom_ca", customCaCheck],
   ["mcp", mcpCheck],
   ["plugins", pluginCheck],
+  ["policy", policyCheck],
 ];
 
 /** Runs `check` with its own deadline; a throw or timeout becomes a finding, so other checks are unaffected. */
@@ -1418,6 +1429,8 @@ function planRepairs(report: DoctorReport): PlannedRepair[] {
     const target = finding.evidence[0];
     if (!target) continue;
     if (seenTargets.has(target)) continue;
+    // GV-1: `--fix` never changes a managed policy file, whatever finding names it.
+    if (path.basename(target) === USER_POLICY_FILE_NAME) continue;
     seenTargets.add(target);
     if (finding.repair.id === "state.create") {
       plans.push({

@@ -377,17 +377,50 @@ export interface ManagedTiers {
  * Reads the two managed tiers and nothing else. Throws `ManagedPolicyError` for a tier that exists and cannot be used;
  * the system tier is checked first.
  */
-export function loadManagedTiers(input: Pick<LoadManagedPolicyInput, "systemPath" | "systemOwnerUid" | "userPath" | "userUid" | "fs">): ManagedTiers {
-  const { fs } = input;
-  let system: LoadedPolicyTier | undefined;
-  if (input.systemPath !== null) {
-    const ownerText = ownerName(input.systemOwnerUid);
-    if (checkSystemDirectory(fs, input.systemPath, input.systemOwnerUid, ownerText)) {
-      system = loadManagedTier(fs, "system", input.systemPath, [input.systemOwnerUid], ownerText);
-    }
-  }
-  const user = loadManagedTier(fs, "user", input.userPath, input.userUid === null ? null : [input.userUid, 0], input.userUid === null ? "" : `you (uid ${input.userUid}) or root`);
+export function loadManagedTiers(input: ManagedTiersInput): ManagedTiers {
+  const system = loadSystemTier(input);
+  const user = loadUserTier(input);
   return { ...(system ? { system } : {}), ...(user ? { user } : {}) };
+}
+
+type ManagedTiersInput = Pick<LoadManagedPolicyInput, "systemPath" | "systemOwnerUid" | "userPath" | "userUid" | "fs">;
+
+function loadSystemTier(input: ManagedTiersInput): LoadedPolicyTier | undefined {
+  if (input.systemPath === null) return undefined;
+  const ownerText = ownerName(input.systemOwnerUid);
+  if (!checkSystemDirectory(input.fs, input.systemPath, input.systemOwnerUid, ownerText)) return undefined;
+  return loadManagedTier(input.fs, "system", input.systemPath, [input.systemOwnerUid], ownerText);
+}
+
+function loadUserTier(input: ManagedTiersInput): LoadedPolicyTier | undefined {
+  return loadManagedTier(input.fs, "user", input.userPath, input.userUid === null ? null : [input.userUid, 0], input.userUid === null ? "" : `you (uid ${input.userUid}) or root`);
+}
+
+/** One managed tier as a diagnosis reports it. `file` is null where the platform has no such tier. */
+export interface TierInspection {
+  tier: "system" | "user";
+  file: string | null;
+  /** The tier as read; absent with no `error` when the file does not exist. */
+  loaded?: LoadedPolicyTier;
+  error?: ManagedPolicyError;
+}
+
+/**
+ * For diagnosis (`nexus policy`, `nexus doctor`): reads each managed tier by itself, so a broken system file does not
+ * hide the state of the user file. It decides nothing: enforcement uses `loadManagedTiers`, which stops at the first
+ * broken tier.
+ */
+export function inspectManagedTiers(input: ManagedTiersInput): TierInspection[] {
+  const inspect = (tier: "system" | "user", file: string | null, load: () => LoadedPolicyTier | undefined): TierInspection => {
+    try {
+      const loaded = load();
+      return { tier, file, ...(loaded ? { loaded } : {}) };
+    } catch (error) {
+      if (!(error instanceof ManagedPolicyError)) throw error;
+      return { tier, file, error };
+    }
+  };
+  return [inspect("system", input.systemPath, () => loadSystemTier(input)), inspect("user", input.userPath, () => loadUserTier(input))];
 }
 
 /**

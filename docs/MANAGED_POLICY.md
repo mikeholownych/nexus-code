@@ -2,10 +2,12 @@
 
 For the administrator of a machine or a fleet that runs Nexus.
 
-> **Status: enforced in part.** `nexus` reads the two managed files at startup and applies the keys listed under
-> "What is enforced today". The MCP and plugin allowlists, `egress.secret_destinations`, the `nexus policy` commands
-> and the doctor findings are not in yet: a key marked "not yet" below is accepted and merged, and changes nothing.
-> Where a behaviour still needs a later change, the text says "planned".
+> **Status: enforced, with two gaps.** `nexus` reads the two managed files at startup and applies the keys listed under
+> "What is enforced today". `egress.secret_destinations` is not in yet: it is marked "not yet" below, is accepted and
+> merged, and changes nothing. `sandbox.forbid_network` is enforced where a session or a verification is started, not
+> inside the sandbox itself. Where a behaviour still needs a later change, the text says "planned".
+> `nexus policy show` prints what is in force and where each value comes from; `nexus policy check` validates the
+> installed files, or a file before it is rolled out.
 
 ## What is enforced today
 
@@ -15,7 +17,7 @@ managed tiers.
 
 | Key | Enforced | How |
 |---|---|---|
-| `approval.strict`, `disable_auto`, `disable_yes`, `disable_full_access` | yes | An explicit `--yes`, `--mode auto` or `NEXUS_APPROVAL_MODE=auto` is refused at launch (exit 2). During a session a switch to `auto` (`/mode auto`, an "always" answer) is ignored with a notice, and the approval gate asks whatever the session's own settings say. In the terminal UI an "always" answer still stops later prompts in that session (planned fix, see below). |
+| `approval.strict`, `disable_auto`, `disable_yes`, `disable_full_access` | yes | An explicit `--yes`, `--mode auto` or `NEXUS_APPROVAL_MODE=auto` is refused at launch (exit 2). During a session a switch to `auto` (`/mode auto`, an "always" answer) is ignored with a notice, and the approval gate asks whatever the session's own settings say. An "always" answer approves the one call it was given for and is not remembered, in the terminal UI and in the line-mode REPL alike. `nexus verify --yes` is refused under `disable_yes` (and `strict`). |
 | `approval.require_human` | yes | The named effects (`exec`, `write_workspace`, `egress`) ask in every mode, full access included. |
 | `verification.mode`, `verification.protected` | yes | The mode is a floor for verification-path protection; the globs are added to the protected verification paths. A project file's relaxations are void where either key is set. |
 | `commands.forbid` | yes | A matching `run_command` is refused in every mode. |
@@ -25,18 +27,48 @@ managed tiers.
 | `egress.inspector` | yes | A floor over `NEXUS_EGRESS_POLICY`. |
 | `egress.allowed_domains` | yes, for a call that names a URL | When a managed tier sets the list, a tool call with egress effect and a `url` argument is refused unless the host is listed (an exact name, or `*.example.com` for subdomains). A call that names no URL (a web search, an MCP tool) and a shell command are not decided by this list. A project file's own `allowedDomains` keeps its existing check in the fetch tool, where a name also admits its subdomains. |
 | `egress.secret_destinations` | not yet | Nothing reads it. |
-| `sandbox.required` | yes, at launch | `--sandbox none` is refused; with no `--sandbox` the sandbox is switched on (`auto`), and a command is refused when no sandbox engine can run it. |
-| `sandbox.forbid_network` | at launch only | `--sandbox-network` and a set `NEXUS_SANDBOX_NETWORK` are refused when a session is configured. The sandbox itself does not consult the policy yet. |
-| `mcp.allow`, `mcp.disable_workspace` | not yet | Planned (GV-5). |
-| `plugins.allow`, `plugins.disable_workspace` | not yet | Planned (GV-5). |
+| `sandbox.required` | yes, at launch | `--sandbox none` is refused, for a session and for `nexus verify`; with no `--sandbox` the sandbox is switched on (`auto`), and a command is refused when no sandbox engine can run it. (`nexus verify` confines every run by default and stops when no engine can.) |
+| `sandbox.forbid_network` | at launch only | `--sandbox-network` and a set `NEXUS_SANDBOX_NETWORK` are refused when a session is configured, and `nexus verify --sandbox-network` is refused. The sandbox itself does not consult the policy yet. |
+| `mcp.allow` | yes | A configured server is checked before it is started: one that no entry admits is not started, in `nexus mcp`, in a session and for `/mcp add` (which then saves nothing). See "MCP servers and plugins" below. |
+| `mcp.disable_workspace` | yes | A server configured by a file of the workspace is not started, whether or not the workspace is trusted and whatever `mcp.allow` says. |
+| `plugins.allow` | yes | A plugin file is checked before it is imported (its code does not run): one that no entry admits is not imported. |
+| `plugins.disable_workspace` | yes | A plugin file of the workspace is not imported, whether or not the workspace is trusted and whatever `plugins.allow` says. |
 | `workspace.disable_env_trust` | yes | `NEXUS_TRUST_WORKSPACE=1` grants no trust and applies no project relaxation; a notice says so. |
+
+### MCP servers and plugins
+
+The allowlists are read from the two managed files only. A project file cannot set them, and nothing a workspace file,
+a model or a tool result says changes them.
+
+- **When the decision is made.** Before a server's program is started or its URL is contacted, and before a plugin
+  file is imported. A refused server or plugin is reported once on standard error with the policy source, for example
+  `nexus: MCP server 'shell' is not started: it is not in the managed allowlist (mcp.allow). [policy: system
+  /etc/nexus/policy.toml mcp.allow]`. The session continues without it.
+- **How a server is matched.** A bare name entry matches the server's configured name, character for character:
+  `github` does not admit `GitHub` or `github ` (with a space). A `command:` entry matches a stdio server whose
+  configured `command` is exactly that absolute path; a command given as a bare name (`npx`, found through `PATH`)
+  or as a path that is not normalized is never matched by a `command:` entry. A `command:` entry pins the program,
+  not its arguments: `command:/usr/bin/node` admits any script run by that Node. A `url:` entry matches a remote
+  server (SSE or HTTP transport) whose URL has exactly that origin; a definition that would run a program is never
+  admitted by a `url` it also carries. A WebSocket server (`ws://`, `wss://`) has no `http(s)` origin, so only a name
+  entry admits it.
+- **How a plugin is matched.** By the file, because a plugin's name is known only after its code ran: a `sha256:`
+  entry matches the SHA-256 of the file's bytes, a `file:` entry the file's real path (a symbolic link is resolved
+  first, so a link is not the path it has, it is the file it points to).
+- **What counts as the workspace's.** A configuration or plugin file under the workspace directory, or one that
+  resolves into it: a symbolic link from `~/.config/nexus/mcp.json` or `~/.nexus/plugins/` to a file inside the
+  repository is the workspace's, and a link in the workspace to a file elsewhere is too. One consequence: when the
+  workspace is your home directory, your own `~/.config/nexus/mcp.json` and `~/.nexus/plugins/` are inside it, and
+  `disable_workspace` switches them off as well.
+- **A managed policy that cannot be read** admits no server and no plugin (`nexus` itself has refused to start by
+  then; this is what a program embedding the modules gets).
+- **A name printed from a configuration file** has its control characters replaced by `?`.
 
 Limits of this stage:
 
-- `nexus verify` does not build a session configuration, so `approval.disable_yes` does not refuse `nexus verify --yes`
-  yet, and `sandbox.*` does not reach `nexus verify --sandbox` yet (planned).
-- The terminal UI keeps its own "always approve" state: after an "always" answer it stops asking for the rest of the
-  session, also under `approval.disable_auto` (planned). The line-mode REPL asks every time.
+- A plugin file is hashed and then imported by path. Someone who can replace the file between the two steps defeats a
+  `sha256:` pin; keep the plugin directories writable by the operator only.
+- A server that is already running is not stopped when a policy file changes: the files are read once per process.
 - The sidecar started directly (not through `nexus`) reports a broken policy as a start failure with exit code 1,
   not 2. It still does not start.
 - A prompt decided by the default approval mode shows no policy line; a refusal always names its source, the default
@@ -345,19 +377,52 @@ line 2: schema_version 2 is not supported by this Nexus (supported: 1); upgrade 
 ## Recovery
 
 - **What still runs when a tier is broken:** `nexus --version`, `nexus --help` and `nexus doctor` (and its alias
-  `nexus check`). Everything else exits with code 2 and the message above. `nexus doctor` has no policy findings of
-  its own yet: it shows the error in its configuration finding. A `nexus policy check` command is planned.
+  `nexus check`), and `nexus policy show` and `nexus policy check`. Everything else exits with code 2 and the message
+  above. `nexus doctor` reports four findings: `policy.system`, `policy.user`, `policy.project` and
+  `policy.effective`. A managed file that cannot be used is a failure (doctor exits 2); a project file that cannot
+  be used, or whose relaxations are not applied, is a warning.
 - **The system tier has no bypass.** No flag, environment variable, user setting or project file makes Nexus run
   past a system file it cannot use. The only fix is to repair or remove the file as root. This is the lockout risk
   of a managed policy: a typing mistake in a file pushed to a fleet stops Nexus on every machine that receives it.
-  Until `nexus policy check` exists there is no supported command to test a file before rolling it out.
+  Test a file before rolling it out with `nexus policy check <file>` (see "The policy commands").
 - **The user tier** fails closed too, and the user can recover alone: fix the file, or move it aside with the `mv`
   command the message prints. With the file gone the user tier is absent and the system tier still applies in full.
 - **Replace a policy file atomically** (write a new file beside it, then rename). A file caught half written is
   either refused, or, if the written part happens to be a complete valid policy, read as that shorter policy.
 - **`schema_version` and rollout order.** Every added or changed key bumps the version, and a reader refuses a
   version it does not know. Upgrade Nexus first, then roll out a policy that uses the new version.
-- `nexus doctor --fix` is not to modify a policy file (planned).
+- `nexus doctor --fix` never modifies a policy file: no policy finding offers a repair, and no repair is planned for
+  a file named `policy.toml`.
+
+## The policy commands
+
+Both commands only read. Neither changes a policy file, records an approval or alters what is enforced, and both run
+when a managed file is broken.
+
+```text
+nexus policy show [-w <workspace>] [--json]
+nexus policy check [<file>] [-w <workspace>] [--json]
+```
+
+- **`nexus policy show`** prints each tier's file and state (`absent`, `valid`, `INVALID` with the error), then every
+  key with its effective value and the tier that decides it, in the `[policy: ...]` form used beside decisions. For a
+  list whose items come from different tiers, each item is shown with its own tier. `--workspace` selects the
+  workspace whose project file is merged in (default: the current directory).
+- **`nexus policy check`** with no file is the same report for the installed files. Exit code 0 means Nexus starts
+  with this policy; exit code 2 means a managed file cannot be used and Nexus refuses to start. Both managed files
+  are checked, also when the first one is broken.
+- **`nexus policy check <file>`** validates a candidate file before it is rolled out: a regular file that is not a
+  symbolic link, at most 64 KiB, valid UTF-8, the strict grammar, known tables and keys, a supported
+  `schema_version`. Exit code 0 when the content is valid, 2 when it is not (with the line). The owner and the mode
+  are not checked for a candidate: they belong to the installed file, so run `nexus policy check` with no argument
+  on a machine where it is installed.
+
+`--json` prints one document. For the report: `schemaVersion` (1), `valid`, `workspace`, `tiers` (each with `tier`,
+`file`, `state`, and `schemaVersion`, `status` or `error` where they apply), `effective` (each row with `key`,
+`value`, `source` and, for a list, `items`), `notices`. `effective` is absent when `valid` is false. For a candidate
+file: `schemaVersion`, `file`, `valid`, and `code`, `error`, `line` when it is invalid.
+
+There is no command that approves a project file by itself: `nexus trust <workspace>` remains the one approval.
 
 ## The project file and its integrity
 
@@ -446,8 +511,10 @@ NEXUS_TRUST_WORKSPACE is ignored: managed policy disables it. [policy: ...]
 ```
 
 A flag that policy disables is refused at launch (exit code 2); an attempt during a session is clamped with a notice
-and the session continues. The texts for MCP servers and plugins are not produced yet (see "What is enforced
-today"). A runtime switch to `auto` is reported as `A request for approval mode 'auto' is ignored: ...`.
+and the session continues. A switch to `auto` that neither `/mode auto` nor an "always" answer asked for (a client
+setting the mode) is reported as `A request for approval mode 'auto' is ignored: ...`. When the managed policy cannot
+be read, a server or plugin is refused as `... is not started: the managed policy cannot be read (system tier,
+/etc/nexus/policy.toml).`
 
 ## What a policy does not protect against
 

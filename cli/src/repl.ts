@@ -27,6 +27,7 @@ import {
 import { renderTokenGauge } from "./tokens.js";
 import { scanAndOnboardWorkspace } from "./onboard.js";
 import { PolicyContext } from "./core/approval_policy.js";
+import { clampAlwaysApproval, clampRuntimeApprovalMode } from "./core/managed_policy.js";
 import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, verifierTimeoutSecs } from "./tester.js";
 import { copyToClipboard, readFromClipboard } from "./clipboard.js";
 import { encodeImageFile, formatVisionContent } from "./image.js";
@@ -156,6 +157,7 @@ export class InteractiveRepl {
     this.config.surface = "repl";
     this.agent.setSurface("repl");
     this.agent.setApprovalMode(this.approvalMode);
+    if (this.approvalMode === "auto" && this.autoModeRefusal("Approval mode 'auto'")) this.approvalMode = "review";
     // Compaction archives the originals beside the current session before the session names it as committed.
     this.agent.setArchiveSink((compactionId, messages, record) => this.sessionManager.appendArchivedHistory(this.currentSessionId, messages, compactionId, record));
     this.historyFile = path.join(os.homedir(), ".nexus_history");
@@ -199,8 +201,20 @@ export class InteractiveRepl {
   }
 
   public setApprovalMode(mode: ApprovalMode): void {
-    this.approvalMode = mode;
     this.agent.setApprovalMode(mode);
+    if (mode === "auto" && this.autoModeRefusal("Approval mode 'auto'")) return;
+    this.approvalMode = mode;
+  }
+
+  /**
+   * GV-1: why this session may not enter approval mode `auto`, when managed policy disables it (the text names the
+   * policy source). The REPL answers approvals from its own copy of the mode, so everything that would set that copy
+   * to `auto` asks here first; the agent refuses the same request by itself.
+   */
+  private autoModeRefusal(origin: string): string | undefined {
+    const policy = this.agent.getBridge().getSecurityManager().getEffectivePolicy();
+    if (origin === "'always'") return clampAlwaysApproval(policy).notice;
+    return clampRuntimeApprovalMode(policy, this.approvalMode === "auto" ? "review" : this.approvalMode, "auto", origin).notice;
   }
 
   /** Runs one agent turn with the operator's stop authority wired to it, then records the structured result. */
@@ -624,6 +638,11 @@ export class InteractiveRepl {
           pc.bold(pc.yellow(`  Type 'all' to confirm auto-approving all actions for this session: `)),
           { graceMs: REPL_APPROVAL_GRACE_MS }
         );
+        const notRemembered = confirmAll?.trim().toLowerCase() === "all" ? this.autoModeRefusal("'always'") : undefined;
+        if (notRemembered) {
+          console.log(pc.yellow(`  ${notRemembered}\n`));
+          return true;
+        }
         if (confirmAll?.trim().toLowerCase() === "all") {
           this.approvalMode = "auto";
           this.agent.setApprovalMode("auto");
@@ -1035,7 +1054,10 @@ export class InteractiveRepl {
             this.printStatus(true);
             continue;
           } else if (cmd === "mode") {
-            if (arg === "auto" || arg === "autonomous") {
+            const autoRefused = arg === "auto" || arg === "autonomous" ? this.autoModeRefusal("/mode auto") : undefined;
+            if (autoRefused) {
+              console.log(pc.yellow(`${autoRefused}\n`));
+            } else if (arg === "auto" || arg === "autonomous") {
               this.approvalMode = "auto";
               this.agent.setApprovalMode("auto");
               console.log(pc.green("✔ Mode switched to: auto (autonomous tool execution)\n"));

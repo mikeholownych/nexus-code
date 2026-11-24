@@ -62,6 +62,8 @@ function buildConfig(options: any): HarnessConfig {
 }
 import { registerOperationCommands } from "./operation_cli.js";
 import { requireManagedPolicyAtStartup } from "./core/policy_runtime.js";
+import { registerPolicyCommands } from "./policy_cli.js";
+import { managedPolicy, verifyFlagRefusal } from "./core/policy_runtime.js";
 import { registerAuditCommands } from "./audit_cli.js";
 import pc from "picocolors";
 
@@ -721,6 +723,9 @@ program
       sandbox = { engine, network: Boolean(options.sandboxNetwork) };
     }
     if (options.sandboxNetwork && sandbox?.engine === "none") return fail("usage", "--sandbox-network cannot be used with --sandbox none");
+    // GV-1: verify builds no session configuration, so managed policy meets its flags here; a refusal names its source.
+    const policyRefusal = verifyFlagRefusal(managedPolicy(), { yes: Boolean(options.yes), sandboxNone: sandbox?.engine === "none", sandboxNetwork: Boolean(options.sandboxNetwork) });
+    if (policyRefusal) return fail("usage", policyRefusal);
 
     // The first signal stops verification once the running verifier process ends; a second one exits at once.
     const abort = new AbortController();
@@ -1541,6 +1546,8 @@ program
 
 registerOperationCommands(program);
 registerProviderCommands(program);
+// GV-1: `nexus policy show|check` (src/policy_cli.ts). Read-only, and it runs when a managed file is broken.
+registerPolicyCommands(program);
 
 program.hook("preAction", async (_thisCommand, actionCommand) => {
   let topLevelCommand = actionCommand;
@@ -1550,11 +1557,11 @@ program.hook("preAction", async (_thisCommand, actionCommand) => {
   const name = topLevelCommand === program ? program.name() : topLevelCommand.name();
 
   // GV-1: the managed policy is read here, once, before any command acts. A policy file that exists and cannot be used
-  // ends the process (exit 2). `doctor` and `check` still run so the problem can be diagnosed; --version and --help
-  // never reach this hook.
-  if (name !== "doctor" && name !== "check") requireManagedPolicyAtStartup();
+  // ends the process (exit 2). `doctor`, `check` and `policy` still run so the problem can be diagnosed; --version and
+  // --help never reach this hook.
+  if (name !== "doctor" && name !== "check" && name !== "policy") requireManagedPolicyAtStartup();
 
-  if (operatorConfigStartupError && name !== "doctor" && name !== "check") {
+  if (operatorConfigStartupError && name !== "doctor" && name !== "check" && name !== "policy") {
     console.error(pc.red(`Configuration error: ${formatDiagnosticForOutput(operatorConfigStartupError)}`));
     process.exit(2);
   }

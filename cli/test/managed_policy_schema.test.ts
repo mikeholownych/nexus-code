@@ -215,11 +215,11 @@ test("the complete example sets every key of the format, and the worked examples
 
 test("the document says, at the top, what is enforced and what is not yet, and lists every key and every error code", () => {
   const head = DOC.split("\n").slice(0, 14).join("\n");
-  assert.match(head, /Status: enforced in part/);
-  assert.match(head, /a key marked "not yet" below is accepted and merged, and changes nothing/);
+  assert.match(head, /Status: enforced, with two gaps/);
+  assert.match(head, /`egress\.secret_destinations` is not in yet: it is marked "not yet" below, is accepted and\n> merged, and changes nothing/);
   // The keys nothing acts on yet are marked so in the enforcement table; no other row is.
   const notYet = DOC.split("\n").filter((line) => /^\| `[a-z_.`, ]+ \| not yet \|/.test(line)).map((line) => line.split("|")[1].trim());
-  assert.deepEqual(notYet, ["`egress.secret_destinations`", "`mcp.allow`, `mcp.disable_workspace`", "`plugins.allow`, `plugins.disable_workspace`"]);
+  assert.deepEqual(notYet, ["`egress.secret_destinations`"]);
   for (const row of PLAN_KEYS) assert.ok(DOC.includes(`| \`${row.table}.${row.key}\` |`), `${row.table}.${row.key} is in the key table`);
   for (const code of ["directory_unsafe", "symlink", "not_regular", "unreadable", "changed", "owner", "mode", "too_large", "invalid_utf8", "bom", "nul", "empty", "schema_version_missing", "schema_version_unsupported", "syntax", "unsupported", "duplicate_key", "duplicate_table", "string_too_long", "array_too_long", "control_character", "invalid_unicode", "unknown_table", "unknown_key", "wrong_type", "bad_value"]) {
     assert.ok(DOC.includes(`\`${code}\``), `error code ${code}`);

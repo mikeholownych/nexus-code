@@ -28,6 +28,24 @@ export function untrustedWorkspaceExtensions(workspace: string, readOnly = false
   return found;
 }
 
+/**
+ * GV-5: whether `file` is the workspace's own: it lies under the workspace, or it resolves to something that does (a
+ * link from the operator's configuration directory to a file the repository controls). Used where managed policy
+ * switches the workspace's MCP servers or plugins off, so a link cannot relabel them.
+ */
+export function isWorkspaceFile(workspace: string, file: string): boolean {
+  const inside = (root: string, candidate: string): boolean => {
+    const relative = path.relative(root, candidate);
+    return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+  };
+  if (inside(path.resolve(workspace), path.resolve(file))) return true;
+  try {
+    return inside(realWorkspace(workspace), fs.realpathSync(file));
+  } catch {
+    return false;
+  }
+}
+
 export function getTrustStorePath(): string {
   return path.join(os.homedir(), ".config", "nexus", "trusted_workspaces.json");
 }

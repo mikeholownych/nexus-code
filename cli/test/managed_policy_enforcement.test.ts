@@ -561,7 +561,7 @@ describe("production has no seam", () => {
     assert.match(sources.get("core/policy_runtime.ts")!, /^const processHost = createPolicyHost\(resolveProductionPolicyInputs\);$/m);
     // Nothing exported from the runtime module assigns the process host or its state.
     const exported = [...sources.get("core/policy_runtime.ts")!.matchAll(/^export (?:function|const|let|var|class|interface|type) (\w+)/gm)].map((match) => match[1]).sort();
-    assert.deepEqual(exported, ["HumanRequirement", "ManagedPolicyState", "PolicyHost", "WorkspaceTrustFacts", "approvalDecisionSource", "approvalHint", "clampApprovalSettings", "createPolicyHost", "emitPolicyNotice", "humanRequirementForEffect", "managedPolicy", "processPolicyHost", "requireManagedPolicyAtStartup"]);
+    assert.deepEqual(exported, ["HumanRequirement", "ManagedPolicyState", "PolicyHost", "WorkspaceTrustFacts", "approvalDecisionSource", "approvalHint", "clampApprovalSettings", "createPolicyHost", "emitPolicyNotice", "humanRequirementForEffect", "managedPolicy", "printableRefusal", "processPolicyHost", "requireManagedPolicyAtStartup", "verifyFlagRefusal"]);
     assert.doesNotMatch(sources.get("core/policy_runtime.ts")!, /^(?!const processHost = ).*\bprocessHost\s*=[^=]/m, "the process host is assigned once");
   });
 
@@ -572,5 +572,7 @@ describe("production has no seam", () => {
     assert.deepEqual(calls(/new ApprovalPolicy\([^)]+\)/g), []);
     assert.deepEqual(calls(/\bisWorkspaceTrusted\((?:[^(),]|\([^()]*\))*,(?:[^(),]|\([^()]*\))*,/g).filter((call) => !call.startsWith("workspace_trust.ts: isWorkspaceTrusted(workspace: string")), []);
     assert.deepEqual(calls(/\bpolicyFor\s*:/g), []);
+    // GV-5: the MCP and plugin managers take the process policy; only a test hands them another one.
+    assert.deepEqual(calls(/new (?:McpClientManager|PluginManager)\([^()]*\bpolicy\b[^()]*\)/g), []);
   });
 });
