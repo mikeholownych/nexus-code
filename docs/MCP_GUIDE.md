@@ -133,7 +133,7 @@ The result text is one JSON object: `service_version`, `receipt_id` (`vr-` and 3
 
 Read a receipt with `resources/read` on `nexus://verify-receipt/<receipt_id>`. It holds the full `nexus verify` result document (`result`, schema v3), the workspace, when the base was pinned, and `receipt_sha256`, the SHA-256 of `JSON.stringify(result)`. `resources/list` shows the retained receipts. Receipts are kept in the server's memory only: the last 32, gone when the server exits. No request can create or change one.
 
-The ACP server exposes the same service as `_nexus/verify`. It accepts only an active `sessionId`; the verifier and deliverables are fixed by the operator configuration, and the base commit is pinned when the session starts or loads. Verification is refused while an overlapping session is prompting or stopping. Read the result with `_nexus/receipt/get` using the returned receipt id and the same session id. See [ACP.md](ACP.md) for the protocol surface.
+The ACP server exposes the same service as `_nexus/verify`. It accepts only an active `sessionId`; the verifier and deliverables are fixed by the operator configuration, and the base commit is pinned by the first session on a directory and kept for every later session on it until the server exits. Verification is refused while an overlapping session is prompting or stopping. Read the receipt with `_nexus/receipt/get` using the returned receipt id and the same session id. See [ACP.md](ACP.md) for the protocol surface.
 
 **What this does not protect against.** The guarantee is about the request. `serve-mcp` gives the same client `run_command`, and a client that can run commands as the server's user can act outside the protocol. No check inside the server stops any of the following:
 

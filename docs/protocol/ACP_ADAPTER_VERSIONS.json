@@ -13,5 +13,10 @@
     "schema_version": 3,
     "schemaSha256": "c36c6a1cdc3a09d7e7b9a5de9885b6d14f5f9a97c82753bbe81f20e1c89e471a",
     "note": "Add the objective inference-submission budget stop reason and continuation usage fields to the ACP turn-result contract. Additive adapter-schema version; v1 and v2 remain unchanged."
+  },
+  {
+    "schema_version": 4,
+    "schemaSha256": "bafcd99e7a1d7d958b700f0e9c8cff0cebdc6f4a3b8113f8767e55cdca095de8",
+    "note": "The `_nexus/verify` result names what it covered: three new required members, `workspace` (the canonical path of the session's directory, as in the receipt), `base_pinned_commit` and `base_pinned_at` (the commit the change was measured from and when this process pinned it for that workspace). Requests are unchanged. Additive for a client that reads results; v1, v2 and v3 remain unchanged."
   }
 ]

@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { AcpStdioServer, acpStartupRefusal } from "../src/acp_stdio.js";
 import { encodeMessage } from "../src/acp/jsonrpc.js";
 import { encodeEvent } from "../src/protocol.js";
+import { makeRepo } from "./helpers/fixtures.js";
 
 // The four defects the review of the adapter found by running it: auto approval was served, a signal did not end the
 // process, a checkpoint choice was never answered, and a cancelled prompt left its permission behind.
@@ -288,5 +289,57 @@ process.once("SIGTERM", () => {
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a signalled adapter waits past its grace period for a running verification to finish stopping", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-acp-verify-shutdown-"));
+  const repo = makeRepo();
+  const script = path.join(dir, "verify.mts");
+  const started = path.join(dir, "started");
+  const cleaned = path.join(dir, "cleaned");
+  // The runner stands for a worker that needs 1.5 s after the stop to remove its scratch trees: longer than the
+  // 300 ms grace, shorter than the bound a running verification is given.
+  fs.writeFileSync(script, `
+import fs from "node:fs";
+import { runAcpStdio } from ${JSON.stringify(path.join(cli, "src/acp_stdio.ts"))};
+import { encodeEvent } from ${JSON.stringify(path.join(cli, "src/protocol.ts"))};
+import { mergePolicies } from ${JSON.stringify(path.join(cli, "src/core/managed_policy.ts"))};
+runAcpStdio({
+  config: { endpoint: "http://127.0.0.1:1/v1", model: "m", workspace: ${JSON.stringify(repo)}, shell: "bash", approvalMode: "review", authoritativeVerifierCommand: "npm test" },
+  version: "test", shutdownGraceMs: 300,
+  verifyDeps: {
+    policy: () => mergePolicies(),
+    run: (_job, signal) => new Promise((resolve) => {
+      fs.writeFileSync(${JSON.stringify(started)}, "");
+      signal.addEventListener("abort", () => setTimeout(() => { fs.writeFileSync(${JSON.stringify(cleaned)}, ""); resolve({ interrupted: true }); }, 1500), { once: true });
+    }),
+  },
+  createSidecar: (_config, _resume, write) => ({
+    start() { write(encodeEvent({ type: "session.state", session: ${JSON.stringify(SESSION)}, workspace: ${JSON.stringify(repo)}, workspace_name: "fixture", model: "m", mode: "review", git: null, busy: false })); },
+    handleLine() { return Promise.resolve(); },
+  }),
+});
+`);
+  const { home, env } = scratchHome();
+  const child = spawn(process.execPath, [entry[0], script], { cwd: dir, env, stdio: ["pipe", "pipe", "pipe"] });
+  let out = "";
+  child.stdout.on("data", (chunk) => { out += chunk; });
+  try {
+    child.stdin.write(encodeMessage({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 1, clientInfo: { name: "fixture", version: "1" }, clientCapabilities: {} } }));
+    child.stdin.write(encodeMessage({ jsonrpc: "2.0", id: 2, method: "session/new", params: { cwd: repo, mcpServers: [] } }));
+    await until(() => out.includes('"id":2'), "the session", 60_000);
+    child.stdin.write(encodeMessage({ jsonrpc: "2.0", id: 3, method: "_nexus/verify", params: { sessionId: SESSION } }));
+    await until(() => fs.existsSync(started), "the verification starting");
+    const exited = new Promise<number | null>((resolve) => child.once("exit", (code) => resolve(code)));
+    child.kill("SIGTERM");
+    let timer: NodeJS.Timeout | undefined;
+    const code = await Promise.race([exited, new Promise<string>((resolve) => { timer = setTimeout(() => resolve("still running"), 10_000); })]);
+    clearTimeout(timer);
+    assert.equal(code, 143);
+    assert.ok(fs.existsSync(cleaned), "the process exited before the verification had finished stopping");
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    for (const target of [dir, repo, home]) fs.rmSync(target, { recursive: true, force: true });
   }
 });

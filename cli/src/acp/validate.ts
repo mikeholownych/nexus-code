@@ -310,14 +310,16 @@ export function validateReceiptGet(params: unknown): Validated<{ sessionId: stri
   return ok({ sessionId: sessionId.value, receiptId });
 }
 
-/** `_nexus/verify`: the client chooses only the active session; verifier, base and deliverables are never accepted. */
+/**
+ * `_nexus/verify`: the client chooses only the active session; verifier, base and deliverables are never accepted.
+ * `_meta` is allowed and never read, whatever it holds, as on every other method.
+ */
 export function validateVerify(params: unknown): Validated<{ sessionId: string }> {
   const p = record(params);
   if (!p) return fail("params", "the verification request requires a params object");
   if (Object.keys(p).some((key) => key !== "sessionId" && key !== "_meta")) {
     return fail("params", "verification accepts only sessionId and optional _meta; verification settings belong to the server operator");
   }
-  if (present(p, "_meta") && !record(p._meta)) return fail("_meta", "_meta must be an object");
   const sessionId = validateSessionId(member(p, "sessionId"));
   return sessionId.ok ? ok({ sessionId: sessionId.value }) : sessionId;
 }
