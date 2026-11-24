@@ -40,3 +40,18 @@ export const jobsOf = (world: RunnerWorld, id: string): JobRecord[] =>
 /** The first job the schedule has started, once there is one. */
 export const firstJobOf = (world: RunnerWorld, id: string, timeoutMs = 120_000): Promise<JobRecord> =>
   until(() => jobsOf(world, id)[0], timeoutMs, () => `a job of schedule ${id}\n${JSON.stringify(readSchedule(schedulePaths(world.paths), id)?.state)}`);
+
+/**
+ * Makes a schedule look as if the runner had not served it for `hoursDown` hours: its grid starts that long ago (plus
+ * twenty minutes, so the newest slot is not on time) and its next slot is the first of them.
+ */
+export function backdate(world: RunnerWorld, id: string, hoursDown: number, change: (record: ScheduleRecord) => ScheduleRecord = (record) => record): void {
+  const paths = schedulePaths(world.paths);
+  withScheduleLock(paths, () => {
+    const record = readSchedule(paths, id)!;
+    assert.equal(record.trigger.kind, "every");
+    const period = (record.trigger as { seconds: number }).seconds * 1000;
+    const createdAt = Date.now() - hoursDown * 3_600_000 - 20 * 60_000;
+    writeSchedule(paths, change({ ...record, createdAt: new Date(createdAt).toISOString(), state: { ...record.state, nextDueAt: new Date(createdAt + period).toISOString() } }));
+  });
+}

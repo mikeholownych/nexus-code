@@ -41,8 +41,10 @@ Each job has objective-wide step, tool, and inference budgets that persist acros
 
 Receipts record the starting commit, policy, verifier, budgets, attempts, unattended status, and final outcome. The runner reports `COMPLETE` only when the worker's durable operation record is also `COMPLETE` and every required unit is complete; a worker's success report by itself is insufficient. It does not mean the job was merged. A blocked, failed, cancelled, or timed-out job is not successful.
 
+A runner that is serving also fires [schedules](SCHEDULES.md): `nexus schedule add` stores an operator's `cron`, `every` or `once` order, and each run is a job like the ones above. Missed runs are counted and reported, never replayed in a burst.
+
 ## State and limits
 
-Runner state is stored in `${NEXUS_STATE_DIR:-~/.nexus}/runner`, in owner-only directories and files. JSON records are size bounded, versioned, strictly parsed, refuse duplicate keys, symbolic links, unexpected keys, and unsafe permissions, and are atomically replaced with file and directory syncs. Event logs are redacted and capped at 16 MiB; worker stderr is capped at 32 MiB. Ended jobs keep their record and receipt; event and stderr logs are pruned after 30 days. Same-user programs can alter this state, so it is not a security boundary against the account that runs Nexus.
+Runner state is stored in `${NEXUS_STATE_DIR:-~/.nexus}/runner`, in owner-only directories and files (schedules in its `nexus-schedules/` directory). JSON records are size bounded, versioned, strictly parsed, refuse duplicate keys, symbolic links, unexpected keys, and unsafe permissions, and are atomically replaced with file and directory syncs. Event logs are redacted and capped at 16 MiB; worker stderr is capped at 32 MiB. Ended jobs keep their record and receipt; event and stderr logs are pruned after 30 days. Same-user programs can alter this state, so it is not a security boundary against the account that runs Nexus.
 
 The runner requires Linux `/proc` process identity and `flock`. It is experimental and does not support Windows or macOS, multi-user scheduling, automatic result merging, or running jobs without a supervising process. Keep the runner on the same Nexus version as its workers; stop it before upgrading.
