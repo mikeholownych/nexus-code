@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01KH8auHoAoyAkpRwLuCW2Va",
+  "agent_id": "a497a5c16f766f926",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement BG-2 schedules",
+  "token_usage": {
+    "input_tokens": 284,
+    "cache_creation_tokens": 774201,
+    "cache_read_tokens": 37595596,
+    "output_tokens": 181711,
+    "api_call_count": 141
+  },
+  "started_at": "2026-11-24T20:18:54.241403425Z",
+  "completed_at": "2026-11-24T21:08:47.701658863Z"
+}

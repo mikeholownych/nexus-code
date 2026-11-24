@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Dvv1sEjNhs8c9QSuMu573H",
+  "agent_id": "a6f130bfd7646f382",
+  "subagent_type": "reviewer",
+  "task_description": "Review PR #799 BG-2 schedules",
+  "token_usage": {
+    "input_tokens": 104,
+    "cache_creation_tokens": 123167,
+    "cache_read_tokens": 4435304,
+    "output_tokens": 25470,
+    "api_call_count": 52
+  },
+  "started_at": "2026-11-24T21:09:46.376831473Z",
+  "completed_at": "2026-11-24T21:31:05.711200166Z"
+}

@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_0157MNqsCpZbijZ95G4BfUSG",
+  "agent_id": "adcdf77bcc6a2faa3",
+  "subagent_type": "reviewer",
+  "task_description": "Re-review PR #797 PF-3 fixes",
+  "token_usage": {
+    "input_tokens": 94,
+    "cache_creation_tokens": 105805,
+    "cache_read_tokens": 3417600,
+    "output_tokens": 34118,
+    "api_call_count": 47
+  },
+  "started_at": "2026-11-24T21:02:48.62408201Z",
+  "completed_at": "2026-11-24T21:22:33.154003523Z"
+}
