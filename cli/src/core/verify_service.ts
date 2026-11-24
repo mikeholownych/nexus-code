@@ -187,13 +187,15 @@ function forkRunner(workerModule: URL, killGraceMs: number): VerifyRunner {
     // ignores the signal itself is handed to init: no later listing finds it under the worker, so it is remembered
     // here, and the start time tells it from an unrelated process that was given the same pid since.
     const seen = new Map<number, string>();
-    const signalTree = (name: NodeJS.Signals, worker = true) => {
+    const signalTree = (name: NodeJS.Signals, worker = true, passes = KILL_LISTING_PASSES) => {
       if (child.pid === undefined) return;
       const send = (pid: number, signal: NodeJS.Signals) => { try { process.kill(pid, signal); } catch { /* already gone */ } };
+      // Once the worker has exited, its pid may belong to another process: it is then neither signalled nor searched.
+      const workerPid = child.exitCode === null && child.signalCode === null ? child.pid : undefined;
       const survivors = () => [...seen].filter(([pid, started]) => startedAt(pid) === started).map(([pid]) => pid);
       const list = () => {
-        const roots = [child.pid!, ...survivors()];
-        const found = [...new Set([...roots.slice(1), ...descendants(roots)])];
+        const remembered = survivors();
+        const found = [...new Set([...remembered, ...descendants([...(workerPid === undefined ? [] : [workerPid]), ...remembered])])];
         for (const pid of found) if (!seen.has(pid)) { const started = startedAt(pid); if (started !== undefined) seen.set(pid, started); }
         return found;
       };
@@ -202,24 +204,25 @@ function forkRunner(workerModule: URL, killGraceMs: number): VerifyRunner {
       // signal is handed to init unseen. So the tree is stopped first, from the top down, one listing at a time: a
       // stopped process starts nothing, and each further listing can only add what was started before its parent
       // stopped. The worker is stopped too, since the moment a verifier dies it may start the next.
-      send(child.pid, "SIGSTOP");
+      if (workerPid !== undefined) send(workerPid, "SIGSTOP");
       const stopped = new Set<number>();
       let targets = list();
-      for (let pass = 0; pass < KILL_LISTING_PASSES; pass++) {
+      for (let pass = 0; pass < passes; pass++) {
         const fresh = targets.filter((pid) => !stopped.has(pid));
         if (!fresh.length) break;
         for (const pid of fresh) { send(pid, "SIGSTOP"); stopped.add(pid); }
         targets = list();
       }
-      for (const pid of stopped) send(pid, name);
-      if (worker) {
-        send(child.pid, name);
-        send(-child.pid, name);
+      // What the last listing added was never stopped, and is signalled all the same.
+      for (const pid of new Set([...stopped, ...targets])) send(pid, name);
+      if (worker && workerPid !== undefined) {
+        send(workerPid, name);
+        send(-workerPid, name);
       }
       // What was not killed goes on: a process handles SIGTERM only once it runs again, and a spared worker has its
       // scratch trees to remove.
       if (name !== "SIGKILL") for (const pid of stopped) send(pid, "SIGCONT");
-      if (name !== "SIGKILL" || !worker) send(child.pid, "SIGCONT");
+      if (workerPid !== undefined && (name !== "SIGKILL" || !worker)) send(workerPid, "SIGCONT");
     };
     const onAbort = () => {
       // SIGTERM ends the running verifier, which lets the worker remove its scratch trees and exit.
@@ -231,7 +234,8 @@ function forkRunner(workerModule: URL, killGraceMs: number): VerifyRunner {
         killTimer = setTimeout(() => signalTree("SIGKILL"), killGraceMs);
       }, killGraceMs);
     };
-    const onProcessExit = () => signalTree("SIGKILL");
+    // The server is exiting: one listing after the first, so a process listing that hangs cannot hold the exit for long.
+    const onProcessExit = () => signalTree("SIGKILL", true, 1);
     const finish = (final: VerifyWorkerReply) => {
       if (settled) return;
       settled = true;
