@@ -1,0 +1,42 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M85G01QWEDG87DT6Q610Y6AK",
+  "strategy": "manual-commit",
+  "branch": "codex/pa3-review-fixes",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "cli/src/core/operation_runner.ts",
+    "cli/src/operation_cli.ts",
+    "docs/v1.3.0/PA3_GOAL_LIFECYCLE.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 233461,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 30690944,
+    "output_tokens": 23423,
+    "api_call_count": 233
+  },
+  "redaction": {
+    "replacements": 2387,
+    "layers": {
+      "betterleaks": 790,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 129,
+      "credentialed_uri": 112,
+      "entropy": 1745,
+      "key_context": 0,
+      "provider_token": 25,
+      "shell_stdin": 0
+    }
+  }
+}
