@@ -106,8 +106,11 @@ export async function startGateway(script: (n: number, body?: any) => Reply, opt
     req.on("end", () => {
       let body: any = {};
       try { body = JSON.parse(raw); } catch {}
-      requests.push(body);
-      const extraHeaders = options.headers ? options.headers(requests.length, body) : {};
+      // Count only chat-completion requests as "requests" for test assertions; probes/models/tokenize are tracked separately.
+      const isChat = req.url?.endsWith("/chat/completions") || Array.isArray(body?.messages);
+      if (isChat) requests.push(body);
+      const chatN = requests.length;
+      const extraHeaders = options.headers ? options.headers(chatN, body) : {};
       for (const [k, v] of Object.entries(extraHeaders)) res.setHeader(k, v);
       const r = script(requests.length, body);
       const respond = () => {

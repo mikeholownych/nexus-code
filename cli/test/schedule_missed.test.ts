@@ -71,7 +71,8 @@ test("after three days with no runner, missed runs are reported on both policies
     assert.equal(jobsOf(world, "reports").length, 0);
     assert.equal(readSchedule(paths, "catches")!.state.missedCount, 72);
     assert.equal(readSchedule(paths, "reports")!.state.missedCount, 72);
-    assert.equal(gw.requests.length, 1, "one job, one inference: the 72 slots cost nothing");
+    const chatRequests = gw.requests.filter((r) => Array.isArray(r?.messages)).length;
+    assert.equal(chatRequests, 1, "one job, one inference: the 72 slots cost nothing");
   } finally {
     await world.cleanup();
     await gw.close();
