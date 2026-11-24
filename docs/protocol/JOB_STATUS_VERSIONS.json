@@ -1,0 +1,7 @@
+[
+  {
+    "schema_version": 1,
+    "schemaSha256": "79c6385aee1416b10e712d41dd4b8f37f5bea9cf3dc12e80f21d06a50fc02c3d",
+    "note": "First published schema of the nexus job status --json document (BG-1), generated from JobStatusDocument in cli/src/core/job_receipt.ts on release/v1.3.0: schema_version, the job record, a summary of the job's operation (id, status, origin, unit statuses) or null, and the job's receipt or null. Nothing was published before it."
+  }
+]

@@ -8,8 +8,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { sha256 } from "../scripts/gen_protocol_schema.mjs";
-import { generateJobReceiptSchema, JOB_RECEIPT_LEDGER_FILE, jobReceiptLedgerProblem, jobReceiptSchemaFile } from "../scripts/gen_job_receipt_schema.mjs";
-import { buildJobReceipt, JOB_RECEIPT_SCHEMA_VERSION } from "../src/core/job_receipt.js";
+import { generateJobReceiptSchema, generateJobStatusSchema, JOB_RECEIPT_LEDGER_FILE, JOB_STATUS_LEDGER_FILE, jobReceiptLedgerProblem, jobReceiptSchemaFile, jobStatusLedgerProblem, jobStatusSchemaFile } from "../scripts/gen_job_receipt_schema.mjs";
+import { buildJobReceipt, buildJobStatus, JOB_RECEIPT_SCHEMA_VERSION, JOB_STATUS_SCHEMA_VERSION } from "../src/core/job_receipt.js";
 import { newOperation, type DurableOperationState } from "../src/core/operation.js";
 import { DEFAULT_JOB_BUDGETS, newJobIds, newJobRecord, TERMINAL_JOB_STATES, type JobRecord } from "../src/core/runner_store.js";
 import { validate } from "./helpers/json_schema.js";
@@ -122,4 +122,30 @@ test("a completed job copies each unit's outcome and says nothing was merged; a 
   for (const bad of [{ ...done, unattended: false }, { ...done, schema_version: 2 }, { ...done, outcome: "VERIFIED" }, { ...done, approval_mode: "auto" }, (({ unattended: _u, ...rest }) => rest)(done)]) {
     assert.ok(validate(bad, schema, schema).length > 0);
   }
+});
+
+test("the job status document: checked-in schema, ledger, and what `job status --json` is built from", () => {
+  const text = fs.readFileSync(jobStatusSchemaFile(JOB_STATUS_SCHEMA_VERSION), "utf8");
+  const generated = generateJobStatusSchema();
+  assert.equal(generated.version, JOB_STATUS_SCHEMA_VERSION);
+  assert.equal(generated.text, text, "docs/protocol/job-status schema is out of date: run `node cli/scripts/gen_job_receipt_schema.mjs`, then record the version decision in docs/protocol/JOB_STATUS_VERSIONS.json");
+  const ledger = JSON.parse(fs.readFileSync(JOB_STATUS_LEDGER_FILE, "utf8"));
+  assert.equal(jobStatusLedgerProblem(text, ledger, JOB_STATUS_SCHEMA_VERSION), undefined);
+  for (const entry of ledger) assert.ok(Number.isInteger(entry.schema_version) && /^[0-9a-f]{64}$/.test(entry.schemaSha256) && typeof entry.note === "string" && entry.note.trim());
+  assert.match(jobStatusLedgerProblem(`${text} `, ledger, JOB_STATUS_SCHEMA_VERSION) ?? "", /add an entry/);
+  assert.equal(ledger[ledger.length - 1].schemaSha256, sha256(text));
+  const statusSchema = JSON.parse(text);
+
+  const j = job();
+  const queued = buildJobStatus(j, undefined, undefined);
+  assert.deepEqual(queued, { schema_version: 1, job: j, operation: null, receipt: null });
+  assert.deepEqual(validate(queued, statusSchema, statusSchema), []);
+  const op = operation(j.operationId);
+  op.origin = { kind: "job", jobId: j.id, unattended: true };
+  const ended = buildJobStatus(j, op, buildJobReceipt(j, op, { outcome: "CANCELLED", reason: "STOPPED", endedAt: ENDED }));
+  assert.deepEqual(validate(JSON.parse(JSON.stringify(ended)), statusSchema, statusSchema), []);
+  assert.deepEqual(ended.operation, { id: j.operationId, status: "RUNNING", origin: { kind: "job", jobId: j.id, unattended: true }, units: [{ id: "task", status: op.units[0].status }, { id: "second", status: op.units[1].status }] });
+  assert.equal(buildJobStatus(j, operation(j.operationId), undefined).operation?.origin, null);
+  assert.ok(validate({ ...queued, schema_version: 2 }, statusSchema, statusSchema).length > 0);
+  assert.ok(validate({ job: j, operation: null, receipt: null }, statusSchema, statusSchema).length > 0);
 });

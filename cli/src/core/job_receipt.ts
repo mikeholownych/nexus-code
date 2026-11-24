@@ -4,7 +4,7 @@
  * outcome is the job's own, a unit's `outcome` is copied from the operation, and `unattended` is always true.
  * Schema: docs/protocol/job-receipt-v<N>.schema.json (cli/scripts/gen_job_receipt_schema.mjs).
  */
-import type { DurableOperationState, EscalationDecision, WorkUnit } from "./operation.js";
+import type { DurableOperationState, EscalationDecision, OperationOrigin, WorkUnit } from "./operation.js";
 import type { JobBudgets, JobPolicy, JobRecord, TerminalJobState } from "./runner_store.js";
 import { unattendedApprovalMode } from "./unattended.js";
 
@@ -56,6 +56,29 @@ export interface JobReceipt {
 
 /** The document `docs/protocol/job-receipt-v<N>.schema.json` describes. */
 export type JobReceiptDocument = JobReceipt;
+
+export const JOB_STATUS_SCHEMA_VERSION = 1;
+
+/** What `nexus job status <id> --json` prints: the job record, a summary of its operation, and its receipt once it ended. */
+export interface JobStatusOutput {
+  schema_version: typeof JOB_STATUS_SCHEMA_VERSION;
+  job: JobRecord;
+  /** Null when the operation was never created (the job has not started, or failed before it could). */
+  operation: { id: string; status: string; origin: OperationOrigin | null; units: Array<{ id: string; status: string }> } | null;
+  receipt: JobReceipt | null;
+}
+
+/** The document `docs/protocol/job-status-v<N>.schema.json` describes. */
+export type JobStatusDocument = JobStatusOutput;
+
+export function buildJobStatus(job: JobRecord, operation: DurableOperationState | undefined, receipt: JobReceipt | undefined): JobStatusOutput {
+  return {
+    schema_version: JOB_STATUS_SCHEMA_VERSION,
+    job,
+    operation: operation ? { id: operation.id, status: operation.status, origin: operation.origin ?? null, units: operation.units.map((unit) => ({ id: unit.id, status: unit.status })) } : null,
+    receipt: receipt ?? null,
+  };
+}
 
 export interface JobEnd {
   outcome: TerminalJobState;

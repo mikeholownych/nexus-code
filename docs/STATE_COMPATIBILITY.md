@@ -48,6 +48,8 @@ In accordance with **REQ-PER-101**, the root state directory `~/.nexus` and ever
 | **REPL History** | `~/.nexus_history` | Interactive shell input line history | `0600` |
 | **Runner Jobs** | `~/.nexus/runner/jobs/<jobId>/job.json` | Detached job record `nexus-job` (version 1); a record of another version, or with an unknown or repeated key, is refused and never run | `0600` (dir `0700`) |
 | **Job Receipts** | `~/.nexus/runner/jobs/<jobId>/receipt.json` | Receipt `nexus-job-receipt` (schema 1) written when a detached job ends | `0600` (dir `0700`) |
+| **Runner Files** | `~/.nexus/runner/runner.json`, `inbox/<requestId>.json`, `jobs/<jobId>/{spec,worker,result}.json` | The runner record, client requests, and a job's frozen spec, worker record and worker result (version 1 each); any other version or an unknown key is refused | `0600` (dir `0700`) |
+| **Job Logs** | `~/.nexus/runner/jobs/<jobId>/events.ndjson`, `stderr.log` | A job's event log (secrets redacted, 16 MiB) and its worker's stderr; removed 30 days after the job ended | `0600` (dir `0700`) |
 
 ### Schema 2 publication and recovery
 
@@ -62,6 +64,12 @@ Pre-migration backups preserve the exact original bytes, including their origina
 Task and session stores use a permanent private `.nexus-state.guard` inode with kernel `flock` ownership. Linux requires `/usr/bin/flock` (util-linux); missing or unsafe lock support fails closed. State transactions wait at most two seconds for another writer, while background retention skips busy stores. Writers, readers, retention and upgrade snapshots must use the same guard. Kernel ownership ends on process death; Nexus never deletes the inode to reclaim it. Rollback preserves guard inodes even when an older backup did not contain that directory.
 
 Exit older Nexus clients before migration or rollback: those versions do not participate in the new store transaction protocol. Concurrent clients of mixed schema versions are not supported. Retention counts message logs, compaction history and migration backups with their parent record, rejects a stale deletion plan, and removes the primary before its companions.
+
+### Operation document version 5
+
+The operation document (the `operation` member of an operation's task record) has its own version, `CURRENT_OPERATION_SCHEMA_VERSION` in `cli/src/core/operation_schema.ts`, independent of the envelope's `schemaVersion`. Version 5 adds the optional member `origin` (`{ "kind": "job", "jobId", "scheduleId"?, "unattended": true }`), present only on an operation a detached job drives: no operator was at a front end. Versions 1 to 4 are upgraded on load by changing the version alone, after the byte-identical `.pre-migration-v<N>` copy; nothing is stamped after the fact. A build that writes version 4 refuses a version 5 record (`operation record schema 5 is newer than this build supports`), so it cannot rewrite one without the stamp. Stop the runner and let its jobs end before downgrading.
+
+The driver lock beside an operation record (`<operationId>.lock`) records the holder's kernel start time (`startTicks`) next to its pid. A lock whose pid is alive but was started at another time belongs to a driver that is gone and is taken over; a lock written by an older build has no start time and is judged on the pid alone, as before.
 
 ---
 

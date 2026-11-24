@@ -12,12 +12,12 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { sha256 } from "../scripts/gen_protocol_schema.mjs";
-import { generateJobSchema, JOB_LEDGER_FILE, jobLedgerProblem, jobSchemaFile } from "../scripts/gen_job_schema.mjs";
+import { generateJobSchema, generateRunnerFileSchema, JOB_LEDGER_FILE, jobLedgerProblem, jobSchemaFile, RUNNER_FILE_LEDGER_FILE, runnerFileLedgerProblem, runnerFileSchemaFile } from "../scripts/gen_job_schema.mjs";
 import { parseStrictJson, StrictJsonError } from "../src/core/strict_json.js";
 import {
   assertPrivateDir, canTransition, DEFAULT_JOB_BUDGETS, ensureRunnerTree, isTerminal, JOB_RECORD_VERSION, JOB_STATES, listJobs, newJobIds, newJobRecord,
-  parseJobRecord, parseJobSubmission, readJob, readPrivateJson, RECEIPT_JSON_LIMIT, RUNNER_JSON_LIMIT, runnerPaths, runnerRoot, RunnerStoreError, transition,
-  writeJob, writePrivateJson, type JobRecord, type JobSubmission,
+  parseJobRecord, parseJobSpecFile, parseJobSubmission, parseRunnerInfo, parseRunnerRequest, parseWorkerInfo, parseWorkerResult, readJob, readPrivateJson, RECEIPT_JSON_LIMIT,
+  RUNNER_FILE_VERSION, RUNNER_JSON_LIMIT, runnerPaths, runnerRoot, RunnerStoreError, transition, writeJob, writePrivateJson, type JobRecord, type JobSubmission,
 } from "../src/core/runner_store.js";
 import { validate } from "./helpers/json_schema.js";
 
@@ -276,4 +276,54 @@ test("the checked-in job schema equals a fresh generation, its ledger records it
   assert.ok(validate({ ...record(), unattended: false }, schema, schema).length > 0);
   assert.ok(validate({ ...record(), policy: "full-access" }, schema, schema).length > 0);
   assert.ok(validate({ ...record(), version: 2 }, schema, schema).length > 0);
+});
+
+test("the runner's other files: the checked-in schema, its ledger, and readers that refuse what they do not know", () => {
+  const checkedIn = fs.readFileSync(runnerFileSchemaFile(RUNNER_FILE_VERSION), "utf8");
+  const generated = generateRunnerFileSchema();
+  assert.equal(generated.version, RUNNER_FILE_VERSION);
+  assert.equal(generated.text, checkedIn, "docs/protocol/runner-files schema is out of date: run `node cli/scripts/gen_job_schema.mjs`, then record the version decision in docs/protocol/RUNNER_FILE_VERSIONS.json");
+  const ledger = JSON.parse(fs.readFileSync(RUNNER_FILE_LEDGER_FILE, "utf8"));
+  assert.equal(runnerFileLedgerProblem(checkedIn, ledger, RUNNER_FILE_VERSION), undefined);
+  for (const entry of ledger) assert.ok(Number.isInteger(entry.schema_version) && /^[0-9a-f]{64}$/.test(entry.schemaSha256) && typeof entry.note === "string" && entry.note.trim());
+  assert.match(runnerFileLedgerProblem(`${checkedIn} `, ledger, RUNNER_FILE_VERSION) ?? "", /add an entry/);
+  assert.equal(ledger[ledger.length - 1].schemaSha256, sha256(checkedIn));
+  const schema = JSON.parse(checkedIn);
+
+  const job = submission();
+  const head = (format: string) => ({ format, version: RUNNER_FILE_VERSION });
+  const identity = { pid: 4242, startTicks: "123456", bootId: "af0a82f9-613b-4dba-89dc-04203c86e454", startedAt: NOW.toISOString() };
+  const documents: Array<[unknown, (value: unknown) => unknown]> = [
+    [{ ...head("nexus-runner-request"), id: "req-0123456789abcdef", at: NOW.toISOString(), kind: "start", job, spec: { objective: "x", units: [] } }, parseRunnerRequest],
+    [{ ...head("nexus-runner-request"), id: "req-0123456789abcdef", at: NOW.toISOString(), kind: "stop", jobId: job.id }, parseRunnerRequest],
+    [{ ...head("nexus-runner-request"), id: "req-0123456789abcdef", at: NOW.toISOString(), kind: "resume", jobId: job.id }, parseRunnerRequest],
+    [{ ...head("nexus-runner"), ...identity, nexusVersion: "1.3.0", maxJobs: 1 }, parseRunnerInfo],
+    [{ ...head("nexus-job-worker"), jobId: job.id, attempt: 1, ...identity }, parseWorkerInfo],
+    [{ ...head("nexus-job-result"), jobId: job.id, attempt: 2, operationId: job.operationId, operationStatus: "BLOCKED", exit: 2 }, parseWorkerResult],
+    [{ ...head("nexus-job-result"), jobId: job.id, attempt: 1, operationId: job.operationId, operationStatus: null, exit: 1, error: { reason: "UNATTENDED_CLAMP", message: "refused" } }, parseWorkerResult],
+    [{ ...head("nexus-job-spec"), jobId: job.id, specSha256: "c".repeat(64), spec: { objective: "x" } }, parseJobSpecFile],
+  ];
+  for (const [document, parse] of documents) {
+    assert.deepEqual(validate(document, schema, schema), [], JSON.stringify(document));
+    assert.deepEqual(parse(JSON.parse(JSON.stringify(document))), document);
+    assert.match(refusal(() => parse({ ...(document as object), extra: 1 })), /unknown key 'extra'/);
+    assert.match(refusal(() => parse({ ...(document as object), version: 2 })), /unsupported version 2 \(this build reads version 1\)/);
+    assert.match(refusal(() => parse({ ...(document as object), format: "nexus-job" })), /format must be /);
+    assert.ok(validate({ ...(document as object), version: 2 }, schema, schema).length > 0);
+  }
+  const start = documents[0][0] as any;
+  assert.equal(refusal(() => parseRunnerRequest({ ...start, kind: "approve" })), "request.kind must be one of start, stop, resume.");
+  assert.equal(refusal(() => parseRunnerRequest({ ...start, id: "req-1" })), "request.id is not valid.");
+  assert.equal(refusal(() => parseRunnerRequest({ ...start, job: { ...job, alwaysApprove: true } })), "request.job: unknown key 'alwaysApprove'.");
+  assert.equal(refusal(() => parseRunnerRequest({ ...start, spec: [] })), "request.spec must be an object.");
+  assert.equal(refusal(() => parseRunnerRequest({ ...(documents[1][0] as object), jobId: "../x" })), "request.jobId is not valid.");
+  assert.equal(refusal(() => parseWorkerResult({ ...(documents[5][0] as object), exit: 300 })), "worker result.exit must be an integer from 0 to 255.");
+
+  const paths = runnerPaths("/state/runner");
+  assert.equal(paths.request("req-0123456789abcdef"), "/state/runner/inbox/req-0123456789abcdef.json");
+  assert.match(refusal(() => paths.request("../../x")), /is not a request id/);
+  for (const [file, name] of [[paths.spec, "spec.json"], [paths.workerGuard, "worker.guard"], [paths.workerJson, "worker.json"], [paths.events, "events.ndjson"], [paths.stderr, "stderr.log"], [paths.result, "result.json"], [paths.receipt, "receipt.json"]] as const) {
+    assert.equal(file(job.id), `/state/runner/jobs/${job.id}/${name}`);
+    assert.match(refusal(() => file("../x")), /is not a job id/);
+  }
 });

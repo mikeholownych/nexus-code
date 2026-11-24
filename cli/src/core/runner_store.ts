@@ -14,6 +14,8 @@ import { ensurePrivateDir, writePrivateFile } from "./durable_file.js";
 import { parseStrictJson, StrictJsonError } from "./strict_json.js";
 
 export const JOB_RECORD_VERSION = 1;
+/** Version of the runner's other files: requests, the runner and worker records, the worker result and the frozen spec. */
+export const RUNNER_FILE_VERSION = 1;
 /** Size bound of a job record, a request and the runner's small state files. */
 export const RUNNER_JSON_LIMIT = 64 * 1024;
 /** Size bound of a job receipt. */
@@ -134,8 +136,16 @@ export interface RunnerPaths {
   inbox: string;
   rejected: string;
   jobs: string;
+  request(requestId: string): string;
   jobDir(id: string): string;
   job(id: string): string;
+  spec(id: string): string;
+  workerGuard(id: string): string;
+  workerJson(id: string): string;
+  events(id: string): string;
+  stderr(id: string): string;
+  result(id: string): string;
+  receipt(id: string): string;
 }
 
 export function runnerPaths(root: string = runnerRoot()): RunnerPaths {
@@ -151,8 +161,19 @@ export function runnerPaths(root: string = runnerRoot()): RunnerPaths {
     inbox: path.join(root, "inbox"),
     rejected: path.join(root, "inbox", "rejected"),
     jobs,
+    request: (requestId) => {
+      if (!REQUEST_ID.test(requestId)) throw new RunnerStoreError(`'${requestId.slice(0, 80)}' is not a request id.`);
+      return path.join(root, "inbox", `${requestId}.json`);
+    },
     jobDir,
     job: (id) => path.join(jobDir(id), "job.json"),
+    spec: (id) => path.join(jobDir(id), "spec.json"),
+    workerGuard: (id) => path.join(jobDir(id), "worker.guard"),
+    workerJson: (id) => path.join(jobDir(id), "worker.json"),
+    events: (id) => path.join(jobDir(id), "events.ndjson"),
+    stderr: (id) => path.join(jobDir(id), "stderr.log"),
+    result: (id) => path.join(jobDir(id), "result.json"),
+    receipt: (id) => path.join(jobDir(id), "receipt.json"),
   };
 }
 
@@ -238,14 +259,15 @@ export function readPrivateJson(file: string, options: ReadPrivateJsonOptions): 
   }
 }
 
-/** Writes one private JSON file (0600, temporary file and rename: a reader sees the old document or the new one). */
+/** Writes one private JSON file durably (0600, temporary file + fsynced file/directory + rename). */
 export function writePrivateJson(file: string, value: unknown): void {
-  writePrivateFile(file, `${JSON.stringify(value, null, 2)}\n`);
+  writePrivateFile(file, `${JSON.stringify(value, null, 2)}\n`, { durable: true });
 }
 
 // ---------------------------------------------------------------- validation
 
 export const JOB_ID = /^job-[0-9a-f]{12}$/;
+export const REQUEST_ID = /^req-[0-9a-f]{16}$/;
 const OPERATION_ID = /^bg-[0-9a-f]{12}$/;
 const COMMIT = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -488,8 +510,8 @@ export interface JobListing {
   invalid: Array<{ id: string; error: string }>;
 }
 
-/** Every job, oldest first. */
-export function listJobs(paths: RunnerPaths): JobListing {
+/** Every job, oldest first. Directories named in `skip` are not read. */
+export function listJobs(paths: RunnerPaths, skip?: ReadonlySet<string>): JobListing {
   const listing: JobListing = { jobs: [], invalid: [] };
   let names: string[];
   try {
@@ -499,6 +521,7 @@ export function listJobs(paths: RunnerPaths): JobListing {
     throw error;
   }
   for (const id of names.sort()) {
+    if (skip?.has(id)) continue;
     try {
       const job = JOB_ID.test(id) ? readJob(paths, id) : undefined;
       if (job) listing.jobs.push(job);
@@ -509,4 +532,133 @@ export function listJobs(paths: RunnerPaths): JobListing {
   }
   listing.jobs.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   return listing;
+}
+
+// ---------------------------------------------------------------- the runner's other files
+
+/**
+ * `inbox/<id>.json`: what a client asks of the runner. A start carries the whole submission and the operation spec;
+ * the runner validates both again and is the only writer of the job record.
+ */
+export type RunnerRequest =
+  | { format: "nexus-runner-request"; version: typeof RUNNER_FILE_VERSION; id: string; at: string; kind: "start"; job: JobSubmission; spec: Record<string, unknown> }
+  | { format: "nexus-runner-request"; version: typeof RUNNER_FILE_VERSION; id: string; at: string; kind: "stop" | "resume"; jobId: string };
+
+/** `runner.json`: who holds the runner lock. Informational: the lock itself is what says a runner is alive. */
+export interface RunnerInfo {
+  format: "nexus-runner";
+  version: typeof RUNNER_FILE_VERSION;
+  pid: number;
+  startTicks: string;
+  bootId: string;
+  startedAt: string;
+  nexusVersion: string;
+  maxJobs: number;
+}
+
+/** `jobs/<id>/worker.json`: written by the worker once it holds `worker.guard`, which is what makes it ready. */
+export interface WorkerInfo {
+  format: "nexus-job-worker";
+  version: typeof RUNNER_FILE_VERSION;
+  jobId: string;
+  attempt: number;
+  pid: number;
+  startTicks: string;
+  bootId: string;
+  startedAt: string;
+}
+
+/** `jobs/<id>/result.json`: the worker's last word before it exits. `error` is a failure outside the operation. */
+export interface WorkerResult {
+  format: "nexus-job-result";
+  version: typeof RUNNER_FILE_VERSION;
+  jobId: string;
+  attempt: number;
+  operationId: string;
+  /** The operation's status when the worker stopped driving it; null when it never drove it. */
+  operationStatus: string | null;
+  exit: number;
+  error?: { reason: string; message: string };
+}
+
+/** `jobs/<id>/spec.json`: the operation spec as submitted, frozen. */
+export interface JobSpecFile {
+  format: "nexus-job-spec";
+  version: typeof RUNNER_FILE_VERSION;
+  jobId: string;
+  specSha256: string;
+  spec: Record<string, unknown>;
+}
+
+/** The documents `docs/protocol/runner-files-v<N>.schema.json` describes. */
+export type RunnerFileDocument = RunnerRequest | RunnerInfo | WorkerInfo | WorkerResult | JobSpecFile;
+
+function header(label: string, o: Json, format: string): void {
+  if (o.format !== format) throw new RunnerStoreError(`${label}: format must be ${format}.`);
+  if (o.version !== RUNNER_FILE_VERSION) throw new RunnerStoreError(`${label}: unsupported version ${JSON.stringify(o.version)} (this build reads version ${RUNNER_FILE_VERSION}).`);
+}
+
+function plainObject(label: string, value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new RunnerStoreError(`${label} must be an object.`);
+  return value as Record<string, unknown>;
+}
+
+function identityFields(label: string, o: Json): { pid: number; startTicks: string; bootId: string; startedAt: string } {
+  return {
+    pid: integer(`${label}.pid`, o.pid, 1, 2 ** 31 - 1),
+    startTicks: text(`${label}.startTicks`, o.startTicks, 32, /^\d+$/),
+    bootId: text(`${label}.bootId`, o.bootId, 64, /^[0-9A-Za-z-]+$/),
+    startedAt: timestamp(`${label}.startedAt`, o.startedAt),
+  };
+}
+
+export function parseRunnerRequest(value: unknown): RunnerRequest {
+  const label = "request";
+  const kind = oneOf(`${label}.kind`, (value as Json | null)?.kind, ["start", "stop", "resume"] as const);
+  const o = strictObject(label, value, kind === "start" ? ["format", "version", "id", "at", "kind", "job", "spec"] : ["format", "version", "id", "at", "kind", "jobId"]);
+  header(label, o, "nexus-runner-request");
+  const base = { format: "nexus-runner-request" as const, version: RUNNER_FILE_VERSION as typeof RUNNER_FILE_VERSION, id: text(`${label}.id`, o.id, 20, REQUEST_ID), at: timestamp(`${label}.at`, o.at) };
+  if (kind === "start") return { ...base, kind, job: parseJobSubmission(o.job, `${label}.job`), spec: plainObject(`${label}.spec`, o.spec) };
+  return { ...base, kind, jobId: text(`${label}.jobId`, o.jobId, 16, JOB_ID) };
+}
+
+export function parseRunnerInfo(value: unknown): RunnerInfo {
+  const label = "runner record";
+  const o = strictObject(label, value, ["format", "version", "pid", "startTicks", "bootId", "startedAt", "nexusVersion", "maxJobs"]);
+  header(label, o, "nexus-runner");
+  return { format: "nexus-runner", version: RUNNER_FILE_VERSION, ...identityFields(label, o), nexusVersion: text(`${label}.nexusVersion`, o.nexusVersion, 80), maxJobs: integer(`${label}.maxJobs`, o.maxJobs, 1, 64) };
+}
+
+export function parseWorkerInfo(value: unknown): WorkerInfo {
+  const label = "worker record";
+  const o = strictObject(label, value, ["format", "version", "jobId", "attempt", "pid", "startTicks", "bootId", "startedAt"]);
+  header(label, o, "nexus-job-worker");
+  return { format: "nexus-job-worker", version: RUNNER_FILE_VERSION, jobId: text(`${label}.jobId`, o.jobId, 16, JOB_ID), attempt: integer(`${label}.attempt`, o.attempt, 1, MAX_JOB_ATTEMPTS), ...identityFields(label, o) };
+}
+
+export function parseWorkerResult(value: unknown): WorkerResult {
+  const label = "worker result";
+  const o = strictObject(label, value, ["format", "version", "jobId", "attempt", "operationId", "operationStatus", "exit"], ["error"]);
+  header(label, o, "nexus-job-result");
+  const result: WorkerResult = {
+    format: "nexus-job-result",
+    version: RUNNER_FILE_VERSION,
+    jobId: text(`${label}.jobId`, o.jobId, 16, JOB_ID),
+    attempt: integer(`${label}.attempt`, o.attempt, 1, MAX_JOB_ATTEMPTS),
+    operationId: text(`${label}.operationId`, o.operationId, 15, OPERATION_ID),
+    operationStatus: o.operationStatus === null ? null : text(`${label}.operationStatus`, o.operationStatus, 32, /^[A-Z_]+$/),
+    exit: integer(`${label}.exit`, o.exit, 0, 255),
+  };
+  if (o.error !== undefined) {
+    const e = strictObject(`${label}.error`, o.error, ["reason", "message"]);
+    result.error = { reason: text(`${label}.error.reason`, e.reason, 64, /^[A-Z_]+$/), message: text(`${label}.error.message`, e.message, 2000) };
+  }
+  return result;
+}
+
+export function parseJobSpecFile(value: unknown): JobSpecFile {
+  const label = "job spec";
+  const o = strictObject(label, value, ["format", "version", "jobId", "specSha256", "spec"]);
+  header(label, o, "nexus-job-spec");
+  return { format: "nexus-job-spec", version: RUNNER_FILE_VERSION, jobId: text(`${label}.jobId`, o.jobId, 16, JOB_ID), specSha256: text(`${label}.specSha256`, o.specSha256, 64, SHA256), spec: plainObject(`${label}.spec`, o.spec) };
 }
