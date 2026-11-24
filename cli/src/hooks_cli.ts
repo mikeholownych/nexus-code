@@ -95,9 +95,14 @@ function printSource(entry: ListedSource): void {
   if (entry.unknown_tools) console.log(pc.yellow(`  no built-in tool is named ${entry.unknown_tools.join(", ")}: a hook that lists only such names never runs`));
 }
 
+/** A person can be asked only when both ends are a terminal: input alone can be a pipe's reader, output alone a log. */
+export function isInteractiveTerminal(stdin: { isTTY?: boolean } = process.stdin, stdout: { isTTY?: boolean } = process.stdout): boolean {
+  return Boolean(stdin.isTTY) && Boolean(stdout.isTTY);
+}
+
 export function registerHookCommands(program: Command, deps: HookCliDeps = {}): void {
   const confirm = deps.confirm ?? confirmOnTerminal;
-  const interactive = deps.interactive ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY));
+  const interactive = deps.interactive ?? (() => isInteractiveTerminal());
   const hooks = program.command("hooks").description("Command hooks that run before and after tool calls (they can deny a call, never approve one)");
 
   hooks

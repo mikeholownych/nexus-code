@@ -83,15 +83,35 @@ nexus hooks revoke
 - Approving is the act of a person at a terminal. Without one (standard input and standard output both a terminal)
   `nexus hooks approve` shows the file and approves nothing, whatever `--sha256` says; there is no `--yes`.
   `nexus hooks revoke` needs no terminal, since it only removes trust.
-- **The approval covers the files the hooks run.** A project hook's command is an array. Its program, and every
-  argument that is an existing file in the workspace (the script after an interpreter, a rules file), is recorded
-  with its SHA-256; `nexus hooks list` and `approve` show them. If one of them changes, or the commands come to name
-  another, the hooks stop on the next tool call and the notice names what changed, exactly as for the hooks file
-  itself. A program that is a relative path or a symbolic link leading out of the workspace is refused.
+- **A project hook names a program and files; inline code is not accepted.** Its command is an array, and each
+  argument must be either a regular file in the workspace, which is then *pinned* (recorded with its SHA-256 and
+  shown by `nexus hooks list` and `approve`), or no reference into the workspace at all. The same holds for the value
+  of `--option=value` and `-ovalue`. If a pinned file changes, or the commands come to name another, the hooks stop
+  on the next tool call and the notice names what changed, exactly as for the hooks file itself.
+- What cannot be pinned is refused, and the file is then invalid (not run, cannot be approved):
+  - a program that is a relative path or a symbolic link leading out of the workspace;
+  - an argument (or option value) that is a directory or anything else in the workspace that is not a regular file,
+    such as `node hookdir`;
+  - for a known shell or interpreter (`sh`, `bash`, `zsh`, `dash`, `ksh`, `fish`, `node`, `nodejs`, `bun`, `deno`,
+    `python*`, `perl`, `ruby`, `php`, `pwsh`, with version suffixes): any single-dash option containing one of the
+    letters `c e i m p r` (`-c`, `-e`, `-p`, `-m`, `-lc`, `-I…`, `-M…`), `--eval`, `--print`, `--command`, `eval` for
+    `deno` and `bun`, and `-r`, `--require`, `--import`, `--loader` unless their value is a pinned workspace file
+    (`--require=./pre.js` is accepted and pinned);
+  - `env` and `busybox` as the program, since they only start another program.
+
+  Put the logic in one script file and name it directly: `["./guard.sh"]`, `["bash", "./guard.sh"]`,
+  `["node", "scripts/guard.js", "--flag"]`.
 - A program outside the workspace (an absolute path such as `/usr/bin/python3`, or a bare name found through `PATH`)
   is **trusted as installed**: nothing in the workspace can replace it, and its bytes are not recorded.
-- Only the files the commands name are covered. A script that runs or sources other workspace files is not protected
-  against changes to those; keep a hook self-contained.
+- This does **not** cover everything a command can reach:
+  - the inline-code refusals are a list for known interpreters; another program that accepts code or a module name
+    on its command line (`awk`, `make`, `sqlite3`, a build tool) is not recognised;
+  - files that a pinned script itself runs, sources, imports or reads are not pinned, and neither is anything a
+    program finds by its own rules (a configuration file in the working directory, `node_modules`);
+  - the files are checked just before the hook is started; a process that changes one between that check and the
+    program reading it is not detected.
+
+  A hook that must hold against the agent belongs in your own hooks file, with its program outside the workspace.
 
 Approvals are kept in `~/.config/nexus/extension_trust.json` (mode 600). If that file is unreadable, malformed or
 readable by other users, it approves nothing.

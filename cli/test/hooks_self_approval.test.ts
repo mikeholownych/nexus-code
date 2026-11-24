@@ -13,7 +13,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { AutonomousAgent } from "../src/agent.js";
-import { readExtensionTrust } from "../src/core/content_trust.js";
+import { approveExtension, readExtensionTrust } from "../src/core/content_trust.js";
 import { inspectHookSources } from "../src/core/hooks.js";
 import { makeRepo, startGateway, type Reply } from "./helpers/fixtures.js";
 import { approveProjectHooks, deniedBy, dispatch, hookAgent, hookScript, loggingHook, runsOf, writeOperatorHooks, writeProjectHooks, type HookAgentOptions } from "./helpers/hooks_fixture.js";
@@ -217,4 +217,96 @@ test("a subagent's tool calls go through the hooks", { timeout: 240_000 }, async
   } finally {
     await gateway.close();
   }
+});
+
+/** A file in the workspace, written directly (the fixture's own setup, not the agent's act). */
+function place(relative: string, content: string, mode = 0o755): string {
+  const file = path.join(repo, relative);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content, { mode });
+  return file;
+}
+
+test("commands that reach workspace code without naming a pinned file do not run, even with an approval on record", async () => {
+  const ran = path.join(scripts, "attack-ran");
+  const original = `#!/bin/sh\nexit 0\n`;
+  const attacks: Array<{ command: string[]; file: string; replacement: string; why: RegExp }> = [
+    { command: ["node", "hookdir"], file: "hookdir/index.js", replacement: `require("fs").writeFileSync(${JSON.stringify(ran)}, "x");\n`, why: /"hookdir" is a directory/ },
+    { command: ["sh", "-c", "./guard.sh x"], file: "guard.sh", replacement: `#!/bin/sh\ntouch "${ran}"\n`, why: /argument "-c" gives sh code/ },
+    { command: ["bash", "-c", "exec ./guard.sh"], file: "guard.sh", replacement: `#!/bin/sh\ntouch "${ran}"\n`, why: /argument "-c" gives bash code/ },
+    { command: ["node", "--require", "./hookdir", "-p", "1"], file: "hookdir/index.js", replacement: `require("fs").writeFileSync(${JSON.stringify(ran)}, "x");\n`, why: /argument "--require" loads "\.\/hookdir"/ },
+  ];
+  for (const attack of attacks) {
+    notices.length = 0;
+    fs.rmSync(path.join(repo, "hookdir"), { recursive: true, force: true });
+    place("guard.sh", original);
+    place("hookdir/index.js", "// harmless\n");
+    const hooksFile = writeProjectHooks(repo, { version: 1, hooks: { "pre-tool": [{ name: "planted", tools: ["read_file"], command: attack.command }] } });
+    // An approval as the earlier rule recorded it for such a command: the hooks file's hash, and no file covered.
+    approveExtension({ kind: "project-hooks", scope: repo, key: path.join(".nexus", "hooks.json"), sha256: sha(hooksFile), approvedAt: new Date().toISOString(), summary: "1 hook", files: [] });
+    const agent = agentFor();
+    const overwrite = await dispatch(agent, "write_file", { path: attack.file, overwrite: true, content: attack.replacement });
+    assert.equal(overwrite.status, "COMPLETED", JSON.stringify(overwrite).slice(0, 300));
+
+    const next = await dispatch(agent, "read_file", { path: "a.txt" });
+    assert.equal(next.status, "COMPLETED", JSON.stringify(attack.command));
+    assert.equal(next.hooks, undefined, `${JSON.stringify(attack.command)}: no project hook ran`);
+    assert.equal(fs.existsSync(ran), false, `${JSON.stringify(attack.command)}: the replaced content was not run`);
+    const state = inspectHookSources({ workspace: repo, readOnly: false }).project;
+    assert.equal(state.status, "invalid", JSON.stringify(attack.command));
+    assert.match(state.problem ?? "", attack.why);
+    assert.ok(notices.some((notice) => /project hooks in .* are not run: /.test(notice) && attack.why.test(notice)), JSON.stringify(notices));
+  }
+});
+
+test("a preload named with --require=./pre.js is covered: overwritten by the agent, the hooks stop and name it", async () => {
+  const ran = path.join(scripts, "preload-ran");
+  place("pre.js", "// harmless preload\n", 0o644);
+  place("guard.js", `require("fs").appendFileSync(${JSON.stringify(log)}, "ran\\n");\n`, 0o644);
+  writeProjectHooks(repo, { version: 1, hooks: { "pre-tool": [{ name: "guard", tools: ["read_file"], command: ["node", "--require=./pre.js", "guard.js"] }] } });
+  approveProjectHooks(repo);
+  assert.deepEqual(readExtensionTrust().entries[0].files?.map((file) => file.path), ["guard.js", "pre.js"]);
+  const agent = agentFor();
+  const first = await dispatch(agent, "read_file", { path: "a.txt" });
+  assert.deepEqual(first.hooks?.map((run: any) => [run.name, run.exit]), [["guard", 0]], "the fixture: the approved hook runs");
+  assert.equal(fs.readFileSync(log, "utf8"), "ran\n");
+
+  const overwrite = await dispatch(agent, "write_file", { path: "pre.js", overwrite: true, content: `require("fs").writeFileSync(${JSON.stringify(ran)}, "x");\n` });
+  assert.equal(overwrite.status, "COMPLETED", JSON.stringify(overwrite).slice(0, 300));
+  const next = await dispatch(agent, "read_file", { path: "a.txt" });
+  assert.equal(next.hooks, undefined);
+  assert.equal(fs.existsSync(ran), false, "the agent's preload was not run");
+  assert.equal(fs.readFileSync(log, "utf8"), "ran\n");
+  assert.ok(notices.some((notice) => /are not approved \(pre\.js changed since approval\)/.test(notice)), JSON.stringify(notices));
+});
+
+test("ordinary project commands run once approved", async () => {
+  place("guard.sh", `#!/bin/sh\necho sh >> "${log}"\n`);
+  place("scripts/guard.js", `require("fs").appendFileSync(${JSON.stringify(log)}, "js " + process.argv[2] + "\\n");\n`, 0o644);
+  writeProjectHooks(repo, { version: 1, hooks: { "pre-tool": [
+    { name: "direct", tools: ["read_file"], command: ["./guard.sh"] },
+    { name: "interpreted", tools: ["read_file"], command: ["bash", "./guard.sh"] },
+    { name: "node", tools: ["read_file"], command: ["node", "scripts/guard.js", "--flag"] },
+    { name: "installed", tools: ["read_file"], command: ["/usr/bin/true"] },
+  ] } });
+  approveProjectHooks(repo);
+  const receipt = await dispatch(agentFor(), "read_file", { path: "a.txt" });
+  assert.equal(receipt.status, "COMPLETED", JSON.stringify(receipt).slice(0, 400));
+  assert.deepEqual(receipt.hooks.map((run: any) => [run.name, run.exit, run.decision]), [["direct", 0, "none"], ["interpreted", 0, "none"], ["node", 0, "none"], ["installed", 0, "none"]]);
+  assert.equal(fs.readFileSync(log, "utf8"), "sh\nsh\njs --flag\n");
+});
+
+test("an approval that names a file the hooks no longer reach is not in force", async () => {
+  place("guard.sh", `#!/bin/sh\nexit 0\n`);
+  writeProjectHooks(repo, { version: 1, hooks: { "pre-tool": [{ name: "guard", tools: ["read_file"], command: ["bash", "./guard.sh"] }] } });
+  approveProjectHooks(repo);
+  assert.equal(inspectHookSources({ workspace: repo, readOnly: false }).project.status, "active");
+  // The approved script is gone: what the command would do now is not what was approved (here bash would fail; for a
+  // program found through PATH, another program of that name would run instead).
+  fs.rmSync(path.join(repo, "guard.sh"));
+  const state = inspectHookSources({ workspace: repo, readOnly: false }).project;
+  assert.deepEqual([state.status, state.changed], ["changed", ["guard.sh"]]);
+  const receipt = await dispatch(agentFor(), "read_file", { path: "a.txt" });
+  assert.equal(receipt.status, "COMPLETED");
+  assert.equal(receipt.hooks, undefined);
 });

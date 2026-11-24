@@ -301,11 +301,33 @@ function onPath(name: string): string | undefined {
   return undefined;
 }
 
+/** Programs that run code given on their command line: for these, inline-code and module-loading options are refused. */
+const INTERPRETERS = /^(?:sh|bash|zsh|dash|ksh|fish|node|nodejs|bun|deno|python|perl|ruby|php|pwsh)[0-9.]*$/;
+/** Programs that only start another program, which would hide what a hook really runs. */
+const WRAPPERS = /^(?:env|busybox)$/;
+/** Interpreter options whose value is code to load: accepted only when that value is a pinned workspace file. */
+const LOADER_OPTIONS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader"]);
+/** Interpreter options that take code, or the name of code to find, on the command line. */
+const INLINE_OPTIONS = /^--(?:eval|print|command|encodedcommand)(?:=|$)/i;
 /**
- * The files inside the workspace that a project hooks file runs: the program of each hook and every argument that is
- * an existing file there, each with the SHA-256 of its bytes now. An approval covers these bytes too, since a hooks
- * file that names `./guard.sh` is only as fixed as `guard.sh` is. A program outside the workspace (an absolute path,
- * or a name found through PATH) is trusted as installed: nothing in the workspace can replace it.
+ * A single-dash option of an interpreter with one of these letters may carry inline code or a module to load (-c, -e,
+ * -p, -m, -r, -I, -M, clusters such as -lc, and attached forms such as -e'code'), whichever interpreter it is.
+ */
+const INLINE_LETTERS = /[ceimpr]/i;
+const NAME_FILES = "A project hook names a program and files; inline code is not accepted. Put the logic in one script file and name it directly";
+
+/** SHA-256 of files already hashed, by the identity of their content on disk, so an unchanged file is not read again. */
+const hashed = new Map<string, string>();
+
+/**
+ * The files inside the workspace that a project hooks file runs, each with the SHA-256 of its bytes now. An approval
+ * covers these bytes too, since a hooks file that names `./guard.sh` is only as fixed as `guard.sh` is.
+ *
+ * The rule: a command is a program and arguments, and every argument is either pinned (an existing regular file in the
+ * workspace, hashed) or not a reference into the workspace at all. An argument that names a workspace directory, an
+ * option whose value is an unpinned workspace path, and inline code for a known shell or interpreter are refused, so
+ * what cannot be pinned cannot be approved. A program outside the workspace (an absolute path, or a name found
+ * through PATH) is trusted as installed: nothing in the workspace can replace it.
  * `workspace` is the workspace's real path. Returns `problem` when the file cannot be pinned.
  */
 export function coveredProjectFiles(file: HooksFile, workspace: string): { files: ExtensionTrustFile[] } | { problem: string } {
@@ -313,18 +335,51 @@ export function coveredProjectFiles(file: HooksFile, workspace: string): { files
   const cover = (shown: string, target: string): string | undefined => {
     if (covered.has(shown)) return undefined;
     try {
-      const stat = fs.statSync(target);
+      const stat = fs.statSync(target, { bigint: true });
       if (!stat.isFile()) return `${shown} is not a regular file`;
-      if (stat.size > COVERED_FILE_BYTES) return `${shown} is larger than 1 MiB and cannot be pinned`;
-      covered.set(shown, createHash("sha256").update(fs.readFileSync(target)).digest("hex"));
+      if (stat.size > BigInt(COVERED_FILE_BYTES)) return `${shown} is larger than 1 MiB and cannot be pinned`;
+      // The change time is part of the identity: a writer cannot set it back.
+      const identity = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+      let sha256 = hashed.get(identity);
+      if (sha256 === undefined) {
+        sha256 = createHash("sha256").update(fs.readFileSync(target)).digest("hex");
+        if (hashed.size >= 256) hashed.clear();
+        hashed.set(identity, sha256);
+      }
+      covered.set(shown, sha256);
     } catch (error: any) {
       return `${shown} cannot be read (${error?.code ?? "error"})`;
     }
     return covered.size > COVERED_FILES_LIMIT ? `more than ${COVERED_FILES_LIMIT} workspace files are named by its commands` : undefined;
   };
+  /**
+   * What `value` is as a reference into the workspace: "none" (not an existing path there), "pinned" (a regular file,
+   * now covered), or the reason it cannot be pinned.
+   */
+  const reference = (value: string): "none" | "pinned" | { problem: string } => {
+    if (!value) return "none";
+    const target = path.resolve(workspace, value);
+    if (!inside(workspace, target)) return "none";
+    try {
+      fs.lstatSync(target);
+    } catch {
+      // Nothing by that name. If it appears later it is a new file the approval does not cover, or a refusal here.
+      return "none";
+    }
+    let isFile: boolean;
+    try {
+      isFile = fs.statSync(target).isFile();
+    } catch {
+      return { problem: `${JSON.stringify(value)} is in the workspace and cannot be read as a regular file` };
+    }
+    if (!isFile) return { problem: `${JSON.stringify(value)} is a directory (or not a regular file) in the workspace, whose content cannot be pinned` };
+    const problem = cover(path.relative(workspace, target), target);
+    return problem ? { problem } : "pinned";
+  };
   for (const event of HOOK_EVENTS) {
     for (const [index, hook] of (file.hooks[event] ?? []).entries()) {
       const at = `hooks.${event}[${index}].command`;
+      const refuse = (problem: string) => ({ problem: `${at}: ${problem}. ${NAME_FILES}` });
       // A shell string can reach any file by any spelling; only an argument list says which files are run.
       if (!Array.isArray(hook.command)) return { problem: `${at}: a project hook's command must be an array (it is run without a shell), so that the files it runs can be pinned` };
       const [program, ...args] = hook.command;
@@ -348,17 +403,31 @@ export function coveredProjectFiles(file: HooksFile, workspace: string): { files
           if (problem) return { problem: `${at}: ${problem}` };
         }
       }
-      for (const arg of args) {
-        const target = path.resolve(workspace, arg);
-        let isFile = false;
-        try {
-          isFile = inside(workspace, target) && fs.statSync(target).isFile();
-        } catch {
-          // not a file: an ordinary argument
+      const base = path.basename(named);
+      if (WRAPPERS.test(base)) return refuse(`${program} only starts another program, which hides what the hook runs`);
+      const interpreter = INTERPRETERS.test(base);
+      for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        const shown = JSON.stringify(arg);
+        if (interpreter) {
+          const [option, attached] = arg.startsWith("--") && arg.includes("=") ? [arg.slice(0, arg.indexOf("=")), arg.slice(arg.indexOf("=") + 1)] : [arg, undefined];
+          if (LOADER_OPTIONS.has(option)) {
+            // Code to load: only a workspace file that is pinned. A module name would be found in the workspace unpinned.
+            const value = attached ?? args[i + 1] ?? "";
+            if (reference(value) !== "pinned") return refuse(`argument ${shown} loads ${JSON.stringify(value)}, which is not a file in the workspace that can be pinned`);
+            if (attached === undefined) i++;
+            continue;
+          }
+          if (INLINE_OPTIONS.test(arg) || (/^-[^-]/.test(arg) && INLINE_LETTERS.test(arg)) || ((base.startsWith("deno") || base.startsWith("bun")) && arg === "eval")) {
+            return refuse(`argument ${shown} gives ${program} code, or the name of code, on the command line`);
+          }
         }
-        if (!isFile) continue;
-        const problem = cover(path.relative(workspace, target), target);
-        if (problem) return { problem: `${at}: ${problem}` };
+        // The argument itself, then the value of `--option=value` and of `-ovalue`.
+        const values = [arg, ...(arg.startsWith("-") && arg.includes("=") ? [arg.slice(arg.indexOf("=") + 1)] : []), ...(/^-[^-=]./.test(arg) ? [arg.slice(2)] : [])];
+        for (const value of values) {
+          const found = reference(value);
+          if (typeof found === "object") return refuse(`argument ${shown}: ${found.problem}`);
+        }
       }
     }
   }

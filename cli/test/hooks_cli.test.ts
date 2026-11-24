@@ -13,7 +13,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { readExtensionTrust } from "../src/core/content_trust.js";
-import { registerHookCommands } from "../src/hooks_cli.js";
+import { isInteractiveTerminal, registerHookCommands } from "../src/hooks_cli.js";
 
 const CLI_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TSX = path.join(CLI_DIR, "node_modules", ".bin", "tsx");
@@ -304,4 +304,87 @@ test("the commands are registered in the real CLI", { timeout: 240_000 }, () => 
   assert.deepEqual(listing.sources.map((s: any) => [s.source, s.status]), [["operator", "active"], ["project", "absent"]]);
   const help = spawnSync(TSX, [path.join(CLI_DIR, "src", "index.ts"), "hooks", "--help"], { encoding: "utf8", env: { ...process.env, HOME: home }, timeout: 200_000 });
   for (const command of ["list", "approve", "revoke", "test"]) assert.match(help.stdout, new RegExp(`^\\s+${command}\\b`, "m"), command);
+});
+
+test("a person can be asked only when standard input and standard output are both a terminal", () => {
+  assert.equal(isInteractiveTerminal({ isTTY: true }, { isTTY: true }), true);
+  assert.equal(isInteractiveTerminal({ isTTY: true }, { isTTY: false }), false, "a terminal on input only (output piped or logged)");
+  assert.equal(isInteractiveTerminal({ isTTY: false }, { isTTY: true }), false, "a terminal on output only (input piped)");
+  assert.equal(isInteractiveTerminal({}, {}), false);
+});
+
+test("a project command that refers into the workspace by anything but a pinned file cannot be approved", async () => {
+  workspaceScript("guard.sh");
+  workspaceScript("pre.js", "// preload");
+  workspaceScript("hookdir/index.js", "// entry");
+  fs.symlinkSync("nowhere", path.join(workspace, "dangling"));
+  const refused: Array<[string[], RegExp]> = [
+    // The four forms of the review, each of which ran replaced content after an approval.
+    [["node", "hookdir"], /argument "hookdir": "hookdir" is a directory \(or not a regular file\) in the workspace, whose content cannot be pinned/],
+    [["sh", "-c", "./guard.sh x"], /argument "-c" gives sh code, or the name of code, on the command line/],
+    [["bash", "-c", "exec ./guard.sh"], /argument "-c" gives bash code/],
+    [["node", "--require", "dotenv/config", "guard.js"], /argument "--require" loads "dotenv\/config", which is not a file in the workspace that can be pinned/],
+    // Their relatives.
+    [["node", "--require=hookdir", "x"], /argument "--require=hookdir" loads "hookdir", which is not a file/],
+    [["node", "-r", "./missing.js"], /argument "-r" loads "\.\/missing\.js"/],
+    [["node", "--import=some-module"], /loads "some-module"/],
+    [["node", "-e", "require('./pre.js')"], /argument "-e" gives node code/],
+    [["node", "-pe", "1"], /argument "-pe" gives node code/],
+    [["node", "--eval=1"], /argument "--eval=1" gives node code/],
+    [["node", "--print", "1"], /argument "--print" gives node code/],
+    [["bash", "-lc", "./guard.sh"], /argument "-lc" gives bash code/],
+    [["python3", "-m", "hookdir"], /argument "-m" gives python3 code/],
+    [["python3.12", "-cimport os"], /argument "-cimport os" gives python3\.12 code/],
+    [["/usr/bin/perl", "-Mstrict", "x"], /argument "-Mstrict" gives \/usr\/bin\/perl code/],
+    [["deno", "eval", "1"], /argument "eval" gives deno code/],
+    [["env", "sh", "./guard.sh"], /env only starts another program, which hides what the hook runs/],
+    [["/usr/bin/env", "node", "guard.js"], /only starts another program/],
+    [["busybox", "sh", "./guard.sh"], /only starts another program/],
+    [["/bin/cat", "."], /argument "\.": "\." is a directory/],
+    [["/bin/cat", "--file=hookdir"], /argument "--file=hookdir": "hookdir" is a directory/],
+    [["/bin/cat", "-fhookdir"], /argument "-fhookdir": "hookdir" is a directory/],
+    [["/bin/cat", path.join(workspace, "hookdir")], /is a directory/],
+    [["/bin/cat", "dangling"], /argument "dangling": "dangling" is in the workspace and cannot be read as a regular file/],
+  ];
+  for (const [command, pattern] of refused) {
+    projectHooks(guard(command));
+    const answer = await nexusHooks(["approve", "-w", workspace], true);
+    assert.equal(answer.exitCode, 1, JSON.stringify(command));
+    assert.match(answer.out, pattern, JSON.stringify(command));
+    assert.match(answer.out, /A project hook names a program and files; inline code is not accepted\. Put the logic in one script file and name it directly/, JSON.stringify(command));
+    assert.deepEqual(answer.asked, [], JSON.stringify(command));
+    assert.equal((await listJson()).sources[1].status, "invalid", JSON.stringify(command));
+  }
+  assert.deepEqual(readExtensionTrust().entries, []);
+
+  // The operator's own file is not held to this: it is not pinned, and its author is the operator.
+  operatorHooks(guard(["sh", "-c", "exit 0"]));
+  assert.equal((await listJson()).sources[0].status, "active");
+});
+
+test("ordinary project commands are accepted, and every workspace file they name is covered", async () => {
+  workspaceScript("guard.sh");
+  workspaceScript("guard.js", "// js");
+  workspaceScript("scripts/guard.js", "// js");
+  workspaceScript("pre.js", "// preload");
+  workspaceScript("rules.txt", "rule");
+  const accepted: Array<[string[], string[]]> = [
+    [["./guard.sh"], ["guard.sh"]],
+    [["bash", "./guard.sh"], ["guard.sh"]],
+    [["node", "guard.js"], ["guard.js"]],
+    [["node", "scripts/guard.js", "--flag"], ["scripts/guard.js"]],
+    [["/usr/bin/true"], []],
+    [["/usr/bin/true", "--level", "3", "not-a-file", "../outside", "/etc/hostname"], []],
+    [["node", "--require=./pre.js", "guard.js"], ["guard.js", "pre.js"]],
+    [["node", "--require", "./pre.js", "guard.js"], ["guard.js", "pre.js"]],
+    [["node", "-r", "pre.js", "guard.js", "--rules=rules.txt"], ["guard.js", "pre.js", "rules.txt"]],
+    [["/usr/bin/grep", "-q", "--file=rules.txt", "-frules.txt"], ["rules.txt"]],
+    [["./guard.sh", "-c", "anything"], ["guard.sh"]],
+  ];
+  for (const [command, files] of accepted) {
+    projectHooks(guard(command));
+    const project = (await listJson()).sources[1];
+    assert.equal(project.status, "not_approved", `${JSON.stringify(command)}: ${project.problem ?? ""}`);
+    assert.deepEqual((project.covered_files ?? []).map((file: any) => file.path), files, JSON.stringify(command));
+  }
 });
