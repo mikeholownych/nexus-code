@@ -78,7 +78,7 @@ test("job logs refuse a symlinked event file", async () => {
       deliverables: [],
       provider: {},
       budgets: { ...DEFAULT_JOB_BUDGETS },
-    });
+    }, new Date("2026-11-24T12:00:00.000Z"));
     writeJob(world.paths, record);
     fs.symlinkSync(path.join(world.root, "missing"), world.paths.events(record.id));
     const result = await world.run(["job", "logs", record.id]);

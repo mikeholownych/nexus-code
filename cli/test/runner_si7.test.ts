@@ -46,6 +46,7 @@ test("kill the worker mid-tool-call: the runner resumes the job, nothing is repl
     await until(() => counts() === 1, 150_000, () => `the allowed command to be running\n${JSON.stringify(world.job(id))}\n${fs.existsSync(world.paths.stderr(id)) ? fs.readFileSync(world.paths.stderr(id), "utf8") : ""}`);
     assert.equal(gw.requests.length, 1);
 
+    await until(() => world.job(id)?.state === "RUNNING", 30_000, () => `the runner to record RUNNING\n${JSON.stringify(world.job(id))}`);
     const first = world.job(id)!;
     assert.equal(first.state, "RUNNING");
     const worker = first.attempts[0];
