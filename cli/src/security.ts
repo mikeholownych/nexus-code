@@ -166,6 +166,10 @@ const DEFAULT_PROTECTED_PATHS = [
   "trusted_workspaces.json",
   // GV-1: the operator's approvals of project policy files: the agent must not approve a project policy for itself.
   "policy_trust.json",
+  // HK-1: the operator's approvals of project hooks: the agent must not approve hooks for itself.
+  "extension_trust.json",
+  // HK-1: the operator's own hooks file (~/.config/nexus/hooks.json): the agent must not write the operator's hooks.
+  "nexus/hooks.json",
   ".env*",
   "id_rsa*",
   "id_ed25519*",
