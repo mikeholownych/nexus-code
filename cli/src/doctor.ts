@@ -28,6 +28,7 @@ import { allProviders, providerSource } from "./providers.js";
 import { effortLevels } from "./core/models_snapshot.js";
 import { mcpConfigFiles } from "./mcp.js";
 import { isBwrapAvailable, sandboxHomeMounts, sandboxNetworkEnabled, sandboxWorkspaceOverlays } from "./sandbox.js";
+import { describeSandboxPosture } from "./sandbox_profile.js";
 import { pluginDirs } from "./plugins.js";
 import { policyFindings, processPolicyReport } from "./policy_cli.js";
 import { USER_POLICY_FILE_NAME } from "./core/managed_policy_load.js";
@@ -592,46 +593,57 @@ const shellCheck: Check = async (ctx, signal) => {
   return f("shell.executable", "runtime", "fail", `The shell ${shell} did not run a test command.`, [resolved, res.timedOut ? "timed out" : `exit ${res.code} ${res.error ?? res.stderr.trim()}`.trim()], "Check the shell installation and its startup files.");
 };
 
-/** What a write-mode `--sandbox` command can reach: the masked HOME, the read-only toolchain mounts, the network. */
+/** Effective confinement posture and the residual holes it does not close (SB-1). */
 const sandboxCheck: Check = async (ctx) => {
   const sandbox = ctx.config?.sandbox ?? ctx.flags.sandbox;
-  if (!sandbox || sandbox === "none") {
+  const posture = describeSandboxPosture({
+    sandbox,
+    readOnly: Boolean(ctx.config?.approvalMode === "read-only" || ctx.flags.readOnly),
+    network: sandboxNetworkEnabled(),
+    profile: ctx.config?.sandboxProfile,
+    source: "configured setting",
+  });
+  if (posture.profile === "unconfined") {
     const available = isBwrapAvailable();
     return f(
       "sandbox.confinement",
       "runtime",
       "skip",
-      "Effective containment: none. No --sandbox is configured; run_command runs on the host with the scrubbed environment only.",
-      [`bubblewrap (bwrap): ${available ? "available" : "not available"}`, `workspace: ${ctx.config?.workspace ?? "(none)"}`],
-      available ? "Run with --sandbox bwrap to confine commands and the native worker (HOME masked, no network unless --sandbox-network)." : "Install bubblewrap and run with --sandbox bwrap to confine commands and the native worker.",
+      `Effective sandbox profile: unconfined (${posture.source}). run_command runs on the host with the scrubbed environment only.`,
+      [`bubblewrap (bwrap): ${available ? "available" : "not available"}`, `workspace: ${ctx.config?.workspace ?? "(none)"}`, "residual holes:", ...posture.residual.map((r) => `  - ${r}`)],
+      available ? "Run with --sandbox :workspace (or --sandbox bwrap) to confine commands and the native worker; use :read-only or :network for other named profiles." : "Install bubblewrap and run with --sandbox :workspace to confine commands and the native worker.",
     );
   }
-  if (sandbox !== "docker" && !isBwrapAvailable()) {
-    return f("sandbox.confinement", "runtime", "warn", "--sandbox is configured but bubblewrap (bwrap) is not available.", [], "Install bubblewrap, or run without --sandbox.");
+  if (posture.engine === "docker" && !posture.readOnly && process.platform !== "linux") {
+    // docker confines commands on non-Linux hosts but the worker is not inside the container there.
+  }
+  if (posture.engine !== "none" && posture.engine !== "docker" && !isBwrapAvailable()) {
+    return f("sandbox.confinement", "runtime", "warn", `Effective sandbox profile: ${posture.profile}, but bubblewrap (bwrap) is not available.`, [`source: ${posture.source}`], "Install bubblewrap, or run without --sandbox.");
   }
   const m = sandboxHomeMounts();
-  // A containerised worker needs a Linux host (the worker is a Linux binary); elsewhere Docker confines commands only.
-  const workerInBox = sandbox !== "docker" || process.platform === "linux";
+  const workerInBox = posture.engine !== "docker" || process.platform === "linux";
   const evidence = [
+    `profile: ${posture.profile} (${posture.source})`,
+    `engine: ${posture.engine} · network: ${posture.network ? "on" : "off"} · read-only: ${posture.readOnly ? "yes" : "no"}`,
     workerInBox
       ? "native worker (harness-core): runs inside this sandbox, so a compromised worker has the same limits as a command (CS-10)"
       : "native worker (harness-core): runs outside Docker on this host (a container can only run it on Linux), so Docker confines commands only here",
     ...(workerInBox ? ["file tools use a separate files-only worker: it refuses to run commands and has no network even with --sandbox-network (CS-10 phase 2)"] : []),
-    `network: ${sandboxNetworkEnabled() ? "ON (--sandbox-network / NEXUS_SANDBOX_NETWORK; covers the worker and its commands)" : "off (default)"}`,
     `HOME ${m.home} is masked with an empty tmpfs; read-only mounts back under it:`,
     ...(m.mounts.length ? m.mounts.map((x) => `  ${x.path}  (${x.source})`) : ["  (none)"]),
     ...m.masked.map((x) => `  hidden file: ${x}`),
     ...m.refused.map((x) => `  refused: ${x.path} (${x.reason})`),
+    "residual holes (not closed by this profile):",
+    ...posture.residual.map((r) => `  - ${r}`),
   ];
   const workspace = ctx.config?.workspace;
   if (workspace) {
     const o = sandboxWorkspaceOverlays(workspace);
-    // Non-empty only when the workspace is, contains or sits above HOME.
     if (o.dirs.length || o.files.length) {
       evidence.push("the workspace holds credential paths; they are emptied inside the sandbox:", ...o.dirs.map((x) => `  masked dir: ${x}`), ...o.files.map((x) => `  masked file: ${x}`));
     }
   }
-  return f("sandbox.confinement", "runtime", "pass", "Write-mode --sandbox masks HOME, binds only the listed toolchain directories read-only, and has no network unless opted in.", evidence, "Extend the mounts with NEXUS_SANDBOX_HOME_READONLY (comma-separated paths; operator environment or config.env only).");
+  return f("sandbox.confinement", "runtime", "pass", `Effective sandbox profile: ${posture.profile}.`, evidence, "Profiles are confinement bundles only; they cannot disable verification-path protection, grant allow-always, or bypass managed policy. Extend read-only HOME mounts with NEXUS_SANDBOX_HOME_READONLY (operator environment or config.env only).");
 };
 
 const engineCheck: Check = async (ctx, signal) => {
