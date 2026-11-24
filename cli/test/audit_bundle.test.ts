@@ -544,7 +544,7 @@ describe("verifying an unsigned bundle (G-5)", () => {
     assert.ok(rewritten.kinds.includes("signature_invalid"));
   });
 
-  test("what the manifest says about a log that is not a failure is a note: not closed, a bounded excerpt, already broken at export", () => {
+  test("a log broken before export is a finding; not-closed and bounded logs remain notes", () => {
     const input = fixtureInput();
     const lines = chainedLines(FLIGHT_EVENTS);
     const brokenAtExport = [...lines];
@@ -561,16 +561,20 @@ describe("verifying an unsigned bundle (G-5)", () => {
     });
     assert.deepEqual(manifest.chained_logs.map((log) => [log.status, log.records, log.head?.seq]), [["intact", 3, 2], ["broken", 5, undefined]]);
     const checked = check(dir);
-    assert.deepEqual([checked.exit, checked.code, checked.kinds], ["intact_unsigned", 0, []]);
+    assert.deepEqual([checked.exit, checked.code, checked.kinds], ["tampered", 1, ["log_not_intact_at_export"]]);
     assert.deepEqual(checked.result.notes, [
       `${FLIGHT_PATH} was not closed when it was exported: it has no end record (still recording, stopped early, or records were already missing from the end).`,
       `${FLIGHT_PATH} is a bounded excerpt: the first 3 records of a source log of 5.`,
-      `${ATTEMPTS_PATH} was already broken when it was exported; its integrity before export cannot be shown.`,
     ]);
-    assert.ok(checked.text.includes(`note: ${checked.result.notes[0]}`) && checked.text.includes(AUDIT_UNSIGNED_CAVEAT));
+    assert.ok(checked.text.includes(`note: ${checked.result.notes[0]}`));
+    assert.deepEqual(checked.result.findings[0], {
+      kind: "log_not_intact_at_export",
+      path: ATTEMPTS_PATH,
+      message: `${ATTEMPTS_PATH} was already broken when it was exported; its source evidence is incomplete.`,
+    });
     // A log recorded as broken that now reads as a different log is still a finding.
     rewritePayload(dir, ATTEMPTS_PATH, `${lines.join("\n")}\n`);
-    assert.deepEqual(check(dir).kinds, ["log_head_mismatch"]);
+    assert.deepEqual(check(dir).kinds, ["log_head_mismatch", "log_not_intact_at_export"]);
   });
 
   test("a log written by the real flight recorder reads here as the flight player reads it", () => {

@@ -196,6 +196,9 @@ describe("flight recorder", () => {
     const boundary = InformationFlowBoundary.getGlobalInstance();
     const redact = boundary.redactForTelemetry;
     boundary.redactForTelemetry = (() => { throw new Error("classifier detail must not escape"); }) as typeof redact;
+    const warnings: string[] = [];
+    const emitWarning = process.emitWarning;
+    process.emitWarning = ((warning: string | Error) => { warnings.push(String(warning)); }) as typeof process.emitWarning;
     let skipped: ReturnType<typeof flight.recordToolCall>;
     try {
       skipped = flight.recordToolCall(1, "c1", "read_file", { path: "a.ts" });
@@ -205,9 +208,51 @@ describe("flight recorder", () => {
 
     assert.equal(skipped.payload.recordingSkipped, true);
     assert.equal(skipped.payload.reason, "sanitization_failed");
-    flight.recordSessionEnd("done", true);
-    const { integrity } = FlightPlayer.loadFlight(ws, "flight-sanitization-failure");
-    assert.equal(integrity.chain.status, "broken");
+    // A new process/recorder must preserve the known omission and must not resume the chain.
+    let integrity: ReturnType<typeof FlightPlayer.loadFlight>["integrity"];
+    try {
+      const resumed = new FlightRecorder(ws, "flight-sanitization-failure");
+      resumed.recordSessionEnd("done", true);
+      resumed.recordThought(2, "still degraded");
+      integrity = FlightPlayer.loadFlight(ws, "flight-sanitization-failure").integrity;
+    } finally {
+      process.emitWarning = emitWarning;
+    }
+    assert.deepEqual([integrity.chain.status, integrity.recordingSkipped], ["broken", true]);
+    assert.match(FlightPlayer.describeIntegrity(integrity), /recording skipped one or more events/);
+    assert.equal(warnings.length, 2, "each recorder warns once, including after resuming a degraded log");
+    assert.match(warnings[0], /replay evidence is incomplete/);
+    assert.doesNotMatch(fs.readFileSync(flight.getLogPath(), "utf8"), /classifier detail must not escape/);
+    assert.ok(lines(flight.getLogPath()).some((line) => JSON.parse(line).type === "recording_gap"));
+  });
+
+  test("a skip on the first record is reported as missing evidence, not legacy unchained history", () => {
+    const ws = workspace();
+    const flight = new FlightRecorder(ws, "flight-first-skip");
+    const boundary = InformationFlowBoundary.getGlobalInstance();
+    const redact = boundary.redactForTelemetry;
+    const emitWarning = process.emitWarning;
+    process.emitWarning = (() => {}) as typeof process.emitWarning;
+    boundary.redactForTelemetry = (() => { throw new Error("private classifier detail"); }) as typeof redact;
+    try {
+      flight.startSession({ model: "m", endpoint: "http://127.0.0.1:1/v1" });
+    } finally {
+      boundary.redactForTelemetry = redact;
+      process.emitWarning = emitWarning;
+    }
+    const { integrity } = FlightPlayer.loadFlight(ws, "flight-first-skip");
+    assert.equal(integrity.recordingSkipped, true);
+    assert.match(FlightPlayer.describeIntegrity(integrity), /recording skipped one or more events/);
+    assert.doesNotMatch(FlightPlayer.describeIntegrity(integrity), /written before hash chaining/);
+    const home = makeHome();
+    tempHomes.push(home);
+    const replay = spawnSync(process.execPath, ["--import", "tsx", "src/index.ts", "replay", "flight-first-skip", "-w", ws, "--delay", "0"], {
+      cwd: CLI_DIR,
+      encoding: "utf8",
+      env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config") },
+    });
+    assert.deepEqual([replay.status, replay.stderr], [0, ""]);
+    assert.match(replay.stdout, /Record integrity: recording skipped one or more events; replay evidence is incomplete/);
   });
 
   test("editing one record on disk is detected at that record", () => {

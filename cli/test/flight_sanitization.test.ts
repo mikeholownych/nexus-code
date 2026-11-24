@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { FlightRecorder } from "../src/flight.js";
+import { FlightPlayer, FlightRecorder } from "../src/flight.js";
 import { InformationFlowBoundary } from "../src/core/egress.js";
 import { AutonomousAgent } from "../src/agent.js";
 
@@ -154,7 +154,13 @@ test("classifier failure skips flight and audit persistence without blocking aut
     assert.equal(result.receipt.success, true);
     assert.deepEqual(executedArgs, { token: secret, phases: [] });
     const flight = agent.getFlightRecorder() as FlightRecorder;
-    assert.equal(fs.existsSync(flight.getLogPath()), false, "sanitizer failure created a durable flightlog");
+    assert.equal(fs.existsSync(flight.getLogPath()), true, "the durable gap marker should survive classifier failure");
+    const flightRows = fs.readFileSync(flight.getLogPath(), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    assert.ok(flightRows.length > 0);
+    assert.ok(flightRows.every((row) => row.type === "recording_gap"), "classifier failures must not persist caller payloads");
+    for (const row of flightRows) assert.deepEqual(Object.keys(row.payload).sort(), ["reason", "recordingSkipped"]);
+    assert.doesNotMatch(JSON.stringify(flightRows), new RegExp(secret));
+    assert.equal(FlightPlayer.loadFlight(workspace, flight.getFlightId()).integrity.recordingSkipped, true);
     assert.equal(fs.existsSync(path.join(auditHome, ".nexus", "audit.log")), false, "audit sanitizer failure wrote a record");
   } finally {
     agent.shutdown();

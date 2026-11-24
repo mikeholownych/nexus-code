@@ -230,6 +230,8 @@ export type AuditFindingKind =
   | "log_head_mismatch"
   /** A chained log the manifest recorded as intact no longer is. */
   | "log_chain_broken"
+  /** The log was already broken when exported; the bundle faithfully preserves incomplete source evidence. */
+  | "log_not_intact_at_export"
   /** A limit of AUDIT_LIMITS was exceeded; what lies beyond it was not checked. */
   | "limit_exceeded"
   /** The bundle declares a schema version this Nexus does not read. Nothing was checked. */

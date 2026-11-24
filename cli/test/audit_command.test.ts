@@ -13,7 +13,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { AUDIT_EXIT_CODES } from "../src/audit_contract.js";
 import { AUDIT_STANDARD_REDACTION_NOTE } from "../src/audit_export.js";
 import { AUDIT_UNSIGNED_CAVEAT } from "../src/core/audit_bundle.js";
-import { AUDIT_VERIFY_SCHEMA, CLI_DIR, assertManifestValid, cleanTemp, flipByte, readManifest, runAudit, savedSubject, snapshot, tempDir, type AuditCliRun, type SubjectFixture } from "./helpers/audit_fixture.js";
+import { ATTEMPTS_PATH, AUDIT_VERIFY_SCHEMA, CLI_DIR, assertManifestValid, cleanTemp, fixtureInput, flipByte, readManifest, runAudit, savedSubject, snapshot, tempDir, writeFixture, type AuditCliRun, type SubjectFixture } from "./helpers/audit_fixture.js";
 import { validate } from "./helpers/json_schema.js";
 
 after(cleanTemp);
@@ -133,6 +133,21 @@ test("the round trip through the commands: export a saved task, verify it, alter
   const seen = await runAudit(["verify", altered[0].copy]);
   assert.equal(seen.code, 1);
   assert.match(seen.stdout, new RegExp(`^NOT INTACT: \\d+ problems? found\\..*\\n  file_altered ${altered[0].file.path}: `));
+});
+
+test("`nexus audit verify` fails when a bundled source log was already broken at export", async () => {
+  const input = fixtureInput();
+  const attempts = input.artefacts.find((entry) => entry.path === ATTEMPTS_PATH)!;
+  attempts.bytes = Buffer.from(Buffer.from(attempts.bytes).toString("utf8").replace("blocked", "rewritten"));
+  const bundle = writeFixture(input);
+
+  const run = await runAudit(["verify", bundle.dir, "--json"]);
+  const result = consume(run);
+  assert.deepEqual([run.code, result.result, result.findings.map((finding: any) => [finding.kind, finding.path])], [
+    1,
+    "tampered",
+    [["log_not_intact_at_export", ATTEMPTS_PATH]],
+  ]);
 });
 
 test("`nexus audit` still prints the tool audit log, byte for byte, and refuses anything that is not a subcommand", async () => {

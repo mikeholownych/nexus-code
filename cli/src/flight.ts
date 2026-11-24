@@ -11,6 +11,7 @@ import type { SandboxDenialEvent } from "./sandbox_events.js";
 
 export type FlightEventType =
   | "session_start"
+  | "recording_gap"
   | "turn_start"
   | "thought"
   | "tool_call"
@@ -42,6 +43,8 @@ export interface FlightEvent {
 export interface FlightIntegrity {
   chain: ChainVerdict;
   closed: boolean;
+  /** True when the recorder durably marked one or more events it could not record. */
+  recordingSkipped: boolean;
 }
 
 export interface FlightManifest {
@@ -62,8 +65,9 @@ export interface FlightManifest {
  * Deterministic Flight Recorder for Agentic Code Execution
  * Records prompts, thoughts, tool calls, diffs, and durable state transitions into
  * append-only .flightlog archives for exact post-mortem replay and audit.
- * Each record is hash-chained to the one before it (core/hash_chain.ts), so a changed, removed or reordered
- * record is found when the log is read (FlightPlayer.loadFlight).
+ * Recorded events are hash-chained to the one before them (core/hash_chain.ts), so a changed, removed or reordered
+ * record is found when the log is read (FlightPlayer.loadFlight). A fixed, unchained gap marker makes a skipped event
+ * visible without claiming the log is complete.
  */
 export class FlightRecorder {
   private workspace: string;
@@ -73,8 +77,10 @@ export class FlightRecorder {
   private startTime: number = Date.now();
   /** Link of the last record written; undefined before the first. */
   private lastLink: ChainLink | undefined;
-  /** False when this recorder continues a log written before chaining: such a log stays unchained. */
+  /** False when continuing legacy, broken, or known-incomplete history; later records must not restore its integrity. */
   private chained = true;
+  private recordingSkipped = false;
+  private warnedAboutRecording = false;
 
   constructor(workspace: string, flightId?: string) {
     this.workspace = path.resolve(workspace);
@@ -98,9 +104,12 @@ export class FlightRecorder {
     } catch {
       return;
     }
-    const verdict = verifyChain(parseFlightLines(text));
+    const records = parseFlightLines(text);
+    this.recordingSkipped = records.some((record) => record?.type === "recording_gap" && record.payload?.recordingSkipped === true);
+    const verdict = verifyChain(records);
     if (verdict.status === "intact") this.lastLink = verdict.head;
-    else this.chained = false;
+    if (verdict.status !== "intact" || this.recordingSkipped) this.chained = false;
+    if (this.recordingSkipped) this.warnRecordingDegraded();
   }
 
   public getFlightId(): string {
@@ -127,7 +136,7 @@ export class FlightRecorder {
     } catch {
       // Do not propagate classifier diagnostics that could echo inspected input.
       // A later event must not make a log with this missing record look complete.
-      this.chained = false;
+      this.markRecordingSkipped("sanitization_failed", eventId, timestamp);
       return {
         eventId,
         timestamp,
@@ -152,7 +161,7 @@ export class FlightRecorder {
     } catch {
       // Flight recording is optional telemetry, so it must not block the authorized action. But continuing
       // the chain after a skipped event would make a later successful write look like complete evidence.
-      this.chained = false;
+      this.markRecordingSkipped("append_failed", eventId, timestamp);
       return {
         eventId,
         timestamp,
@@ -162,6 +171,33 @@ export class FlightRecorder {
       };
     }
     return event;
+  }
+
+  /** Persist a payload-free, unchained gap marker when the log is writable, then warn the operator once. */
+  private markRecordingSkipped(reason: "sanitization_failed" | "append_failed", eventId: string, timestamp: string): void {
+    this.chained = false;
+    this.recordingSkipped = true;
+    try {
+      const marker: FlightEvent = {
+        eventId: `gap-${eventId}`,
+        timestamp,
+        type: "recording_gap",
+        payload: { recordingSkipped: true, reason },
+      };
+      // This fixed payload contains no caller data and deliberately has no chain link: the log is incomplete.
+      appendPrivateFile(this.flightLogPath, JSON.stringify(marker) + "\n");
+    } catch {
+      // The warning remains useful if the same storage failure prevents a durable marker.
+    }
+    this.warnRecordingDegraded();
+  }
+
+  private warnRecordingDegraded(): void {
+    if (this.warnedAboutRecording) return;
+    this.warnedAboutRecording = true;
+    process.emitWarning("Flight recording skipped one or more events; replay evidence is incomplete.", {
+      code: "NEXUS_FLIGHT_RECORDING_DEGRADED",
+    });
   }
 
   public startSession(config: {
@@ -360,7 +396,8 @@ export class FlightPlayer {
       }
     }
     const last = records[records.length - 1];
-    const integrity: FlightIntegrity = { chain: verifyChain(records), closed: Boolean(last && last.type === "session_end") };
+    const recordingSkipped = records.some((record) => record?.type === "recording_gap" && record.payload?.recordingSkipped === true);
+    const integrity: FlightIntegrity = { chain: verifyChain(records), closed: Boolean(last && last.type === "session_end"), recordingSkipped };
 
     if (!manifest) {
       manifest = {
@@ -379,6 +416,10 @@ export class FlightPlayer {
   /** One line for the operator: what reading the log back established about it. */
   public static describeIntegrity(integrity: FlightIntegrity): string {
     const chain = describeChain(integrity.chain);
+    if (integrity.recordingSkipped) {
+      const chainDetail = integrity.chain.status === "broken" ? ` (${chain})` : "";
+      return `recording skipped one or more events; replay evidence is incomplete${chainDetail}`;
+    }
     if (integrity.chain.status !== "intact" || integrity.chain.records === 0) return chain;
     return integrity.closed
       ? `${chain}, closed by its session end`
