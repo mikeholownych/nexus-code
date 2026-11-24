@@ -23,7 +23,7 @@ import { addSchedule, firstJobOf, jobsOf, reseed, trustRepo } from "./helpers/sc
 
 const receiptSchema = JSON.parse(fs.readFileSync(jobReceiptSchemaFile(JOB_RECEIPT_SCHEMA_VERSION), "utf8"));
 
-test("a scheduled run whose verifier fails ends BLOCKED, and the receipt, the pointer and `schedule status` say so", { timeout: 290_000, skip: isSandboxAvailable("auto") ? false : "worktree-write needs a sandbox engine" }, async () => {
+test("a scheduled run whose verifier fails ends BLOCKED naming the verifier, and the receipt, the pointer and `schedule status` say so", { timeout: 290_000, skip: isSandboxAvailable("auto") ? false : "worktree-write needs a sandbox engine" }, async () => {
   const world = runnerWorld();
   const repo = fs.realpathSync(makeRepo({
     "package.json": JSON.stringify({ name: "seeded", scripts: { test: "node --test" } }, null, 2),
@@ -33,7 +33,9 @@ test("a scheduled run whose verifier fails ends BLOCKED, and the receipt, the po
   const gw = await startGateway((n) =>
     n === 1
       ? { kind: "tools", calls: [{ name: "write_file", args: { path: "package.json", content: JSON.stringify({ name: "seeded", scripts: { test: "true" } }) } }] }
-      : { kind: "tools", calls: [{ name: "task_completed", args: { summary: "the test passes" } }] },
+      : n === 2
+        ? { kind: "tools", calls: [{ name: "task_completed", args: { summary: "the test passes" } }] }
+        : { kind: "text", content: "The seeded test still fails and I cannot change how it is verified, so the task is not done." },
   );
   try {
     await trustRepo(world, repo);
@@ -56,7 +58,9 @@ test("a scheduled run whose verifier fails ends BLOCKED, and the receipt, the po
     assert.equal(receipt.unattended, true);
     assert.equal(receipt.verifier?.command, "node --test");
     assert.match(receipt.summary, /^BLOCKED: unit 'task'/, "the receipt says it is blocked, and which unit");
-    assert.equal(receipt.reason, "EXECUTION_FAILED");
+    assert.equal(receipt.reason, "VERIFIER_FAILED", receipt.summary);
+    assert.match(receipt.summary, /VERIFIER_FAILED.*node --test.*Verifier failed: node --test/, "the receipt names the verifier failing");
+    assert.equal(receipt.verifier?.status, "FAILED");
     assert.ok(receipt.units.every((unit) => unit.outcome !== "VERIFIED"), JSON.stringify(receipt.units));
     assert.equal(receipt.pending_decisions.length, 1, "the operator is told what needs deciding");
 
@@ -65,13 +69,8 @@ test("a scheduled run whose verifier fails ends BLOCKED, and the receipt, the po
       assert.notEqual(loadJobOperation(ended)!.status, "COMPLETE");
     } finally { delete process.env.NEXUS_STATE_DIR; }
 
-    // The model's attempt on the verifier's own configuration was refused, completion was never accepted (every
-    // task_completed failed against the verifier), and the failing test is as it was.
+    // The model's attempt on the verifier's own configuration was refused, completion was refused because the verifier really ran and failed, and the failing test is as it was.
     assert.match(JSON.stringify(gw.requests[1] ?? ""), /VERIFICATION_CONFIG_PROTECTED/);
-    const events = fs.readFileSync(world.paths.events(job.id), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
-    const completions = events.filter((event) => event.type === "TOOL_END" && event.tool === "task_completed");
-    assert.ok(completions.length >= 1);
-    assert.ok(completions.every((event) => event.success === false && /Verifier 'node --test'/.test(event.error)), JSON.stringify(completions));
     assert.equal(fs.readFileSync(path.join(repo, "check.test.js"), "utf8"), testFile);
     assert.equal(fs.readFileSync(path.join(repo, "package.json"), "utf8").includes('"test": "node --test"'), true, "the operator's checkout is untouched");
 
@@ -94,6 +93,61 @@ test("a scheduled run whose verifier fails ends BLOCKED, and the receipt, the po
     const json = JSON.parse((await world.run(["schedule", "status", "nightly", "--json"])).stdout);
     assert.equal(json.receipt.outcome, "BLOCKED");
     assert.equal(json.pointer.jobId, job.id);
+  } finally {
+    await world.cleanup();
+    await gw.close();
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("a scheduled run whose verifier passes can end VERIFIED: the operator's verifier runs unattended, in the worktree", { timeout: 290_000, skip: isSandboxAvailable("auto") ? false : "worktree-write needs a sandbox engine" }, async () => {
+  const world = runnerWorld();
+  const repo = fs.realpathSync(makeRepo({
+    "package.json": JSON.stringify({ name: "seeded", scripts: { test: "node --test" } }, null, 2),
+    "calc.js": "export const add = (a, b) => a - b;\n",
+    "calc.test.js": "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { add } from './calc.js';\ntest('add', () => assert.equal(add(2, 3), 5));\n",
+  }));
+  const gw = await startGateway((n) =>
+    n === 1
+      ? { kind: "tools", calls: [{ name: "write_file", args: { path: "calc.js", content: "export const add = (a, b) => a + b;\n", overwrite: true } }] }
+      : { kind: "tools", calls: [{ name: "task_completed", args: { summary: "add now adds" } }] },
+  );
+  try {
+    await trustRepo(world, repo);
+    await addSchedule(world, repo, "Fix add in calc.js.", "--name", "fixer", "--every", "5m", "--allow-worktree-write", "--verifier", "node --test", "--deliverable-file", "calc.js", "-e", gw.url, "-m", "m");
+    await world.startRunner();
+    reseed(world, "fixer", 6);
+    const job = await firstJobOf(world, "fixer");
+    const ended = await world.waitJob(job.id, ["BLOCKED", "COMPLETE", "FAILED", "CANCELLED", "TIMED_OUT"], 240_000);
+    const receipt = readReceipt(world.paths, job.id)!;
+    assert.equal(ended.state, "COMPLETE", JSON.stringify(receipt));
+    assert.deepEqual(validate(receipt, receiptSchema, receiptSchema), []);
+    assert.equal(receipt.verifier?.status, "PASSED");
+    assert.ok(receipt.units.every((unit) => unit.outcome === "VERIFIED"), JSON.stringify(receipt.units));
+    assert.equal(fs.readFileSync(path.join(repo, "calc.js"), "utf8"), "export const add = (a, b) => a - b;\n", "the operator's checkout is untouched");
+  } finally {
+    await world.cleanup();
+    await gw.close();
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("a read-only schedule with a verifier does not run it, and the receipt says so", { timeout: 200_000 }, async () => {
+  const world = runnerWorld();
+  const repo = fs.realpathSync(makeRepo({ "README.md": "hello\n" }));
+  const gw = await startGateway(() => ({ kind: "tools", calls: [{ name: "task_completed", args: { summary: "read it" } }] }));
+  try {
+    await trustRepo(world, repo);
+    await addSchedule(world, repo, "Read README.md.", "--name", "reader", "--every", "5m", "--verifier", "git status --short", "-e", gw.url, "-m", "m");
+    await world.startRunner();
+    reseed(world, "reader", 4);
+    const job = await firstJobOf(world, "reader");
+    await world.waitJob(job.id, ["COMPLETE", "BLOCKED", "FAILED", "CANCELLED", "TIMED_OUT"], 150_000);
+    const receipt = readReceipt(world.paths, job.id)!;
+    assert.equal(receipt.verifier?.command, "git status --short");
+    assert.equal(receipt.verifier?.status, "NOT_RUN");
+    assert.match(receipt.verifier?.detail ?? "", /was not run/);
+    assert.deepEqual(validate(receipt, receiptSchema, receiptSchema), []);
   } finally {
     await world.cleanup();
     await gw.close();

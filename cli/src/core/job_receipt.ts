@@ -50,7 +50,11 @@ export interface JobReceipt {
   integration_branch: string | null;
   policy: JobPolicy;
   approval_mode: "review" | "read-only";
-  verifier: { command: string; source: "operator" } | null;
+  /**
+   * The operator's verifier and what became of it: `status` is the run the operation recorded (PASSED, FAILED, TIMED_OUT, ...)
+   * or NOT_RUN when no unit recorded one; `detail` says what NOT_RUN means. Absent on a receipt written before BG-2.
+   */
+  verifier: { command: string; source: "operator"; status?: string; detail?: string } | null;
   budgets: JobBudgets;
   created_at: string;
   started_at: string | null;
@@ -110,12 +114,29 @@ function unitReason(unit: WorkUnit): string | null {
   return /^[A-Z_]+\/[A-Z_]+ \(([A-Z_]+)\)/.exec(unit.blocked.reason)?.[1] ?? unit.blocked.decision.cause;
 }
 
+/** The operator verifier's recorded run, newest unit last; NOT_RUN when no unit recorded one (never started: a read-only run, or one that ended first). */
+function verifierState(operation: DurableOperationState | undefined): { status: string; detail?: string } {
+  const recorded = (operation?.units ?? []).flatMap((unit) => [unit.failedRun?.verification, unit.result?.verification]).filter((v) => v !== undefined);
+  const last = recorded[recorded.length - 1];
+  if (last) return { status: last.status };
+  return { status: "NOT_RUN", detail: "no unit recorded a verifier run: the verifier was not run (a read-only run does not run it, or the job ended before completion was attempted)" };
+}
+
 function summarize(job: JobRecord, operation: DurableOperationState | undefined, end: JobEnd, reason: string | null): string {
   const branch = operation?.git?.integrationBranch;
   if (end.outcome === "COMPLETE") return `COMPLETE: ${operation?.units.length ?? 0} unit(s) finished${branch ? `; results are on ${branch}` : ""}; nothing was merged into your branch.`;
   const blocked = operation?.units.find((unit) => unit.status === "BLOCKED" && unit.blocked);
   if (end.outcome === "BLOCKED" && blocked) return `BLOCKED: unit '${blocked.id}' ${blocked.blocked!.reason}; nothing was merged.`.slice(0, 600);
   return `${end.outcome}: ${end.detail ?? reason ?? "the job ended without a result"}; nothing was merged.`.slice(0, 600);
+}
+
+/** A job that did not complete says when its operator verifier did not run or did not pass. */
+function withVerifierNote(summary: string, job: JobRecord, operation: DurableOperationState | undefined, end: JobEnd): string {
+  if (job.verifier === null || end.outcome === "COMPLETE") return summary;
+  const state = verifierState(operation);
+  if (state.status === "PASSED") return summary;
+  const note = state.status === "NOT_RUN" ? ` Verifier not run: ${job.verifier.slice(0, 80)}.` : ` Verifier ${state.status.toLowerCase().replace(/_/g, " ")}: ${job.verifier.slice(0, 80)}.`;
+  return `${summary}${note}`.slice(0, 700);
 }
 
 export function buildJobReceipt(job: JobRecord, operation: DurableOperationState | undefined, end: JobEnd): JobReceipt {
@@ -138,7 +159,7 @@ export function buildJobReceipt(job: JobRecord, operation: DurableOperationState
     integration_branch: operation?.git?.integrationBranch ?? null,
     policy: job.policy,
     approval_mode: unattendedApprovalMode(job.policy),
-    verifier: job.verifier === null ? null : { command: job.verifier, source: "operator" },
+    verifier: job.verifier === null ? null : { command: job.verifier, source: "operator", ...verifierState(operation) },
     budgets: { ...job.budgets },
     created_at: job.createdAt,
     started_at: job.attempts[0]?.startedAt ?? null,
@@ -146,7 +167,7 @@ export function buildJobReceipt(job: JobRecord, operation: DurableOperationState
     attempts: job.attempts.length,
     outcome: end.outcome,
     reason,
-    summary: summarize(job, operation, end, reason),
+    summary: withVerifierNote(summarize(job, operation, end, reason), job, operation, end),
     units: units.map((unit) => ({
       id: unit.id,
       status: unit.status,

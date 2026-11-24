@@ -19,7 +19,7 @@ export const MAX_CRON_LENGTH = 100;
 /** How far a cron expression is searched for its next slot. Four years and a day: enough for 29 February. */
 export const CRON_HORIZON_MS = 1462 * 24 * 60 * 60 * 1000;
 /** The most slots one scan counts; a longer gap is reported as "at least" this many. */
-export const MAX_SLOT_SCAN = 200_000;
+export const MAX_SLOT_SCAN = 20_000;
 
 export class ScheduleSpecError extends Error {
   constructor(message: string) {
@@ -106,6 +106,19 @@ export function parseCron(expr: string): CronSpec {
   return { minute, hour, dayOfMonth, month, dayOfWeek };
 }
 
+/**
+ * The smallest gap, in minutes, between two slots of one day (and across midnight when every day matches). A trigger
+ * must not fire more often than `every` may: five minutes.
+ */
+export function cronMinGapMinutes(spec: CronSpec): number {
+  const slots: number[] = [];
+  for (const hour of [...spec.hour.allowed].sort((a, b) => a - b)) for (const minute of [...spec.minute.allowed].sort((a, b) => a - b)) slots.push(hour * 60 + minute);
+  let gap = Infinity;
+  for (let i = 1; i < slots.length; i++) gap = Math.min(gap, slots[i] - slots[i - 1]);
+  if (slots.length > 1 && spec.dayOfMonth.star && spec.dayOfWeek.star) gap = Math.min(gap, slots[0] + 1440 - slots[slots.length - 1]);
+  return gap;
+}
+
 function dayMatches(spec: CronSpec, date: Date): boolean {
   const dom = spec.dayOfMonth.allowed.has(date.getUTCDate());
   const dow = spec.dayOfWeek.allowed.has(date.getUTCDay());
@@ -158,7 +171,8 @@ export function parseOnceAt(text: string): string {
 /** A trigger from stored or typed parts, validated. The returned trigger is the normal form (an `at` is a full ISO string). */
 export function validateTrigger(value: ScheduleTrigger): ScheduleTrigger {
   if (value.kind === "cron") {
-    parseCron(value.expr);
+    const gap = cronMinGapMinutes(parseCron(value.expr));
+    if (gap < MIN_EVERY_SECONDS / 60) throw new ScheduleSpecError(`cron '${value.expr.slice(0, 60)}' runs every ${gap} minute${gap === 1 ? "" : "s"} at times; slots are at least ${MIN_EVERY_SECONDS / 60} minutes apart, as for --every.`);
     return { kind: "cron", expr: value.expr };
   }
   if (value.kind === "every") {

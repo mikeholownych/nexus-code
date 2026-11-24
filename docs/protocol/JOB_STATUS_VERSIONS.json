@@ -8,5 +8,10 @@
     "schema_version": 1,
     "schemaSha256": "2d23d2b5b1cba5f637096ba909b580aee1bf79f6961aa90d2e1bcae3ac3f310a",
     "note": "BG-2: the status document embeds the job receipt, whose `missed` is now null or an object and which gains the optional `schedule_occurrence` (see JOB_RECEIPT_VERSIONS.json). Version stays 1 for the same reason: nothing the previous entry published changed meaning, and no release carried the earlier shape."
+  },
+  {
+    "schema_version": 1,
+    "schemaSha256": "0574b41b9a3c2c42ea63119c883f16d2db536f435a0c6102d7b5bf64a7436a66",
+    "note": "BG-2 review: the status document embeds the job receipt, whose `verifier` gains the optional `status` and `detail` (see JOB_RECEIPT_VERSIONS.json). Version stays 1 for the same reason."
   }
 ]

@@ -12,7 +12,7 @@ import type { AutonomousAgent } from "../src/agent.js";
 import { buildConfig } from "../src/config.js";
 import { DEFAULT_JOB_BUDGETS, newJobRecord, runnerPaths, type JobPolicy } from "../src/core/runner_store.js";
 import { submissionFor } from "../src/core/schedule_engine.js";
-import { ensureScheduleDir, newScheduleState, readSchedule, schedulePaths, writeSchedule, type ScheduleRecord } from "../src/core/schedule_store.js";
+import { ensureScheduleDir, newScheduleState, parseScheduleRecord, readSchedule, schedulePaths, writeSchedule, type ScheduleRecord } from "../src/core/schedule_store.js";
 import { unattendedConfig } from "../src/core/unattended.js";
 import { setWorkspaceTrusted } from "../src/workspace_trust.js";
 import { makeRepo } from "./helpers/fixtures.js";
@@ -243,5 +243,49 @@ test("sixty-four schedules due at once: the runner's queue bound holds, the over
     assert.equal(JSON.parse(fs.readFileSync(paths.record("s69"), "utf8")).state.lastFire, undefined, "the 70th was never run");
   } finally {
     await b.cleanup();
+  }
+});
+
+test("a hand-edited verifier is held to the command checks when the schedule fires: a tripwire command or one your rules forbid never runs", async () => {
+  // Guard: verifierProblem in buildJobSubmission, reached through submissionFor at every fire.
+  const repo = fs.realpathSync(makeRepo({ "README.md": "x\n" }));
+  temp.push(repo);
+  for (const verifier of ["rm -rf /", "sudo rm -rf /"]) {
+    assert.throws(() => submissionFor(record(repo, { policy: "worktree-write", verifier }), iso(T0 + HOUR)), /refused by the security policy/, verifier);
+  }
+  fs.mkdirSync(path.join(home, ".config", "nexus"), { recursive: true });
+  const rules = path.join(home, ".config", "nexus", "command_rules.json");
+  fs.writeFileSync(rules, JSON.stringify({ version: 1, rules: [{ prefix: ["make", "deploy"], decision: "forbidden", justification: "never from automation" }] }), { mode: 0o600 });
+  try {
+    assert.throws(() => submissionFor(record(repo, { policy: "worktree-write", verifier: "make deploy" }), iso(T0 + HOUR)), /forbidden by your command rules/);
+    assert.doesNotThrow(() => submissionFor(record(repo, { policy: "worktree-write", verifier: "make test" }), iso(T0 + HOUR)));
+  } finally { fs.rmSync(rules, { force: true }); }
+  // And a record whose verifier is several lines is not even a record.
+  assert.throws(() => parseScheduleRecord({ ...JSON.parse(JSON.stringify(record(repo))), verifier: "node --test\nrm -rf x" }), /verifier is not valid/);
+});
+
+test("the runner's state directory (inbox, jobs, schedules, lock files) is a protected path for the agent's file tools, under any NEXUS_STATE_DIR", async () => {
+  // Guard: the runner root pattern in the security policy and the absolute-directory rule of isPathProtected.
+  const repo = fs.realpathSync(makeRepo({ "a.txt": "hello\n" }));
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-sched-hostile-agent2-"));
+  temp.push(repo, stateDir);
+  const saved = process.env.NEXUS_STATE_DIR;
+  process.env.NEXUS_STATE_DIR = path.join(repo, "state");
+  try {
+    const root = path.join(repo, "state", "runner");
+    const agent = hookAgent({ repo, stateDir, mode: "auto", fullAccess: true });
+    agents.push(agent);
+    for (const target of ["inbox/req-0123456789abcdef.json", "jobs/job-0123456789ab/job.json", "jobs/job-0123456789ab/receipt.json", "runner.json", "runner.guard"]) {
+      for (const where of [path.join("state", "runner", target), path.join(root, target)]) {
+        const receipt = await dispatch(agent, "write_file", { path: where, content: "{}" });
+        assert.equal(receipt.success, false, where);
+        assert.match(JSON.stringify(receipt), /Security Policy Violation|protected/i, where);
+      }
+    }
+    assert.equal(fs.existsSync(path.join(root, "inbox")), false, "nothing was written");
+    const ok = await dispatch(agent, "write_file", { path: "state/other.txt", content: "fine\n" });
+    assert.equal(ok.success, true, JSON.stringify(ok).slice(0, 200));
+  } finally {
+    if (saved === undefined) delete process.env.NEXUS_STATE_DIR; else process.env.NEXUS_STATE_DIR = saved;
   }
 });

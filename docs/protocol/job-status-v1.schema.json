@@ -300,6 +300,7 @@
           }
         },
         "verifier": {
+          "description": "The operator's verifier and what became of it: `status` is the run the operation recorded (PASSED, FAILED, TIMED_OUT, ...)\nor NOT_RUN when no unit recorded one; `detail` says what NOT_RUN means. Absent on a receipt written before BG-2.",
           "anyOf": [
             {
               "type": "object",
@@ -307,8 +308,14 @@
                 "command": {
                   "type": "string"
                 },
+                "detail": {
+                  "type": "string"
+                },
                 "source": {
                   "const": "operator"
+                },
+                "status": {
+                  "type": "string"
                 }
               },
               "required": [

@@ -16,7 +16,7 @@ import { describeTrigger, nextAfter, parseEvery, parseOnceAt, ScheduleSpecError,
 import { submissionFor } from "./core/schedule_engine.js";
 import {
   ensureScheduleDir, listSchedules, MAX_REMAINING_RUNS, MAX_SCHEDULES, newScheduleId, newScheduleState, readSchedule, readSchedulePointer, SCHEDULE_ID, SCHEDULE_ON_MISSED, schedulePaths,
-  withScheduleLock, writeSchedule, type ScheduleOnMissed, type ScheduleRecord,
+  withScheduleLock, withScheduleLockAsync, writeSchedule, type ScheduleOnMissed, type ScheduleRecord,
 } from "./core/schedule_store.js";
 import { OperationSpecError } from "./operation_cli.js";
 import { safeTerminal } from "./ui.js";
@@ -154,6 +154,7 @@ export function registerScheduleCommands(program: Command): void {
       printRecord(record);
       console.log(`  next runs: ${upcoming(record, now.getTime(), 3).join(", ")}`);
       console.log(pc.dim(`  Each run is an unattended job in a fresh worktree: ${policy === "worktree-write" ? "it may write inside that worktree only" : "read-only"}; it never approves a command or a network call, and results are never merged for you.`));
+      if (verifier !== null && policy === "read-only") console.error(pc.yellow("warning: a read-only run does not run its verifier (it cannot change anything), so its receipt will say the verifier was not run. Add --allow-worktree-write for a schedule whose point is a verified change."));
       if (!runnerAlive(runnerPaths())) console.error(pc.yellow("warning: no runner is running, so nothing fires until `nexus runner serve` is up; runs missed meanwhile are reported (docs/SCHEDULES.md)."));
     }));
 
@@ -254,21 +255,26 @@ export function registerScheduleCommands(program: Command): void {
       const { record } = readOrFail(id);
       const paths = runnerPaths();
       if (!isWorkspaceListed(record.workspace)) throw new BackgroundUsageError(`${record.workspace} is not a trusted workspace; a schedule does not run there. Run \`nexus trust ${record.workspace}\` after reviewing it.`);
-      if (listJobs(paths).jobs.some((job) => job.origin.kind === "schedule" && job.origin.scheduleId === id && !isTerminal(job.state))) {
-        throw new BackgroundUsageError(`Schedule ${id} still has a running job; wait for it (\`nexus schedule status ${id}\`).`);
-      }
       requireRunner(paths);
-      let built: ReturnType<typeof submissionFor>;
-      try {
-        built = submissionFor(record, new Date().toISOString());
-      } catch (error) {
-        if (error instanceof RunnerStoreError || error instanceof OperationSpecError) throw new BackgroundUsageError(error.message);
-        throw error;
-      }
-      const requestId = submitRequest(paths, { kind: "start", job: built.job, spec: built.spec });
-      const accepted = await waitFor(() => readJob(paths, built.job.id) ?? requestRefusal(paths, requestId), ACK_WAIT_MS);
-      if (typeof accepted === "string") throw new BackgroundUsageError(`The runner refused the job: ${accepted}`);
-      if (!accepted) throw new Error(`The runner did not accept the job within ${ACK_WAIT_MS / 1000} s; it stays queued as request ${requestId}.`);
+      // The check for a running job and the runner's acceptance of the new one happen under the schedule lock, so two
+      // run-now commands cannot both see "nothing running". The runner's own tick takes the same lock briefly.
+      const built = await withScheduleLockAsync(schedulePaths(paths), async () => {
+        if (listJobs(paths).jobs.some((job) => job.origin.kind === "schedule" && job.origin.scheduleId === id && !isTerminal(job.state))) {
+          throw new BackgroundUsageError(`Schedule ${id} still has a running job; wait for it (\`nexus schedule status ${id}\`).`);
+        }
+        let made: ReturnType<typeof submissionFor>;
+        try {
+          made = submissionFor(record, new Date().toISOString());
+        } catch (error) {
+          if (error instanceof RunnerStoreError || error instanceof OperationSpecError) throw new BackgroundUsageError(error.message);
+          throw error;
+        }
+        const requestId = submitRequest(paths, { kind: "start", job: made.job, spec: made.spec });
+        const accepted = await waitFor(() => readJob(paths, made.job.id) ?? requestRefusal(paths, requestId), ACK_WAIT_MS);
+        if (typeof accepted === "string") throw new BackgroundUsageError(`The runner refused the job: ${accepted}`);
+        if (!accepted) throw new Error(`The runner did not accept the job within ${ACK_WAIT_MS / 1000} s; it stays queued as request ${requestId}.`);
+        return made;
+      }, 15_000);
       if (options.json) console.log(JSON.stringify({ schedule: id, job: built.job.id }, null, 2));
       else console.log(built.job.id);
     }));

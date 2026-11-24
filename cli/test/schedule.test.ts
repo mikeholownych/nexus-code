@@ -13,7 +13,7 @@ const cron = (expr: string): ScheduleTrigger => ({ kind: "cron", expr });
 const next = (expr: string, after: string) => iso(nextAfter(cron(expr), 0, at(after)));
 
 test("cron: accepted expressions", () => {
-  for (const expr of ["* * * * *", "*/5 * * * *", "0 3 * * 1-5", "0,30 9-17 * * *", "0 0 1 1 *", "15 14 1 * *", "0 22 * * 7", "0-59/15 * * * *", "0 0 29 2 *", "5 4 * * 0"]) {
+  for (const expr of ["*/5 * * * *", "0 3 * * 1-5", "0,30 9-17 * * *", "0 0 1 1 *", "15 14 1 * *", "0 22 * * 7", "0-59/15 * * * *", "0 0 29 2 *", "5 4 * * 0"]) {
     assert.doesNotThrow(() => parseCron(expr), expr);
   }
   assert.deepEqual([...parseCron("0 22 * * 7").dayOfWeek.allowed], [0], "7 is Sunday, the same as 0");
@@ -60,6 +60,17 @@ test("cron: invalid strings are refused with a reason that names the field", () 
   for (const [expr, pattern] of table) {
     assert.throws(() => parseCron(expr), (error: unknown) => error instanceof ScheduleSpecError && pattern.test(error.message), `${JSON.stringify(expr)} -> ${pattern}`);
   }
+});
+
+test("cron: slots closer than five minutes are refused like an interval below the floor (validateTrigger), the rest are accepted", () => {
+  for (const expr of ["* * * * *", "*/4 * * * *", "0,2 * * * *", "0-4 3 * * *", "1,58 0,23 * * *"]) {
+    assert.throws(() => validateTrigger({ kind: "cron", expr }), (error: unknown) => error instanceof ScheduleSpecError && /at least 5 minutes apart/.test(error.message), expr);
+  }
+  for (const expr of ["*/5 * * * *", "0,5 * * * *", "58,3 * * * *", "0 3 * * 1-5", "59 23 * * 1", "56 23 * * 1,2", "0 0,12 1 * *"]) {
+    assert.doesNotThrow(() => validateTrigger({ kind: "cron", expr }), expr);
+  }
+  // The pure slot functions still accept a one-minute expression: the floor is a rule of what may be scheduled.
+  assert.equal(nextAfter(cron("* * * * *"), 0, at("2026-01-01T00:00:30Z")) , at("2026-01-01T00:01:00Z"));
 });
 
 test("cron: next slots across hours, days, month ends, years and leap days", () => {

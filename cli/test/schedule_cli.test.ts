@@ -7,10 +7,11 @@ import "./helpers/leak_guard.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { listJobs } from "../src/core/runner_store.js";
 import { listSchedules, MAX_SCHEDULES, newScheduleState, readSchedule, schedulePaths, writeSchedule, type ScheduleRecord } from "../src/core/schedule_store.js";
 import { DEFAULT_JOB_BUDGETS } from "../src/core/runner_store.js";
 import { makeRepo } from "./helpers/fixtures.js";
-import { runnerWorld, type RunnerWorld } from "./helpers/runner_fixture.js";
+import { runnerWorld, stalledGateway, type RunnerWorld } from "./helpers/runner_fixture.js";
 
 async function withWorld(body: (world: RunnerWorld, repo: string, trusted: () => Promise<void>) => Promise<void>): Promise<void> {
   const world = runnerWorld();
@@ -190,5 +191,44 @@ test("run-now needs a runner and a trusted workspace, and refuses while the sche
     const untrusted = await world.run(["schedule", "run-now", "n"]);
     assert.equal(untrusted.code, 2);
     assert.match(untrusted.stderr, /not a trusted workspace/);
+  });
+});
+
+test("two run-now at once start one job: the running-job check and the runner's acceptance happen under the schedule lock", { timeout: 240_000 }, async () => {
+  const world = runnerWorld();
+  const repo = fs.realpathSync(makeRepo({ "README.md": "hello\n" }));
+  const gw = await stalledGateway();
+  try {
+    assert.equal((await world.run(["trust", repo])).code, 0);
+    assert.equal((await add(world, repo, "--name", "n", "--every", "15m", "-e", gw.url, "-m", "m")).code, 0);
+    await world.startRunner();
+    const runs = await Promise.all([world.run(["schedule", "run-now", "n"]), world.run(["schedule", "run-now", "n"])]);
+    const ok = runs.filter((run) => run.code === 0);
+    const refused = runs.filter((run) => run.code === 2);
+    assert.equal(ok.length, 1, JSON.stringify(runs));
+    assert.equal(refused.length, 1, JSON.stringify(runs));
+    assert.match(refused[0].stderr, /still has a running job/);
+    assert.equal(listJobs(world.paths).jobs.filter((job) => job.origin.kind === "schedule" && job.origin.scheduleId === "n").length, 1);
+  } finally {
+    await world.cleanup();
+    await gw.close();
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("add warns that a read-only run does not run its verifier", { timeout: 120_000 }, async () => {
+  await withWorld(async (world, repo, trusted) => {
+    await trusted();
+    const result = await add(world, repo, "--name", "w", "--every", "15m", "--verifier", "node --test");
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stderr, /a read-only run does not run its verifier/);
+    const writable = await add(world, repo, "--name", "x", "--every", "15m", "--verifier", "node --test", "--allow-worktree-write");
+    assert.doesNotMatch(writable.stderr, /does not run its verifier/);
+    const bad = await add(world, repo, "--name", "y", "--every", "15m", "--verifier", "rm -rf /", "--allow-worktree-write");
+    assert.equal(bad.code, 2);
+    assert.match(bad.stderr, /refused by the security policy/);
+    const fast = await add(world, repo, "--name", "z", "--cron", "*/2 * * * *");
+    assert.equal(fast.code, 2);
+    assert.match(fast.stderr, /at least 5 minutes apart/);
   });
 });

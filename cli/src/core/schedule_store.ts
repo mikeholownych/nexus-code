@@ -194,6 +194,23 @@ export function withScheduleLock<T>(paths: SchedulePaths, work: () => T, waitMs 
   }
 }
 
+/** As `withScheduleLock`, for work that waits (a client that must see its request accepted before it lets go). */
+export async function withScheduleLockAsync<T>(paths: SchedulePaths, work: () => Promise<T>, waitMs = 5_000): Promise<T> {
+  ensurePrivateDir(path.dirname(paths.guard));
+  let guard: FileGuard | null = null;
+  try {
+    guard = acquireFileGuard(paths.guard, { label: "Schedule guard", waitMs });
+  } catch (error) {
+    throw new RunnerStoreError(error instanceof Error ? error.message : String(error));
+  }
+  if (!guard) throw new RunnerStoreError("The schedules are being changed by another command; try again.");
+  try {
+    return await work();
+  } finally {
+    releaseFileGuard(guard);
+  }
+}
+
 // ---------------------------------------------------------------- validation
 
 const STATE_KEYS = ["nextDueAt", "missedCount", "missed", "clockSteps"];

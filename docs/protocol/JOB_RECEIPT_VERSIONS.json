@@ -8,5 +8,10 @@
     "schema_version": 1,
     "schemaSha256": "08ad0d9252a1f3bf99a18508656eca46b44e356f1c8296ebb8f9bb157cc6f0c2",
     "note": "BG-2: the receipt of a job a schedule started now reports the slots the schedule missed just before it. `missed`, reserved as always null in the entry above, is null or {count, first, last, truncated?}, and the optional `schedule_occurrence` names the slot the job stands for. Version stays 1: every member the previous entry published is unchanged, `missed` was never anything but null in a build that shipped (no release carried BG-1 before this), and the added member is optional, as this ledger's rule for a report allows."
+  },
+  {
+    "schema_version": 1,
+    "schemaSha256": "371d3cea1e49dac7b9b819f5bac82529fbd549ce0f6165ea595bf20f36c93a37",
+    "note": "BG-2 review: the receipt's `verifier` gains the optional members `status` (the verifier run the operation recorded, or NOT_RUN) and `detail` (what NOT_RUN means), so a job whose verifier never ran says so. Version stays 1: both members are optional additions to a report and nothing published changed meaning."
   }
 ]

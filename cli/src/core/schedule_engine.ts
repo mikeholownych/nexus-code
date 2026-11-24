@@ -10,7 +10,7 @@
  *    slot (same schedule and `dueAt`) is never made again, even if the clock steps backwards.
  *  - Slots the runner could not serve (it was down, the host slept, the clock jumped forward) are late. Late slots are
  *    never replayed one by one: they are counted, recorded as one gap and reported in a missed-run receipt, and with
- *    `onMissed: "run-once"` (the default) one catch-up job stands for them all; with `report` none runs.
+ *    `onMissed: "run-once"` one catch-up job stands for them all; with `report` (the default) none runs.
  *  - A slot due while the schedule's previous job still runs is recorded as an `overlap` gap and skipped.
  *  - A slot whose job could not be submitted (untrusted workspace, queue full, managed policy) is recorded as `refused`.
  */
