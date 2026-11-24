@@ -158,6 +158,30 @@ test("two units that each pass alone and conflict semantically: the first integr
   assert.ok(git(f.root, ["rev-parse", "--verify", `refs/heads/${f.state.units.A.branch}`]), "the refused unit's branch is kept");
 });
 
+test("the same two units in the other order: the unit whose own verifier breaks on the merged tree is refused naming the unit it had not seen", async () => {
+  const f = fixture();
+  const b = f.prepare("B");
+  const a = f.prepare("A");
+  writeB(b);
+  writeA(a);
+  assert.equal((await f.integrate("A", "node test/a.test.js")).kind, "integrated");
+  const tip = f.ops.currentTip();
+
+  const second = await f.integrate("B", "node test/b.test.js");
+  assert.ok(second.kind === "failed");
+  assert.deepEqual(second.conflictWith, ["A"]);
+  assert.match(second.reason, /^integration verification failed on the merged tree: node test\/b\.test\.js; it passed in B's own worktree, which lacks the integrated work of A\n/);
+  assert.deepEqual(second.checks, [{ command: "node test/b.test.js", owners: ["B"], status: "FAILED" }]);
+  assertUntouched(f, tip);
+
+  // A unit that starts from the tip has seen everything: its failing verifier is its own, and nobody else is named.
+  write(f.prepare("C"), "c.txt", "c\n");
+  const own = await f.integrate("C", "test -f missing");
+  assert.ok(own.kind === "failed");
+  assert.equal(own.conflictWith, undefined);
+  assertUntouched(f, tip);
+});
+
 test("a textual conflict names the integrated unit it collides with and leaves the branch as it was", async () => {
   const f = fixture();
   const one = f.prepare("u1");

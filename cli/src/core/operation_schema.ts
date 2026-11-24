@@ -10,8 +10,9 @@
  *   1. A record this build understands (current version) is validated and used as-is.
  *   2. A v1 to v4 record (or one that predates the field, which reads as v1) is upgraded in memory by changing
  *      only the schema version. v4 adds explicit execution reservations; older parallel records are clamped to serial.
- *      v5 adds `origin` (a detached job drives the operation): the version is bumped so that an older build refuses
- *      such a record instead of rewriting it without the stamp.
+ *      v5 adds `origin` (a detached job drives the operation) and verified merge arbitration (PA-2:
+ *      `git.integrationVerifiers`, `mergedChecks` on a receipt, `INTEGRATION_REJECTED`). The version is bumped so an
+ *      older build refuses such a record instead of rewriting it without those fields or integrating without checks.
  *   3. A record from a newer build is refused. It is not corrupt: a build that wrote it can still read it, and
  *      quarantining it would destroy evidence. It is also never interpreted as if it were current.
  *
@@ -30,6 +31,7 @@ export const LEGACY_OPERATION_SCHEMA_VERSION = 1;
 
 const OPERATION_STATUSES = new Set(["RUNNING", "WAITING", "BLOCKED", "PAUSED", "COMPLETE", "CANCELLED"]);
 const WORK_UNIT_STATUSES = new Set(["RUNNABLE", "RUNNING", "PARKED", "WAITING_ON_DEPENDENCY", "COMPLETE", "BLOCKED"]);
+const MERGED_CHECK_STATUSES = new Set(["PASSED", "FAILED", "ENVIRONMENT", "TIMED_OUT"]);
 const DECISION_ACTION_KINDS = new Set([
   "retry",
   "keep_waiting",
@@ -260,7 +262,23 @@ export function validateOperationState(state: DurableOperationState): void {
       if (!receipt || typeof receipt.unitId !== "string" || typeof receipt.integratedCommit !== "string") {
         throw new InvalidOperationStateError(`operation ${state.id}: an integration receipt is missing its unitId or integratedCommit`);
       }
+      // The runner reads files and tests of every receipt at each later merge; a damaged one is refused, not skipped.
+      const checks = receipt.mergedChecks;
+      const files: unknown = receipt.files;
+      const damaged = (files !== undefined && (!Array.isArray(files) || files.some((file) => typeof file !== "string")))
+        || (receipt.tests !== undefined && (!receipt.tests || typeof receipt.tests.command !== "string"))
+        || (checks !== undefined && (!Array.isArray(checks) || checks.some((check) =>
+          !check || typeof check.command !== "string" || !MERGED_CHECK_STATUSES.has(check.status)
+          || !Array.isArray(check.owners) || check.owners.some((owner) => typeof owner !== "string"))));
+      if (damaged) {
+        throw new InvalidOperationStateError(`operation ${state.id}: the integration receipt of '${receipt.unitId}' has invalid files, tests or mergedChecks`);
+      }
     }
+  }
+  // A pinned verifier that cannot be read must not read as "none pinned": the merged-tree check would be dropped.
+  const pinned = state.git?.integrationVerifiers;
+  if (pinned !== undefined && (!Array.isArray(pinned) || pinned.some((command) => typeof command !== "string" || !command.trim()))) {
+    throw new InvalidOperationStateError(`operation ${state.id}: git.integrationVerifiers must be an array of non-empty commands`);
   }
 }
 

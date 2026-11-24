@@ -201,6 +201,12 @@ function unsubmittedMessages(history: ChatMessage[], messages?: OperationMessage
 export class AgentWorkUnitExecutor implements WorkUnitExecutor {
   constructor(private readonly opts: AgentExecutorOptions) {}
 
+  /** PA-2: the operator's verifier and the sandbox the units' own commands run in; merged-tree checks use both. */
+  integrationPolicy(): { verifier?: string; sandbox?: boolean | string } {
+    const verifier = this.opts.baseConfig.authoritativeVerifierCommand?.trim();
+    return { ...(verifier ? { verifier } : {}), sandbox: this.opts.baseConfig.sandbox };
+  }
+
   configFor(resource: ResourceDescriptor, unit?: WorkUnit, workspace?: string): HarnessConfig {
     const base = this.opts.baseConfig;
     // The client sends a key only to the origin it belongs to, so the configured key never reaches another provider.

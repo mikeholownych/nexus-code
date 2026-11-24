@@ -231,6 +231,7 @@ export type OperationEventType =
   | "OPERATION_MESSAGE_DROPPED"
   | "CHECKPOINT_RESTORED"
   | "WORK_INTEGRATED"
+  | "INTEGRATION_REJECTED"
   | "WORKTREE_RETAINED";
 
 export interface OperationEvent {

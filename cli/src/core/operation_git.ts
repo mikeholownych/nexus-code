@@ -402,12 +402,12 @@ export class OperationGit {
         : undefined;
       const takeover = before ? this.verificationTakeover(unit, before, tip, earlier) : undefined;
       if (takeover) return { kind: "failed", ...takeover, reason: `${takeover.reason}${inPlace}` };
-      const posthoc = checks.length ? this.runChecks(checks) : undefined;
+      const posthoc = checks.length ? this.runChecks(checks, commit, tip) : undefined;
       const integrity = posthoc ? this.integrationIntegrity(commit, tip) : undefined;
-      if (integrity && !integrity.ok) {
-        const reason = integrity.reason ?? "integration verification changed the integration history";
+      if (posthoc && (posthoc.integrityFailure || (integrity && !integrity.ok))) {
+        const reason = posthoc.integrityFailure ?? integrity?.reason ?? "integration verification changed the integration history";
         const restoration = this.restoreIntegration(tip);
-        return { kind: "failed", reason: restoration ? `${reason}; ${restoration}` : reason, checks: posthoc!.ran };
+        return { kind: "failed", reason: restoration ? `${reason}; ${restoration}` : reason, checks: posthoc.ran };
       }
       if (posthoc) this.cleanIntegrationWorktree();
       if (posthoc?.failed) {
@@ -449,7 +449,7 @@ export class OperationGit {
       const conflicted = this.inIntegration(["diff", "--name-only", "--diff-filter=U"]).stdout
         .split("\n").map((line) => line.trim()).filter(Boolean).sort();
       this.inIntegration(["merge", "--abort"]);
-      const conflictWith = earlier.filter((receipt) => conflicted.some((file) => receipt.files.includes(file))).map((receipt) => receipt.unitId);
+      const conflictWith = earlier.filter((receipt) => conflicted.some((file) => receipt.files?.includes(file))).map((receipt) => receipt.unitId);
       return { kind: "conflict", files: conflicted, tip, ...(conflictWith.length ? { conflictWith } : {}) };
     }
 
@@ -460,13 +460,13 @@ export class OperationGit {
       const restoration = this.restoreIntegration(tip);
       return { kind: "failed", ...takeover, reason: restoration ? `${takeover.reason}; ${restoration}` : takeover.reason };
     }
-    const verification = checks.length ? this.runChecks(checks) : undefined;
+    const verification = checks.length ? this.runChecks(checks, commit, mergedTip) : undefined;
     const integrity = verification ? this.integrationIntegrity(commit, mergedTip) : undefined;
-    if (verification && (verification.failed || (integrity && !integrity.ok))) {
+    if (verification && (verification.failed || verification.integrityFailure || (integrity && !integrity.ok))) {
       // The merge is mechanically clean but the merged tree does not pass a verifier: undo it.
       const restoration = this.restoreIntegration(tip);
-      const undone = !restoration && integrity?.ok && verification.failed ? this.attribute(unit, verification.failed, tip) : undefined;
-      const reason = undone?.reason ?? integrity?.reason ?? verification.failed?.detail ?? "integration verification failed";
+      const undone = !restoration && integrity?.ok && verification.failed ? this.attribute(unit, verification.failed, tip, commit, earlier) : undefined;
+      const reason = undone?.reason ?? verification.integrityFailure ?? integrity?.reason ?? verification.failed?.detail ?? "integration verification failed";
       return {
         kind: "failed",
         reason: restoration ? `${reason}; ${restoration}` : reason,
@@ -717,13 +717,19 @@ export class OperationGit {
   }
 
   /** Run the checks in order on the tree the integration worktree holds; stop at the first that does not pass. */
-  private runChecks(checks: ReadonlyArray<{ command: string; owners: string[] }>): { ran: MergedCheck[]; failed?: { check: MergedCheck; detail: string } } {
+  private runChecks(
+    checks: ReadonlyArray<{ command: string; owners: string[] }>,
+    commit: string,
+    expectedTip: string,
+  ): { ran: MergedCheck[]; failed?: { check: MergedCheck; detail: string }; integrityFailure?: string } {
     const ran: MergedCheck[] = [];
     for (const { command, owners } of checks) {
       const outcome = this.verifyMerged(command);
       const check: MergedCheck = { command, owners, status: outcome.status, ...(outcome.sandbox ? { sandbox: outcome.sandbox } : {}) };
       ran.push(check);
       if (!outcome.ok) return { ran, failed: { check, detail: outcome.reason ?? "integration verification failed" } };
+      const integrity = this.integrationIntegrity(commit, expectedTip);
+      if (!integrity.ok) return { ran, integrityFailure: integrity.reason ?? "integration verification changed the integration history" };
     }
     return { ran };
   }
@@ -783,14 +789,34 @@ export class OperationGit {
 
   /**
    * Whose failure is it? Called with the integration branch back on the pre-merge tip. A check owned only by the
-   * integrating unit is that unit's failure. Any other check held when its owner integrated, so it is run once more on
-   * the tree without the merge: passing there, the merge broke it; failing there too, the branch (or its environment)
-   * was already broken and the unit is not blamed, though it still cannot be verified and is not integrated.
+   * integrating unit passed in that unit's worktree, so what broke it is integrated work the unit never saw: those
+   * units are named (none: the failure is the unit's own). Any other check held when its owner integrated, so it is
+   * run once more on the tree without the merge: passing there, the merge broke it; failing there too, the branch (or
+   * its environment) was already broken and the unit is not blamed, though it still cannot be verified and is not
+   * integrated.
    */
-  private attribute(unit: WorkUnit, failed: { check: MergedCheck; detail: string }, tip: string): { reason: string; conflictWith?: string[] } {
+  private attribute(
+    unit: WorkUnit,
+    failed: { check: MergedCheck; detail: string },
+    tip: string,
+    commit: string,
+    earlier: readonly IntegrationReceipt[],
+  ): { reason: string; conflictWith?: string[] } {
     const { check, detail } = failed;
     const others = check.owners.filter((owner) => owner !== unit.id);
-    if (check.status === "ENVIRONMENT" || others.length === 0) return { reason: detail };
+    if (check.status === "ENVIRONMENT") return { reason: detail };
+    if (others.length === 0) {
+      const unseen = earlier
+        .filter((receipt) => !/^[0-9a-f]{40,64}$/.test(receipt.integratedCommit)
+          || !gitResult(this.plan.repoRoot, ["merge-base", "--is-ancestor", receipt.integratedCommit, commit]).ok)
+        .map((receipt) => receipt.unitId);
+      if (!unseen.length) return { reason: detail };
+      const [head, ...tail] = detail.split("\n");
+      return {
+        reason: [`${head}; it passed in ${unit.id}'s own worktree, which lacks the integrated work of ${unseen.join(", ")}`, ...tail].join("\n"),
+        conflictWith: unseen,
+      };
+    }
     check.baseline = this.verifyMerged(check.command).ok ? "PASSED" : "FAILED";
     // Whatever the baseline run wrote or moved is dropped again.
     const restoration = this.restoreIntegration(tip);
@@ -837,7 +863,7 @@ export class OperationGit {
       return { reason: `cannot list the files merging ${unit.id} changes: ${printable(String(error?.message ?? error)).slice(0, 300)}` };
     }
     if (!taken.length) return undefined;
-    const conflictWith = earlier.filter((receipt) => taken.some((rel) => receipt.files.includes(rel))).map((receipt) => receipt.unitId);
+    const conflictWith = earlier.filter((receipt) => taken.some((rel) => receipt.files?.includes(rel))).map((receipt) => receipt.unitId);
     const shown = taken.slice(0, 5).map((rel) => printable(rel)).join(", ") + (taken.length > 5 ? ` and ${taken.length - 5} more` : "");
     return {
       reason: `${unit.id} changes verification files integrated by ${conflictWith.length ? conflictWith.join(", ") : "earlier units"}: ${shown}`,
