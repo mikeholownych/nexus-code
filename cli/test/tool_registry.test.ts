@@ -6,6 +6,7 @@ import "./helpers/leak_guard.js";
  */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import * as toolRegistryModule from "../src/core/tool_registry.js";
 import { ToolRegistry, baselineTools, createToolRegistry, type OfferContext, type RegisteredTool } from "../src/core/tool_registry.js";
 import { HARNESS_TOOLS, type CanonicalCapability } from "../src/core/capabilities.js";
@@ -70,6 +71,19 @@ describe("registration fails closed", () => {
     const registry = new ToolRegistry();
     assert.throws(() => registry.register({ spec: spec("alpha"), binding: { kind: "extension" }, offer: "always" }), /extension category, backend and binding together/);
     assert.throws(() => registry.register({ spec: extensionCapability(definition("custom__a"), { kind: "plugin" }), binding: { kind: "native", handler: ok }, offer: "always" }), /together/);
+  });
+
+  test("each shipped tool is bound the way the routing characterization resolves it", () => {
+    const recorded = JSON.parse(fs.readFileSync(new URL("./fixtures/tool_bindings_v1.json", import.meta.url), "utf8")).bindings as Record<string, { source: string }>;
+    const registry = createToolRegistry();
+    const kindOf: Record<string, string> = { "registry-handler": "bridge", "spine-handler": "native" };
+    let checked = 0;
+    for (const tool of registry.baselineDefinitions()) {
+      const name = tool.function.name;
+      assert.equal(registry.resolve(name)?.binding.kind, kindOf[recorded[name].source], name);
+      checked++;
+    }
+    assert.equal(checked, 36);
   });
 
   test("the shipped catalogue registers without an error and every tool has a binding", () => {
