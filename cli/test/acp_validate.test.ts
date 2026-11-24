@@ -366,7 +366,11 @@ test("verification params identify a session and reject caller-controlled verifi
   for (const field of ["verifier", "command", "base", "deliverables", "verdict", "result", "workspace"]) {
     refused(validateVerify({ sessionId: SESSION, [field]: "caller-controlled" }), "params", field);
   }
-  refused(validateVerify({ sessionId: SESSION, _meta: "bad" }), "_meta");
+  // `_meta` is never read on any method, so its shape is not judged on this one either; it carries no setting.
+  for (const meta of ["bad", 5, [], { verifier: "echo forged", base: "HEAD~99" }]) {
+    assert.deepEqual(accepted(validateVerify({ sessionId: SESSION, _meta: meta })), { sessionId: SESSION });
+    assert.deepEqual(accepted(validateReceiptGet({ sessionId: SESSION, _meta: meta })), { sessionId: SESSION });
+  }
   refused(validateVerify({ sessionId: "latest" }), "sessionId");
   refused(validateVerify(null), "params");
 });
