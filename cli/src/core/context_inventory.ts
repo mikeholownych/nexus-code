@@ -6,6 +6,7 @@ export type ContextFreshness = "current" | "stale" | "unknown";
 export type ContextTrust = "operator_input_untrusted" | "model_generated_unverified" | "tool_output_unverified" | "persisted_unverified" | "system_instruction" | "verified_evidence";
 export type ContextSourceStatus = "ok" | "partial" | "failed";
 export type ContextSourceOutcome = "timed_out" | "cancelled";
+export type ContextObservationState = "dispatching" | "response_received" | "unknown_effect" | "not_dispatched";
 export type WorkspaceStateComparison = "changed" | "unchanged" | "no_previous_capture" | "previous_capture_unversioned" | "unavailable";
 
 export interface WorkspaceStateEvidence {
@@ -25,6 +26,9 @@ export interface ContextInventoryItem {
   freshnessRule?: string;
   /** Content-free source version marker for comparing current records with saved inventories. */
   sourceVersion?: string;
+  /** Lifecycle outcome for an observed request manifest; absent on other context items. */
+  observationState?: ContextObservationState;
+  observationSequence?: number;
   trust: ContextTrust;
   retention: string;
   inclusionReason: string;
@@ -212,6 +216,8 @@ export interface ContextSourceItemInput {
   freshness?: ContextFreshness;
   freshnessRule?: string;
   sourceVersion?: string;
+  observationState?: ContextObservationState;
+  observationSequence?: number;
   sourceRefs?: string[];
 }
 
@@ -283,6 +289,8 @@ export function buildContextInventory(input: ContextInventoryInput): ContextInve
         freshness,
         ...(item.freshnessRule ? { freshnessRule: metadataText(item.freshnessRule) } : {}),
         ...(item.sourceVersion && safeSourceVersion(item.sourceVersion) ? { sourceVersion: item.sourceVersion } : {}),
+        ...(item.observationState ? { observationState: item.observationState } : {}),
+        ...(Number.isSafeInteger(item.observationSequence) && (item.observationSequence ?? -1) >= 0 ? { observationSequence: item.observationSequence } : {}),
         trust: item.trust,
         retention: metadataText(item.retention, 120),
         inclusionReason: metadataText(item.inclusionReason),
@@ -559,7 +567,7 @@ export function isContextInventorySnapshot(value: unknown): value is ContextInve
     (snapshot.workspaceState === undefined || (snapshot.workspaceState && Object.keys(snapshot.workspaceState).every((key) => ["fingerprint", "comparison", "invalidatedRepositoryItemIds"].includes(key)) && (snapshot.workspaceState.fingerprint === undefined || /^[a-f0-9]{64}$/.test(snapshot.workspaceState.fingerprint)) && workspaceComparisons.includes(snapshot.workspaceState.comparison) && Array.isArray(snapshot.workspaceState.invalidatedRepositoryItemIds) && snapshot.workspaceState.invalidatedRepositoryItemIds.length <= DEFAULT_MAX_ITEMS && snapshot.workspaceState.invalidatedRepositoryItemIds.every((id) => safeText(id, 80)) && (snapshot.workspaceState.comparison === "unavailable" ? snapshot.workspaceState.fingerprint === undefined && snapshot.workspaceState.invalidatedRepositoryItemIds.length === 0 : Boolean(snapshot.workspaceState.fingerprint)) && (["unchanged", "no_previous_capture"].includes(snapshot.workspaceState.comparison) ? snapshot.workspaceState.invalidatedRepositoryItemIds.length === 0 : true))) &&
     (snapshot.coverage === "complete" || snapshot.coverage === "partial") &&
     Array.isArray(snapshot.coverageGaps) && snapshot.coverageGaps.length <= 100 && snapshot.coverageGaps.every((gap) => safeText(gap)) &&
-    Array.isArray(snapshot.items) && snapshot.items.length <= DEFAULT_MAX_ITEMS && snapshot.items.every((item) => item && safeText(item.id, 80) && safeText(item.sourceType, 80) && safeText(item.sourceLocation) && scopes.includes(item.scope) && safeText(item.observedAt, 80) && freshness.includes(item.freshness) && (item.freshnessRule === undefined || safeText(item.freshnessRule)) && (item.freshness === "unknown" || safeText(item.freshnessRule)) && (item.sourceVersion === undefined || safeSourceVersion(item.sourceVersion)) && trust.includes(item.trust) && safeText(item.retention) && safeText(item.inclusionReason) && safeText(item.retrievalMethod, 100) && Number.isFinite(item.estimatedTokens) && item.estimatedTokens >= 0 && (item.sourceRefs === undefined || (Array.isArray(item.sourceRefs) && item.sourceRefs.length <= 100 && item.sourceRefs.every((ref) => safeText(ref, 200))))) &&
+    Array.isArray(snapshot.items) && snapshot.items.length <= DEFAULT_MAX_ITEMS && snapshot.items.every((item) => item && safeText(item.id, 80) && safeText(item.sourceType, 80) && safeText(item.sourceLocation) && scopes.includes(item.scope) && safeText(item.observedAt, 80) && freshness.includes(item.freshness) && (item.freshnessRule === undefined || safeText(item.freshnessRule)) && (item.freshness === "unknown" || safeText(item.freshnessRule)) && (item.sourceVersion === undefined || safeSourceVersion(item.sourceVersion)) && (item.observationState === undefined || ["dispatching", "response_received", "unknown_effect", "not_dispatched"].includes(item.observationState)) && (item.observationSequence === undefined || Number.isSafeInteger(item.observationSequence) && item.observationSequence >= 0) && trust.includes(item.trust) && safeText(item.retention) && safeText(item.inclusionReason) && safeText(item.retrievalMethod, 100) && Number.isFinite(item.estimatedTokens) && item.estimatedTokens >= 0 && (item.sourceRefs === undefined || (Array.isArray(item.sourceRefs) && item.sourceRefs.length <= 100 && item.sourceRefs.every((ref) => safeText(ref, 200))))) &&
     Array.isArray(snapshot.sourceMeasurements) && snapshot.sourceMeasurements.length <= 100 && snapshot.sourceMeasurements.every((source) => source && safeText(source.source, 100) && ["ok", "partial", "failed"].includes(source.status) && (source.durationMeasured === undefined || typeof source.durationMeasured === "boolean") && (source.outcome === undefined || (source.status === "failed" && ["timed_out", "cancelled"].includes(source.outcome))) && Number.isFinite(source.durationMs) && source.durationMs >= 0 && Number.isFinite(source.itemCount) && source.itemCount >= 0 && Number.isFinite(source.includedItemCount) && source.includedItemCount >= 0 && Number.isFinite(source.omittedItemCount) && source.omittedItemCount >= 0 && Number.isFinite(source.estimatedTokens) && source.estimatedTokens >= 0 && (source.detail === undefined || safeText(source.detail, MAX_SOURCE_DETAIL))) &&
     Boolean(snapshot.metrics && (snapshot.metrics.assemblyDurationMeasured === undefined || typeof snapshot.metrics.assemblyDurationMeasured === "boolean") && Number.isFinite(snapshot.metrics.assemblyDurationMs) && snapshot.metrics.assemblyDurationMs >= 0 && Number.isFinite(snapshot.metrics.estimatedTokens) && snapshot.metrics.estimatedTokens >= 0 && Number.isFinite(snapshot.metrics.includedItems) && snapshot.metrics.includedItems >= 0 && Number.isFinite(snapshot.metrics.omittedItems) && snapshot.metrics.omittedItems >= 0 && snapshot.metrics.tokenSource === "client_estimate" && ["within_budget", "over_budget", "unknown"].includes(snapshot.metrics.budgetStatus) && (snapshot.metrics.contextLimit === undefined || (Number.isFinite(snapshot.metrics.contextLimit) && snapshot.metrics.contextLimit > 0)) && (snapshot.metrics.lastRequestTokens === undefined || (Number.isFinite(snapshot.metrics.lastRequestTokens) && snapshot.metrics.lastRequestTokens >= 0)));
 }
@@ -594,12 +602,19 @@ const STAGES: Record<ContextMaturityLevel, string> = {
 /** Rule-based, per-dimension assessment; it does not use model judgment and has no aggregate score. */
 export function assessContextMaturity(snapshot: ContextInventorySnapshot, evidence: { hasDurableKnowledge: boolean; hasActiveSkills: boolean }): ContextMaturityAssessment {
   const inventoryExists = snapshot.items.length > 0;
-  const requestManifests = snapshot.items.filter((item) => item.sourceType === "inference_request_manifest");
+  const observedRequestManifests = snapshot.items.filter((item) => item.sourceType === "inference_request_manifest");
+  const sequencedRequestManifests = observedRequestManifests.filter((item) => item.observationSequence !== undefined);
+  const latestSequence = sequencedRequestManifests.reduce((latest, item) => Math.max(latest, item.observationSequence!), -1);
+  const latestSequenceItems = sequencedRequestManifests.filter((item) => item.observationSequence === latestSequence);
+  const latestRequestManifest = latestSequenceItems.length === 1 ? latestSequenceItems[0] : undefined;
+  // Older request refs reuse positional names; only the latest sequenced completed
+  // request can establish that the currently inspected context reached the adapter.
+  const requestManifests = latestRequestManifest?.observationState === "response_received" ? [latestRequestManifest] : [];
   const requestManifestCount = requestManifests.length;
+  // Session message indexes are not provider request indexes: prompt injection and
+  // compaction can change the arrays. Only explicit source links prove inclusion.
   const dispatchedContextItems = snapshot.items.filter((item) => item.sourceType !== "inference_request_manifest" && requestManifests.some((manifest) => {
-    if (item.sourceRefs?.some((reference) => manifest.sourceRefs?.includes(reference))) return true;
-    const position = /(?:^|:)message:(\d+)(?::|$)/.exec(item.sourceLocation)?.[1];
-    return position !== undefined && manifest.sourceRefs?.includes(`request:message:${position}`) === true;
+    return item.sourceRefs?.some((reference) => manifest.sourceRefs?.includes(reference)) === true;
   }));
   const dispatchedSourceTypes = new Set(dispatchedContextItems.map((item) => item.sourceType));
   const allFreshnessKnown = inventoryExists && snapshot.items.every((item) => item.freshness !== "unknown");
@@ -616,8 +631,8 @@ export function assessContextMaturity(snapshot: ContextInventorySnapshot, eviden
       dimension({
         dimension: "navigability", level: requestManifestCount === 0 ? null : dispatchedSourceTypes.size >= 2 ? 2 : 1,
         evidence: [
-          { reference: "cli/src/core/context_inventory.ts:inventorySourcesFromMessages", finding: `${dispatchedContextItems.length} source item(s) were linked by message position or source reference to a captured request; ${dispatchedSourceTypes.size} distinct source type(s) were observed in dispatched context.`, status: requestManifestCount ? "observed" : "unknown" },
-          { reference: "cli/src/agent.ts:submitGuardingLength", finding: requestManifestCount ? `${requestManifestCount} content-free client-side inference-request manifest item(s) were observed; each records request message positions and effective tool-schema positions.` : "Conversation replay and pinned task context exist; no persisted request manifest was observed in this capture.", status: requestManifestCount ? "observed" : "unknown" },
+          { reference: "cli/src/core/context_inventory.ts:inventorySourcesFromMessages", finding: `${dispatchedContextItems.length} source item(s) have explicit source references linked to a captured request; ${dispatchedSourceTypes.size} distinct source type(s) were observed in dispatched context.`, status: requestManifestCount ? "observed" : "unknown" },
+          { reference: "cli/src/agent.ts:submitGuardingLength", finding: observedRequestManifests.length ? `${observedRequestManifests.length} content-free request manifest(s) were observed; the latest outcome is ${latestRequestManifest?.observationState ?? "unknown"}${requestManifestCount ? " and is eligible for request-link evidence" : " and is not eligible for request-link evidence"}.` : "Conversation replay and pinned task context exist; no persisted request manifest was observed in this capture.", status: requestManifestCount ? "observed" : "unknown" },
           ...(evidence.hasActiveSkills ? [{ reference: "cli/src/skills.ts:SkillManager.getPromptSection", finding: "Path and trust metadata exist for skills; active prompt inclusion is not represented in the persisted message inventory.", status: "observed" as const }] : []),
         ],
         unmetCriteria: ["Relationships from each request message to the repository, task, session, profile, or memory source that produced it.", "A unified retrieval graph connecting repository, task, session, profile, and memory items."],
@@ -675,7 +690,7 @@ export function renderContextInventoryText(snapshot: ContextInventorySnapshot): 
     "",
     ...snapshot.sourceMeasurements.map((source) => `Source ${source.source}: ${source.status}${source.outcome ? ` (${source.outcome})` : ""}, ${source.includedItemCount}/${source.itemCount} item(s) included (${source.omittedItemCount} omitted), ${source.estimatedTokens} estimated tokens, ${source.durationMs} ms${source.detail ? ` — ${source.detail}` : ""}`),
     "",
-    ...snapshot.items.map((item) => `${item.id} ${item.sourceType} @ ${item.sourceLocation} [${item.scope}; ${item.freshness}${item.freshnessRule ? ` (${item.freshnessRule})` : ""}${item.sourceVersion ? `; source-version=${encodeURIComponent(item.sourceVersion)}` : ""}; ${item.trust}] ${item.estimatedTokens} est. tokens; via ${item.retrievalMethod}`),
+    ...snapshot.items.map((item) => `${item.id} ${item.sourceType} @ ${item.sourceLocation} [${item.scope}; ${item.freshness}${item.freshnessRule ? ` (${item.freshnessRule})` : ""}${item.sourceVersion ? `; source-version=${encodeURIComponent(item.sourceVersion)}` : ""}${item.observationState ? `; outcome=${item.observationState}` : ""}${item.observationSequence !== undefined ? `; sequence=${item.observationSequence}` : ""}; ${item.trust}] ${item.estimatedTokens} est. tokens; via ${item.retrievalMethod}`),
     ...(snapshot.coverageGaps.length ? ["", "Coverage gaps:", ...snapshot.coverageGaps.map((gap) => `- ${gap}`)] : []),
   ];
   return lines.join("\n");

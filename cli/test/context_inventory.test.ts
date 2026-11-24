@@ -468,16 +468,18 @@ test("assessment keeps dimensions separate and reports insufficient evidence", (
   assert.equal(assessContextMaturity(catalogOnly, { hasDurableKnowledge: true, hasActiveSkills: false }).dimensions.find((item) => item.dimension === "compounding_value")?.level, 1,
     "a stored memory catalog alone does not establish carried forward use");
 
-  const request = (sourceRefs: string[]) => ({
-    ...input("task:inference-request:one", "session"),
+  const request = (sourceRefs: string[], observationState: "dispatching" | "response_received" | "unknown_effect" | "not_dispatched" = "response_received", id = "one", sequence = 1) => ({
+    ...input(`task:inference-request:${id}`, "session"),
     sourceType: "inference_request_manifest",
     scope: "task" as const,
+    observationState,
+    observationSequence: sequence,
     sourceRefs,
   });
   const carried = buildContextInventory({ sources: [{
     name: "session", status: "ok", durationMs: 1,
     items: [
-      { ...input("session:message:0:system", "session"), sourceType: "compaction_summary", sourceRefs: ["archive:record:one"] },
+      { ...input("session:message:0:system", "session"), sourceType: "compaction_summary", sourceRefs: ["request:message:0", "archive:record:one"] },
       request(["request:message:0"]),
     ],
   }] });
@@ -494,6 +496,15 @@ test("assessment keeps dimensions separate and reports insufficient evidence", (
   const oneMeasuredSource = buildContextInventory({ sources: [{ name: "one", status: "ok", durationMs: 1, items: [input("one")] }] });
   assert.equal(assessContextMaturity(oneMeasuredSource, { hasDurableKnowledge: false, hasActiveSkills: false }).dimensions.find((item) => item.dimension === "retrieval_speed")?.level, null,
     "one timing sample from one source is not a retrieval-speed maturity rating");
+  const reconstructedTimings = buildContextInventory({
+    durationsMeasured: false,
+    sources: [
+      { name: "one", status: "ok", durationMs: 8, items: [input("one")] },
+      { name: "two", status: "ok", durationMs: 12, items: [input("two")] },
+    ],
+  });
+  assert.equal(assessContextMaturity(reconstructedTimings, { hasDurableKnowledge: false, hasActiveSkills: false }).dimensions.find((item) => item.dimension === "retrieval_speed")?.level, null,
+    "reconstructed inventory timings are not observed latency measurements");
 
   const linkedSources = buildContextInventory({ sources: [{
     name: "request", status: "ok", durationMs: 2,
@@ -515,6 +526,29 @@ test("assessment keeps dimensions separate and reports insufficient evidence", (
   assert.equal(assessContextMaturity(oneLinkedSource, { hasDurableKnowledge: false, hasActiveSkills: false }).dimensions.find((item) => item.dimension === "navigability")?.level, 1,
     "one linked context category does not demonstrate shared multi-source navigation");
 
+  const uncertainDispatch = buildContextInventory({ sources: [{
+    name: "request", status: "ok", durationMs: 2,
+    items: [
+      { ...input("request:system", "session"), sourceType: "system_context", sourceRefs: ["request:message:0"] },
+      { ...input("request:skill", "profile"), sourceType: "skill_note", sourceRefs: ["request:message:0"] },
+      request(["request:message:0"], "response_received", "previous", 1),
+      request(["request:message:0"], "unknown_effect", "latest", 2),
+    ],
+  }] });
+  assert.equal(assessContextMaturity(uncertainDispatch, { hasDurableKnowledge: false, hasActiveSkills: true }).dimensions.find((item) => item.dimension === "navigability")?.level, null,
+    "a dispatch with unknown effect does not establish a completed request-link observation");
+  const ambiguousLatest = buildContextInventory({ sources: [{
+    name: "request", status: "ok", durationMs: 2,
+    items: [
+      { ...input("request:system", "session"), sourceType: "system_context", sourceRefs: ["request:message:0"] },
+      { ...input("request:skill", "profile"), sourceType: "skill_note", sourceRefs: ["request:message:0"] },
+      request(["request:message:0"], "response_received", "duplicate-a", 2),
+      request(["request:message:0"], "unknown_effect", "duplicate-b", 2),
+    ],
+  }] });
+  assert.equal(assessContextMaturity(ambiguousLatest, { hasDurableKnowledge: false, hasActiveSkills: true }).dimensions.find((item) => item.dimension === "navigability")?.level, null,
+    "duplicate latest request sequences leave request linkage ambiguous");
+
   const freshnessMeasured = buildContextInventory({
     workspaceState: { comparison: "unchanged", invalidatedRepositoryItemIds: [] },
     sources: [
@@ -527,6 +561,16 @@ test("assessment keeps dimensions separate and reports insufficient evidence", (
     "freshness requires complete source coverage and a comparable workspace capture");
   assert.equal(freshnessAssessment.dimensions.find((item) => item.dimension === "retrieval_speed")?.level, 2,
     "retrieval speed requires timings from at least two source readers");
+  const partialFreshness = buildContextInventory({
+    workspaceState: { comparison: "unchanged", invalidatedRepositoryItemIds: [] },
+    coverageGaps: ["one source timed out"],
+    sources: [
+      { name: "repo", status: "ok", durationMs: 1, items: [{ ...input("repo:state", "repository"), freshness: "current", freshnessRule: "live repository state" }] },
+      { name: "task", status: "ok", durationMs: 1, items: [{ ...input("task:objective"), freshness: "current", freshnessRule: "live task ledger" }] },
+    ],
+  });
+  assert.equal(assessContextMaturity(partialFreshness, { hasDurableKnowledge: false, hasActiveSkills: false }).dimensions.find((item) => item.dimension === "freshness")?.level, null,
+    "incomplete source coverage cannot earn a Stage 2 freshness rating");
 });
 
 test("context command is discoverable and dispatched through the common REPL/TUI route", async () => {
@@ -577,6 +621,7 @@ test("context inspection and maturity execute without provider calls and emit pa
     getInferenceContextManifests: () => [buildInferenceContextManifest({
       id: "ctxreq_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", sequence: 1,
       messages: [{ role: "user", content: "private request body" }], tools: [],
+      status: "response_received",
       contextLimit: 2048, contextLimitSource: "client_default", outputAllowance: 128, outputAllowanceSource: "client_default", toolResponseReserve: 64,
     })],
   };
@@ -596,6 +641,8 @@ test("context inspection and maturity execute without provider calls and emit pa
   assert.equal(snapshot.coverage, "partial");
   assert.equal(JSON.stringify(snapshot).includes("private prompt text"), false);
   assert.ok(snapshot.items.some((item: any) => item.sourceType === "inference_request_manifest"));
+  assert.equal(snapshot.items.find((item: any) => item.sourceType === "inference_request_manifest")?.observationState, "response_received");
+  assert.equal(snapshot.items.find((item: any) => item.sourceType === "inference_request_manifest")?.observationSequence, 1);
   assert.equal(snapshot.coverageGaps.some((gap: string) => gap.includes("does not yet persist a per-inference manifest")), false);
   assert.equal(snapshot.coverageGaps.some((gap: string) => gap.includes("active system prompt sections could not be linked")), false);
   assert.equal(snapshot.items.some((item: any) => item.sourceRefs?.includes("request:message:0")), true);
@@ -621,6 +668,12 @@ test("context inspection and maturity execute without provider calls and emit pa
   const assessment = JSON.parse(maturity.output);
   assert.equal(assessment.basis, "deterministic_client_evidence");
   assert.equal(assessment.dimensions.length, 4);
+  assert.deepEqual(assessment.dimensions.map((dimension: any) => [dimension.dimension, dimension.level]), [
+    ["navigability", 1],
+    ["retrieval_speed", 2],
+    ["freshness", 1],
+    ["compounding_value", 1],
+  ], "the command fixture rates observed source links, measured readers, unknown freshness, and unused stored memory separately");
 
   const durableHost = {
     ...host,
@@ -793,19 +846,31 @@ test("session save, resume, compaction, and export retain source references with
         freshness: "current",
         freshnessRule: "live at capture; invalidate after workspace changes",
         sourceVersion: JSON.stringify(["capture-1", "current"]),
-      }] }],
+    }, {
+      ...input("task:request:one", "task"),
+      sourceType: "inference_request_manifest",
+      observationState: "unknown_effect",
+      observationSequence: 9,
+      sourceRefs: ["request:message:0"],
+    }] }],
     });
     manager.saveSession({ id: "ctx-live", workspace, messages: [], contextInventory: liveInventory } as any);
     const restoredLive = manager.loadSession("ctx-live")!;
     assert.equal(restoredLive.contextInventory?.items[0].freshness, "unknown");
     assert.match(restoredLive.contextInventory?.items[0].freshnessRule ?? "", /requires revalidation/);
     assert.equal(restoredLive.contextInventory?.items[0].sourceVersion, JSON.stringify(["capture-1", "current"]));
+    assert.equal(restoredLive.contextInventory?.items[1].observationState, "unknown_effect");
+    assert.equal(restoredLive.contextInventory?.items[1].observationSequence, 9);
     assert.equal(restoredLive.contextInventory?.workspaceState?.fingerprint, "a".repeat(64));
     assert.equal(compareWorkspaceState(restoredLive.contextInventory, "b".repeat(64)).comparison, "changed");
     const exportedLive = buildSessionExport(manager, restoredLive as any);
     assert.equal((exportedLive.json as any).contextInventory.workspaceState.fingerprint, "a".repeat(64));
     assert.equal((exportedLive.json as any).contextInventory.items[0].sourceVersion, JSON.stringify(["capture-1", "current"]));
+    assert.equal((exportedLive.json as any).contextInventory.items[1].observationState, "unknown_effect");
+    assert.equal((exportedLive.json as any).contextInventory.items[1].observationSequence, 9);
     assert.match(exportedLive.markdown, /source-version=`%5B%22capture-1%22%2C%22current%22%5D`/);
+  assert.match(exportedLive.markdown, /outcome=unknown_effect/);
+    assert.match(exportedLive.markdown, /sequence=9/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

@@ -459,6 +459,8 @@ async function context({ host, args, signal }: SlashContext): Promise<SlashOutco
         retention: "bounded_latest_24_session_records",
         inclusionReason: "client-side record of message and tool-schema arrays handed to the adapter; dispatch status does not prove provider processing",
         retrievalMethod: "agent_submit_wrapper",
+        observationState: manifest.status,
+        observationSequence: manifest.sequence,
         sourceRefs: manifest.messages.slice(0, 100).map((item: any) => item.sourceRef),
       })));
   } else {
