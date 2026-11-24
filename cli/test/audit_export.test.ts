@@ -663,6 +663,37 @@ test("a repository whose own Git configuration names a program is not hashed: th
   }
 });
 
+test("a workspace with a submodule is not hashed: a program its own configuration names does not run", { skip: process.platform !== "linux" }, () => {
+  const subject = savedSubject({ flight: false });
+  const identity = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"];
+  const source = path.join(subject.root, "sub-src");
+  fs.mkdirSync(source, { recursive: true });
+  git(source, "init", "-q");
+  fs.writeFileSync(path.join(source, "inner.txt"), "inner\n");
+  git(source, "add", "-A");
+  git(source, ...identity, "commit", "-q", "-m", "sub");
+  if (!fs.existsSync(path.join(subject.workspace, ".git"))) git(subject.workspace, "init", "-q");
+  git(subject.workspace, "-c", "protocol.file.allow=always", "submodule", "add", "-q", source, "sub");
+  git(subject.workspace, "add", "-A");
+  git(subject.workspace, ...identity, "commit", "-q", "-m", "base");
+  setReceiptCandidateId(subject, "0".repeat(64));
+
+  // Same content and size, new modification time: Git must hash the file again, which is what runs a clean filter.
+  const later = new Date(Date.now() + 5_000);
+  fs.utimesSync(path.join(subject.workspace, "sub", "inner.txt"), later, later);
+  // The filter is defined in the submodule's own configuration, which a listing of the workspace's does not show.
+  const marker = path.join(subject.root, "ran");
+  fs.appendFileSync(path.join(subject.workspace, ".git", "modules", "sub", "config"), `[filter "planted"]\n\tclean = "sh -c 'echo ran > ${marker}; cat'"\n`);
+  fs.mkdirSync(path.join(subject.workspace, ".git", "modules", "sub", "info"), { recursive: true });
+  fs.writeFileSync(path.join(subject.workspace, ".git", "modules", "sub", "info", "attributes"), "* filter=planted\n");
+
+  const exported = exportChecked(subject.request({ out: path.join(subject.root, "out", "submodule") }));
+  const binding = JSON.parse(bundleTexts(exported.written.dir)["receipts/candidate-binding.json"]);
+  assert.equal(fs.existsSync(marker), false, "the submodule's configured command ran");
+  assert.equal(binding.status, "unavailable");
+  assert.equal(binding.unavailable_reason, "workspace_configures_git_programs");
+});
+
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 }

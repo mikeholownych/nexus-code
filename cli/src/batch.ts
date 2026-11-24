@@ -270,6 +270,7 @@ export class BatchOrchestrator {
       const runner = new OperationRunner(operation, {
         executor: this.executor,
         workspace: this.config.workspace,
+        store: this.store,
         persist: (state) => this.store.save(state),
         ...(this.options.onEvent ? { onEvent: this.options.onEvent } : {}),
       });

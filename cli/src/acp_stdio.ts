@@ -3,13 +3,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { HarnessConfig } from "./types.js";
 import { ApplicationCore } from "./core/app.js";
-import { pinBase, VerifyService, type PinnedBase, type VerifyServiceDeps } from "./core/verify_service.js";
+import { pinBase, VERIFY_KILL_GRACE_MS, VerifyService, type PinnedBase, type VerifyServiceDeps } from "./core/verify_service.js";
 import { formatSafeSidecarDiagnostic, SidecarServer } from "./sidecar.js";
 import { PROTOCOL_VERSION, SIDECAR_MAX_HISTORY_PAGES, type SidecarEvent } from "./protocol.js";
 import {
   ACP_CANCEL_REQUEST_METHOD, ACP_ERROR, ACP_MAX_INFLIGHT_REQUESTS, ACP_MAX_PENDING_PERMISSIONS_PER_SESSION,
   ACP_MAX_OVERSIZED_LINES, ACP_MAX_SESSIONS, ACP_PERMISSION_TIMEOUT_SECS, ACP_RECEIPT_STORE_SIZE, ACP_TOMBSTONE_COUNT,
-  ACP_VERIFY_METHOD, type AcpId, type AcpVerification,
+  ACP_VERIFY_METHOD, type AcpId, type AcpVerification, type NexusVerifyResult,
 } from "./acp/types.js";
 import {
   BoundedLineReader, RequestCorrelator, encodeMessage, errorResponse, notification,
@@ -51,6 +51,8 @@ export interface AcpStdioOptions {
 }
 
 const ACP_SHUTDOWN_GRACE_MS = 10_000;
+/** The client chooses each session's directory, so the pins are bounded; a full table refuses, it never evicts. */
+export const ACP_MAX_PINNED_WORKSPACES = 4 * ACP_MAX_SESSIONS;
 
 /** One ACP connection. Every session still executes through ApplicationCore and SidecarServer gates. */
 export class AcpStdioServer {
@@ -63,6 +65,12 @@ export class AcpStdioServer {
   private readonly pending = new Map<string, AcpId>();
   private readonly loadingSessionIds = new Set<string>();
   private readonly verifyService: VerifyService;
+  /**
+   * The verification base of each canonical workspace path, pinned by the first session on it and kept for the life of
+   * the process: a commit made after that is part of the change, whichever session asks. A workspace that had no
+   * commit then keeps that answer, or committing and opening another session would choose the base.
+   */
+  private readonly workspaceBases = new Map<string, PinnedBase | { error: string }>();
   private startingSessions = 0;
   private initialized = false;
   private closed = false;
@@ -77,6 +85,16 @@ export class AcpStdioServer {
       readOnly: Boolean(config.readOnly) || config.approvalMode === "read-only",
       surface: "acp",
     }, options.verifyDeps);
+  }
+
+  /**
+   * How long a signalled process waits for close(). A running verification is stopped with SIGTERM and its verifier
+   * killed one kill grace later; only then can its worker remove its scratch trees, so the wait outlasts that.
+   */
+  shutdownGraceMs(): number {
+    const grace = this.options.shutdownGraceMs ?? ACP_SHUTDOWN_GRACE_MS;
+    const verifying = [...this.sessions.values()].some((session) => session.pendingVerify);
+    return verifying ? Math.max(grace, (this.options.verifyDeps?.killGraceMs ?? VERIFY_KILL_GRACE_MS) + 5_000) : grace;
   }
 
   /** Feed raw stdin bytes. Invalid/oversized lines are answered without retaining unbounded input. */
@@ -227,8 +245,19 @@ export class AcpStdioServer {
     return result.ok ? result.value : undefined;
   }
 
+  private workspaceBase(cwd: string): PinnedBase | { error: string } {
+    const pinned = this.workspaceBases.get(cwd);
+    if (pinned) return pinned;
+    if (this.workspaceBases.size >= ACP_MAX_PINNED_WORKSPACES) {
+      return { error: `this nexus acp process has already pinned a verification base for ${ACP_MAX_PINNED_WORKSPACES} workspaces and pins no more; restart nexus acp to verify this workspace` };
+    }
+    const base = pinBase(cwd);
+    this.workspaceBases.set(cwd, base);
+    return base;
+  }
+
   private async startSession(cwd: string, mcp: { count: number; names: string[] }, resume?: string): Promise<Session | undefined> {
-    const verifyBase = pinBase(cwd);
+    const verifyBase = this.workspaceBase(cwd);
     const config = { ...this.options.config, workspace: cwd, surface: "tui" as const };
     const events: SidecarEvent[] = [];
     const early: string[] = [];
@@ -351,7 +380,8 @@ export class AcpStdioServer {
     if (!parsed.ok) { this.replyError(id, parsed.error); return; }
     const explicitReceiptId = parsed.value.receiptId !== undefined;
     const receiptId = parsed.value.receiptId ?? this.latestReceipts.get(parsed.value.sessionId);
-    if (receiptId) {
+    // A verification receipt is read by its id only: a request without one returns turn receipts, as it always has.
+    if (explicitReceiptId) {
       const verificationReceipt = this.verifyService.receipt(receiptId, parsed.value.sessionId);
       if (verificationReceipt) {
         this.send(resultResponse(id, { ...verificationReceipt, surface: "acp", session_id: parsed.value.sessionId }));
@@ -415,8 +445,8 @@ export class AcpStdioServer {
         this.replyError(id, { code: ACP_ERROR.INTERNAL_ERROR, message: `verification did not produce a verdict: ${outcome.error.message}`, data: { reason: outcome.error.kind } });
         return;
       }
-      this.latestReceipts.set(session.id, outcome.summary.receipt_id);
-      this.send(resultResponse(id, outcome.summary));
+      const result: NexusVerifyResult = { ...outcome.summary, workspace: outcome.receipt.workspace, base_pinned_commit: session.verifyBase.commit, base_pinned_at: session.verifyBase.at };
+      this.send(resultResponse(id, result));
     } finally {
       if (session.pendingVerify === pending) session.pendingVerify = undefined;
     }
@@ -558,7 +588,7 @@ export function runAcpStdio(options: AcpStdioOptions): AcpStdioServer {
   // The stdin listener keeps the process alive, so setting an exit code would leave it running after a signal.
   // close() waits for every session to stop. A session that never does must not keep a signalled process alive.
   const stop = (code: number) => {
-    const deadline = setTimeout(() => process.exit(code), options.shutdownGraceMs ?? ACP_SHUTDOWN_GRACE_MS);
+    const deadline = setTimeout(() => process.exit(code), server.shutdownGraceMs());
     void server.close().finally(() => {
       clearTimeout(deadline);
       process.exit(code);

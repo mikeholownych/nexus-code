@@ -14,7 +14,7 @@ import type { ReceiptSection } from "../evidence.js";
 import type { VerifyJsonResult } from "../verify_contract.js";
 
 /** Version of the published schema of this adapter's messages (the ledger key `schema_version`). */
-export const ACP_ADAPTER_SCHEMA_VERSION = 3;
+export const ACP_ADAPTER_SCHEMA_VERSION = 4;
 
 /**
  * The ACP protocol version Nexus speaks: an integer major version, currently 1 (published specification,
@@ -508,6 +508,11 @@ export interface NexusVerifyResult {
   verifier?: { command: string; source: string; approval: string; digest: string };
   operator_hint?: string;
   issued_at: string;
+  /** What was verified: the canonical path of the session's directory, as in the receipt. */
+  workspace: string;
+  /** The commit the change was measured from, and when this process pinned it for the workspace. */
+  base_pinned_commit: string;
+  base_pinned_at: string;
 }
 
 /** Details of an error, in the standard `data` member (`_meta` is not allowed on a JSON-RPC error). */

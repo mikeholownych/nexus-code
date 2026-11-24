@@ -12,7 +12,8 @@ import { startGateway, makeRepo, makeHome } from "./helpers/fixtures.js";
 function messages(output: string[]): any[] { return output.flatMap((line) => line.trim() ? [JSON.parse(line)] : []); }
 
 async function until(output: string[], predicate: (items: any[]) => boolean): Promise<any[]> {
-  const deadline = Date.now() + 10_000;
+  // A real turn takes about 5 s on a quiet host and has been seen past 10 s under load.
+  const deadline = Date.now() + 45_000;
   while (Date.now() < deadline) {
     const current = messages(output);
     if (predicate(current)) return current;
@@ -62,7 +63,7 @@ test("ACP stdio completes a sidecar turn and exposes its receipt", async () => {
   }
 });
 
-test("ACP verification uses operator settings, pins its session base, and returns a session-scoped receipt", async () => {
+test("ACP verification uses operator settings, pins its base, names what it covered, and returns a session-scoped receipt", async () => {
   const repo = makeRepo({ "src/product.ts": "export const value = 1;\n" });
   const home = makeHome();
   const oldHome = process.env.HOME;
@@ -114,19 +115,27 @@ test("ACP verification uses operator settings, pins its session base, and return
     assert.deepEqual(jobs[0].operator.deliverables, ["src/product.ts"]);
     assert.equal(jobs[0].request.worktree, repo);
     assert.equal(jobs[0].request.base, sessionBase, "a later commit cannot move the session's pinned base");
+    assert.equal(summary.workspace, fs.realpathSync(repo));
+    assert.equal(summary.base_pinned_commit, sessionBase);
+    assert.match(summary.base_pinned_at, /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/);
 
+    // Without an id only turn receipts are served, and this session has had no turn.
     send({ jsonrpc: "2.0", id: 5, method: "_nexus/receipt/get", params: { sessionId } });
-    const receiptReply = await until(output, (items) => items.some((item) => item.id === 5 && item.result?.receipt_sha256));
-    assert.equal(receiptReply.find((item) => item.id === 5).result.session_id, sessionId);
-    assert.equal(receiptReply.find((item) => item.id === 5).result.receipt_id, summary.receipt_id, "latest receipt includes the newer verification receipt");
-    assert.equal(receiptReply.find((item) => item.id === 5).result.result.verdict, "VERIFIED");
+    const receiptReply = await until(output, (items) => items.some((item) => item.id === 5 && (item.result || item.error)));
+    assert.equal(receiptReply.find((item) => item.id === 5).error?.code, -32602);
+    assert.equal(receiptReply.find((item) => item.id === 5).error.message, "receipt is not available on this connection");
 
     send({ jsonrpc: "2.0", id: 6, method: "_nexus/receipt/get", params: { sessionId: "session_20261123_010098_abcdefgh", receiptId: summary.receipt_id } });
     const crossSession = await until(output, (items) => items.some((item) => item.id === 6 && item.error));
     assert.equal(crossSession.find((item) => item.id === 6).error.code, -32602);
     send({ jsonrpc: "2.0", id: 7, method: "_nexus/receipt/get", params: { sessionId, receiptId: summary.receipt_id } });
     const explicitReceipt = await until(output, (items) => items.some((item) => item.id === 7 && item.result?.receipt_id));
-    assert.equal(explicitReceipt.find((item) => item.id === 7).result.receipt_id, summary.receipt_id);
+    const receipt = explicitReceipt.find((item) => item.id === 7).result;
+    assert.equal(receipt.receipt_id, summary.receipt_id);
+    assert.equal(receipt.session_id, sessionId);
+    assert.equal(receipt.result.verdict, "VERIFIED");
+    assert.equal(receipt.workspace, summary.workspace);
+    assert.equal(receipt.base_pinned_at, summary.base_pinned_at);
   } finally {
     await server.close();
     fs.rmSync(repo, { recursive: true, force: true });

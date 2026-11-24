@@ -187,6 +187,7 @@ const PROJECT_ENV_KEYS = new Set([
   "NEXUS_MAX_TOOL_INVOCATIONS",
   "NEXUS_MAX_INFERENCE_SUBMISSIONS",
   "NEXUS_MAX_TURN_MINUTES",
+  "NEXUS_MAX_TASK_MINUTES",
   "NEXUS_STAGNATION_STEPS",
   "NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS",
   "NEXUS_REPEATED_CALL_SOFT",
@@ -623,6 +624,7 @@ export function configuredOperationPolicy(setting: (key: string) => string | und
     ["NEXUS_OPERATION_UNKNOWN_RESUME_BUDGET", "unknownResumeBudget", 0],
     ["NEXUS_OPERATION_MAX_RUNS_PER_UNIT", "maxRunsPerUnit", 1],
     ["NEXUS_OPERATION_MIN_WAIT_MS", "minWaitMs", 1],
+    ["NEXUS_OPERATION_MAX_TOTAL_TOKENS", "maxTotalTokens", 1],
   ] as const;
   const policy: NonNullable<HarnessConfig["operationPolicy"]> = {};
   for (const [key, property, minimum] of fields) {
@@ -648,6 +650,9 @@ export function configuredOperationPolicy(setting: (key: string) => string | und
     }
     if ((property === "maxWaitMs" || property === "minWaitMs") && value > maxTimerDelayMs) {
       throw new Error(`Invalid ${key}='${raw}': must not exceed Node's timer limit (${maxTimerDelayMs} ms).`);
+    }
+    if (property === "maxTotalTokens" && value > 10_000_000_000) {
+      throw new Error(`Invalid ${key}='${raw}': expected a safe integer from 1 to 10000000000.`);
     }
     policy[property] = value;
   }
@@ -737,6 +742,7 @@ function parseOperationPolicy(raw: unknown): HarnessConfig["operationPolicy"] {
     ["unknownResumeBudget", 0],
     ["maxRunsPerUnit", 1],
     ["minWaitMs", 1],
+    ["maxTotalTokens", 1],
   ] as const;
   for (const key of Object.keys(rawPolicy)) {
     if (!fields.some(([field]) => field === key)) throw new Error(`Unsupported Nexus config.json operationPolicy field '${key}'.`);
@@ -749,6 +755,9 @@ function parseOperationPolicy(raw: unknown): HarnessConfig["operationPolicy"] {
     }
     if ((field === "maxWaitMs" || field === "minWaitMs") && value > 2_147_483_647) {
       throw new Error(`Invalid Nexus config.json operationPolicy.${field}: must not exceed Node's timer limit (2147483647 ms).`);
+    }
+    if (field === "maxTotalTokens" && value > 10_000_000_000) {
+      throw new Error(`Invalid Nexus config.json operationPolicy.${field}: expected a safe integer from 1 to 10000000000.`);
     }
     policy[field] = value;
   }
@@ -777,6 +786,12 @@ export function mergeOperationPolicy(
       throw new Error(`Invalid operation policy ${field}: must not exceed Node's timer limit (${maxTimerDelayMs} ms).`);
     }
   }
+  if (effective.maxTotalTokens !== undefined) {
+    const value = effective.maxTotalTokens;
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > 10_000_000_000) {
+      throw new Error("Invalid operation policy maxTotalTokens: expected a safe integer from 1 to 10000000000.");
+    }
+  }
   const { maxWaitMs, minWaitMs } = effective;
   if (minWaitMs > maxWaitMs) {
     throw new Error(`Invalid operation wait settings: minWaitMs (${minWaitMs}) must not exceed maxWaitMs (${maxWaitMs}).`);
@@ -785,7 +800,7 @@ export function mergeOperationPolicy(
 }
 
 /**
- * Continuation budgets: flags, then NEXUS_MAX_TOTAL_STEPS / NEXUS_MAX_TURN_MINUTES / NEXUS_STAGNATION_STEPS, then
+ * Continuation budgets: flags, then NEXUS_MAX_TOTAL_STEPS / NEXUS_MAX_TURN_MINUTES / NEXUS_MAX_TASK_MINUTES / NEXUS_STAGNATION_STEPS, then
  * finite defaults. Total steps are charged to the durable objective ledger, so resume does not reset them.
  * `--no-continuation` (or NEXUS_CONTINUATION=0) is the operator's explicit choice of the single-segment turn that
  * ends at --max-steps.
@@ -809,6 +824,7 @@ export function continuationBudget(options: any): ContinuationBudget | undefined
     maxToolInvocations: toolInvocationLimit(options),
     maxInferenceSubmissions: inferenceSubmissionLimit(options),
     maxTurnMinutes: positive(options.maxTurnMinutes, effectiveSetting("NEXUS_MAX_TURN_MINUTES"), DEFAULT_CONTINUATION.maxTurnMinutes, MAX_CONTINUATION_MINUTES),
+    maxTaskMinutes: Math.floor(positive(options.maxTaskMinutes, effectiveSetting("NEXUS_MAX_TASK_MINUTES"), DEFAULT_CONTINUATION.maxTaskMinutes, MAX_CONTINUATION_MINUTES)),
     stagnationSteps: Math.floor(positive(options.stagnationSteps, effectiveSetting("NEXUS_STAGNATION_STEPS"), DEFAULT_CONTINUATION.stagnationSteps)),
     verifierConvergenceAttempts: Math.floor(positive(undefined, effectiveSetting("NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS"), DEFAULT_CONVERGENCE_ATTEMPTS)),
   };

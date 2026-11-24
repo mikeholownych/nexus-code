@@ -26,7 +26,8 @@ function parseOutput(output: string[]): any[] {
 }
 
 async function until(output: string[], predicate: (items: any[]) => boolean): Promise<any[]> {
-  const deadline = Date.now() + 10_000;
+  // A real turn has been seen past 10 s under load.
+  const deadline = Date.now() + 45_000;
   while (Date.now() < deadline) {
     const current = parseOutput(output);
     if (predicate(current)) return current;

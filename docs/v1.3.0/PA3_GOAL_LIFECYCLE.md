@@ -54,9 +54,15 @@ scope changes unavailable in read-only mode.
 
 - Goal decomposition currently reuses the existing full team graph; arbitrary requirement-to-work-unit mapping is not
   exposed by `/goal`. Use `/batch` when an operator needs an authored work-unit DAG.
+- Token usage roll-up is reported in goal results and `/goal` output (agent runs, total/reported/estimated tokens,
+  inference requests). The report marks the total as incomplete when any child task usage is unavailable. When
+  `operation.policy.maxTotalTokens` is set, the driver pauses the goal at a safe boundary before starting new work
+  once rolled-up child task token totals reach the cap. Missing or corrupt accounting also pauses the goal, because
+  the cap cannot be enforced from a partial sum; the pause reason identifies unavailable usage. Resume continues
+  after the operator repairs the record, raises or removes the cap, or cancels. This is a safe-boundary limit: one
+  already-running batch can consume more than the configured cap before the next check.
 - PA-3 stretch gaps remain to be audited/implemented: stall counting by failure fingerprint (not turn count) at the
-  goal/operation semantics level where applicable, optional token budget roll-up/cap enforcement from sub-operations
-  (usage roll-up is reported; no cap enforcement yet), and full PA-3 acceptance qualification. `/team` remains
+  goal/operation semantics level where applicable, and full PA-3 acceptance qualification. `/team` remains
   experimental until PA-1 and PA-2 are complete.
 - Restart-specific interrupted-effect reconciliation beyond stale-boot pause still requires qualification.
 - No inference-provider or homelab-ai changes are required. Provider-neutral end-to-end qualification remains separate.
@@ -67,4 +73,6 @@ XERJ returned the opencode goal-state pattern of bounded rounds and a server boo
 `packages/schema/src/goal.ts:11`, plus restart-pausing behavior in `packages/core/src/plugin/goal.ts:339`. These informed
 the recovery questions only; no peer code was copied. XERJ marked the corpus as incompletely indexed, so absence of a
 result is not evidence that no other pattern exists. The stale-boot pause implementation follows Nexus's existing
-boot-id pattern (`cli/src/upgrade_journal.ts` / `currentUpgradeBootId`) and durable operation pause semantics.
+boot-id pattern (`cli/src/upgrade_journal.ts` / `currentUpgradeBootId`) and durable operation pause semantics. A
+follow-up search for fail-closed aggregate token accounting timed out with a partial, irrelevant passage set; it did
+not establish a peer pattern, so no further code was borrowed.
