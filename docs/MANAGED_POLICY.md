@@ -52,6 +52,15 @@ a model or a tool result says changes them.
   server (SSE or HTTP transport) whose URL has exactly that origin; a definition that would run a program is never
   admitted by a `url` it also carries. A WebSocket server (`ws://`, `wss://`) has no `http(s)` origin, so only a name
   entry admits it.
+- **A name does not admit a server the workspace configures.** A name is whatever the configuring file says it is, so
+  a repository could reuse an allowed name for a program or a URL of its own. A server defined by a file of the
+  workspace is admitted only by a `command:` or a `url:` entry that matches what it would reach; with only a name entry
+  it is refused, and the message says so. Consequently a WebSocket server can only come from your own configuration.
+  A name entry still admits a server from your user configuration, whatever it runs: a name pins nothing by itself.
+- **What an entry does not pin.** A `command:` entry pins the program and not its arguments. A plugin's `sha256:`
+  entry covers the plugin's entry file and not the modules that file imports. A hard link in your configuration
+  directory to a file of the workspace is treated as your file: `disable_workspace` goes by path and by symbolic
+  link, and a repository cannot create such a link.
 - **How a plugin is matched.** By the file, because a plugin's name is known only after its code ran: a `sha256:`
   entry matches the SHA-256 of the file's bytes, a `file:` entry the file's real path (a symbolic link is resolved
   first, so a link is not the path it has, it is the file it points to).

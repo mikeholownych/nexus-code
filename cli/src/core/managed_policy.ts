@@ -832,10 +832,19 @@ export function permitsMcpServer(policy: EffectivePolicy, server: McpServerDescr
   const matches = (entry: string): boolean => {
     if (entry.startsWith("command:")) return server.command !== undefined && entry.slice(8) === server.command;
     if (entry.startsWith("url:")) return serverOrigin !== undefined && entry.slice(4) === serverOrigin;
-    return entry === server.name;
+    // A name is whatever the configuring file says it is. For a definition that comes from the workspace, a name entry
+    // would let the repository choose the program or the URL behind an allowed name, so it is admitted only by what it
+    // would reach (`command:`, `url:`).
+    return entry === server.name && !server.fromWorkspace;
   };
   if (!list.restricted || list.values.some(matches)) return { allowed: true, value: server, source: list.source };
-  return refuse(`MCP server '${server.name}' is not started: it is not in the managed allowlist (mcp.allow).`, allowlistRefuser(list, matches));
+  const byNameOnly = server.fromWorkspace && list.values.includes(server.name);
+  return refuse(
+    byNameOnly
+      ? `MCP server '${server.name}' is not started: the managed allowlist (mcp.allow) names it, and a name does not admit a server that the workspace configures. List its program (command:) or its URL (url:).`
+      : `MCP server '${server.name}' is not started: it is not in the managed allowlist (mcp.allow).`,
+    allowlistRefuser(list, matches),
+  );
 }
 
 export interface PluginFileDescriptor {

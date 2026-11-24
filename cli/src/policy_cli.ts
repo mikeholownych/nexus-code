@@ -7,7 +7,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Command } from "commander";
-import { describeSource, type EffectivePolicy, type PolicySource } from "./core/managed_policy.js";
+import { describeSource, POLICY_KEYS, type EffectivePolicy, type PolicySource } from "./core/managed_policy.js";
 import { loadManagedTiers, ManagedPolicyError, MANAGED_POLICY_EXIT_CODE, type LoadedPolicy, type TierInspection } from "./core/managed_policy_load.js";
 import { approvalHint, printableRefusal, processPolicyHost, type PolicyHost, type WorkspaceTrustFacts } from "./core/policy_runtime.js";
 import { envTrustRequested, isWorkspaceListed, realWorkspace } from "./workspace_trust.js";
@@ -152,6 +152,22 @@ export interface PolicyFileCheck {
 }
 
 /**
+ * A parse error quotes the token it could not accept. `policy check` is pointed at any file the caller names, so a
+ * quoted token is cut to a few characters (enough to find the place, not enough to read the file through its errors)
+ * unless it is short or is a dotted name under one of the policy's own tables, which is what a mistyped key looks
+ * like. Quotes are taken in order, pair by pair: `expected '=' after the key 'x'` holds two tokens, `=` and `x`.
+ */
+/** Quoted examples that the loader's own messages contain; they are not text of the file. */
+const MESSAGE_EXAMPLES = new Set(["command:/absolute/path", "url:https://origin", "sha256:<64 hex digits>", "file:/absolute/path"]);
+
+function withoutFileText(detail: string): string {
+  const tables = new Set(Object.keys(POLICY_KEYS));
+  const policyName = (text: string): boolean => /^[a-z_]+(\.[a-z_]+){0,3}$/.test(text) && text.length <= 48 && tables.has(text.split(".")[0]);
+  return detail.replace(/(['"`])(.*?)\1/gs, (all, quote: string, text: string) =>
+    text.length < 9 || policyName(text) || MESSAGE_EXAMPLES.has(text) ? all : `${quote}${text.slice(0, 8)}…${quote}`);
+}
+
+/**
  * Checks a candidate policy file before it is rolled out: a regular file, not a link, at most 64 KiB, valid UTF-8,
  * the strict grammar, known tables and keys, a supported `schema_version`. Owner and mode are not checked here: they
  * are properties of the installed file, and Nexus checks them where it is installed.
@@ -164,7 +180,7 @@ export function checkPolicyFile(file: string): PolicyFileCheck {
     return tiers.user ? { ...base, valid: true } : { ...base, valid: false, code: "absent", error: "the file does not exist" };
   } catch (error) {
     if (!(error instanceof ManagedPolicyError)) throw error;
-    return { ...base, valid: false, code: error.code, error: `${error.line === undefined ? "" : `line ${error.line}: `}${error.detail}`, ...(error.line === undefined ? {} : { line: error.line }) };
+    return { ...base, valid: false, code: error.code, error: `${error.line === undefined ? "" : `line ${error.line}: `}${withoutFileText(error.detail)}`, ...(error.line === undefined ? {} : { line: error.line }) };
   }
 }
 
