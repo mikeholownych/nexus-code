@@ -404,3 +404,63 @@ test("ACC-V11-GIT-05: a worktree kept for ignored files is named in the event lo
   assert.equal((retained!.detail as any).reason, "ignored");
   assert.ok(fs.existsSync(path.join((retained!.detail as any).worktree, "build.log")), "the ignored file must survive");
 });
+
+test("PA-2: semantic conflict between parallel isolated units fails merged-tree verification and neither is integrated silently", async (t) => {
+  const root = repo();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  // Base verifier: value.txt must be "ok". Each unit changes a different file and passes alone.
+  fs.writeFileSync(path.join(root, "check.sh"), "#!/bin/sh\ntest \"$(cat value.txt)\" = \"ok\"\n");
+  git(root, ["add", "check.sh"]);
+  git(root, ["commit", "-qm", "add verifier"]);
+  fs.writeFileSync(path.join(root, "value.txt"), "ok\n");
+  git(root, ["add", "value.txt"]);
+  git(root, ["commit", "-qm", "base value"]);
+
+  const clock = fakeClock();
+  const plan = planOperationGit(root, "op-pa2-semantic");
+  const state = newOperation(
+    "op-pa2-semantic",
+    "objective",
+    [unit("a"), unit("b")],
+    [res("r1"), res("r2")],
+    clock.now(),
+    { maxConcurrentUnits: 2 },
+  );
+  state.git = newOperationGitState(plan);
+  ensureIntegrationWorktree(plan, state.git);
+
+  const barrier = bothStartedBarrier();
+  const executor: WorkUnitExecutor = {
+    run: async (u, _r, ctx) => {
+      await barrier.wait();
+      if (u.id === "a") {
+        fs.writeFileSync(path.join(ctx.workspace!, "a.txt"), "a\n");
+      } else {
+        // Mechanically clean with a.txt, but breaks the shared verifier.
+        fs.writeFileSync(path.join(ctx.workspace!, "value.txt"), "broken\n");
+      }
+      return {
+        kind: "completed",
+        summary: `${u.id} done`,
+        outcome: "VERIFIED",
+        verification: { command: "sh ./check.sh", status: "PASSED", hasExecutedTests: true },
+      };
+    },
+  };
+  const runner = new OperationRunner(state, { executor, clock, persist: () => {} });
+  await runner.run();
+
+  // One unit may integrate; the unit that breaks the merged verifier must not be integrated silently.
+  const receipts = state.integrations ?? [];
+  assert.ok(receipts.length <= 1, `expected at most one integration, got ${receipts.length}`);
+  const integratedIds = receipts.map((r) => r.unitId);
+  const brokenIntegrated = integratedIds.includes("b");
+  assert.equal(brokenIntegrated, false, "unit b breaks the merged verifier and must not be integrated");
+  // The failing integration should leave the operation blocked/failed for resolution, not COMPLETE.
+  assert.notEqual(state.status, "COMPLETE");
+  const b = state.units.find((u) => u.id === "b")!;
+  assert.notEqual(b.status, "COMPLETE");
+  // Integration branch tip must not contain the broken value if b was rejected.
+  const mergedValue = fs.readFileSync(path.join(plan.integrationWorktree, "value.txt"), "utf8");
+  if (!integratedIds.includes("b")) assert.equal(mergedValue, "ok\n");
+});

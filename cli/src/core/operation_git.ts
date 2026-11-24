@@ -170,7 +170,7 @@ export class OperationGit {
   constructor(
     private readonly plan: OperationGitPlan,
     private readonly state: OperationGitState,
-    private readonly options: { verifyTimeoutSecs?: number } = {},
+    private readonly options: { verifyTimeoutSecs?: number; integrations?: () => readonly IntegrationReceipt[] } = {},
   ) {
     this.hooksDir = path.join(plan.baseDir, "no-hooks");
   }
@@ -397,21 +397,34 @@ export class OperationGit {
     }
 
     const mergedTip = this.currentTip();
-    const verification = result.verification?.command && result.verification.status === "PASSED" && result.verification.hasExecutedTests
-      ? this.verifyMerged(result.verification.command)
-      : undefined;
-    const integrity = verification ? this.integrationIntegrity(commit, mergedTip) : undefined;
-    if (verification && (!verification.ok || (integrity && !integrity.ok))) {
-      // The merge is mechanically clean but the merged tree does not pass the unit's verifier: undo it.
-      const reason = integrity?.reason ?? verification.reason ?? "integration verification failed";
-      const restoration = this.restoreIntegration(tip);
-      return { kind: "failed", reason: restoration ? `${reason}; ${restoration}` : reason };
+    const verifiers = this.mergedTreeVerifiers(unit.id, result);
+    let verification: { ok: boolean; reason?: string } | undefined;
+    let verificationCommand: string | undefined;
+    for (const command of verifiers) {
+      const ran = this.verifyMerged(command);
+      if (command === result.verification?.command) {
+        verification = ran;
+        verificationCommand = command;
+      }
+      const integrity = this.integrationIntegrity(commit, mergedTip);
+      if (!ran.ok || !integrity.ok) {
+        // A mechanically clean merge can still break an already-integrated unit's verifier (semantic conflict).
+        // Reject the merge so neither the new unit nor the broken merged state is accepted silently.
+        const reason = !integrity.ok
+          ? (integrity.reason ?? "integration verification changed the integration history")
+          : ran.reason ?? "integration verification failed";
+        const restoration = this.restoreIntegration(tip);
+        return { kind: "failed", reason: restoration ? `${reason}; ${restoration}` : reason };
+      }
     }
-    if (verification) this.cleanIntegrationWorktree();
+    if (verifiers.length > 0) this.cleanIntegrationWorktree();
 
     const integratedCommit = this.currentTip();
     const files = gitResult(this.plan.repoRoot, ["diff", "--name-only", tip, integratedCommit]).stdout
       .split("\n").map((line) => line.trim()).filter(Boolean).sort();
+    const verificationStatus = verificationCommand
+      ? (verification?.ok ? (result.verification?.definitionBound === false ? "PASSED_UNBOUND" : "PASSED") : "NOT_RUN")
+      : (verifiers.length > 0 ? "PASSED" : "NOT_RUN");
     const receipt: IntegrationReceipt = {
       unitId: unit.id,
       branch: entry.branch,
@@ -421,7 +434,7 @@ export class OperationGit {
       files,
       outcome: result.outcome,
       summary: result.summary,
-      verification: verification ? (result.verification?.definitionBound === false ? "PASSED_UNBOUND" : "PASSED") : "NOT_RUN",
+      verification: verificationStatus,
       ...evidenceFields(evidence),
     };
     this.state.units[unit.id] = { ...entry, integratedCommit };
@@ -578,6 +591,36 @@ export class OperationGit {
   private cleanIntegrationWorktree(): void {
     gitResult(this.plan.integrationWorktree, ["reset", "--hard", "HEAD"]);
     gitResult(this.plan.integrationWorktree, ["clean", "-fd"]);
+  }
+
+  /**
+   * Verifiers that must pass on the merged tree before a unit is accepted. Always includes the integrating unit's
+   * own executed verifier. Also includes previously integrated units' executed verifiers so a mechanically clean merge
+   * that semantically breaks an accepted unit is rejected (PA-2 merge arbitration).
+   */
+  private mergedTreeVerifiers(
+    unitId: string,
+    result: Extract<UnitRunResult, { kind: "completed" }>,
+  ): string[] {
+    const commands: string[] = [];
+    const seen = new Set<string>();
+    const add = (cmd: string | undefined) => {
+      const c = (cmd ?? "").trim();
+      if (!c || seen.has(c)) return;
+      seen.add(c);
+      commands.push(c);
+    };
+    if (result.verification?.command && result.verification.status === "PASSED" && result.verification.hasExecutedTests) {
+      add(result.verification.command);
+    }
+    for (const receipt of this.options.integrations?.() ?? []) {
+      if (receipt.unitId === unitId) continue;
+      const tests = receipt.tests;
+      if (!tests?.command || !tests.hasExecutedTests) continue;
+      if (tests.status !== "PASSED") continue;
+      add(tests.command);
+    }
+    return commands;
   }
 
   private integrationIntegrity(commit: string, expectedTip: string): { ok: boolean; reason?: string } {
