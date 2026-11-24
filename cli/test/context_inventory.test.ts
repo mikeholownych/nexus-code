@@ -468,12 +468,12 @@ test("assessment keeps dimensions separate and reports insufficient evidence", (
   assert.equal(assessContextMaturity(catalogOnly, { hasDurableKnowledge: true, hasActiveSkills: false }).dimensions.find((item) => item.dimension === "compounding_value")?.level, 1,
     "a stored memory catalog alone does not establish carried forward use");
 
-  const request = (sourceRefs: string[], observationState: "dispatching" | "response_received" | "unknown_effect" | "not_dispatched" = "response_received", id = "one", sequence = 1) => ({
+  const request = (sourceRefs: string[], observationState: "dispatching" | "response_received" | "unknown_effect" | "not_dispatched" = "response_received", id = "one", sequence: number | null = 1) => ({
     ...input(`task:inference-request:${id}`, "session"),
     sourceType: "inference_request_manifest",
     scope: "task" as const,
     observationState,
-    observationSequence: sequence,
+    ...(sequence === null ? {} : { observationSequence: sequence }),
     sourceRefs,
   });
   const carried = buildContextInventory({ sources: [{
@@ -548,6 +548,19 @@ test("assessment keeps dimensions separate and reports insufficient evidence", (
   }] });
   assert.equal(assessContextMaturity(ambiguousLatest, { hasDurableKnowledge: false, hasActiveSkills: true }).dimensions.find((item) => item.dimension === "navigability")?.level, null,
     "duplicate latest request sequences leave request linkage ambiguous");
+  const unsequencedRequest = buildContextInventory({ sources: [{
+    name: "request", status: "ok", durationMs: 2,
+    items: [
+      { ...input("request:system", "session"), sourceType: "system_context", sourceRefs: ["request:message:0"] },
+      { ...input("request:skill", "profile"), sourceType: "skill_note", sourceRefs: ["request:message:0"] },
+      request(["request:message:0"], "response_received", "sequenced", 2),
+      request(["request:message:0"], "unknown_effect", "unsequenced", null),
+    ],
+  }] });
+  const unsequencedAssessment = assessContextMaturity(unsequencedRequest, { hasDurableKnowledge: false, hasActiveSkills: true });
+  assert.equal(unsequencedAssessment.dimensions.find((item) => item.dimension === "navigability")?.level, null,
+    "an unsequenced request could be newer than the last sequenced request and blocks linkage evidence");
+  assert.match(unsequencedAssessment.dimensions.find((item) => item.dimension === "navigability")?.evidence[1].finding ?? "", /ordering is unknown/);
 
   const freshnessMeasured = buildContextInventory({
     workspaceState: { comparison: "unchanged", invalidatedRepositoryItemIds: [] },

@@ -609,7 +609,9 @@ export function assessContextMaturity(snapshot: ContextInventorySnapshot, eviden
   const latestRequestManifest = latestSequenceItems.length === 1 ? latestSequenceItems[0] : undefined;
   // Older request refs reuse positional names; only the latest sequenced completed
   // request can establish that the currently inspected context reached the adapter.
-  const requestManifests = latestRequestManifest?.observationState === "response_received" ? [latestRequestManifest] : [];
+  // An unsequenced record could be newer, so it makes ordering unknowable.
+  const requestOrderKnown = observedRequestManifests.length > 0 && observedRequestManifests.length === sequencedRequestManifests.length;
+  const requestManifests = requestOrderKnown && latestRequestManifest?.observationState === "response_received" ? [latestRequestManifest] : [];
   const requestManifestCount = requestManifests.length;
   // Session message indexes are not provider request indexes: prompt injection and
   // compaction can change the arrays. Only explicit source links prove inclusion.
@@ -632,7 +634,7 @@ export function assessContextMaturity(snapshot: ContextInventorySnapshot, eviden
         dimension: "navigability", level: requestManifestCount === 0 ? null : dispatchedSourceTypes.size >= 2 ? 2 : 1,
         evidence: [
           { reference: "cli/src/core/context_inventory.ts:inventorySourcesFromMessages", finding: `${dispatchedContextItems.length} source item(s) have explicit source references linked to a captured request; ${dispatchedSourceTypes.size} distinct source type(s) were observed in dispatched context.`, status: requestManifestCount ? "observed" : "unknown" },
-          { reference: "cli/src/agent.ts:submitGuardingLength", finding: observedRequestManifests.length ? `${observedRequestManifests.length} content-free request manifest(s) were observed; the latest outcome is ${latestRequestManifest?.observationState ?? "unknown"}${requestManifestCount ? " and is eligible for request-link evidence" : " and is not eligible for request-link evidence"}.` : "Conversation replay and pinned task context exist; no persisted request manifest was observed in this capture.", status: requestManifestCount ? "observed" : "unknown" },
+          { reference: "cli/src/agent.ts:submitGuardingLength", finding: observedRequestManifests.length ? `${observedRequestManifests.length} content-free request manifest(s) were observed; ordering is ${requestOrderKnown ? "sequenced" : "unknown because at least one record has no sequence"}, and the latest outcome is ${latestRequestManifest?.observationState ?? "unknown"}${requestManifestCount ? " and is eligible for request-link evidence" : " and is not eligible for request-link evidence"}.` : "Conversation replay and pinned task context exist; no persisted request manifest was observed in this capture.", status: requestManifestCount ? "observed" : "unknown" },
           ...(evidence.hasActiveSkills ? [{ reference: "cli/src/skills.ts:SkillManager.getPromptSection", finding: "Path and trust metadata exist for skills; active prompt inclusion is not represented in the persisted message inventory.", status: "observed" as const }] : []),
         ],
         unmetCriteria: ["Relationships from each request message to the repository, task, session, profile, or memory source that produced it.", "A unified retrieval graph connecting repository, task, session, profile, and memory items."],
