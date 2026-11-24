@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Pg1Thh3jBzodZsYb9jYGMD",
+  "agent_id": "a0bff749f3ab5e366",
+  "subagent_type": "reviewer",
+  "task_description": "Delta re-review PR #797 dotdot fix",
+  "token_usage": {
+    "input_tokens": 40,
+    "cache_creation_tokens": 41202,
+    "cache_read_tokens": 716161,
+    "output_tokens": 10295,
+    "api_call_count": 20
+  },
+  "started_at": "2026-11-24T21:35:26.424387661Z",
+  "completed_at": "2026-11-24T21:44:41.886432039Z"
+}
