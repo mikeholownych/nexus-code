@@ -126,7 +126,7 @@ describe("doctor findings name the actual failure", () => {
   test("sandbox.confinement states the effective containment when no sandbox is configured (CS-1)", async () => {
     const finding = find(await doctor({ config: cfg() }), "sandbox.confinement")!;
     assert.equal(finding.status, "skip");
-    assert.match(finding.explanation, /Effective containment: none/);
+    assert.match(finding.explanation, /Effective sandbox profile: unconfined/);
     assert.ok(finding.evidence.some((e) => /^bubblewrap \(bwrap\): (available|not available)$/.test(e)));
     assert.match(finding.action ?? "", /--sandbox bwrap/);
   });

@@ -294,15 +294,18 @@
       ]
     },
     "ErrorCode": {
-      "description": "`UNSUPPORTED_PROTOCOL`: `initialize` named a version range that shares no version with the sidecar's.\n`EXPERIMENTAL_DISABLED`: an experimental feature was used on a connection that did not enable it at `initialize`.",
+      "description": "`UNSUPPORTED_PROTOCOL`: `initialize` named a version range that shares no version with the sidecar's.\n`EXPERIMENTAL_DISABLED`: an experimental feature was used on a connection that did not enable it at `initialize`.\nSocket transport only (docs/PROTOCOL.md, \"Socket transport\"): `UNAUTHORIZED`: the attach was refused (the reason is never given);\n`NOT_CONTROLLER`: an observer sent a command; `NOT_PERMITTED`: the controller sent a command a socket client may not send.",
       "enum": [
         "BAD_REQUEST",
         "BUSY",
         "EXPERIMENTAL_DISABLED",
         "INTERNAL",
+        "NOT_CONTROLLER",
         "NOT_FOUND",
+        "NOT_PERMITTED",
         "NO_PENDING_APPROVAL",
         "NO_PROVIDER",
+        "UNAUTHORIZED",
         "UNSUPPORTED_PROTOCOL"
       ]
     },

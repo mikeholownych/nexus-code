@@ -65,6 +65,7 @@ function buildConfig(options: any): HarnessConfig {
 }
 import { registerOperationCommands } from "./operation_cli.js";
 import { registerBackgroundCommands } from "./background_cli.js";
+import { registerScheduleCommands } from "./schedule_cli.js";
 import { requireManagedPolicyAtStartup } from "./core/policy_runtime.js";
 import { registerPolicyCommands } from "./policy_cli.js";
 import { managedPolicy, verifyFlagRefusal } from "./core/policy_runtime.js";
@@ -397,7 +398,7 @@ program
   .option("--fallback <urls>", "Comma-separated fallback LLM endpoints if primary is unavailable")
   .option("--context-limit <tokens>", "Context window limit in tokens; below the provider's advertised capacity it is kept, above it the advertised capacity applies (default: advertised capacity, else 65536)")
   .option("--dry-run", "Simulate file modifications without writing changes to disk")
-  .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
+  .option("--sandbox [mode]", "Isolate command execution (auto|bwrap|docker|none or [engine]:workspace|:read-only|:network; default: auto)")
   .option("--sandbox-network", "With --sandbox: let sandboxed commands and the sandboxed native worker use the network (off by default; also NEXUS_SANDBOX_NETWORK=1 in the operator environment)")
   .option("--worktree", "Isolate execution inside an ephemeral git worktree under .nexus/worktrees/<task-id>")
   .option("--worktree-branch <name>", "Run inside the named git worktree for this branch (created if missing); kept after the run, merge it with `nexus worktree merge`")
@@ -439,7 +440,7 @@ program
   .option("--context-limit <tokens>", "Context window limit in tokens; below the provider's advertised capacity it is kept, above it the advertised capacity applies (default: advertised capacity, else 65536)")
   .option("--dry-run", "Simulate file modifications without writing changes to disk")
   .option("--read-only", "Reject all mutating tool executions and commands")
-  .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
+  .option("--sandbox [mode]", "Isolate command execution (auto|bwrap|docker|none or [engine]:workspace|:read-only|:network; default: auto)")
   .option("--sandbox-network", "With --sandbox: let sandboxed commands and the sandboxed native worker use the network (off by default; also NEXUS_SANDBOX_NETWORK=1 in the operator environment)")
   .option("--worktree", "Isolate execution inside an ephemeral git worktree under .nexus/worktrees/<task-id>")
   .option("--worktree-branch <name>", "Run inside the named git worktree for this branch (created if missing); kept after the run, merge it with `nexus worktree merge`")
@@ -489,7 +490,7 @@ program
   .option("-y, --yes", "Run non-interactively without approval prompts (forces auto mode)")
   .option("--approve", "Require human approval before destructive actions (forces review mode)")
   .option("--mode <mode>", "Execution mode: auto, review, or read-only (default: review; folder trust does not change it)")
-  .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
+  .option("--sandbox [mode]", "Isolate command execution (auto|bwrap|docker|none or [engine]:workspace|:read-only|:network; default: auto)")
   .option("--sandbox-network", "With --sandbox: let sandboxed commands and the sandboxed native worker use the network (off by default; also NEXUS_SANDBOX_NETWORK=1 in the operator environment)")
   .option("--worktree", "Isolate execution inside an ephemeral git worktree under .nexus/worktrees/<task-id>")
   .option("--worktree-branch <name>", "Run inside the named git worktree for this branch (created if missing); kept after the run, merge it with `nexus worktree merge`")
@@ -1556,6 +1557,7 @@ program
 
 registerOperationCommands(program);
 registerBackgroundCommands(program);
+registerScheduleCommands(program);
 registerProviderCommands(program);
 registerHookCommands(program);
 registerTriggerCommands(program);

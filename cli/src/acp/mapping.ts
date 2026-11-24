@@ -613,6 +613,10 @@ const SIDECAR_ERROR_CODES: Record<ErrorCode, AcpErrorCode> = {
   NO_PROVIDER: ACP_ERROR.INTERNAL_ERROR,
   UNSUPPORTED_PROTOCOL: ACP_ERROR.INTERNAL_ERROR,
   EXPERIMENTAL_DISABLED: ACP_ERROR.INTERNAL_ERROR,
+  // Socket transport only: the ACP adapter talks to its sidecar over stdio and never receives these.
+  UNAUTHORIZED: ACP_ERROR.INTERNAL_ERROR,
+  NOT_CONTROLLER: ACP_ERROR.INTERNAL_ERROR,
+  NOT_PERMITTED: ACP_ERROR.INTERNAL_ERROR,
 };
 
 /** The JSON-RPC error for a sidecar `error` event; `data.reason` is the sidecar's code. */

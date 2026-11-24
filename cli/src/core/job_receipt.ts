@@ -26,11 +26,21 @@ export interface JobReceiptDecision {
   decide: string;
 }
 
+/** Slots a schedule missed just before this job started (BG-2): `truncated` marks `count` as a lower bound. */
+export interface JobReceiptMissed {
+  count: number;
+  first: string;
+  last: string;
+  truncated?: true;
+}
+
 export interface JobReceipt {
   format: "nexus-job-receipt";
   schema_version: typeof JOB_RECEIPT_SCHEMA_VERSION;
   job_id: string;
   schedule_id: string | null;
+  /** The slot of the schedule this job stands for (for a catch-up, the last slot that was missed); absent for a job started by hand. */
+  schedule_occurrence?: string;
   /** No operator was present: no call was approved by a person, and none was approved "always". */
   unattended: true;
   workspace: string;
@@ -40,7 +50,11 @@ export interface JobReceipt {
   integration_branch: string | null;
   policy: JobPolicy;
   approval_mode: "review" | "read-only";
-  verifier: { command: string; source: "operator" } | null;
+  /**
+   * The operator's verifier and what became of it: `status` is the run the operation recorded (PASSED, FAILED, TIMED_OUT, ...)
+   * or NOT_RUN when no unit recorded one; `detail` says what NOT_RUN means. Absent on a receipt written before BG-2.
+   */
+  verifier: { command: string; source: "operator"; status?: string; detail?: string } | null;
   budgets: JobBudgets;
   created_at: string;
   started_at: string | null;
@@ -51,7 +65,8 @@ export interface JobReceipt {
   summary: string;
   units: JobReceiptUnit[];
   pending_decisions: JobReceiptDecision[];
-  missed: null;
+  /** Slots the schedule missed before this job (it was down, or asleep); null when none, and for a job started by hand. */
+  missed: JobReceiptMissed | null;
 }
 
 /** The document `docs/protocol/job-receipt-v<N>.schema.json` describes. */
@@ -87,6 +102,8 @@ export interface JobEnd {
   /** One sentence for a job that ended outside the operation (a worker failure). */
   detail?: string;
   endedAt: string;
+  /** Slots the job's schedule missed just before it started. */
+  missed?: JobReceiptMissed | null;
 }
 
 const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
@@ -97,12 +114,39 @@ function unitReason(unit: WorkUnit): string | null {
   return /^[A-Z_]+\/[A-Z_]+ \(([A-Z_]+)\)/.exec(unit.blocked.reason)?.[1] ?? unit.blocked.decision.cause;
 }
 
+/** The operator verifier's recorded run, newest unit last; NOT_RUN when no unit recorded one (never started: a read-only run, or one that ended first). */
+function verifierState(operation: DurableOperationState | undefined): { status: string; detail?: string } {
+  const recorded = (operation?.units ?? []).flatMap((unit) => [unit.failedRun?.verification, unit.result?.verification]).filter((v) => v !== undefined);
+  const last = recorded[recorded.length - 1];
+  if (last) return { status: last.status };
+  // A blocked unit whose turn ended after the verifier ran says how (the run is recorded only when it established a result).
+  for (const unit of operation?.units ?? []) {
+    const code = unitReason(unit);
+    const text = unit.blocked?.reason.replace(/^[^:]*: /, "") ?? "";
+    if (code === "REGRESSION_FREE") return { status: "PASSED", detail: `the verifier passed but did not establish the change (REGRESSION_FREE): ${text}`.slice(0, 300) };
+    if (code === "NO_TESTS_EXECUTED") return { status: "PASSED", detail: "the verifier passed but executed no tests (NO_TESTS_EXECUTED)" };
+    if (code === "VERIFIER_FAILED") return { status: "FAILED" };
+    if (code === "VERIFIER_TIMED_OUT") return { status: "TIMED_OUT" };
+  }
+  return { status: "NOT_RUN", detail: "no unit recorded a verifier run: the verifier was not run (a read-only run does not run it, or the job ended before completion was attempted)" };
+}
+
 function summarize(job: JobRecord, operation: DurableOperationState | undefined, end: JobEnd, reason: string | null): string {
   const branch = operation?.git?.integrationBranch;
   if (end.outcome === "COMPLETE") return `COMPLETE: ${operation?.units.length ?? 0} unit(s) finished${branch ? `; results are on ${branch}` : ""}; nothing was merged into your branch.`;
   const blocked = operation?.units.find((unit) => unit.status === "BLOCKED" && unit.blocked);
   if (end.outcome === "BLOCKED" && blocked) return `BLOCKED: unit '${blocked.id}' ${blocked.blocked!.reason}; nothing was merged.`.slice(0, 600);
   return `${end.outcome}: ${end.detail ?? reason ?? "the job ended without a result"}; nothing was merged.`.slice(0, 600);
+}
+
+/** A job that did not complete says when its operator verifier did not run or did not pass. */
+function withVerifierNote(summary: string, job: JobRecord, operation: DurableOperationState | undefined, end: JobEnd): string {
+  if (job.verifier === null || end.outcome === "COMPLETE") return summary;
+  const state = verifierState(operation);
+  if (state.status === "PASSED" && !state.detail) return summary;
+  if (state.status === "PASSED") return `${summary} Verifier passed without establishing the change: ${job.verifier.slice(0, 80)}.`.slice(0, 700);
+  const note = state.status === "NOT_RUN" ? ` Verifier not run: ${job.verifier.slice(0, 80)}.` : ` Verifier ${state.status.toLowerCase().replace(/_/g, " ")}: ${job.verifier.slice(0, 80)}.`;
+  return `${summary}${note}`.slice(0, 700);
 }
 
 export function buildJobReceipt(job: JobRecord, operation: DurableOperationState | undefined, end: JobEnd): JobReceipt {
@@ -117,6 +161,7 @@ export function buildJobReceipt(job: JobRecord, operation: DurableOperationState
     schema_version: JOB_RECEIPT_SCHEMA_VERSION,
     job_id: job.id,
     schedule_id: job.origin.kind === "schedule" ? job.origin.scheduleId : null,
+    ...(job.origin.kind === "schedule" ? { schedule_occurrence: job.origin.dueAt } : {}),
     unattended: true,
     workspace: job.workspace,
     base_commit: job.baseCommit,
@@ -124,7 +169,7 @@ export function buildJobReceipt(job: JobRecord, operation: DurableOperationState
     integration_branch: operation?.git?.integrationBranch ?? null,
     policy: job.policy,
     approval_mode: unattendedApprovalMode(job.policy),
-    verifier: job.verifier === null ? null : { command: job.verifier, source: "operator" },
+    verifier: job.verifier === null ? null : { command: job.verifier, source: "operator", ...verifierState(operation) },
     budgets: { ...job.budgets },
     created_at: job.createdAt,
     started_at: job.attempts[0]?.startedAt ?? null,
@@ -132,7 +177,7 @@ export function buildJobReceipt(job: JobRecord, operation: DurableOperationState
     attempts: job.attempts.length,
     outcome: end.outcome,
     reason,
-    summary: summarize(job, operation, end, reason),
+    summary: withVerifierNote(summarize(job, operation, end, reason), job, operation, end),
     units: units.map((unit) => ({
       id: unit.id,
       status: unit.status,
@@ -145,6 +190,6 @@ export function buildJobReceipt(job: JobRecord, operation: DurableOperationState
       question: decision.question,
       decide: `nexus operation decide ${job.operationId} ${shellQuote(decision.id)} <option> --no-resume -w ${shellQuote(job.workspace)}`,
     })),
-    missed: null,
+    missed: end.missed ?? null,
   };
 }

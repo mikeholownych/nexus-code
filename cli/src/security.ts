@@ -9,6 +9,7 @@ import type { LoadedPolicy } from "./core/managed_policy_load.js";
 import { approvalHint, emitPolicyNotice, processPolicyHost } from "./core/policy_runtime.js";
 import { FILE_EDIT_TOOLS } from "./file_diff.js";
 import { linkRecord, verifyChain, type ChainLink, type ChainVerdict } from "./core/hash_chain.js";
+import { runnerRoot } from "./core/runner_store.js";
 
 export type VerificationMode = "off" | "record" | "approve" | "block";
 export type VerificationClass = "ci" | "build" | "test_config" | "verifier_script" | "test_file" | "package_scripts" | "policy";
@@ -170,6 +171,8 @@ const DEFAULT_PROTECTED_PATHS = [
   "extension_trust.json",
   // HK-1: the operator's own hooks file (~/.config/nexus/hooks.json): the agent must not write the operator's hooks.
   "nexus/hooks.json",
+  // BG-2: the operator's schedules (runner/nexus-schedules/ and its lock): the agent a schedule starts must not create or edit a schedule.
+  "nexus-schedules*",
   ".env*",
   "id_rsa*",
   "id_ed25519*",
@@ -403,7 +406,7 @@ export class SecurityManager {
     if (inspector.notice) say(inspector.notice);
     return {
       blockedCommands: [...DEFAULT_BLOCKED_COMMANDS, ...loaded.project.blockedCommandPatterns],
-      protectedPaths: [...DEFAULT_PROTECTED_PATHS, ...effective.paths.protected.values],
+      protectedPaths: [...DEFAULT_PROTECTED_PATHS, runnerRoot(), ...effective.paths.protected.values],
       allowedDomains: projectDomains ? (projectDomains.length > 0 ? [...projectDomains] : [NO_HOST]) : undefined,
       verificationPaths: {
         mode: effectiveVerificationMode(effective).value,
@@ -624,6 +627,10 @@ export class SecurityManager {
       for (const pattern of this.policy.protectedPaths || []) {
         if (absolutePatternsOnly && !path.isAbsolute(pattern)) continue;
         const patLower = pattern.toLowerCase();
+        // An absolute pattern also protects everything below it (BG-1/BG-2: the runner's state directory).
+        if (path.isAbsolute(pattern) && clean.toLowerCase().startsWith(`${patLower.replace(/\/+$/, "")}/`)) {
+          return { protected: true, reason: `Security Policy Violation: Path '${targetPath}' is inside protected directory '${pattern}' ${this.protectedPathSource(pattern)}` };
+        }
         if (patLower === ".env*" || patLower === ".env") {
           if (segments.some((seg) => seg.toLowerCase().startsWith(".env"))) {
             return {

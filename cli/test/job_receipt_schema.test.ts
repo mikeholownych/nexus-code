@@ -80,9 +80,14 @@ test("a blocked job's receipt carries the turn's reason, the question and the co
   assert.equal(receipt.attempts, 2);
   assert.equal(receipt.started_at, "2026-11-24T10:00:01.000Z");
   assert.equal(receipt.integration_branch, `nexus/op-${j.operationId}/integration`);
-  assert.deepEqual(receipt.verifier, { command: "npm test", source: "operator" });
+  assert.deepEqual(receipt.verifier, {
+    command: "npm test",
+    source: "operator",
+    status: "NOT_RUN",
+    detail: "no unit recorded a verifier run: the verifier was not run (a read-only run does not run it, or the job ended before completion was attempted)",
+  });
   assert.equal(receipt.schedule_id, null);
-  assert.equal(receipt.summary, "BLOCKED: unit 'task' BLOCKED/UNVERIFIED (NEEDS_INPUT): Allow run_command (exec)?; nothing was merged.");
+  assert.equal(receipt.summary, "BLOCKED: unit 'task' BLOCKED/UNVERIFIED (NEEDS_INPUT): Allow run_command (exec)?; nothing was merged. Verifier not run: npm test.");
   assert.deepEqual(receipt.units, [
     { id: "task", status: "BLOCKED", outcome: null, reason: "NEEDS_INPUT", blocked: { cause: "EXECUTION_FAILED", question: decision.question } },
     { id: "second", status: "WAITING_ON_DEPENDENCY", outcome: null, reason: null, blocked: null },
@@ -115,9 +120,9 @@ test("a completed job copies each unit's outcome and says nothing was merged; a 
   assert.deepEqual(validate(crashed, schema, schema), []);
   assert.deepEqual({ outcome: crashed.outcome, reason: crashed.reason, started_at: crashed.started_at, attempts: crashed.attempts, units: crashed.units, integration_branch: crashed.integration_branch },
     { outcome: "FAILED", reason: "CRASH_LIMIT", started_at: null, attempts: 0, units: [], integration_branch: null });
-  assert.equal(crashed.summary, "FAILED: the worker crashed 4 times; nothing was merged.");
+  assert.equal(crashed.summary, "FAILED: the worker crashed 4 times; nothing was merged. Verifier not run: npm test.");
   const timedOut = buildJobReceipt(job(), op, { outcome: "TIMED_OUT", reason: "DEADLINE", endedAt: ENDED });
-  assert.equal(timedOut.summary, "TIMED_OUT: DEADLINE; nothing was merged.");
+  assert.equal(timedOut.summary, "TIMED_OUT: DEADLINE; nothing was merged. Verifier not run: npm test.");
 
   for (const bad of [{ ...done, unattended: false }, { ...done, schema_version: 2 }, { ...done, outcome: "VERIFIED" }, { ...done, approval_mode: "auto" }, (({ unattended: _u, ...rest }) => rest)(done)]) {
     assert.ok(validate(bad, schema, schema).length > 0);

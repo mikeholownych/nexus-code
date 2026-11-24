@@ -14,6 +14,8 @@ import { LocalLlmClient } from "./client.js";
 import { HarnessConfig, ApprovalMode } from "./types.js";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
 import { isNexusDirPermissive } from "./doctor.js";
+import { describeSandboxPosture } from "./sandbox_profile.js";
+import { sandboxNetworkEnabled } from "./sandbox.js";
 import { surfaceFacts } from "./surface_facts.js";
 import { getGitInfo, scaffoldProjectRules, generateConventionalCommit, commitChanges, trustedGitArgs, workspaceStatus } from "./git.js";
 import { SessionManager, SessionData } from "./session.js";
@@ -391,7 +393,8 @@ export class InteractiveRepl {
 
     const facts = surfaceFacts(this.app, this.currentSessionId);
     const trusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
-    const sandboxStatus = this.config.sandbox ? (typeof this.config.sandbox === "string" ? this.config.sandbox : "on") : "off";
+    const posture = describeSandboxPosture({ sandbox: this.config.sandbox, readOnly: this.config.approvalMode === "read-only", network: sandboxNetworkEnabled(), profile: this.config.sandboxProfile, source: "managed policy" });
+    const sandboxStatus = this.config.sandboxProfile ? `${posture.profile} (${posture.engine}, network ${posture.network ? "on" : "off"})` : (this.config.sandbox ? (typeof this.config.sandbox === "string" ? this.config.sandbox : "on") : "off");
     const trustStatus = trusted ? "trusted" : "untrusted (nexus trust .)";
     console.log(pc.dim(`mode: ${facts.mode} · sandbox: ${sandboxStatus} · workspace: ${trustStatus}`));
 

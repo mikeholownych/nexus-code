@@ -27,7 +27,10 @@ import {
   type JobAttempt, type JobAttemptEndReason, type JobRecord, type JobSubmission, type RunnerInfo, type RunnerPaths, type RunnerRequest, type TerminalJobState,
   type WorkerResult,
 } from "./runner_store.js";
+import { verifierProblem } from "./verifier_check.js";
+import { ScheduleEngine, type ScheduleEngineOptions } from "./schedule_engine.js";
 import { UNATTENDED_ENV_SCRUB } from "./unattended.js";
+import { isWorkspaceListed } from "../workspace_trust.js";
 
 export const DEFAULT_MAX_JOBS = 1;
 export const MAX_MAX_JOBS = 4;
@@ -103,6 +106,9 @@ export function submissionProblem(job: JobSubmission, spec: unknown): string | u
     return error.message;
   }
   if (specDigest(spec) !== job.specSha256) return "the spec does not match its recorded digest";
+  // A request is a file a client wrote: its verifier is held to the same checks `nexus job start` and `schedule add` apply.
+  const verifier = verifierProblem(job.workspace, job.verifier);
+  if (verifier) return verifier;
   if (job.policy === "worktree-write") {
     // Every write would be denied, so the job could only ever end blocked: refuse it where the operator can see why.
     const human = humanRequirementForEffect(managedPolicy(), "write_workspace");
@@ -182,6 +188,8 @@ export interface JobRunnerOptions {
   spawnWorker?: (job: JobRecord, paths: RunnerPaths) => SpawnedWorker;
   /** Reads the job's operation for the receipt. */
   loadOperation?: (job: JobRecord) => DurableOperationState | undefined;
+  /** BG-2: the schedule engine. On by default; `false` serves jobs only; options override its clock-independent settings. */
+  schedules?: false | Partial<Pick<ScheduleEngineOptions, "scanMs" | "graceMs" | "workspaceListed" | "owner">>;
 }
 
 /** Another runner holds this state directory. */
@@ -205,6 +213,7 @@ export class JobRunner {
   /** Jobs this runner has seen ended or unreadable. */
   private readonly settled = new Set<string>();
   private wake: (() => void) | undefined;
+  private readonly scheduler: ScheduleEngine | undefined;
 
   constructor(private readonly options: JobRunnerOptions) {
     this.paths = runnerPaths(options.root);
@@ -215,6 +224,14 @@ export class JobRunner {
     this.now = options.now ?? (() => new Date());
     this.log = options.log ?? (() => {});
     this.timings = { ...DEFAULT_RUNNER_TIMINGS, ...options.timings };
+    // A schedule fires through the same acceptance as a client's `start` request: nothing a job could not be given.
+    this.scheduler = options.schedules === false ? undefined : new ScheduleEngine(this.paths, {
+      now: this.now,
+      log: this.log,
+      workspaceListed: isWorkspaceListed,
+      submit: (job, spec) => this.acceptStart(job, spec, this.now().toISOString()),
+      ...options.schedules,
+    });
   }
 
   /** Takes the runner lock, records this runner and settles every job an earlier runner left. Throws `RunnerBusyError`. */
@@ -242,6 +259,7 @@ export class JobRunner {
   /** One pass: read requests, settle workers that ended, enforce deadlines, start queued jobs. */
   tick(): void {
     this.readInbox();
+    if (!this.stopping) this.scheduler?.tick();
     let running = 0;
     const queued: JobRecord[] = [];
     for (const job of this.activeJobs()) {
@@ -736,7 +754,7 @@ export class JobRunner {
     } catch (error) {
       this.log(`job ${job.id}: its operation record could not be read for the receipt: ${error instanceof Error ? error.message : String(error)}`);
     }
-    const receipt = buildJobReceipt(closed, operation, { outcome: state, endedAt: this.now().toISOString(), ...why });
+    const receipt = buildJobReceipt(closed, operation, { outcome: state, endedAt: this.now().toISOString(), missed: this.scheduler?.missedFor(closed) ?? null, ...why });
     writePrivateJson(this.paths.receipt(job.id), receipt);
     const ended = transition(closed, state, this.now(), { outcome: { status: state, ...(receipt.reason ? { reason: receipt.reason.slice(0, 200) } : {}), receipt: "receipt.json" } });
     writeJob(this.paths, ended);
