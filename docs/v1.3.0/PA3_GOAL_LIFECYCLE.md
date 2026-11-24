@@ -62,7 +62,7 @@ scope changes unavailable in read-only mode.
   after the operator repairs the record, raises or removes the cap, or cancels. This is a safe-boundary limit: one
   already-running batch can consume more than the configured cap before the next check.
 - PA-3 stall counting is fingerprint-based at operation unit execution: consecutive failures with the same fingerprint count toward `policy.maxStallsPerFingerprint` (default 3), not raw turn count. A stall blocks the unit with `NOT_CONVERGING`. `retry` preserves the fingerprint count; `revise`, `replace`, `set_inputs`, `lift_context_budget`, and `assign` clear it. Operation schema v7 stores this policy/state; v6 records migrate by adding only the schema version, and older binaries refuse v7 records.
-- Full PA-3 acceptance qualification remains open (stale-goal pause, verifier-receipt completion, token budget, and fingerprint-stall behavior need end-to-end qualification). `/team` remains experimental until PA-1 and PA-2 are complete.
+- Deterministic PA-3 acceptance is recorded in `PA3_ACCEPTANCE.md` (stale pause, token budget, fingerprint stalls, verifier-receipt gates). Restart interrupted-effect reconciliation and live-gateway qualification remain open. `/team` leaves the experimental catalogue label after PA-1 and PA-2.
 - Restart-specific interrupted-effect reconciliation beyond stale-boot pause still requires qualification.
 - No inference-provider or homelab-ai changes are required. Provider-neutral end-to-end qualification remains separate.
 
