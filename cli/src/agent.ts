@@ -36,6 +36,7 @@ import { captureVerificationState } from "./worktrunk/verification.js";
 import { homeDir } from "./worktrunk/core.js";
 import { openRepo, currentEntry, NotARepositoryError } from "./worktrunk/repo.js";
 import { replacedWorktreeReason, verifyCheckout } from "./core/checkout_trust.js";
+import { inspectWorkspaceGitSafety, type WorkspaceGitSafetyReason } from "./core/workspace_git_safety.js";
 import { WORKTREE_BINDING_VERSION } from "./core/state.js";
 import { argsFingerprint } from "./core/operation_identity.js";
 import { isSandboxAvailable } from "./sandbox.js";
@@ -1883,13 +1884,20 @@ export class AutonomousAgent {
   }
 
   /** A bounded, content-free candidate identity for revalidating recorded repository context. */
-  public getWorkspaceContextFingerprint(): string | undefined {
+  public getWorkspaceContextFingerprintResult(): { fingerprint?: string; unavailableReason?: WorkspaceGitSafetyReason } {
+    const safety = inspectWorkspaceGitSafety(this.config.workspace);
+    if (!safety.safe) return { unavailableReason: safety.reason };
     try {
-      return computeCandidateIdentitySync(this.config.workspace, { maxEntries: 4096, maxTotalBytes: 16 * 1024 * 1024 }).candidateId;
+      return { fingerprint: computeCandidateIdentitySync(this.config.workspace, { maxEntries: 4096, maxTotalBytes: 16 * 1024 * 1024 }).candidateId };
     } catch {
       // Unknown is safer than presenting an old repository observation as current.
-      return undefined;
+      return { unavailableReason: "fingerprint_failed" };
     }
+  }
+
+  /** Backward-compatible fingerprint accessor; callers needing an explanation use the result form. */
+  public getWorkspaceContextFingerprint(): string | undefined {
+    return this.getWorkspaceContextFingerprintResult().fingerprint;
   }
 
   /** Judges, once per workspace, whether the session STARTED in a linked worktree the agent had already worked in. */

@@ -289,6 +289,20 @@ const DEFAULT_CONTEXT_BUDGET_MS = 2_000;
 const MAX_CONTEXT_BUDGET_MS = 30_000;
 const MAX_CONTEXT_ITEMS = 500;
 
+class ContextSourceReadFailure extends Error {
+  constructor(readonly safeDetail: string) { super(safeDetail); }
+}
+
+function fingerprintUnavailableDetail(reason: string | undefined): string {
+  switch (reason) {
+    case "program_settings_present": return "repository Git configuration contains program settings; fingerprinting was refused and freshness is unknown";
+    case "configuration_unrecognized": return "repository Git configuration could not be safely interpreted; fingerprinting was refused and freshness is unknown";
+    case "configuration_unavailable": return "repository Git configuration could not be inspected safely; fingerprinting was refused and freshness is unknown";
+    case "fingerprint_failed": return "workspace fingerprint computation failed; freshness is unknown";
+    default: return "workspace fingerprint API is unavailable; freshness is unknown";
+  }
+}
+
 async function context({ host, args, signal }: SlashContext): Promise<SlashOutcome> {
   const [view, ...tokens] = args.trim().split(/\s+/).filter(Boolean);
   const usage = "Usage: /context inspect [--json] [--record] [--budget-ms <1..30000>] [--max-items <1..500>] | /context maturity [--json] [--budget-ms <1..30000>] [--max-items <1..500>]";
@@ -383,9 +397,10 @@ async function context({ host, args, signal }: SlashContext): Promise<SlashOutco
         }
         recordSourceItems(name, status, durationMs, result as SourceReadResult, detail);
       }
-    } catch {
-      sources.push({ name, status: "failed", durationMs: performance.now() - started, items: [], detail: "source lookup failed; no source content was recorded" });
-      gaps.push(`${name} source lookup failed`);
+    } catch (error) {
+      const detail = error instanceof ContextSourceReadFailure ? error.safeDetail : "source lookup failed; no source content was recorded";
+      sources.push({ name, status: "failed", durationMs: performance.now() - started, items: [], detail });
+      gaps.push(`${name} ${detail}`);
     } finally {
       if (timeout) clearTimeout(timeout);
       if (abortListener) signal.removeEventListener("abort", abortListener);
@@ -411,9 +426,16 @@ async function context({ host, args, signal }: SlashContext): Promise<SlashOutco
   });
   let workspaceFingerprint: string | undefined;
   await measure("workspace_state_fingerprint", () => {
-    if (typeof agent.getWorkspaceContextFingerprint !== "function") throw new Error("workspace fingerprint API unavailable");
-    workspaceFingerprint = agent.getWorkspaceContextFingerprint();
-    if (!workspaceFingerprint) throw new Error("workspace fingerprint unavailable");
+    if (typeof agent.getWorkspaceContextFingerprintResult === "function") {
+      const result = agent.getWorkspaceContextFingerprintResult();
+      workspaceFingerprint = result.fingerprint;
+      if (!workspaceFingerprint) throw new ContextSourceReadFailure(fingerprintUnavailableDetail(result.unavailableReason));
+    } else if (typeof agent.getWorkspaceContextFingerprint === "function") {
+      workspaceFingerprint = agent.getWorkspaceContextFingerprint();
+      if (!workspaceFingerprint) throw new ContextSourceReadFailure(fingerprintUnavailableDetail(undefined));
+    } else {
+      throw new ContextSourceReadFailure(fingerprintUnavailableDetail(undefined));
+    }
     return [{
       sourceType: "workspace_state_fingerprint",
       sourceLocation: "repository:candidate-identity",

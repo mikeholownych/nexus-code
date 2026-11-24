@@ -27,6 +27,7 @@ import { replReadOnlyAllowed } from "../src/repl.js";
 import { readOnlySlashAllowed } from "../src/sidecar.js";
 import { AutonomousAgent } from "../src/agent.js";
 import { calculateContextBudget } from "../src/tokens.js";
+import { inspectWorkspaceGitSafety } from "../src/core/workspace_git_safety.js";
 
 const input = (sourceLocation: string, scope: "session" | "repository" = "session", content = "sensitive source text") => ({
   sourceType: "note", sourceLocation, scope, content, trust: "persisted_unverified" as const,
@@ -91,10 +92,21 @@ test("workspace fingerprints detect changed repository state and retain only sta
 
 test("agent workspace fingerprint is bounded by candidate limits and returns unknown on failure", () => {
   const agent: any = Object.create(AutonomousAgent.prototype);
-  Object.assign(agent, { config: { workspace: path.resolve(process.cwd(), "..") } });
-  assert.match(agent.getWorkspaceContextFingerprint(), /^[a-f0-9]{64}$/);
-  agent.config.workspace = path.join(os.tmpdir(), `missing-context-workspace-${process.pid}`);
-  assert.equal(agent.getWorkspaceContextFingerprint(), undefined);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-context-bounded-fingerprint-"));
+  try {
+    execFileSync("git", ["init", "-q", root]);
+    execFileSync("git", ["-C", root, "config", "user.email", "context-test@example.invalid"]);
+    execFileSync("git", ["-C", root, "config", "user.name", "Context Test"]);
+    fs.writeFileSync(path.join(root, "README.md"), "bounded fixture\n");
+    execFileSync("git", ["-C", root, "add", "README.md"]);
+    execFileSync("git", ["-C", root, "commit", "-q", "-m", "baseline"]);
+    Object.assign(agent, { config: { workspace: root } });
+    assert.match(agent.getWorkspaceContextFingerprint(), /^[a-f0-9]{64}$/);
+    agent.config.workspace = path.join(os.tmpdir(), `missing-context-workspace-${process.pid}`);
+    assert.equal(agent.getWorkspaceContextFingerprint(), undefined);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("workspace candidate fingerprint changes when tracked repository content changes", () => {
@@ -114,6 +126,87 @@ test("workspace candidate fingerprint changes when tracked repository content ch
     fs.writeFileSync(path.join(root, "README.md"), "after\n");
     assert.notEqual(agent.getWorkspaceContextFingerprint(), before);
   } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("context fingerprint refuses a configured clean filter without running it", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-context-clean-filter-"));
+  const marker = path.join(root, "filter-ran");
+  try {
+    execFileSync("git", ["init", "-q", root]);
+    execFileSync("git", ["-C", root, "config", "user.email", "context-test@example.invalid"]);
+    execFileSync("git", ["-C", root, "config", "user.name", "Context Test"]);
+    fs.writeFileSync(path.join(root, ".gitattributes"), "tracked.txt filter=hostile\n");
+    fs.writeFileSync(path.join(root, "tracked.txt"), "baseline\n");
+    execFileSync("git", ["-C", root, "add", ".gitattributes", "tracked.txt"]);
+    execFileSync("git", ["-C", root, "commit", "-q", "-m", "baseline"]);
+    fs.writeFileSync(path.join(root, "tracked.txt"), "changed\n");
+    execFileSync("git", ["-C", root, "config", "filter.hostile.clean", `touch '${marker}'`]);
+
+    assert.deepEqual(inspectWorkspaceGitSafety(root), { safe: false, reason: "program_settings_present" });
+    const agent: any = Object.create(AutonomousAgent.prototype);
+    Object.assign(agent, { config: { workspace: root } });
+    assert.deepEqual(agent.getWorkspaceContextFingerprintResult(), { unavailableReason: "program_settings_present" });
+    assert.equal(fs.existsSync(marker), false, "fingerprinting must not invoke the configured clean filter");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("context fingerprint refuses fsmonitor and included Git configuration before invoking commands", () => {
+  for (const unsafeSetting of ["fsmonitor", "include"]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), `nexus-context-${unsafeSetting}-`));
+    const marker = path.join(root, "program-ran");
+    try {
+      execFileSync("git", ["init", "-q", root]);
+      const config = path.join(root, ".git", "config");
+      if (unsafeSetting === "fsmonitor") {
+        fs.appendFileSync(config, `\n[core]\n\tfsmonitor = !touch '${marker}'\n`);
+      } else {
+        const included = path.join(root, "included-git-config");
+        fs.writeFileSync(included, `[core]\n\tfsmonitor = !touch '${marker}'\n`);
+        fs.appendFileSync(config, `\n[include]\n\tpath = ${included}\n`);
+      }
+
+      const agent: any = Object.create(AutonomousAgent.prototype);
+      Object.assign(agent, { config: { workspace: root } });
+      const result = agent.getWorkspaceContextFingerprintResult();
+      assert.equal(result.fingerprint, undefined);
+      assert.ok(result.unavailableReason === "program_settings_present");
+      assert.equal(fs.existsSync(marker), false, `${unsafeSetting} configuration must not execute`);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("context fingerprint refuses a global clean filter used by workspace attributes", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-context-global-filter-"));
+  const marker = path.join(root, "global-filter-ran");
+  const globalConfig = path.join(root, "global-git-config");
+  const priorGlobal = process.env.GIT_CONFIG_GLOBAL;
+  const priorNoSystem = process.env.GIT_CONFIG_NOSYSTEM;
+  try {
+    execFileSync("git", ["init", "-q", root]);
+    execFileSync("git", ["-C", root, "config", "user.email", "context-test@example.invalid"]);
+    execFileSync("git", ["-C", root, "config", "user.name", "Context Test"]);
+    fs.writeFileSync(path.join(root, ".gitattributes"), "tracked.txt filter=hostile\n");
+    fs.writeFileSync(path.join(root, "tracked.txt"), "baseline\n");
+    execFileSync("git", ["-C", root, "add", ".gitattributes", "tracked.txt"]);
+    execFileSync("git", ["-C", root, "commit", "-q", "-m", "baseline"]);
+    fs.writeFileSync(path.join(root, "tracked.txt"), "changed\n");
+    fs.writeFileSync(globalConfig, `[filter "hostile"]\n\tclean = touch '${marker}'\n`);
+    process.env.GIT_CONFIG_GLOBAL = globalConfig;
+    process.env.GIT_CONFIG_NOSYSTEM = "1";
+
+    const agent: any = Object.create(AutonomousAgent.prototype);
+    Object.assign(agent, { config: { workspace: root } });
+    assert.deepEqual(agent.getWorkspaceContextFingerprintResult(), { unavailableReason: "program_settings_present" });
+    assert.equal(fs.existsSync(marker), false, "a repository attribute must not activate a configured global filter");
+  } finally {
+    if (priorGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL; else process.env.GIT_CONFIG_GLOBAL = priorGlobal;
+    if (priorNoSystem === undefined) delete process.env.GIT_CONFIG_NOSYSTEM; else process.env.GIT_CONFIG_NOSYSTEM = priorNoSystem;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
@@ -562,6 +655,38 @@ test("context inspection and maturity execute without provider calls and emit pa
   assert.equal(unavailableSnapshot.workspaceState.comparison, "unavailable");
   assert.equal(unavailableSnapshot.sourceMeasurements.find((source: any) => source.source === "workspace_state_fingerprint").status, "failed");
   assert.ok(unavailableSnapshot.coverageGaps.some((gap: string) => gap.includes("could not be fingerprinted")));
+
+  const unsafeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-context-inspect-unsafe-git-"));
+  const marker = path.join(unsafeRoot, "filter-ran");
+  try {
+    execFileSync("git", ["init", "-q", unsafeRoot]);
+    execFileSync("git", ["-C", unsafeRoot, "config", "user.email", "context-test@example.invalid"]);
+    execFileSync("git", ["-C", unsafeRoot, "config", "user.name", "Context Test"]);
+    fs.writeFileSync(path.join(unsafeRoot, ".gitattributes"), "tracked.txt filter=hostile\n");
+    fs.writeFileSync(path.join(unsafeRoot, "tracked.txt"), "baseline\n");
+    execFileSync("git", ["-C", unsafeRoot, "add", ".gitattributes", "tracked.txt"]);
+    execFileSync("git", ["-C", unsafeRoot, "commit", "-q", "-m", "baseline"]);
+    fs.writeFileSync(path.join(unsafeRoot, "tracked.txt"), "changed\n");
+    execFileSync("git", ["-C", unsafeRoot, "config", "filter.hostile.clean", `touch '${marker}'`]);
+    const unsafeAgent = Object.assign(Object.create(AutonomousAgent.prototype), agent, { config: { workspace: unsafeRoot } });
+    const unsafeWorkspaceHost = {
+      ...host,
+      app: {
+        ...host.app,
+        getAgent: () => unsafeAgent,
+        getConfig: () => ({ workspace: unsafeRoot }),
+      },
+    };
+    const unsafeWorkspace = await routeSlash(unsafeWorkspaceHost, "context", "inspect --json", new AbortController().signal);
+    const unsafeWorkspaceSnapshot = JSON.parse(unsafeWorkspace.output);
+    assert.equal(unsafeWorkspaceSnapshot.workspaceState.comparison, "unavailable");
+    const unsafeMeasurement = unsafeWorkspaceSnapshot.sourceMeasurements.find((source: any) => source.source === "workspace_state_fingerprint");
+    assert.equal(unsafeMeasurement.status, "failed");
+    assert.match(unsafeMeasurement.detail, /program settings; fingerprinting was refused and freshness is unknown/);
+    assert.equal(fs.existsSync(marker), false, "/context inspect must not execute the configured filter");
+  } finally {
+    fs.rmSync(unsafeRoot, { recursive: true, force: true });
+  }
 });
 
 test("session save, resume, compaction, and export retain source references without promoting memory", () => {
