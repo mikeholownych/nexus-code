@@ -66,6 +66,14 @@ const metadata = JSON.parse(fs.readFileSync(process.argv[4], 'utf8'));
 if (metadata.compatibility.stateSchemaVersion !== CURRENT_STATE_SCHEMA_VERSION) throw new Error('packaged state schema disagrees with compatibility metadata');
 EOF
 "$TMP/nexus/lib/core/harness-core" --help >/dev/null
+
+# PF-4: the packaged library entry imports with no output, reports its API version, and ships its declarations
+# beside the sidecar it spawns.
+LIB_OUT=$(node --input-type=module -e 'const lib = await import(process.argv[1]); if (lib.NEXUS_LIB_API_VERSION !== 1 || typeof lib.spawnSidecar !== "function") process.exit(1);' "$TMP/nexus/lib/cli/dist/lib.js" 2>&1) \
+  || { printf '%s\n' "$LIB_OUT" >&2; echo "packaged library entry failed to import" >&2; exit 1; }
+[ -z "$LIB_OUT" ] || { printf '%s\n' "$LIB_OUT" >&2; echo "packaged library entry wrote output on import" >&2; exit 1; }
+test -s "$TMP/nexus/lib/cli/dist/types/lib.d.ts"
+test -s "$TMP/nexus/lib/cli/dist/sidecar.js"
 cat > "$TMP/snapshot.json" <<'EOF'
 {"model":"smoke","workspace":"/tmp","task_id":"smoke","objective":"package smoke","activity":[],"plan":[],"validation":null,"context":"0 messages","status":"IDLE","theme":"default"}
 EOF
