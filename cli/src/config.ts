@@ -12,11 +12,12 @@ import { providerApiKey } from "./credentials.js";
 import { validateBranchName } from "./worktrunk/paths.js";
 import { validateBaseUrl } from "./provider_safety.js";
 import { DEFAULT_OPERATION_POLICY } from "./core/operation.js";
-import { setSandboxNetworkFlag } from "./sandbox_network.js";
+import { setSandboxNetworkFlag, setSandboxNetworkProfile } from "./sandbox_network.js";
 import { clampApprovalRequest, clampSandbox, clampSandboxNetwork, type EffectivePolicy } from "./core/managed_policy.js";
 import { managedPolicy } from "./core/policy_runtime.js";
 import { readSmallFile } from "./core/checkout_trust.js";
 import { resolveRepeatedCallSettings } from "./core/repeated_calls.js";
+import { expandSandboxProfile } from "./sandbox_profile.js";
 import { ContinuationBudget, DEFAULT_CONTINUATION, DEFAULT_CONVERGENCE_ATTEMPTS, DEFAULT_MAX_INFERENCE_SUBMISSIONS, DEFAULT_MAX_TOOL_INVOCATIONS, MAX_CONTINUATION_MINUTES, MAX_CONTINUATION_STEPS, MAX_INFERENCE_SUBMISSIONS, MAX_TOOL_INVOCATIONS, HarnessConfig, ApprovalMode } from "./types.js";
 
 /** A project `.env` larger than this is ignored (it is repository-controlled). */
@@ -455,7 +456,7 @@ export function buildConfigWithPolicy(options: any, policy: EffectivePolicy): Ha
   const temperature = options.temperature ? parseFloat(options.temperature) : 0.2;
   const shell = options.shell || operatorSetting("LOCAL_HARNESS_SHELL") || process.env.LOCAL_HARNESS_SHELL || "bash";
   const dryRun = Boolean(options.dryRun);
-  const readOnly = Boolean(options.readOnly);
+  let readOnly = Boolean(options.readOnly);
   const yes = Boolean(options.yes);
   const approve = Boolean(options.approve);
   const modeOption = options.mode ? String(options.mode).trim().toLowerCase() : undefined;
@@ -498,25 +499,41 @@ export function buildConfigWithPolicy(options: any, policy: EffectivePolicy): Ha
   const approval = clampApprovalRequest(policy, { mode: approvalMode, modeOrigin, yes, ...(fullAccess && !yes ? { fullAccessOrigin } : {}) });
   if (!approval.allowed) throw new Error(approval.message);
 
-  let sandbox = options.sandbox ? (typeof options.sandbox === "string" ? options.sandbox : true) : undefined;
+  // SB-1: expand a named permission profile into the existing sandbox/read-only flags before managed-policy clamps.
+  const networkEnv = /^(1|true|yes|on)$/i.test((operatorSetting("NEXUS_SANDBOX_NETWORK") ?? "").trim());
+  const expanded = expandSandboxProfile(options, networkEnv);
+  for (const notice of expanded.notices) warnOnce(notice);
+  if (expanded.profile === ":read-only") {
+    // :read-only is the read-only profile; it wins like --read-only and must not be weakened by --yes/--approve.
+    readOnly = true;
+    approvalMode = "read-only";
+    fullAccess = false;
+  }
+  let sandbox = expanded.options.sandbox ? (typeof expanded.options.sandbox === "string" ? expanded.options.sandbox : true) : undefined;
   // GV-1: under `sandbox.required` an explicit opt-out is refused and an unset sandbox becomes `auto`, which the tool
   // executor treats as a configured sandbox: a command is refused when no sandbox engine can run it.
   const sandboxAsked = typeof sandbox === "string" ? (sandbox.trim().toLowerCase() === "none" ? "none" : sandbox) : sandbox ? "auto" : undefined;
-  const sandboxDecision = clampSandbox(policy, { mode: sandboxAsked, origin: `--sandbox ${String(sandbox)}` });
+  const sandboxOrigin = expanded.profile ? `--sandbox ${String(options.sandbox)}` : `--sandbox ${String(sandbox)}`;
+  const sandboxDecision = clampSandbox(policy, { mode: sandboxAsked, origin: sandboxOrigin });
   if (!sandboxDecision.allowed) throw new Error(sandboxDecision.message);
   if (sandboxDecision.notice) warnOnce(sandboxDecision.notice);
   if (sandbox === undefined && sandboxDecision.value.mode !== undefined) sandbox = sandboxDecision.value.mode;
-  // GV-1: `sandbox.forbid_network` refuses both ways of asking for network in the sandbox. The variable is read as
-  // sandbox.ts reads it (`sandboxNetworkEnabled`).
-  for (const [asked, origin] of [[Boolean(options.sandboxNetwork), "--sandbox-network"], [/^(1|true|yes|on)$/i.test((operatorSetting("NEXUS_SANDBOX_NETWORK") ?? "").trim()), "NEXUS_SANDBOX_NETWORK"]] as const) {
+  // A named profile is an explicit effective setting: :network asks for network, while :workspace and :read-only
+  // override an environment opt-in. Without a profile preserve the legacy flag/environment behavior.
+  const profileNetwork = expanded.profile === undefined ? undefined : expanded.profile === ":network";
+  const networkRequests = profileNetwork === undefined
+    ? [[Boolean(expanded.options.sandboxNetwork), "--sandbox-network"], [networkEnv, "NEXUS_SANDBOX_NETWORK"]] as const
+    : profileNetwork ? [[true, "--sandbox :network"]] as const : [];
+  // GV-1: managed policy refuses every effective request for network access.
+  for (const [asked, origin] of networkRequests) {
     const network = clampSandboxNetwork(policy, asked, origin);
     if (!network.allowed) throw new Error(network.message);
   }
-  // Network inside --sandbox is an explicit operator choice; --yes never implies it.
-  if (options.sandboxNetwork) {
-    if (sandbox) setSandboxNetworkFlag(true);
-    else warnOnce("--sandbox-network has no effect without --sandbox.");
-  }
+  // Network inside --sandbox is an explicit operator choice; --yes never implies it. Reset module state on every
+  // configuration build so repeated config construction cannot retain an earlier run's choice.
+  setSandboxNetworkFlag(Boolean(expanded.options.sandboxNetwork));
+  setSandboxNetworkProfile(profileNetwork);
+  if (expanded.options.sandboxNetwork && !sandbox) warnOnce("--sandbox-network has no effect without --sandbox.");
   if (provider && options.fallback) warnOnce(`--fallback is ignored for provider '${provider}': a provider connection is pinned to its own endpoint.`);
   const fallbackEndpoints = options.fallback && !provider ? options.fallback.split(",").map((s: string) => s.trim()) : undefined;
   const contextLimit = options.contextLimit ? parseInt(options.contextLimit, 10) : (effectiveSetting("NEXUS_CONTEXT_LIMIT") ? parseInt(effectiveSetting("NEXUS_CONTEXT_LIMIT")!, 10) : undefined);
@@ -584,6 +601,7 @@ export function buildConfigWithPolicy(options: any, policy: EffectivePolicy): Ha
     yes,
     fullAccess,
     sandbox,
+    ...(expanded.profile ? { sandboxProfile: expanded.profile } : {}),
     fallbackEndpoints,
     contextLimit,
     ...(strictTokenCount ? { strictTokenCount } : {}),
