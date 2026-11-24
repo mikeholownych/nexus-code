@@ -129,3 +129,19 @@ export default {
   ]
 };
 ```
+
+## 2.3 Workspace plugin trust (HK-3 / D18)
+
+Global plugins (`~/.nexus/plugins/`, `~/.config/nexus/plugins/`) are operator-managed and load when present.
+
+Workspace plugins (`.nexus/plugins/`, `plugins/`) are repository content. They require **per-plugin trust** keyed by the SHA-256 of the exact plugin bytes. Trusting a workspace (`nexus trust .`) is necessary but no longer sufficient to execute workspace plugin code.
+
+```bash
+nexus plugins list                        # loaded plugins + unapproved workspace plugins
+nexus plugins trust .nexus/plugins/p.js   # approve exact bytes for this workspace
+nexus plugins revoke .nexus/plugins/p.js  # withdraw approval
+```
+
+A changed workspace plugin file needs a new approval. Managed policy may refuse plugins.
+
+**Migration note (HK-3/D18):** in-process workspace JS plugins remain supported for now but are deprecated as a trust boundary. They run with full process authority. Prefer operator-managed/global plugins or future subprocess/manifest plugin packaging.
