@@ -286,6 +286,7 @@ const CONFIG_KEYS: Array<{ key: string; flag?: string; field: keyof HarnessConfi
   { key: "NEXUS_MAX_TOTAL_STEPS", flag: "maxTotalSteps", field: (c) => (c.continuation ? (Number.isFinite(c.continuation.maxTotalSteps) ? String(c.continuation.maxTotalSteps) : "none") : "continuation off"), fallback: "none" },
   { key: "NEXUS_MAX_INFERENCE_SUBMISSIONS", field: (c) => String(c.maxInferenceSubmissions ?? DEFAULT_MAX_INFERENCE_SUBMISSIONS), fallback: String(DEFAULT_MAX_INFERENCE_SUBMISSIONS) },
   { key: "NEXUS_MAX_TURN_MINUTES", flag: "maxTurnMinutes", field: (c) => (c.continuation ? (Number.isFinite(c.continuation.maxTurnMinutes) ? String(c.continuation.maxTurnMinutes) : "none") : "continuation off"), fallback: "none" },
+  { key: "NEXUS_MAX_TASK_MINUTES", flag: "maxTaskMinutes", field: (c) => (c.continuation ? String(c.continuation.maxTaskMinutes) : "continuation off"), fallback: "4320" },
   { key: "NEXUS_STAGNATION_STEPS", flag: "stagnationSteps", field: (c) => (c.continuation ? String(c.continuation.stagnationSteps) : "continuation off"), fallback: "12" },
   { key: "NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS", field: (c) => String(c.continuation?.verifierConvergenceAttempts ?? DEFAULT_CONVERGENCE_ATTEMPTS), fallback: "3" },
   { key: "NEXUS_REPEATED_CALL_SOFT", field: (c) => String(c.repeatedCalls?.soft ?? DEFAULT_REPEATED_CALL_SOFT), fallback: "3" },

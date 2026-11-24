@@ -175,6 +175,8 @@ export interface ContinuationBudget {
   maxToolInvocations?: number;
   /** Maximum inference requests for one objective across turns and resumes. */
   maxInferenceSubmissions?: number;
+  /** Maximum cumulative execution time for one durable objective across turns and resumes. */
+  maxTaskMinutes: number;
   /** Maximum wall-clock minutes for one invocation (TIME_BUDGET_EXHAUSTED). */
   maxTurnMinutes: number;
   /**
@@ -200,6 +202,7 @@ export const DEFAULT_MAX_TOOL_INVOCATIONS = 1_000;
 export const MAX_TOOL_INVOCATIONS = 10_000;
 export const DEFAULT_MAX_INFERENCE_SUBMISSIONS = 1_000;
 export const MAX_INFERENCE_SUBMISSIONS = 10_000;
+export const DEFAULT_MAX_TASK_MINUTES = 4_320;
 
 export function assertValidContinuationBudget(budget: ContinuationBudget | undefined): void {
   if (!budget) return;
@@ -215,6 +218,9 @@ export function assertValidContinuationBudget(budget: ContinuationBudget | undef
   if (budget.maxInferenceSubmissions !== undefined && (!Number.isSafeInteger(budget.maxInferenceSubmissions) || budget.maxInferenceSubmissions < 1 || budget.maxInferenceSubmissions > MAX_INFERENCE_SUBMISSIONS)) {
     throw new Error(`Invalid inference submission budget: expected an integer from 1 to ${MAX_INFERENCE_SUBMISSIONS}.`);
   }
+  if (!Number.isSafeInteger(budget.maxTaskMinutes) || budget.maxTaskMinutes < 1 || budget.maxTaskMinutes > MAX_CONTINUATION_MINUTES) {
+    throw new Error(`Invalid task time budget: expected an integer from 1 to ${MAX_CONTINUATION_MINUTES} minutes.`);
+  }
 }
 
 /** Failed verifier attempts on changing candidates that show no convergence before the turn stops (see ContinuationBudget). */
@@ -224,6 +230,7 @@ export const DEFAULT_CONTINUATION: ContinuationBudget = {
   maxTotalSteps: 500,
   maxToolInvocations: DEFAULT_MAX_TOOL_INVOCATIONS,
   maxInferenceSubmissions: DEFAULT_MAX_INFERENCE_SUBMISSIONS,
+  maxTaskMinutes: DEFAULT_MAX_TASK_MINUTES,
   maxTurnMinutes: 480,
   stagnationSteps: 12,
   maxRecoveries: 2,

@@ -193,6 +193,11 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
   }
   maxInferenceSubmissions = savedInferenceLimit === 0 ? configuredInferenceLimit : Math.min(savedInferenceLimit, configuredInferenceLimit);
   tracker.data.maxInferenceSubmissions = maxInferenceSubmissions;
+  const taskElapsedRemainingMs = budget
+    ? tracker.beginTaskElapsedBudget(budget.maxTaskMinutes * 60_000, Date.now(), this.objective?.startedAt)
+    : undefined;
+  const taskElapsedHistoryComplete = tracker.data.taskElapsedHistoryComplete;
+  const taskElapsedCheckpointFailed = Boolean(this.objective && this.durable && !this.persistProgress({ messages: true }));
 
   try {
     if (this.flightRecorder) {
@@ -251,7 +256,9 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
     let inferenceFailure: InferenceFailure | null = null;
     let interruption: InterruptionRecord | null = null;
     let undispatched = 0;
-    let persistenceFailure: string | undefined;
+    let persistenceFailure: string | undefined = taskElapsedCheckpointFailed
+      ? "Task elapsed-time budget could not be saved before execution; no model or tool action was started."
+      : undefined;
 
     const reserveToolInvocations = (requested: number): { admitted: number; exhausted: boolean } => {
       const admitted = tracker.admitToolInvocations(requested, maxToolInvocations);
@@ -283,13 +290,19 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
       content: `Not executed: ${stopDetail ?? persistenceFailure ?? "tool invocation budget unavailable"}.`,
     });
 
-    let stopReason: TurnReason | undefined;
+    let stopReason: TurnReason | undefined = taskElapsedRemainingMs === 0 && !persistenceFailure ? "TIME_BUDGET_EXHAUSTED" : undefined;
     let stopDetail: string | undefined;
     let timeBudgetExpired = false;
+    const taskTimeDeadline = taskElapsedRemainingMs !== undefined && budget !== undefined && taskElapsedRemainingMs <= budget.maxTurnMinutes * 60_000;
+    if (stopReason === "TIME_BUDGET_EXHAUSTED") {
+      stopDetail = `objective elapsed-time limit ${budget!.maxTaskMinutes} min exhausted; elapsed history ${taskElapsedHistoryComplete ? "is complete" : "was conservatively estimated from the objective start time"}`;
+    }
     const markInterrupted = (phase: InterruptionRecord["phase"], extra: Partial<InterruptionRecord> = {}) => {
       if (timeBudgetExpired) {
         stopReason = "TIME_BUDGET_EXHAUSTED";
-        stopDetail = `operator time limit ${budget!.maxTurnMinutes} min`;
+        stopDetail = taskTimeDeadline
+          ? `objective elapsed-time limit ${budget!.maxTaskMinutes} min exhausted; elapsed history ${taskElapsedHistoryComplete ? "is complete" : "was conservatively estimated from the objective start time"}`
+          : `operator time limit ${budget!.maxTurnMinutes} min`;
         interruption = null;
         return;
       }
@@ -310,10 +323,14 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
     // Continuation: `maxSteps` is a segment, a durable checkpoint. The total-step budget is objective-scoped and
     // survives resumes; the active invocation also has a finite wall-clock limit. Without continuation
     // (`--no-continuation`), the first segment boundary ends the turn (LIMIT_REACHED, legacy).
-    const turnDeadline = budget && Number.isFinite(budget.maxTurnMinutes) ? Date.now() + budget.maxTurnMinutes * 60_000 : Number.POSITIVE_INFINITY;
-    if (budget && Number.isFinite(turnDeadline)) {
+    const turnStartedAt = Date.now();
+    const activeTurnLimitMs = budget
+      ? Math.min(budget.maxTurnMinutes * 60_000, taskElapsedRemainingMs ?? Number.POSITIVE_INFINITY)
+      : Number.POSITIVE_INFINITY;
+    const turnDeadline = Number.isFinite(activeTurnLimitMs) ? turnStartedAt + activeTurnLimitMs : Number.POSITIVE_INFINITY;
+    if (budget && activeTurnLimitMs > 0 && Number.isFinite(turnDeadline)) {
       deadlineTimer = setTimeout(() => {
-        if (this.requestCancel("time budget")) timeBudgetExpired = true;
+        if (this.requestCancel(taskTimeDeadline ? "task time budget" : "time budget")) timeBudgetExpired = true;
       }, Math.max(0, turnDeadline - Date.now()));
     }
     let completionNudges = 0;
@@ -360,7 +377,9 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
       }
       if (Date.now() > turnDeadline) {
         stopReason = "TIME_BUDGET_EXHAUSTED";
-        stopDetail = `operator time limit ${budget!.maxTurnMinutes} min`;
+        stopDetail = taskTimeDeadline
+          ? `objective elapsed-time limit ${budget!.maxTaskMinutes} min exhausted; elapsed history ${taskElapsedHistoryComplete ? "is complete" : "was conservatively estimated from the objective start time"}`
+          : `operator time limit ${budget!.maxTurnMinutes} min`;
         break;
       }
       if (budget && tracker.data.stepsWithoutProgress >= budget.stagnationSteps) {
@@ -1133,17 +1152,29 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
 
       endStep();
     }
-    if (deadlineTimer) clearTimeout(deadlineTimer);
     turn.closing = true;
     this.closeSteeringConflicts();
     // Queued /compact: run now that the last step has settled, or cancelled with the turn.
     if (this.compactionQueue.length) {
       try {
-        await this.drainCompactionQueue(currentStep, undefined, interruption ? "the turn was cancelled" : persistenceFailure ? "the turn stopped on a persistence failure" : undefined, true);
+        const taskBudgetReason = budget && tracker.remainingTaskElapsedBudget(Date.now()) === 0 ? "the objective elapsed-time budget is exhausted" : undefined;
+        await this.drainCompactionQueue(
+          currentStep,
+          signal,
+          interruption ? "the turn was cancelled" : persistenceFailure ? "the turn stopped on a persistence failure" : taskBudgetReason,
+          true,
+        );
       } catch (err) {
         if (!(err instanceof CompactionCommitError)) throw err;
         persistenceFailure ??= err.outcome.message;
       }
+    }
+    if (deadlineTimer) clearTimeout(deadlineTimer);
+    if (timeBudgetExpired && modelStop === "NONE") {
+      stopReason = "TIME_BUDGET_EXHAUSTED";
+      stopDetail = taskTimeDeadline
+        ? `objective elapsed-time limit ${budget!.maxTaskMinutes} min exhausted; elapsed history ${taskElapsedHistoryComplete ? "is complete" : "was conservatively estimated from the objective start time"}`
+        : `operator time limit ${budget!.maxTurnMinutes} min`;
     }
     if (this.hasQueuedSteering()) {
       this.cancelQueuedSteering(
@@ -1157,6 +1188,7 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
       this.knowledge.autoExtract(promptText, "");
     } catch {}
 
+    tracker.finishTaskElapsedBudget(Date.now());
     const limitReached = !interruption && !inferenceFailure && !capacityBlock && !persistenceFailure && modelStop === "NONE" && stopReason !== undefined;
     const resultInput = {
       persistenceFailure,
@@ -1185,6 +1217,9 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
               inferenceSubmissions: tracker.data.inferenceSubmissions,
               maxInferenceSubmissions,
               inferenceSubmissionHistoryComplete: tracker.data.inferenceSubmissionHistoryComplete,
+              taskElapsedMs: tracker.data.taskElapsedMs,
+              maxTaskElapsedMs: tracker.data.maxTaskElapsedMs,
+              taskElapsedHistoryComplete: tracker.data.taskElapsedHistoryComplete,
               ...(tracker.loops().length ? { repeated: tracker.loops().slice(0, 5).map((r) => ({ action: r.action, count: r.count, firstStep: r.firstStep, lastStep: r.lastStep })) } : {}),
               ...(this.stateIdentityUncertainty ? { stateUncertainty: this.stateIdentityUncertainty } : {}),
             },
@@ -1222,6 +1257,7 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
     return result;
   } catch (err: any) {
     if (deadlineTimer) clearTimeout(deadlineTimer);
+    tracker.finishTaskElapsedBudget(Date.now());
     turn.closing = true;
     this.closeSteeringConflicts();
     if (this.compactionQueue.length) {
@@ -1255,6 +1291,9 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
               stopReason: "UNHANDLED_ERROR",
               stepsWithoutProgress: tracker.data.stepsWithoutProgress,
               cumulativeSteps: tracker.data.cumulativeSteps,
+              taskElapsedMs: tracker.data.taskElapsedMs,
+              maxTaskElapsedMs: tracker.data.maxTaskElapsedMs,
+              taskElapsedHistoryComplete: tracker.data.taskElapsedHistoryComplete,
               ...(tracker.loops().length ? { repeated: tracker.loops().slice(0, 5).map((r) => ({ action: r.action, count: r.count, firstStep: r.firstStep, lastStep: r.lastStep })) } : {}),
               ...(this.stateIdentityUncertainty ? { stateUncertainty: this.stateIdentityUncertainty } : {}),
             },
