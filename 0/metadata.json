@@ -1,0 +1,44 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M86JA3R34DTJPDDHFVNH611D",
+  "session_id": "01a1f54f-2cb2-7201-ad27-acf2d9bbd90e",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-24T10:42:21.923651739Z",
+  "branch": "codex/context-maturity-v130",
+  "checkpoints_count": 6,
+  "save_step_count": 1,
+  "files_touched": [
+    "docs/research/context-engineering/CONTEXT-MATURITY-SYSTEM.md",
+    "docs/v1.3.0/PLAN.md"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6-luna",
+  "turn_id": "5724049b7038",
+  "checkpoint_transcript_start": 113208,
+  "transcript_lines_at_start": 113208,
+  "compact_transcript_start": 16648,
+  "token_usage": {
+    "input_tokens": 50026,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 8883072,
+    "output_tokens": 12182,
+    "api_call_count": 60
+  },
+  "redaction": {
+    "replacements": 2768,
+    "layers": {
+      "betterleaks": 888,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 140,
+      "credentialed_uri": 126,
+      "entropy": 2052,
+      "key_context": 0,
+      "provider_token": 25,
+      "shell_stdin": 0
+    }
+  },
+  "session_metrics": {
+    "turn_count": 58
+  }
+}
