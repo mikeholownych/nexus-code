@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_019D4UtWReAoNFvbA5Xhe2hN",
+  "agent_id": "a6eab58ec58e56906",
+  "subagent_type": "general-purpose",
+  "task_description": "MT-2 slice 1 characterization tests",
+  "token_usage": {
+    "input_tokens": 92,
+    "cache_creation_tokens": 259129,
+    "cache_read_tokens": 8917817,
+    "output_tokens": 74421,
+    "api_call_count": 46
+  },
+  "started_at": "2026-11-24T15:06:43.601754781Z",
+  "completed_at": "2026-11-24T15:26:19.797359907Z"
+}
