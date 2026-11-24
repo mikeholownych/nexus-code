@@ -625,7 +625,8 @@ test("a repository whose own Git configuration names a program is not hashed: th
     ["a filter defined in an included file", (workspace, command) => {
       fs.writeFileSync(path.join(workspace, ".gitattributes"), "* filter=planted\n");
       const included = path.join(workspace, ".git", "planted.inc");
-      fs.writeFileSync(included, `[filter "planted"]\n\tclean = ${command}\n`);
+      // Quoted: an unquoted `;` starts a comment in a Git configuration file and would cut the command short.
+      fs.writeFileSync(included, `[filter "planted"]\n\tclean = "${command}"\n`);
       git(workspace, "config", "include.path", included);
     }],
     ["a file-system monitor", (workspace, command) => git(workspace, "config", "core.fsmonitor", command)],
