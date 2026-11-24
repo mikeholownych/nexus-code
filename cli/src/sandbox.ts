@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { buildCommandEnvironment } from "./command_env.js";
 import { operatorSetting } from "./client.js";
-import { sandboxNetworkFlagSet, setSandboxNetworkFlag } from "./sandbox_network.js";
+import { sandboxNetworkFlagSet, sandboxNetworkProfileValue, setSandboxNetworkFlag } from "./sandbox_network.js";
 
 export type SandboxMode = "auto" | "bwrap" | "docker" | "none";
 
@@ -218,6 +218,8 @@ export function sandboxWorkspaceOverlays(workspace: string, env: NodeJS.ProcessE
 export { setSandboxNetworkFlag };
 /** Whether write-mode sandboxed commands may use the network: only on an explicit operator opt-in. */
 export function sandboxNetworkEnabled(): boolean {
+  const profile = sandboxNetworkProfileValue();
+  if (profile !== undefined) return profile;
   if (sandboxNetworkFlagSet()) return true;
   return /^(1|true|yes|on)$/i.test((operatorSetting(SANDBOX_NETWORK_SETTING) ?? "").trim());
 }
