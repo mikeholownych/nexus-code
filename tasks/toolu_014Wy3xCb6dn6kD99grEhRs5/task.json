@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_014Wy3xCb6dn6kD99grEhRs5",
+  "agent_id": "a6ad467289d879869",
+  "subagent_type": "reviewer",
+  "task_description": "Security review PR #797 PF-3",
+  "token_usage": {
+    "input_tokens": 88,
+    "cache_creation_tokens": 114219,
+    "cache_read_tokens": 3117391,
+    "output_tokens": 42165,
+    "api_call_count": 44
+  },
+  "started_at": "2026-11-24T20:18:18.985653361Z",
+  "completed_at": "2026-11-24T20:44:37.7989096Z"
+}

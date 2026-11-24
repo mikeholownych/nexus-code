@@ -1,0 +1,65 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M87NCK8G22NWDRK82TN9Z1YG",
+  "strategy": "manual-commit",
+  "branch": "v1/bg2-schedules",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "CHANGELOG.md",
+    "cli/scripts/gen_schedule_schema.mjs",
+    "cli/test/helpers/schedule_fixture.ts",
+    "cli/test/schedule_approval_denied.test.ts",
+    "cli/test/schedule_examples.test.ts",
+    "cli/test/schedule_failing_verifier.test.ts",
+    "cli/test/schedule_hostile.test.ts",
+    "cli/test/schedule_missed.test.ts",
+    "cli/test/schedule_schema.test.ts",
+    "cli/test/schedule_unattended.test.ts",
+    "docs/RUNNER.md",
+    "docs/SCHEDULES.md",
+    "docs/STATE_COMPATIBILITY.md",
+    "docs/USER_MANUAL.md",
+    "docs/protocol/README.md",
+    "docs/protocol/SCHEDULE_VERSIONS.json",
+    "docs/protocol/schedule-v1.schema.json",
+    "examples/schedules/README.md",
+    "examples/schedules/run.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 8640,
+    "cache_read_tokens": 862691,
+    "output_tokens": 4122,
+    "api_call_count": 4,
+    "subagent_tokens": {
+      "input_tokens": 126,
+      "cache_creation_tokens": 330517,
+      "cache_read_tokens": 16986141,
+      "output_tokens": 80360,
+      "api_call_count": 62
+    }
+  },
+  "redaction": {
+    "replacements": 1711,
+    "layers": {
+      "betterleaks": 5,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 46,
+      "credentialed_uri": 3,
+      "entropy": 1653,
+      "key_context": 0,
+      "provider_token": 9,
+      "shell_stdin": 0
+    }
+  }
+}
