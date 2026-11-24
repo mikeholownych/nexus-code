@@ -6,7 +6,7 @@ PA-2 requires that when parallel units integrate, Nexus applies each diff, runs 
 
 ## Landed in release branch
 
-- `cli/src/core/operation_git.ts`: integration collects executed verifiers from the integrating unit and previously integrated receipts (`integrations()`), dedupes commands, runs them on the merged integration tree after mechanical merge, and resets/rejects integration on failure. It also blocks merges that change integrated verification files before checks run.
+- `cli/src/core/operation_git.ts`: integration collects executed verifiers from the integrating unit and previously integrated receipts (`integrations()`), dedupes commands, runs them on the merged integration tree after mechanical merge, and resets/rejects integration on failure. `integrationIntegrity()` fails closed if a verifier moves the worktree off the integration branch, rewinds/rewrites tip/ancestry, or leaves staged/tracked/untracked changes in the integration worktree.
 - `cli/src/core/operation_runner.ts`: wires `integrations: () => this.state.integrations ?? []` into `OperationGit`.
 - Deterministic regressions:
   - `cli/test/operation_git.test.ts` “PA-2: a mechanically clean merge that breaks an already-integrated unit's verifier is rejected” — 43 pass/0 fail in slice verification.
@@ -20,8 +20,7 @@ PA-2 requires that when parallel units integrate, Nexus applies each diff, runs 
 
 ## Remaining PA-2 acceptance qualification
 
-- Run and record the deterministic tests above against the current release-branch head (this doc).
-- Confirm operation/reporting surfaces the failed merge as non-integrated and not COMPLETE; the regression asserts `state.status !== "COMPLETE"` and the broken unit is not integrated.
+- Confirm operation/reporting surfaces the failed merge as non-integrated and not COMPLETE; the deterministic regressions assert `state.status !== "COMPLETE"` and the broken unit is not integrated.
 - Full acceptance still depends on review/CI of the PR carrying this qualification record; no merge by agent.
 
 ## Reference coding
