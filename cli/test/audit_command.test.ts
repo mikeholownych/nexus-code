@@ -89,7 +89,7 @@ test("the round trip through the commands: export a saved task, verify it, alter
   const hash = /^manifest sha256: ([0-9a-f]{64})$/m.exec(exported.stdout)?.[1];
   assert.ok(hash, exported.stdout);
   assert.ok(exported.stdout.startsWith(`Audit bundle written: ${dir}\n`));
-  assert.match(exported.stdout, /files: 11 \(\d+ bytes\) and manifest\.json/);
+  assert.match(exported.stdout, /files: 12 \(\d+ bytes\) and manifest\.json/);
   assert.match(exported.stdout, /Left out of the bundle:\n  - traces\/trace\.jsonl: local traces \(timings only\) are not exported by this version\n/);
   assert.match(exported.stdout, /Record this value somewhere the bundle's holder cannot change it/);
   assert.ok(exported.stdout.includes(AUDIT_UNSIGNED_CAVEAT));
@@ -276,7 +276,7 @@ test("`--json` prints one document of the published schema for every outcome, wi
 
   const document = consume(written);
   assert.equal(written.stderr, "");
-  assert.deepEqual([written.code, document.result, document.bundle_dir, document.signed, document.redaction, document.at_rest, document.file_count], [0, "exported", out, false, "standard", false, 10]);
+  assert.deepEqual([written.code, document.result, document.bundle_dir, document.signed, document.redaction, document.at_rest, document.file_count], [0, "exported", out, false, "standard", false, 11]);
   assert.match(document.warnings.join("\n"), /The subject was not at rest \(status in_progress\)/);
   assert.equal(document.manifest_sha256, consume(await runAudit(["verify", out, "--json"])).manifest_sha256);
   assertManifestValid(readManifest(out));

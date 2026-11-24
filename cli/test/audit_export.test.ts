@@ -142,7 +142,7 @@ test("a saved task exports every artefact with its role, and the bundle verifies
   assert.deepEqual(
     { ...exported.document, file_bytes: 0 },
     { schema_version: 1, result: "exported", exitCode: 0, bundle_dir: exported.written.dir, bundle_id: manifest.bundle_id, manifest_sha256: exported.written.manifestSha256, signed: false, redaction: "standard", at_rest: true, file_count: 12, file_bytes: 0, omitted: manifest.omitted, warnings: process.platform === "linux"
-      ? ["Some persisted validation receipts could not be bound to the current workspace candidate; see receipts/candidate-binding.json."]
+      ? ["Some persisted validation receipts could not be bound to the current workspace candidate or the report was truncated; see receipts/candidate-binding.json."]
       : ["Current workspace candidate identity could not be computed; validation receipt bindings are inconclusive."] },
   );
   assert.equal(exported.document.file_bytes, manifest.files.reduce((sum, file) => sum + file.bytes, 0));
@@ -522,7 +522,7 @@ test("an export is deterministic for a fixed subject, clock and id, and its file
   const second = snapshot(exportChecked(subject.request()).written.dir);
   assert.deepEqual(second, first);
   for (const [entry, mode] of Object.entries(first.modes)) assert.equal(mode, entry in first.files ? 0o600 : 0o700, entry);
-  assert.equal(Object.keys(first.files).length, 11);
+  assert.equal(Object.keys(first.files).length, 12);
   const other = exportChecked(subject.request({ bundleId: "cd".repeat(16) }));
   assert.notEqual(other.document.manifest_sha256, sha256(Buffer.from(first.files["manifest.json"], "hex")));
 });
