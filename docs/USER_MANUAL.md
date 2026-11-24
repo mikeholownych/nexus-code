@@ -821,3 +821,7 @@ when `approval.disable_yes`, `sandbox.required` or `sandbox.forbid_network` is s
 - **Audit Logging**: Every tool execution is recorded with timestamps, parameters, duration, and status in `~/.nexus/audit.log`. Visual inspection available via `/audit` and `nexus audit`.
 - **Workspace Snapshots & Rollback**: Automatic Git-backed and filesystem snapshot rollback. Inspect diffs anytime with `/checkpoint diff <id>`, and manage disk footprint with `/checkpoint prune [keep]`.
 - **Real-Time Hot-Reloading**: Automatically detects edits or additions in `skills/` and `AGENTS.md` and reloads them dynamically without restarting the REPL.
+
+## 5. Detached background jobs
+
+The experimental Linux runner lets an unattended job continue after its submitting CLI exits. Jobs use a fresh worktree pinned to the submitted `HEAD`, bounded budgets and a deadline, and a stricter approval policy. The default is read-only; `--allow-worktree-write` is limited to the job's sandboxed worktree. Jobs never use auto-approval and are not merged automatically. A required decision leaves the job `BLOCKED` for you to inspect. Install and run the supervised service with `nexus runner install-unit` and `systemctl --user`; see [`RUNNER.md`](RUNNER.md) for setup, commands, recovery and limits.

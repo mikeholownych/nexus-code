@@ -8,8 +8,10 @@
  * Rules, in the order they are applied on load:
  *
  *   1. A record this build understands (current version) is validated and used as-is.
- *   2. A v1, v2, or v3 record (or one that predates the field, which reads as v1) is upgraded in memory by changing
+ *   2. A v1 to v4 record (or one that predates the field, which reads as v1) is upgraded in memory by changing
  *      only the schema version. v4 adds explicit execution reservations; older parallel records are clamped to serial.
+ *      v5 adds `origin` (a detached job drives the operation): the version is bumped so that an older build refuses
+ *      such a record instead of rewriting it without the stamp.
  *   3. A record from a newer build is refused. It is not corrupt: a build that wrote it can still read it, and
  *      quarantining it would destroy evidence. It is also never interpreted as if it were current.
  *
@@ -21,7 +23,7 @@ import { specialistInputsProblem } from "./specialist_profiles.js";
 import { parseBoundaryRules } from "./boundary_rules.js";
 
 /** The operation document version this build writes. Independent of the task-store envelope version. */
-export const CURRENT_OPERATION_SCHEMA_VERSION = 4;
+export const CURRENT_OPERATION_SCHEMA_VERSION = 5;
 
 /** The operation document version every released 1.0.0 build wrote. */
 export const LEGACY_OPERATION_SCHEMA_VERSION = 1;
@@ -137,6 +139,17 @@ export function validateOperationState(state: DurableOperationState): void {
   }
   if (!state.policy || typeof state.policy !== "object" || Array.isArray(state.policy)) {
     throw new InvalidOperationStateError(`operation ${state.id}: policy is not an object`);
+  }
+
+  // The stamp says no operator was present. One that is damaged is refused: it must not read as an attended run.
+  if (state.origin !== undefined) {
+    const origin = state.origin as unknown as Record<string, unknown> | null;
+    const keys = origin && typeof origin === "object" && !Array.isArray(origin) ? Object.keys(origin) : undefined;
+    if (!keys || origin!.kind !== "job" || typeof origin!.jobId !== "string" || !origin!.jobId || origin!.unattended !== true
+        || (origin!.scheduleId !== undefined && typeof origin!.scheduleId !== "string")
+        || keys.some((key) => !["kind", "jobId", "scheduleId", "unattended"].includes(key))) {
+      throw new InvalidOperationStateError(`operation ${state.id}: origin is not a valid job origin`);
+    }
   }
 
   // A damaged boundary declaration is refused, not skipped: skipping it would silently switch the check off.
