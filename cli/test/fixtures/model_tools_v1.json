@@ -1,0 +1,1448 @@
+{
+  "definitions": {
+    "read_file": {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "description": "Read the contents of a file with line numbers. Use start_line and end_line for specific ranges, or offset and length to page through large files (>8 MB limit).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Relative path to the file within the workspace."
+            },
+            "start_line": {
+              "type": "number",
+              "description": "1-indexed starting line number (optional)."
+            },
+            "end_line": {
+              "type": "number",
+              "description": "1-indexed ending line number (optional)."
+            },
+            "offset": {
+              "type": "number",
+              "description": "Byte offset from the start of the file to begin reading (optional; required if file exceeds 8 MB)."
+            },
+            "length": {
+              "type": "number",
+              "description": "Maximum number of bytes to read (optional; maximum 8 MB)."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    "write_file": {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "description": "Create a new file or completely overwrite an existing file with the provided content. One reply can hold only a limited amount of output: write a long file (more than a few hundred lines) in parts, a first part here and the rest with edit_file, or as several smaller files.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Relative path to the file to create or overwrite."
+            },
+            "content": {
+              "type": "string",
+              "description": "Complete text content of the file."
+            },
+            "overwrite": {
+              "type": "boolean",
+              "description": "Must be true if replacing an existing file."
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    "edit_file": {
+      "type": "function",
+      "function": {
+        "name": "edit_file",
+        "description": "Perform a safe search-and-replace on a file. Replaces old_content with new_content and returns the diff.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Relative path to the file to edit."
+            },
+            "old_content": {
+              "type": "string",
+              "description": "Exact snippet of text in the file to be replaced."
+            },
+            "new_content": {
+              "type": "string",
+              "description": "The new replacement snippet."
+            },
+            "replace_all": {
+              "type": "boolean",
+              "description": "Replace every occurrence of old_content. Without it, old_content must occur exactly once."
+            }
+          },
+          "required": [
+            "path",
+            "old_content",
+            "new_content"
+          ]
+        }
+      }
+    },
+    "list_dir": {
+      "type": "function",
+      "function": {
+        "name": "list_dir",
+        "description": "List files and directories in the workspace, respecting .gitignore and ignoring hidden files.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Subdirectory to list (defaults to workspace root '.')."
+            },
+            "max_depth": {
+              "type": "number",
+              "description": "Maximum directory traversal depth (default: 3)."
+            }
+          }
+        }
+      }
+    },
+    "search_code": {
+      "type": "function",
+      "function": {
+        "name": "search_code",
+        "description": "High-performance code search across the workspace (ripgrep speed). Respects .gitignore.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search string or regex pattern to search for."
+            },
+            "is_regex": {
+              "type": "boolean",
+              "description": "Whether query is a regular expression (default: false)."
+            },
+            "max_results": {
+              "type": "number",
+              "description": "Maximum number of matching lines to return (default: 50)."
+            },
+            "file_pattern": {
+              "type": "string",
+              "description": "Optional regex to filter filenames (e.g. '\\.rs$' or '\\.ts$')."
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    },
+    "run_command": {
+      "type": "function",
+      "function": {
+        "name": "run_command",
+        "description": "Execute a command in a Linux shell (bash, zsh, or sh) to run builds, tests, git, package managers, etc. Standard Unix commands only (ls, cat, grep, rm, etc.).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "The bash/zsh shell command to execute."
+            },
+            "cwd": {
+              "type": "string",
+              "description": "Optional subdirectory to run the command in."
+            },
+            "timeout_secs": {
+              "type": "number",
+              "description": "Execution timeout in seconds (default: 60; clamped to NEXUS_MAX_TOOL_TIMEOUT_SECS, default 1800)."
+            },
+            "shell": {
+              "type": "string",
+              "description": "Linux shell to use: 'bash', 'zsh', or 'sh' (default: 'bash')."
+            },
+            "background": {
+              "type": "boolean",
+              "description": "Run command in background as a managed service without blocking the turn."
+            },
+            "service_name": {
+              "type": "string",
+              "description": "Unique name for the background service (required if background is true)."
+            }
+          },
+          "required": [
+            "command"
+          ]
+        }
+      }
+    },
+    "find_files": {
+      "type": "function",
+      "function": {
+        "name": "find_files",
+        "description": "Quickly locate files matching a glob or substring pattern (e.g. '*.rs', '**/*.ts', 'auth'). Respects .gitignore.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "pattern": {
+              "type": "string",
+              "description": "Glob or substring pattern to search for."
+            },
+            "max_results": {
+              "type": "number",
+              "description": "Maximum results to return (default: 50)."
+            }
+          },
+          "required": [
+            "pattern"
+          ]
+        }
+      }
+    },
+    "search_symbols": {
+      "type": "function",
+      "function": {
+        "name": "search_symbols",
+        "description": "Search for function, struct, class, interface, trait, or type declarations across the codebase (AST-level symbol search).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Optional symbol name or substring to filter declarations."
+            },
+            "max_results": {
+              "type": "number",
+              "description": "Maximum number of symbols to return (default: 50)."
+            }
+          }
+        }
+      }
+    },
+    "delete_file": {
+      "type": "function",
+      "function": {
+        "name": "delete_file",
+        "description": "Delete a file or directory inside the workspace. A directory needs recursive: true. The workspace root and .git cannot be deleted.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Relative path to file or directory to remove."
+            },
+            "recursive": {
+              "type": "boolean",
+              "description": "Required to delete a directory and everything in it."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    "task_completed": {
+      "type": "function",
+      "function": {
+        "name": "task_completed",
+        "description": "Signal that the overall task is finished and report a short final summary of the changes.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "summary": {
+              "type": "string",
+              "description": "Short summary (2-4 sentences): what changed and how it was checked."
+            },
+            "notes": {
+              "type": "string",
+              "description": "Any instructions, follow-up recommendations, or verification steps."
+            }
+          },
+          "required": [
+            "summary"
+          ]
+        }
+      }
+    },
+    "spawn_subagent": {
+      "type": "function",
+      "function": {
+        "name": "spawn_subagent",
+        "description": "Spawn an isolated subagent with its own dedicated context to investigate code, search files, or verify implementations without cluttering the main conversation history.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "prompt": {
+              "type": "string",
+              "description": "The specific objective or question for the subagent to solve."
+            },
+            "profile": {
+              "type": "string",
+              "enum": [
+                "researcher",
+                "architect",
+                "implementer",
+                "tester",
+                "reviewer",
+                "semantic_explorer",
+                "call_site_analyzer",
+                "failure_debugger",
+                "security_reviewer",
+                "acceptance_reviewer"
+              ],
+              "description": "Optional pre-defined specialist profile. Omitted requests use the read-only semantic_explorer profile."
+            },
+            "inputs": {
+              "type": "object",
+              "description": "Optional bounded task inputs. These do not grant additional permissions."
+            }
+          },
+          "required": [
+            "prompt"
+          ]
+        }
+      }
+    },
+    "file_info": {
+      "type": "function",
+      "function": {
+        "name": "file_info",
+        "description": "Inspect detailed metadata of a file or directory (size in bytes, permissions, line count, binary check, modified timestamp).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Relative path to the file or directory."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    "batch_read": {
+      "type": "function",
+      "function": {
+        "name": "batch_read",
+        "description": "Read multiple files in parallel in a single turn to eliminate multi-turn round trips.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "List of relative paths to files to read."
+            },
+            "max_lines_per_file": {
+              "type": "number",
+              "description": "Maximum number of lines to read per file (default: 500)."
+            },
+            "offset": {
+              "type": "number",
+              "description": "Byte offset to begin reading each file (optional; required if file exceeds 8 MB)."
+            },
+            "length": {
+              "type": "number",
+              "description": "Maximum number of bytes to read per file (optional; maximum 8 MB)."
+            }
+          },
+          "required": [
+            "paths"
+          ]
+        }
+      }
+    },
+    "file_tree": {
+      "type": "function",
+      "function": {
+        "name": "file_tree",
+        "description": "Render a hierarchical Unicode directory tree of the workspace, respecting .gitignore and ignoring hidden files.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Subdirectory to render tree from (default: '.')."
+            },
+            "max_depth": {
+              "type": "number",
+              "description": "Maximum tree depth to traverse (default: 3)."
+            }
+          }
+        }
+      }
+    },
+    "patch_file": {
+      "type": "function",
+      "function": {
+        "name": "patch_file",
+        "description": "Apply a standard unified diff patch or hunk to a file.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Relative path to the file to patch."
+            },
+            "patch": {
+              "type": "string",
+              "description": "Unified diff or hunk content (including @@ headers or -/+ lines)."
+            }
+          },
+          "required": [
+            "path",
+            "patch"
+          ]
+        }
+      }
+    },
+    "update_plan": {
+      "type": "function",
+      "function": {
+        "name": "update_plan",
+        "description": "Create or update the task's plan: a short checklist, one item per phase, each a few words.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "phases": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "The item, in a few words."
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "pending",
+                      "in_progress",
+                      "completed"
+                    ]
+                  }
+                },
+                "required": [
+                  "name",
+                  "status"
+                ]
+              },
+              "description": "Checklist items in order."
+            }
+          },
+          "required": [
+            "phases"
+          ]
+        }
+      }
+    },
+    "run_tests": {
+      "type": "function",
+      "function": {
+        "name": "run_tests",
+        "description": "Auto-detect and run the project test suite (cargo test, npm test, pytest, make test) with parsed failures and compiler diagnostics.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "filter": {
+              "type": "string",
+              "description": "Optional test name filter or pattern to isolate specific unit tests."
+            }
+          }
+        }
+      }
+    },
+    "git_status": {
+      "type": "function",
+      "function": {
+        "name": "git_status",
+        "description": "Inspect native repository branch and staged/modified/untracked files via Rust libgit2 engine.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    "git_diff": {
+      "type": "function",
+      "function": {
+        "name": "git_diff",
+        "description": "Generate unified diff of repository changes natively via Rust libgit2 engine.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "staged": {
+              "type": "boolean",
+              "description": "If true, diff staged changes against HEAD. Otherwise diff working directory."
+            },
+            "path_filter": {
+              "type": "string",
+              "description": "Optional file path pattern to restrict diff to."
+            }
+          }
+        }
+      }
+    },
+    "git_log": {
+      "type": "function",
+      "function": {
+        "name": "git_log",
+        "description": "Inspect recent commit history (author, hash, summary, timestamp) natively via Rust libgit2 engine.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "max_commits": {
+              "type": "number",
+              "description": "Maximum number of commits to retrieve (default: 10)."
+            }
+          }
+        }
+      }
+    },
+    "outline_file": {
+      "type": "function",
+      "function": {
+        "name": "outline_file",
+        "description": "Generate a compact AST skeleton outline of a source file (functions, classes, interfaces, signatures, and line numbers) to conserve context before reading specific line ranges.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Relative path to the source file to outline."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    "enable_tools": {
+      "type": "function",
+      "function": {
+        "name": "enable_tools",
+        "description": "Make more tools available from your next step. Groups: browser — drive a headless browser: open a page, click, type, screenshot, read console logs; lsp — language-server lookups: go to definition, hover types, diagnostics; web — search the web and fetch a URL; search — extra code search: ranked hybrid search, trigram substring index, syntax-tree symbols (search_code and search_symbols are always available); knowledge — the persistent project knowledge store (save and recall facts across sessions).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "groups": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "browser",
+                  "lsp",
+                  "web",
+                  "search",
+                  "knowledge"
+                ]
+              },
+              "description": "Groups to enable"
+            }
+          },
+          "required": [
+            "groups"
+          ]
+        }
+      }
+    },
+    "read_findings": {
+      "type": "function",
+      "function": {
+        "name": "read_findings",
+        "description": "Your recorded findings in full: one by id, those containing a query, or a list. Use it for findings your memory shows condensed or by id, and before claiming something is absent.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "e.g. F12"
+            },
+            "query": {
+              "type": "string",
+              "description": "Case-insensitive text"
+            }
+          }
+        }
+      }
+    },
+    "read_archive": {
+      "type": "function",
+      "function": {
+        "name": "read_archive",
+        "description": "Search the earlier conversation that left your context when it was compacted (tool outputs, replies, requests). Returns the matching passages verbatim. Use it when a detail you need is no longer in your memory or findings.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Case-insensitive text to find"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    },
+    "browser_navigate": {
+      "type": "function",
+      "function": {
+        "name": "browser_navigate",
+        "description": "Navigate the headless browser to a local development server URL (e.g. http://localhost:3000), web page, or HTML file for runtime verification.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "The complete HTTP/HTTPS URL or local HTML file path to load."
+            }
+          },
+          "required": [
+            "url"
+          ]
+        }
+      }
+    },
+    "browser_screenshot": {
+      "type": "function",
+      "function": {
+        "name": "browser_screenshot",
+        "description": "Capture a viewport screenshot of the active browser page to verify frontend layout or UI state.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "output_path": {
+              "type": "string",
+              "description": "Optional destination file path for screenshot PNG (defaults to .nexus/screenshots/)."
+            }
+          }
+        }
+      }
+    },
+    "browser_click": {
+      "type": "function",
+      "function": {
+        "name": "browser_click",
+        "description": "Click an interactive DOM element on the active browser page by CSS selector or element ID.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "selector": {
+              "type": "string",
+              "description": "CSS selector of the element to click (e.g. '#submit-btn' or 'button.login')."
+            }
+          },
+          "required": [
+            "selector"
+          ]
+        }
+      }
+    },
+    "browser_type": {
+      "type": "function",
+      "function": {
+        "name": "browser_type",
+        "description": "Type text into an input field or textarea on the active browser page.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "selector": {
+              "type": "string",
+              "description": "CSS selector of target input element."
+            },
+            "text": {
+              "type": "string",
+              "description": "Text to enter into the target field."
+            }
+          },
+          "required": [
+            "selector",
+            "text"
+          ]
+        }
+      }
+    },
+    "browser_console_logs": {
+      "type": "function",
+      "function": {
+        "name": "browser_console_logs",
+        "description": "Inspect browser console logs, warnings, and uncaught exceptions for frontend diagnostics.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": "number",
+              "description": "Maximum recent log entries to return (default: 50)."
+            }
+          }
+        }
+      }
+    },
+    "lsp_hover": {
+      "type": "function",
+      "function": {
+        "name": "lsp_hover",
+        "description": "LSP hover: type signature and docs of the symbol at a position. \"Still indexing\" is not an answer: ask again.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Source file path."
+            },
+            "line": {
+              "type": "number",
+              "description": "Positive 1-based line."
+            },
+            "character": {
+              "type": "number",
+              "description": "Positive code-point column, 1-based."
+            }
+          },
+          "required": [
+            "path",
+            "line",
+            "character"
+          ]
+        }
+      }
+    },
+    "lsp_definition": {
+      "type": "function",
+      "function": {
+        "name": "lsp_definition",
+        "description": "LSP definition: JSON [{file, line, column, endLine, endColumn}], 1-based code-point columns; workspace-relative files (external: true outside); approximate: true = columns may be off.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Source file path."
+            },
+            "line": {
+              "type": "number",
+              "description": "Positive 1-based line."
+            },
+            "character": {
+              "type": "number",
+              "description": "Positive code-point column, 1-based."
+            }
+          },
+          "required": [
+            "path",
+            "line",
+            "character"
+          ]
+        }
+      }
+    },
+    "lsp_diagnostics": {
+      "type": "function",
+      "function": {
+        "name": "lsp_diagnostics",
+        "description": "LSP diagnostics for a source file's current content. \"unavailable\" means no answer, not a clean file.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Source file path."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    "fetch_web": {
+      "type": "function",
+      "function": {
+        "name": "fetch_web",
+        "description": "Fetch web content, documentation, or JSON API from an HTTP/HTTPS URL. Strips HTML markup.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "The complete HTTP or HTTPS URL to fetch."
+            },
+            "max_length": {
+              "type": "number",
+              "description": "Maximum character length to return (default: 15000)."
+            }
+          },
+          "required": [
+            "url"
+          ]
+        }
+      }
+    },
+    "search_web": {
+      "type": "function",
+      "function": {
+        "name": "search_web",
+        "description": "Search the web for programming documentation, error messages, library APIs, and technical solutions.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "The technical search query (e.g. 'rust axum json extraction example')."
+            },
+            "max_results": {
+              "type": "number",
+              "description": "Maximum number of search results to return (default: 5)."
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    },
+    "cst_symbols": {
+      "type": "function",
+      "function": {
+        "name": "cst_symbols",
+        "description": "Parse symbols, multiline signatures, doc comments, visibility, and scopes using the Rust CST parser.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File or directory path to parse."
+            },
+            "query": {
+              "type": "string",
+              "description": "Optional symbol name filter."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    "trigram_search": {
+      "type": "function",
+      "function": {
+        "name": "trigram_search",
+        "description": "Ultra-fast code search accelerated by Rust inverted trigram index.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Substring or token to search for across the codebase."
+            },
+            "path": {
+              "type": "string",
+              "description": "Optional subdirectory to restrict search to."
+            },
+            "max_results": {
+              "type": "number",
+              "description": "Maximum matches to return (default: 50)."
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    },
+    "hybrid_search": {
+      "type": "function",
+      "function": {
+        "name": "hybrid_search",
+        "description": "Perform hybrid code search blending dense semantic embeddings, sparse Okapi BM25, and Reciprocal Rank Fusion (RRF). Ideal for discovering code by intent or meaning when exact keyword tokens are unknown.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Natural language query or code concept to search for."
+            },
+            "path": {
+              "type": "string",
+              "description": "Optional relative directory path to scope search."
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "hybrid",
+                "semantic",
+                "lexical"
+              ],
+              "description": "Search mode: 'hybrid' (blended RRF, default), 'semantic' (vector embeddings), or 'lexical' (BM25 keyword)."
+            },
+            "limit": {
+              "type": "number",
+              "description": "Maximum matches to return (default: 10)."
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    },
+    "manage_knowledge": {
+      "type": "function",
+      "function": {
+        "name": "manage_knowledge",
+        "description": "Query or record persistent project idioms, rules, dependencies, and architectural decisions.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "get",
+                "set",
+                "list",
+                "delete",
+                "query"
+              ],
+              "description": "The knowledge operation to execute."
+            },
+            "key": {
+              "type": "string",
+              "description": "Knowledge entry key identifier (e.g. 'preferred-package-manager')."
+            },
+            "value": {
+              "type": "string",
+              "description": "Value or rule description to persist."
+            },
+            "category": {
+              "type": "string",
+              "enum": [
+                "idiom",
+                "architecture",
+                "dependency",
+                "troubleshooting",
+                "rule"
+              ],
+              "description": "Classification category for the knowledge entry."
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      }
+    },
+    "read_objective": {
+      "type": "function",
+      "function": {
+        "name": "read_objective",
+        "description": "Return the operator's words verbatim: the complete wording of one requirement (requirement: \"R3\"), one steering message (steering: its id), one follow-up (amendment: \"A2\"), or a character range of the objective (offset, length up to 20000). Use it when the pinned Objective Ledger says something is not shown.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "requirement": {
+              "type": "string",
+              "description": "Requirement id, e.g. R3."
+            },
+            "steering": {
+              "type": "string",
+              "description": "Steering id, as named in the ledger."
+            },
+            "amendment": {
+              "type": "string",
+              "description": "Follow-up id, e.g. A2."
+            },
+            "offset": {
+              "type": "number",
+              "description": "Start character (0-based)."
+            },
+            "length": {
+              "type": "number",
+              "description": "Characters to return (max 20000)."
+            }
+          }
+        }
+      }
+    },
+    "update_requirements": {
+      "type": "function",
+      "function": {
+        "name": "update_requirements",
+        "description": "Record the state of the operator's acceptance requirements (listed in the pinned Objective Ledger). The plan never replaces them. Mark a requirement implemented or verified only with evidence (files changed, commands run, tests passed); mark it blocked or descoped only with a note giving the reason (an explicit scope change). Add a sub-requirement by giving text without an id. Also states your next action.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "requirements": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "description": "Requirement id from the ledger, e.g. R3. Omit to add a new sub-requirement."
+                  },
+                  "text": {
+                    "type": "string",
+                    "description": "Text of a new sub-requirement (ignored for the operator's own requirements)."
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "open",
+                      "in_progress",
+                      "implemented",
+                      "verified",
+                      "blocked",
+                      "descoped"
+                    ]
+                  },
+                  "evidence": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Implementation and validation evidence."
+                  },
+                  "note": {
+                    "type": "string",
+                    "description": "Reason, required for blocked and descoped."
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "feature",
+                      "constraint",
+                      "invariant"
+                    ],
+                    "description": "Type of a new sub-requirement (default feature). A constraint or invariant is complete only when its verifier passes after your last change; the operator's own cannot be retyped."
+                  },
+                  "verifier": {
+                    "type": "string",
+                    "description": "Command that checks a new constraint or invariant (set once, run through the approval gate)."
+                  },
+                  "tests": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Test names or paths that exercise this requirement."
+                  }
+                }
+              }
+            },
+            "next_action": {
+              "type": "string",
+              "description": "The next concrete action you will take."
+            }
+          },
+          "required": [
+            "requirements"
+          ]
+        }
+      }
+    },
+    "activate_skill": {
+      "type": "function",
+      "function": {
+        "name": "activate_skill",
+        "description": "Load the complete instructions, workflow, and guidelines of a specialized agent skill into active context.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "The skill to activate (e.g. 'graphify'). If no skill has exactly this name, it is used as a search and the best matching skills are listed."
+            }
+          },
+          "required": [
+            "name"
+          ]
+        }
+      }
+    },
+    "read_tool_output": {
+      "type": "function",
+      "function": {
+        "name": "read_tool_output",
+        "description": "Retrieve a tool result that was masked from context. Pass the 12-character id shown in its mask marker.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "The 12-character lowercase hexadecimal id in the tool-output marker"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      }
+    },
+    "mcp__demo__echo": {
+      "type": "function",
+      "function": {
+        "name": "mcp__demo__echo",
+        "description": "[MCP: demo] Echo the text back.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "description": "What to echo."
+            }
+          },
+          "required": [
+            "text"
+          ]
+        }
+      }
+    },
+    "custom__stamp": {
+      "type": "function",
+      "function": {
+        "name": "custom__stamp",
+        "description": "Stamp a label (test plugin tool).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "label": {
+              "type": "string",
+              "description": "The label."
+            }
+          },
+          "required": [
+            "label"
+          ]
+        }
+      }
+    }
+  },
+  "configurations": {
+    "main/default": {
+      "count": 24,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,run_tests,git_status,git_diff,git_log,outline_file,enable_tools,read_findings,read_archive",
+      "bytes": 12385,
+      "sha256": "d5a0851a15c6deff7d822c5fc70c3f102af1de9e184283a34f5ded643f6388bf"
+    },
+    "main/mode=auto": {
+      "count": 24,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,run_tests,git_status,git_diff,git_log,outline_file,enable_tools,read_findings,read_archive",
+      "bytes": 12385,
+      "sha256": "d5a0851a15c6deff7d822c5fc70c3f102af1de9e184283a34f5ded643f6388bf"
+    },
+    "main/mode=auto,full-access": {
+      "count": 24,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,run_tests,git_status,git_diff,git_log,outline_file,enable_tools,read_findings,read_archive",
+      "bytes": 12385,
+      "sha256": "d5a0851a15c6deff7d822c5fc70c3f102af1de9e184283a34f5ded643f6388bf"
+    },
+    "main/mode=read-only": {
+      "count": 24,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,run_tests,git_status,git_diff,git_log,outline_file,enable_tools,read_findings,read_archive",
+      "bytes": 12385,
+      "sha256": "d5a0851a15c6deff7d822c5fc70c3f102af1de9e184283a34f5ded643f6388bf"
+    },
+    "main/launched-read-only": {
+      "count": 24,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,run_tests,git_status,git_diff,git_log,outline_file,enable_tools,read_findings,read_archive",
+      "bytes": 12385,
+      "sha256": "d5a0851a15c6deff7d822c5fc70c3f102af1de9e184283a34f5ded643f6388bf"
+    },
+    "main/group=browser": {
+      "count": 29,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,run_tests,git_status,git_diff,git_log,outline_file,browser_navigate,browser_screenshot,browser_click,browser_type,browser_console_logs,enable_tools,read_findings,read_archive",
+      "bytes": 14164,
+      "sha256": "4466a014d4d91ffd77e24d0cde9eb4c215765795db425bdaaf23f5b04f5c9603"
+    },
+    "main/group=lsp": {
+      "count": 27,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,run_tests,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,outline_file,enable_tools,read_findings,read_archive",
+      "bytes": 13707,
+      "sha256": "e6c19a1f471eea649e01f9d76df4de1d57ec144b4eac432a3fd7771a4c9e4dbc"
+    },
+    "main/group=web": {
+      "count": 26,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,fetch_web,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,run_tests,search_web,git_status,git_diff,git_log,outline_file,enable_tools,read_findings,read_archive",
+      "bytes": 13244,
+      "sha256": "80ce015fd212ae6f94ee32816885f340e8f058c6c8cf23a14c76c23353a5b38b"
+    },
+    "main/group=search": {
+      "count": 27,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,run_tests,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search,hybrid_search,enable_tools,read_findings,read_archive",
+      "bytes": 14044,
+      "sha256": "309137cf6026ea62bd6bfd707b2ea55efeaca60bf23e8e0cb7426eb0381b32c0"
+    },
+    "main/group=knowledge": {
+      "count": 25,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,run_tests,git_status,git_diff,git_log,outline_file,manage_knowledge,enable_tools,read_findings,read_archive",
+      "bytes": 13096,
+      "sha256": "f378dc45f733d9912efae00f7f01f15572fc264c230e9c33d0a91702b90de59c"
+    },
+    "main/groups=all": {
+      "count": 37,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,fetch_web,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,run_tests,search_web,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search,hybrid_search,browser_navigate,browser_screenshot,browser_click,browser_type,browser_console_logs,manage_knowledge,read_findings,read_archive",
+      "bytes": 17926,
+      "sha256": "301b1b19ca1db06ee866443fd008468d1521bd2d713496d4a61e71f089f92069"
+    },
+    "main/objective": {
+      "count": 25,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,run_tests,git_status,git_diff,git_log,outline_file,enable_tools,read_objective,read_findings,read_archive",
+      "bytes": 13189,
+      "sha256": "4a425d5fdbf296fba43e2c60fa805d2a3acf0878a5761080046f32c8e3be4ea2"
+    },
+    "main/objective+requirements": {
+      "count": 26,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,run_tests,git_status,git_diff,git_log,outline_file,enable_tools,read_objective,update_requirements,read_findings,read_archive",
+      "bytes": 14963,
+      "sha256": "62d0a1799d4200ac46b6e6226fa4c874af9bd222b9d8f256374a9b1891f9b273"
+    },
+    "main/skills": {
+      "count": 25,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,activate_skill,run_tests,git_status,git_diff,git_log,outline_file,enable_tools,read_findings,read_archive",
+      "bytes": 12812,
+      "sha256": "c94beae6df931779ae29c81c5dd3f751d58d51b00d672da0dc416cfc818ef3f7"
+    },
+    "main/mask": {
+      "count": 25,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,run_tests,git_status,git_diff,git_log,outline_file,enable_tools,read_findings,read_archive,read_tool_output",
+      "bytes": 12735,
+      "sha256": "1f0be0230e7aa38138f43fd52187a57e6ccb68f4e4b99df4272b51775a4b54de"
+    },
+    "main/extensions": {
+      "count": 26,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,run_tests,git_status,git_diff,git_log,outline_file,enable_tools,read_findings,read_archive,mcp__demo__echo,custom__stamp",
+      "bytes": 12838,
+      "sha256": "adaaf57c85bc874d4f411b5c2c1f393fca2393e4acecdd00f391cb0d17585048"
+    },
+    "main/everything": {
+      "count": 43,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,fetch_web,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,activate_skill,run_tests,search_web,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search,hybrid_search,browser_navigate,browser_screenshot,browser_click,browser_type,browser_console_logs,manage_knowledge,read_objective,update_requirements,read_findings,read_archive,read_tool_output,mcp__demo__echo,custom__stamp",
+      "bytes": 21734,
+      "sha256": "a3af67f7a2191d64c41cfb3b18503a1ac13f64308668b2ab2ef4e41334bbc1b6"
+    },
+    "main/everything,mode=read-only": {
+      "count": 43,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,fetch_web,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,activate_skill,run_tests,search_web,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search,hybrid_search,browser_navigate,browser_screenshot,browser_click,browser_type,browser_console_logs,manage_knowledge,read_objective,update_requirements,read_findings,read_archive,read_tool_output,mcp__demo__echo,custom__stamp",
+      "bytes": 21734,
+      "sha256": "a3af67f7a2191d64c41cfb3b18503a1ac13f64308668b2ab2ef4e41334bbc1b6"
+    },
+    "main/delegated=read_file,run_command,enable_tools,mcp,no_such_tool": {
+      "count": 3,
+      "names": "read_file,run_command,mcp__demo__echo",
+      "bytes": 1991,
+      "sha256": "fa0760a0bb05c30dcdff95bb84dd94cc4301b7016bc5f609e625ace321628d17"
+    },
+    "subagent/default": {
+      "count": 24,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,run_tests,git_status,git_diff,git_log,outline_file,enable_tools,read_findings,read_archive",
+      "bytes": 12385,
+      "sha256": "d5a0851a15c6deff7d822c5fc70c3f102af1de9e184283a34f5ded643f6388bf"
+    },
+    "subagent/everything": {
+      "count": 41,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,fetch_web,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,activate_skill,run_tests,search_web,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search,hybrid_search,browser_navigate,browser_screenshot,browser_click,browser_type,browser_console_logs,manage_knowledge,read_findings,read_archive,read_tool_output,mcp__demo__echo,custom__stamp",
+      "bytes": 19156,
+      "sha256": "7f4b405351362008f486f5f77549f6ea7b310fd1a4fc62f1f01baa7918918955"
+    },
+    "subagent/delegated=read_file,search_code,task_completed": {
+      "count": 3,
+      "names": "read_file,search_code,task_completed",
+      "bytes": 1891,
+      "sha256": "22bf1c20045b6f14e8d9f6a68f8dc83d53f7f653a65d2f48f41d22ce5cb69732"
+    },
+    "main/role=researcher,everything": {
+      "count": 9,
+      "names": "read_file,search_code,find_files,search_symbols,task_completed,file_info,batch_read,search_web,read_tool_output",
+      "bytes": 4578,
+      "sha256": "a00fae048b817c52b326b8b660ca28916e5ab78457c8a8fefebfeaa766f3c71e"
+    },
+    "subagent/role=researcher,everything": {
+      "count": 9,
+      "names": "read_file,search_code,find_files,search_symbols,task_completed,file_info,batch_read,search_web,read_tool_output",
+      "bytes": 4578,
+      "sha256": "a00fae048b817c52b326b8b660ca28916e5ab78457c8a8fefebfeaa766f3c71e"
+    },
+    "main/role=architect,everything": {
+      "count": 43,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,fetch_web,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,activate_skill,run_tests,search_web,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search,hybrid_search,browser_navigate,browser_screenshot,browser_click,browser_type,browser_console_logs,manage_knowledge,read_objective,update_requirements,read_findings,read_archive,read_tool_output,mcp__demo__echo,custom__stamp",
+      "bytes": 21734,
+      "sha256": "a3af67f7a2191d64c41cfb3b18503a1ac13f64308668b2ab2ef4e41334bbc1b6"
+    },
+    "subagent/role=architect,everything": {
+      "count": 41,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,fetch_web,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,activate_skill,run_tests,search_web,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search,hybrid_search,browser_navigate,browser_screenshot,browser_click,browser_type,browser_console_logs,manage_knowledge,read_findings,read_archive,read_tool_output,mcp__demo__echo,custom__stamp",
+      "bytes": 19156,
+      "sha256": "7f4b405351362008f486f5f77549f6ea7b310fd1a4fc62f1f01baa7918918955"
+    },
+    "main/role=implementer,everything": {
+      "count": 37,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,fetch_web,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,activate_skill,run_tests,search_web,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search,hybrid_search,read_objective,update_requirements,read_findings,read_archive,read_tool_output,mcp__demo__echo,custom__stamp",
+      "bytes": 19244,
+      "sha256": "07cbadb0373aae887ef966d746d988079d9655fd7404749d3ac914da3b762485"
+    },
+    "subagent/role=implementer,everything": {
+      "count": 37,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,fetch_web,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,activate_skill,run_tests,search_web,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search,hybrid_search,read_objective,update_requirements,read_findings,read_archive,read_tool_output,mcp__demo__echo,custom__stamp",
+      "bytes": 19244,
+      "sha256": "07cbadb0373aae887ef966d746d988079d9655fd7404749d3ac914da3b762485"
+    },
+    "main/role=tester,everything": {
+      "count": 34,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,task_completed,file_info,batch_read,file_tree,patch_file,update_plan,activate_skill,run_tests,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search,hybrid_search,read_objective,update_requirements,read_findings,read_archive,read_tool_output,mcp__demo__echo,custom__stamp",
+      "bytes": 17537,
+      "sha256": "0f29faec19514e38be90ac0e2cfa100d88ba2e5a5d542bce37456e9d6af620a9"
+    },
+    "subagent/role=tester,everything": {
+      "count": 34,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,task_completed,file_info,batch_read,file_tree,patch_file,update_plan,activate_skill,run_tests,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search,hybrid_search,read_objective,update_requirements,read_findings,read_archive,read_tool_output,mcp__demo__echo,custom__stamp",
+      "bytes": 17537,
+      "sha256": "0f29faec19514e38be90ac0e2cfa100d88ba2e5a5d542bce37456e9d6af620a9"
+    },
+    "main/role=reviewer,everything": {
+      "count": 5,
+      "names": "read_file,search_code,task_completed,batch_read,read_tool_output",
+      "bytes": 2918,
+      "sha256": "a76a304c66c72cf88d0aaead4cd57e16e89cad0eda35e9501f50dff486bb9e05"
+    },
+    "subagent/role=reviewer,everything": {
+      "count": 5,
+      "names": "read_file,search_code,task_completed,batch_read,read_tool_output",
+      "bytes": 2918,
+      "sha256": "a76a304c66c72cf88d0aaead4cd57e16e89cad0eda35e9501f50dff486bb9e05"
+    },
+    "main/role=semantic_explorer,everything": {
+      "count": 9,
+      "names": "read_file,search_code,find_files,search_symbols,task_completed,file_info,batch_read,file_tree,read_tool_output",
+      "bytes": 4530,
+      "sha256": "cb7a1dc6dd9505886595fd9a5d9855b70cf6b1b8824b24690b95c6b375aaa7d5"
+    },
+    "subagent/role=semantic_explorer,everything": {
+      "count": 9,
+      "names": "read_file,search_code,find_files,search_symbols,task_completed,file_info,batch_read,file_tree,read_tool_output",
+      "bytes": 4530,
+      "sha256": "cb7a1dc6dd9505886595fd9a5d9855b70cf6b1b8824b24690b95c6b375aaa7d5"
+    },
+    "main/role=call_site_analyzer,everything": {
+      "count": 7,
+      "names": "read_file,search_code,search_symbols,task_completed,file_info,batch_read,read_tool_output",
+      "bytes": 3698,
+      "sha256": "b9b61a57a8592724dd5660720724d90a9f5e8591d12faa4259c0f7b190a36aa5"
+    },
+    "subagent/role=call_site_analyzer,everything": {
+      "count": 7,
+      "names": "read_file,search_code,search_symbols,task_completed,file_info,batch_read,read_tool_output",
+      "bytes": 3698,
+      "sha256": "b9b61a57a8592724dd5660720724d90a9f5e8591d12faa4259c0f7b190a36aa5"
+    },
+    "main/role=failure_debugger,everything": {
+      "count": 8,
+      "names": "read_file,search_code,run_command,task_completed,file_info,batch_read,run_tests,read_tool_output",
+      "bytes": 4577,
+      "sha256": "149fc88b81842e52c06afdfe8c81224e4026f1d7166ef11c892d7a198465a492"
+    },
+    "subagent/role=failure_debugger,everything": {
+      "count": 8,
+      "names": "read_file,search_code,run_command,task_completed,file_info,batch_read,run_tests,read_tool_output",
+      "bytes": 4577,
+      "sha256": "149fc88b81842e52c06afdfe8c81224e4026f1d7166ef11c892d7a198465a492"
+    },
+    "main/role=security_reviewer,everything": {
+      "count": 6,
+      "names": "read_file,search_code,task_completed,file_info,batch_read,read_tool_output",
+      "bytes": 3258,
+      "sha256": "a4924689fab143dff389635478fe2abeba86033d7531ef1773ff6998711c12f8"
+    },
+    "subagent/role=security_reviewer,everything": {
+      "count": 6,
+      "names": "read_file,search_code,task_completed,file_info,batch_read,read_tool_output",
+      "bytes": 3258,
+      "sha256": "a4924689fab143dff389635478fe2abeba86033d7531ef1773ff6998711c12f8"
+    },
+    "main/role=acceptance_reviewer,everything": {
+      "count": 6,
+      "names": "read_file,search_code,task_completed,file_info,batch_read,read_tool_output",
+      "bytes": 3258,
+      "sha256": "a4924689fab143dff389635478fe2abeba86033d7531ef1773ff6998711c12f8"
+    },
+    "subagent/role=acceptance_reviewer,everything": {
+      "count": 6,
+      "names": "read_file,search_code,task_completed,file_info,batch_read,read_tool_output",
+      "bytes": 3258,
+      "sha256": "a4924689fab143dff389635478fe2abeba86033d7531ef1773ff6998711c12f8"
+    }
+  },
+  "derived": {
+    "harnessTools": {
+      "count": 36,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,fetch_web,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,activate_skill,run_tests,search_web,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search,hybrid_search,browser_navigate,browser_screenshot,browser_click,browser_type,browser_console_logs,manage_knowledge",
+      "bytes": 17511,
+      "sha256": "491719e955a704a81898ff5e40d5bacd24d41ad3ef279807997ced7ab8384fe5"
+    },
+    "parserKnownToolNames": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,run_tests,git_status,git_diff,git_log,outline_file,browser_navigate,browser_screenshot,browser_click,browser_type,browser_console_logs,lsp_hover,lsp_definition,lsp_diagnostics,fetch_web,search_web,cst_symbols,trigram_search,hybrid_search,manage_knowledge,update_requirements,activate_skill,mcp__demo__echo,custom__stamp,mcp__other__tool,custom__other",
+    "parserUnknownToolNames": "enable_tools,read_findings,read_archive,read_objective,read_tool_output,no_such_tool,git_commit,git_stage,checkpoint_restore,nexus_verify,verifier",
+    "parserWriteOrExecToolNames": "write_file,edit_file,run_command,delete_file,patch_file,run_tests,lsp_hover,lsp_definition,lsp_diagnostics,manage_knowledge,mcp__demo__echo,custom__stamp,mcp__other__tool,custom__other,git_commit,git_stage,checkpoint_restore",
+    "serveMcpTools": {
+      "count": 35,
+      "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,fetch_web,task_completed,file_info,batch_read,file_tree,patch_file,update_plan,run_tests,search_web,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search,hybrid_search,browser_navigate,browser_screenshot,browser_click,browser_type,browser_console_logs,manage_knowledge,nexus_verify",
+      "bytes": 15666,
+      "sha256": "906a9600b729d16f297f4273cb8e1710593c7fd56ebbb30a8649158911d183f9"
+    },
+    "acpToolKinds": {
+      "read_file": "read",
+      "batch_read": "read",
+      "file_info": "read",
+      "list_dir": "read",
+      "file_tree": "read",
+      "outline_file": "read",
+      "lsp_hover": "read",
+      "lsp_diagnostics": "read",
+      "git_status": "read",
+      "git_diff": "read",
+      "git_log": "read",
+      "write_file": "edit",
+      "edit_file": "edit",
+      "patch_file": "edit",
+      "delete_file": "delete",
+      "search_code": "search",
+      "find_files": "search",
+      "search_symbols": "search",
+      "cst_symbols": "search",
+      "trigram_search": "search",
+      "hybrid_search": "search",
+      "lsp_definition": "search",
+      "run_command": "execute",
+      "run_tests": "execute",
+      "verifier": "execute",
+      "fetch_web": "fetch",
+      "search_web": "fetch",
+      "browser_navigate": "fetch",
+      "browser_screenshot": "fetch",
+      "browser_console_logs": "fetch",
+      "browser_click": "other",
+      "browser_type": "other",
+      "spawn_subagent": "think",
+      "update_plan": "think",
+      "task_completed": "other",
+      "activate_skill": "other",
+      "manage_knowledge": "other"
+    }
+  }
+}

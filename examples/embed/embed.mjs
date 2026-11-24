@@ -31,11 +31,14 @@ try {
     extraArgs: (process.env.NEXUS_ARGS ?? "").split(/\s+/).filter(Boolean),
   });
 
-  // The sidecar asks before each command, edit, or verifier run. This embedder allows the listed actions one call at a
-  // time and denies everything else; with no handler every request would be denied.
-  const allowed = new Set(["run_command", "write_file", "edit_file", "verifier"]);
+  // The sidecar asks before each command, edit, or verifier run. Only the verifier configured above is allowed;
+  // discovered and model-declared verifiers are denied.
   const result = await client.prompt("Fix add() in add.js so that the test in test/add.test.js passes.", {
-    onApproval: (request) => (allowed.has(request.tool) ? "approve" : "deny"),
+    onApproval: (request) => {
+      if (["run_command", "write_file", "edit_file"].includes(request.tool)) return "approve";
+      if (request.tool === "verifier" && request.review.kind === "verifier" && request.review.command === "node --test" && request.review.detail === "configured") return "approve";
+      return "deny";
+    },
   });
 
   console.log(`outcome: ${result.turn.outcome}`);

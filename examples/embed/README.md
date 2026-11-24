@@ -16,7 +16,8 @@ NEXUS_LIB="$PWD/cli/dist/lib.js" node examples/embed/embed.mjs
 The endpoint and model come from the usual settings (`LOCAL_LLM_ENDPOINT`), or from sidecar options in `NEXUS_ARGS`.
 
 The sidecar runs in review mode, so it asks before each command, edit, and configured verifier run. The example's
-`onApproval` allows `run_command`, `write_file`, `edit_file`, and `verifier`, one call at a time, and denies everything
-else. Without a handler every request is denied, and the library has no way to approve "always".
+`onApproval` allows `run_command`, `write_file`, and `edit_file` one call at a time. For `verifier`, it allows only the
+operator-configured `node --test` check; discovered or model-declared verifiers are denied. Everything else is denied.
+Without a handler every request is denied, and the library has no way to approve "always".
 
 See [`docs/EMBEDDING.md`](../../docs/EMBEDDING.md) for the API and what the library guarantees.

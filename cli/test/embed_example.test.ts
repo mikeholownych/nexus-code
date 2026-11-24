@@ -63,11 +63,11 @@ async function runNode(args: string[], cwd: string, env: Record<string, string>)
   }
 }
 
-async function runExample(replies: Reply[]): Promise<Run & { gatewayRequests: number }> {
+async function runExample(replies: Reply[]): Promise<Run & { gatewayRequests: number; requests: unknown[] }> {
   const gateway = await startGateway((n) => replies[Math.min(n, replies.length) - 1]);
   try {
     const run = await runNode([EXAMPLE], ROOT, { NEXUS_LIB: LIB, NEXUS_ARGS: `-e ${gateway.url} -m m --no-continuation -s 8` });
-    return { ...run, gatewayRequests: gateway.requests.length };
+    return { ...run, gatewayRequests: gateway.requests.length, requests: gateway.requests };
   } finally {
     await gateway.close();
   }
@@ -97,6 +97,26 @@ test("examples/embed: a completion claim the verifier rejects is not VERIFIED an
   const run = await runExample(claimWithoutFixing);
   assert.notEqual(run.code, 0, "the verifier is the gate: claiming completion is not completing");
   assert.match(run.out, /^outcome: (?!VERIFIED)\w+\n$/, `${run.out}\n${run.err}`.slice(-1500));
+});
+
+test("examples/embed: a model-declared verifier is denied while the configured verifier remains usable", { timeout: 280_000 }, async () => {
+  requireBuild();
+  const marker = "NEXUS_MODEL_DECLARED_VERIFIER_MUST_NOT_RUN";
+  const run = await runExample([
+    { kind: "tools", calls: [{ name: "verifier", args: { command: `printf ${marker}`, detail: "model-declared" } }] },
+    ...fixAndComplete,
+  ]);
+  assert.equal(run.code, 0, `${run.out}\n${run.err}`.slice(-1500));
+  assert.equal(run.out, "outcome: VERIFIED\n");
+  const messages = run.requests.flatMap((request: any) => request.messages ?? []);
+  const attempted = messages.flatMap((message: any) => message.tool_calls ?? []).find((call: any) => {
+    if (call.function?.name !== "verifier") return false;
+    try { return JSON.parse(call.function.arguments).command.includes(marker); } catch { return false; }
+  });
+  assert.ok(attempted, "the model-declared verifier request reached the sidecar");
+  const result = messages.find((message: any) => message.role === "tool" && message.tool_call_id === attempted.id);
+  assert.ok(result, "the model-declared verifier call received a tool result");
+  assert.ok(!String(result.content ?? "").includes(marker), "the denied model-declared verifier did not execute");
 });
 
 test("the package resolves by name to the library entry only: the CLI and the agent are not importable through it", { timeout: 120_000 }, async () => {

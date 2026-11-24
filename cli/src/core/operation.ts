@@ -416,6 +416,18 @@ export interface DurableOperationState {
   activeHost?: string;
   /** Operator-visible reason the operation was paused (stale recovery, explicit pause, etc.). */
   pauseReason?: string;
+  /**
+   * Present when a detached job drives the operation (BG-1): no operator was at a front end, so no call was approved
+   * by a person. Set when the operation is created and never removed. Absent on every attended operation.
+   */
+  origin?: OperationOrigin;
+}
+
+export interface OperationOrigin {
+  kind: "job";
+  jobId: string;
+  scheduleId?: string;
+  unattended: true;
 }
 
 /** An option before it is numbered into a decision. */

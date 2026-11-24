@@ -7,7 +7,7 @@
  * working tree on disk, and the sandbox is the core default. A receipt is created here, after a verdict exists, under
  * an id drawn here, and is kept only in this process: no request writes the store.
  */
-import { fork, spawnSync } from "node:child_process";
+import { fork } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -16,6 +16,7 @@ import { VERIFY_RESULT_SCHEMA_VERSION, type VerifyJsonResult } from "../verify_c
 import { git } from "../worktrunk/git.js";
 import type { EffectivePolicy } from "./managed_policy.js";
 import { humanRequirementForEffect, managedPolicy } from "./policy_runtime.js";
+import { descendants, processStartTicks as startedAt } from "./process_identity.js";
 
 export const VERIFY_SERVICE_VERSION = 1;
 export const VERIFY_RECEIPT_STORE_SIZE = 32;
@@ -134,35 +135,6 @@ function deepFreeze<T>(value: T): T {
 
 /** How many listings a kill takes at most while it stops a process tree; each one after the first only catches late forks. */
 const KILL_LISTING_PASSES = 6;
-
-/** Every process below any of `roots`, from one process listing. */
-function descendants(roots: readonly number[]): number[] {
-  const listing = spawnSync("ps", ["-A", "-o", "pid=,ppid="], { encoding: "utf8", timeout: 5_000 });
-  const children = new Map<number, number[]>();
-  for (const line of (listing.stdout ?? "").split("\n")) {
-    const [pid, parent] = line.trim().split(/\s+/).map(Number);
-    if (pid > 0 && parent > 0) children.set(parent, [...(children.get(parent) ?? []), pid]);
-  }
-  const found = new Set<number>();
-  for (const queue = [...roots]; queue.length;) {
-    for (const pid of children.get(queue.shift()!) ?? []) {
-      if (found.has(pid)) continue;
-      found.add(pid);
-      queue.push(pid);
-    }
-  }
-  return [...found];
-}
-
-/** When the kernel started `pid` (field 22 of its stat line), or undefined when it is gone or this is not Linux. */
-function startedAt(pid: number): string | undefined {
-  try {
-    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
-    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
-  } catch {
-    return undefined;
-  }
-}
 
 /**
  * The worker as a child process in its own group. The module's extension follows this file's, so the source runs under

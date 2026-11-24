@@ -1,0 +1,660 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "nexus job status v1",
+  "description": "Generated from JobStatusDocument in cli/src/core/job_receipt.ts by cli/scripts/gen_job_receipt_schema.mjs. Do not edit by hand. The one JSON document `nexus job status <id> --json` prints; `schema_version` is its first member. It carries the job record, a summary of the job's operation and, once the job ended, its receipt.",
+  "$ref": "#/$defs/JobStatusOutput",
+  "$defs": {
+    "JobAttempt": {
+      "type": "object",
+      "properties": {
+        "bootId": {
+          "type": "string"
+        },
+        "end": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "$ref": "#/$defs/JobAttemptEndReason"
+            },
+            "signal": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "code",
+            "reason",
+            "signal"
+          ]
+        },
+        "endedAt": {
+          "type": "string"
+        },
+        "n": {
+          "type": "number"
+        },
+        "pid": {
+          "description": "The worker's identity: signals go only to a process that still matches all three.",
+          "type": "number"
+        },
+        "startTicks": {
+          "type": "string"
+        },
+        "startedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "bootId",
+        "n",
+        "pid",
+        "startTicks",
+        "startedAt"
+      ]
+    },
+    "JobAttemptEndReason": {
+      "enum": [
+        "crashed",
+        "deadline",
+        "exited",
+        "reboot",
+        "runner_stop",
+        "stopped"
+      ]
+    },
+    "JobBudgets": {
+      "type": "object",
+      "properties": {
+        "maxInferenceSubmissions": {
+          "type": "number"
+        },
+        "maxToolInvocations": {
+          "type": "number"
+        },
+        "maxTotalSteps": {
+          "description": "Objective-wide, counted across attempts.",
+          "type": "number"
+        },
+        "maxTurnMinutes": {
+          "description": "One attempt's turn deadline.",
+          "type": "number"
+        },
+        "timeoutMinutes": {
+          "description": "The whole job, from `createdAt`; `deadlineAt` is derived from it once.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "maxInferenceSubmissions",
+        "maxToolInvocations",
+        "maxTotalSteps",
+        "maxTurnMinutes",
+        "timeoutMinutes"
+      ]
+    },
+    "JobOrigin": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "dueAt": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "schedule"
+            },
+            "scheduleId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "dueAt",
+            "kind",
+            "scheduleId"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "cli"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "JobOutcome": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "receipt": {
+          "description": "File name of the receipt in the job directory.",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/TerminalJobState"
+        }
+      },
+      "required": [
+        "receipt",
+        "status"
+      ]
+    },
+    "JobPolicy": {
+      "description": "What an unattended job may do to the fresh worktree it runs in. Nothing else is expressible.",
+      "enum": [
+        "read-only",
+        "worktree-write"
+      ]
+    },
+    "JobProvider": {
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      }
+    },
+    "JobReceipt": {
+      "type": "object",
+      "properties": {
+        "approval_mode": {
+          "enum": [
+            "read-only",
+            "review"
+          ]
+        },
+        "attempts": {
+          "type": "number"
+        },
+        "base_commit": {
+          "type": "string"
+        },
+        "budgets": {
+          "$ref": "#/$defs/JobBudgets"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "ended_at": {
+          "type": "string"
+        },
+        "format": {
+          "const": "nexus-job-receipt"
+        },
+        "integration_branch": {
+          "description": "Where the job's results are. Nothing is merged into the operator's branch.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "job_id": {
+          "type": "string"
+        },
+        "missed": {
+          "type": "null"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/TerminalJobState"
+        },
+        "pending_decisions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JobReceiptDecision"
+          }
+        },
+        "policy": {
+          "$ref": "#/$defs/JobPolicy"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schedule_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "unattended": {
+          "description": "No operator was present: no call was approved by a person, and none was approved \"always\".",
+          "const": true
+        },
+        "units": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JobReceiptUnit"
+          }
+        },
+        "verifier": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "command": {
+                  "type": "string"
+                },
+                "source": {
+                  "const": "operator"
+                }
+              },
+              "required": [
+                "command",
+                "source"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspace": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "approval_mode",
+        "attempts",
+        "base_commit",
+        "budgets",
+        "created_at",
+        "ended_at",
+        "format",
+        "integration_branch",
+        "job_id",
+        "missed",
+        "operation_id",
+        "outcome",
+        "pending_decisions",
+        "policy",
+        "reason",
+        "schedule_id",
+        "schema_version",
+        "started_at",
+        "summary",
+        "unattended",
+        "units",
+        "verifier",
+        "workspace"
+      ]
+    },
+    "JobReceiptDecision": {
+      "type": "object",
+      "properties": {
+        "decide": {
+          "description": "The command that records the operator's answer; `nexus job resume <job>` then continues the job.",
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "question": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "decide",
+        "id",
+        "question"
+      ]
+    },
+    "JobReceiptUnit": {
+      "type": "object",
+      "properties": {
+        "blocked": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "cause": {
+                  "type": "string"
+                },
+                "question": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "cause",
+                "question"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "outcome": {
+          "description": "The unit's turn outcome as the operation recorded it (for example VERIFIED or UNVERIFIED); null when it has none.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "blocked",
+        "id",
+        "outcome",
+        "reason",
+        "status"
+      ]
+    },
+    "JobRecord": {
+      "description": "`jobs/<id>/job.json`. The runner is its only writer.",
+      "type": "object",
+      "properties": {
+        "attempts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JobAttempt"
+          }
+        },
+        "autoResumes": {
+          "description": "Crash resumes used; reboots and orderly runner stops are not counted.",
+          "type": "number"
+        },
+        "baseCommit": {
+          "description": "HEAD at submit: the job never sees a later commit.",
+          "type": "string"
+        },
+        "budgets": {
+          "$ref": "#/$defs/JobBudgets"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "deadlineAt": {
+          "description": "Absolute, so it survives runner and machine restarts.",
+          "type": "string"
+        },
+        "deliverables": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "format": {
+          "const": "nexus-job"
+        },
+        "id": {
+          "type": "string"
+        },
+        "maxAutoResumes": {
+          "type": "number"
+        },
+        "operationId": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/JobOrigin"
+        },
+        "outcome": {
+          "$ref": "#/$defs/JobOutcome"
+        },
+        "policy": {
+          "$ref": "#/$defs/JobPolicy"
+        },
+        "provider": {
+          "$ref": "#/$defs/JobProvider"
+        },
+        "specSha256": {
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "BLOCKED",
+            "CANCELLED",
+            "COMPLETE",
+            "FAILED",
+            "QUEUED",
+            "RUNNING",
+            "STARTING",
+            "STOPPING",
+            "TIMED_OUT"
+          ]
+        },
+        "unattended": {
+          "description": "Constant. A record without it is invalid, so no reader can take an attended run for a job.",
+          "const": true
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "verifier": {
+          "description": "The operator's verifier command, or null.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version": {
+          "const": 1
+        },
+        "workspace": {
+          "description": "Real path of the repository at submit.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "attempts",
+        "autoResumes",
+        "baseCommit",
+        "budgets",
+        "createdAt",
+        "deadlineAt",
+        "deliverables",
+        "format",
+        "id",
+        "maxAutoResumes",
+        "operationId",
+        "origin",
+        "policy",
+        "provider",
+        "specSha256",
+        "state",
+        "unattended",
+        "updatedAt",
+        "verifier",
+        "version",
+        "workspace"
+      ]
+    },
+    "JobStatusOutput": {
+      "description": "What `nexus job status <id> --json` prints: the job record, a summary of its operation, and its receipt once it ended.",
+      "type": "object",
+      "properties": {
+        "job": {
+          "$ref": "#/$defs/JobRecord"
+        },
+        "operation": {
+          "description": "Null when the operation was never created (the job has not started, or failed before it could).",
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "origin": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/OperationOrigin"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "status": {
+                  "type": "string"
+                },
+                "units": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "status"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "origin",
+                "status",
+                "units"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobReceipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schema_version": {
+          "const": 1
+        }
+      },
+      "required": [
+        "job",
+        "operation",
+        "receipt",
+        "schema_version"
+      ]
+    },
+    "OperationOrigin": {
+      "type": "object",
+      "properties": {
+        "jobId": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "job"
+        },
+        "scheduleId": {
+          "type": "string"
+        },
+        "unattended": {
+          "const": true
+        }
+      },
+      "required": [
+        "jobId",
+        "kind",
+        "unattended"
+      ]
+    },
+    "TerminalJobState": {
+      "enum": [
+        "BLOCKED",
+        "CANCELLED",
+        "COMPLETE",
+        "FAILED",
+        "TIMED_OUT"
+      ]
+    }
+  }
+}
