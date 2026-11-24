@@ -31,7 +31,7 @@ const client = await spawnSidecar({
 });
 try {
   const result = await client.prompt("Fix add() in add.js so that the test passes.", {
-    onApproval: (request) => (request.tool === "run_command" ? "approve" : "deny"),
+    onApproval: (request) => (["run_command", "verifier"].includes(request.tool) ? "approve" : "deny"),
   });
   console.log(result.turn.outcome); // "VERIFIED" only when the verifier passed on the declared deliverable
 } finally {

@@ -31,9 +31,9 @@ try {
     extraArgs: (process.env.NEXUS_ARGS ?? "").split(/\s+/).filter(Boolean),
   });
 
-  // The sidecar asks before each command or edit. This embedder allows those three tools, one call at a time, and
-  // nothing else; with no handler every request would be denied.
-  const allowed = new Set(["run_command", "write_file", "edit_file"]);
+  // The sidecar asks before each command, edit, or verifier run. This embedder allows the listed actions one call at a
+  // time and denies everything else; with no handler every request would be denied.
+  const allowed = new Set(["run_command", "write_file", "edit_file", "verifier"]);
   const result = await client.prompt("Fix add() in add.js so that the test in test/add.test.js passes.", {
     onApproval: (request) => (allowed.has(request.tool) ? "approve" : "deny"),
   });

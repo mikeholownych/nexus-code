@@ -15,8 +15,8 @@ NEXUS_LIB="$PWD/cli/dist/lib.js" node examples/embed/embed.mjs
 `NEXUS_LIB` is the absolute path of `lib/cli/dist/lib.js` under the Nexus home (the directory that holds `bin/nexus`).
 The endpoint and model come from the usual settings (`LOCAL_LLM_ENDPOINT`), or from sidecar options in `NEXUS_ARGS`.
 
-The sidecar runs in review mode, so it asks before each command or edit. The example's `onApproval` allows
-`run_command`, `write_file` and `edit_file`, one call at a time, and denies everything else. Without a handler every
-request is denied, and the library has no way to approve "always".
+The sidecar runs in review mode, so it asks before each command, edit, and configured verifier run. The example's
+`onApproval` allows `run_command`, `write_file`, `edit_file`, and `verifier`, one call at a time, and denies everything
+else. Without a handler every request is denied, and the library has no way to approve "always".
 
 See [`docs/EMBEDDING.md`](../../docs/EMBEDDING.md) for the API and what the library guarantees.
