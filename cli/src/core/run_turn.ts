@@ -28,6 +28,54 @@ import type { AutonomousAgent } from "../agent.js";
 class InferenceSubmissionBudgetExhausted extends Error {}
 class InferenceSubmissionPersistenceFailed extends Error {}
 
+interface TaskElapsedTurnState {
+  remainingMs: number | undefined;
+  historyComplete: boolean;
+  reservationFailed: boolean;
+  isDeadline: boolean;
+}
+
+function beginTaskElapsedTurn(tracker: ExecutionTracker, budget: any, objective: any, durable: boolean, persist: () => boolean): TaskElapsedTurnState {
+  const remainingMs = budget
+    ? tracker.beginTaskElapsedBudget(budget.maxTaskMinutes * 60_000, Date.now(), objective?.startedAt)
+    : undefined;
+  return {
+    remainingMs,
+    historyComplete: tracker.data.taskElapsedHistoryComplete,
+    reservationFailed: Boolean(objective && durable && !persist()),
+    isDeadline: remainingMs !== undefined && budget !== undefined && remainingMs <= budget.maxTurnMinutes * 60_000,
+  };
+}
+
+function taskTimeLimitDetail(budget: any, state: TaskElapsedTurnState): string {
+  return state.isDeadline
+    ? `objective elapsed-time limit ${budget.maxTaskMinutes} min exhausted; elapsed history ${state.historyComplete ? "is complete" : "was conservatively estimated from the objective start time"}`
+    : `operator time limit ${budget.maxTurnMinutes} min`;
+}
+
+function initialTaskTimeStopReason(state: TaskElapsedTurnState, persistenceFailure?: string): TurnReason | undefined {
+  return state.remainingMs === 0 && !persistenceFailure ? "TIME_BUDGET_EXHAUSTED" : undefined;
+}
+
+function activeTurnDeadline(startedAt: number, budget: any, taskRemainingMs: number | undefined): number {
+  const limitMs = budget
+    ? Math.min(budget.maxTurnMinutes * 60_000, taskRemainingMs ?? Number.POSITIVE_INFINITY)
+    : Number.POSITIVE_INFINITY;
+  return Number.isFinite(limitMs) ? startedAt + limitMs : Number.POSITIVE_INFINITY;
+}
+
+function shouldArmTurnDeadline(budget: any, activeTurnLimitMs: number, deadline: number): boolean {
+  return Boolean(budget && activeTurnLimitMs > 0 && Number.isFinite(deadline));
+}
+
+function queuedCompactionBudgetReason(budget: any, tracker: ExecutionTracker): string | undefined {
+  return budget && tracker.remainingTaskElapsedBudget(Date.now()) === 0 ? "the objective elapsed-time budget is exhausted" : undefined;
+}
+
+function shouldOverrideStopAfterDeadline(timeBudgetExpired: boolean, modelStop: ModelStop): boolean {
+  return timeBudgetExpired && modelStop === "NONE";
+}
+
 export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean; tddRed?: boolean; step?: boolean }): Promise<TurnResult> {
   // The REPL calls runTurn directly. Route worktree-enabled turns through the
   // same establishment and resolution boundary as one-shot `run` tasks. A retained
@@ -193,11 +241,8 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
   }
   maxInferenceSubmissions = savedInferenceLimit === 0 ? configuredInferenceLimit : Math.min(savedInferenceLimit, configuredInferenceLimit);
   tracker.data.maxInferenceSubmissions = maxInferenceSubmissions;
-  const taskElapsedRemainingMs = budget
-    ? tracker.beginTaskElapsedBudget(budget.maxTaskMinutes * 60_000, Date.now(), this.objective?.startedAt)
-    : undefined;
-  const taskElapsedHistoryComplete = tracker.data.taskElapsedHistoryComplete;
-  const taskElapsedCheckpointFailed = Boolean(this.objective && this.durable && !this.persistProgress({ messages: true }));
+  const taskElapsedState = beginTaskElapsedTurn(tracker, budget, this.objective, this.durable, () => this.persistProgress({ messages: true }));
+  const taskElapsedRemainingMs = taskElapsedState.remainingMs;
 
   try {
     if (this.flightRecorder) {
@@ -256,7 +301,7 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
     let inferenceFailure: InferenceFailure | null = null;
     let interruption: InterruptionRecord | null = null;
     let undispatched = 0;
-    let persistenceFailure: string | undefined = taskElapsedCheckpointFailed
+    let persistenceFailure: string | undefined = taskElapsedState.reservationFailed
       ? "Task elapsed-time budget could not be saved before execution; no model or tool action was started."
       : undefined;
 
@@ -290,19 +335,17 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
       content: `Not executed: ${stopDetail ?? persistenceFailure ?? "tool invocation budget unavailable"}.`,
     });
 
-    let stopReason: TurnReason | undefined = taskElapsedRemainingMs === 0 && !persistenceFailure ? "TIME_BUDGET_EXHAUSTED" : undefined;
+    let stopReason: TurnReason | undefined = initialTaskTimeStopReason(taskElapsedState, persistenceFailure);
     let stopDetail: string | undefined;
     let timeBudgetExpired = false;
-    const taskTimeDeadline = taskElapsedRemainingMs !== undefined && budget !== undefined && taskElapsedRemainingMs <= budget.maxTurnMinutes * 60_000;
+    const taskTimeDeadline = taskElapsedState.isDeadline;
     if (stopReason === "TIME_BUDGET_EXHAUSTED") {
-      stopDetail = `objective elapsed-time limit ${budget!.maxTaskMinutes} min exhausted; elapsed history ${taskElapsedHistoryComplete ? "is complete" : "was conservatively estimated from the objective start time"}`;
+      stopDetail = taskTimeLimitDetail(budget, taskElapsedState);
     }
     const markInterrupted = (phase: InterruptionRecord["phase"], extra: Partial<InterruptionRecord> = {}) => {
       if (timeBudgetExpired) {
         stopReason = "TIME_BUDGET_EXHAUSTED";
-        stopDetail = taskTimeDeadline
-          ? `objective elapsed-time limit ${budget!.maxTaskMinutes} min exhausted; elapsed history ${taskElapsedHistoryComplete ? "is complete" : "was conservatively estimated from the objective start time"}`
-          : `operator time limit ${budget!.maxTurnMinutes} min`;
+        stopDetail = taskTimeLimitDetail(budget, taskElapsedState);
         interruption = null;
         return;
       }
@@ -324,11 +367,9 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
     // survives resumes; the active invocation also has a finite wall-clock limit. Without continuation
     // (`--no-continuation`), the first segment boundary ends the turn (LIMIT_REACHED, legacy).
     const turnStartedAt = Date.now();
-    const activeTurnLimitMs = budget
-      ? Math.min(budget.maxTurnMinutes * 60_000, taskElapsedRemainingMs ?? Number.POSITIVE_INFINITY)
-      : Number.POSITIVE_INFINITY;
-    const turnDeadline = Number.isFinite(activeTurnLimitMs) ? turnStartedAt + activeTurnLimitMs : Number.POSITIVE_INFINITY;
-    if (budget && activeTurnLimitMs > 0 && Number.isFinite(turnDeadline)) {
+    const turnDeadline = activeTurnDeadline(turnStartedAt, budget, taskElapsedRemainingMs);
+    const activeTurnLimitMs = turnDeadline - turnStartedAt;
+    if (shouldArmTurnDeadline(budget, activeTurnLimitMs, turnDeadline)) {
       deadlineTimer = setTimeout(() => {
         if (this.requestCancel(taskTimeDeadline ? "task time budget" : "time budget")) timeBudgetExpired = true;
       }, Math.max(0, turnDeadline - Date.now()));
@@ -377,9 +418,7 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
       }
       if (Date.now() > turnDeadline) {
         stopReason = "TIME_BUDGET_EXHAUSTED";
-        stopDetail = taskTimeDeadline
-          ? `objective elapsed-time limit ${budget!.maxTaskMinutes} min exhausted; elapsed history ${taskElapsedHistoryComplete ? "is complete" : "was conservatively estimated from the objective start time"}`
-          : `operator time limit ${budget!.maxTurnMinutes} min`;
+        stopDetail = taskTimeLimitDetail(budget, taskElapsedState);
         break;
       }
       if (budget && tracker.data.stepsWithoutProgress >= budget.stagnationSteps) {
@@ -1157,7 +1196,7 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
     // Queued /compact: run now that the last step has settled, or cancelled with the turn.
     if (this.compactionQueue.length) {
       try {
-        const taskBudgetReason = budget && tracker.remainingTaskElapsedBudget(Date.now()) === 0 ? "the objective elapsed-time budget is exhausted" : undefined;
+        const taskBudgetReason = queuedCompactionBudgetReason(budget, tracker);
         await this.drainCompactionQueue(
           currentStep,
           signal,
@@ -1170,11 +1209,9 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
       }
     }
     if (deadlineTimer) clearTimeout(deadlineTimer);
-    if (timeBudgetExpired && modelStop === "NONE") {
+    if (shouldOverrideStopAfterDeadline(timeBudgetExpired, modelStop)) {
       stopReason = "TIME_BUDGET_EXHAUSTED";
-      stopDetail = taskTimeDeadline
-        ? `objective elapsed-time limit ${budget!.maxTaskMinutes} min exhausted; elapsed history ${taskElapsedHistoryComplete ? "is complete" : "was conservatively estimated from the objective start time"}`
-        : `operator time limit ${budget!.maxTurnMinutes} min`;
+      stopDetail = taskTimeLimitDetail(budget, taskElapsedState);
     }
     if (this.hasQueuedSteering()) {
       this.cancelQueuedSteering(
