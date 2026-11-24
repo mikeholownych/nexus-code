@@ -16,6 +16,7 @@ import {
   type PluginManifest,
   type PluginPermission,
   InvalidPluginManifestError,
+  isPluginName,
 } from "./plugin_manifest.js";
 import { decodeStrictUtf8, parseStrictJson, readHardenedFile } from "./strict_json.js";
 
@@ -163,7 +164,10 @@ export function listInstalledPlugins(home = os.homedir()): Array<{ name: string;
 }
 
 export function removeInstalledPlugin(name: string, home = os.homedir()): string {
-  const installDir = path.join(installedPluginsRoot(home), name);
+  if (!isPluginName(name)) throw new PluginInstallError("invalid plugin name");
+  const root = path.resolve(installedPluginsRoot(home));
+  const installDir = path.resolve(root, name);
+  if (path.dirname(installDir) !== root) throw new PluginInstallError("plugin path escapes the installed plugins directory");
   if (!fs.existsSync(installDir)) throw new PluginInstallError(`plugin '${name}' is not installed`);
   fs.rmSync(installDir, { recursive: true, force: true });
   return installDir;

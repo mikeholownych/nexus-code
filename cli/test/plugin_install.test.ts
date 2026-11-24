@@ -58,6 +58,16 @@ test("install, verify, tamper detection, and remove", () => {
   assert.throws(() => removeInstalledPlugin("demo-plugin", home), PluginInstallError);
 });
 
+test("remove refuses path traversal without deleting outside the install root", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-hk2-remove-boundary-"));
+  const outside = path.join(home, "outside");
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, "keep.txt"), "keep\n");
+
+  assert.throws(() => removeInstalledPlugin("../../../outside", home), PluginInstallError);
+  assert.equal(fs.readFileSync(path.join(outside, "keep.txt"), "utf8"), "keep\n");
+});
+
 test("install refuses a second copy of the same name", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-hk2-"));
   const src = packageDir(home, "once");

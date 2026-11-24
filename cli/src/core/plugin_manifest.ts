@@ -14,7 +14,7 @@ export const PLUGIN_MANIFEST_VERSION = 1;
 export const PLUGIN_MANIFEST_NAME = "nexus-plugin.json";
 export const PLUGIN_MANIFEST_LIMIT = 64 * 1024;
 
-const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const PLUGIN_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const PERMISSIONS = ["hooks", "skills", "verifiers", "mcp", "tools"] as const;
 export type PluginPermission = (typeof PERMISSIONS)[number];
 
@@ -43,6 +43,10 @@ export class InvalidPluginManifestError extends Error {
   }
 }
 
+export function isPluginName(value: string): boolean {
+  return PLUGIN_NAME_RE.test(value);
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
 function stringList(field: string, value: unknown, limit: number): string[] {
@@ -65,7 +69,7 @@ export function parsePluginManifest(raw: unknown): PluginManifest {
     if (!allowed.has(key)) throw new InvalidPluginManifestError(`unknown key '${key}'`);
   }
   if (raw.version !== 1) throw new InvalidPluginManifestError(`version must be 1 (got ${String(raw.version)})`);
-  if (typeof raw.name !== "string" || !NAME_RE.test(raw.name)) throw new InvalidPluginManifestError("name must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}");
+  if (typeof raw.name !== "string" || !isPluginName(raw.name)) throw new InvalidPluginManifestError("name must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}");
   if (typeof raw.pluginVersion !== "string" || !raw.pluginVersion || raw.pluginVersion.length > 64) {
     throw new InvalidPluginManifestError("pluginVersion must be a non-empty string up to 64 characters");
   }
