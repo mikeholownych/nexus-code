@@ -83,7 +83,7 @@ export function registerScheduleCommands(program: Command): void {
     .option("--verifier <command>", "Your verifier command: it gates every completion")
     .option("--deliverable-file <path>", "Workspace-relative file each run must deliver (repeatable)", (value: string, all: string[] = []) => [...all, value])
     .option("--max-runs <n>", "Stop after this many runs (default: no limit)")
-    .option("--on-missed <policy>", "What to do with runs that were missed: run-once (report, then one catch-up; default) or report", "run-once")
+    .option("--on-missed <policy>", "What to do with runs that were missed: report (default) or start one catch-up with run-once", "report")
     .option("--max-total-steps <n>", "Steps for the whole job")
     .option("--max-tool-invocations <n>", "Tool calls for the whole job")
     .option("--max-inference-submissions <n>", "Model requests for the whole job")

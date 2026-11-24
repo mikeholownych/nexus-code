@@ -51,7 +51,7 @@ test("add, list, status, pause, resume and remove: the operator's whole loop", {
     assert.equal(shown.schedule.policy, "read-only", "read-only unless the operator says otherwise");
     assert.equal(shown.schedule.verifier, "node --test");
     assert.equal(shown.schedule.remainingRuns, 5);
-    assert.equal(shown.schedule.onMissed, "run-once");
+    assert.equal(shown.schedule.onMissed, "report", "a missed schedule must be reported unless catch-up is explicitly requested");
     assert.equal(shown.upcoming.length, 3);
     assert.equal(shown.schedule.state.nextDueAt, shown.upcoming[0]);
     const paths = schedulePaths(world.paths);

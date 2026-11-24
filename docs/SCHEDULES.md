@@ -11,7 +11,7 @@ nexus schedule run-now nightly                  # one run now; the schedule's gr
 nexus schedule pause nightly                    # and: resume, remove (alias rm)
 ```
 
-`add`, `list`, `status` and `run-now` take `--json` (`add` prints `{schedule, upcoming}`, `status` prints `{schedule, latest_job, last_fired_job, pointer, receipt}`). `add` also takes the job options (`--verifier`, `--deliverable-file`, the budget flags, `-e/-m/--provider`), `--max-runs N`, and `--on-missed run-once|report`. There is no `--yes`, `--mode`, `--sandbox` or `--approve`: they are refused, as for `job start`.
+`add`, `list`, `status` and `run-now` take `--json` (`add` prints `{schedule, upcoming}`, `status` prints `{schedule, latest_job, last_fired_job, pointer, receipt}`). `add` also takes the job options (`--verifier`, `--deliverable-file`, the budget flags, `-e/-m/--provider`), `--max-runs N`, and `--on-missed report|run-once` (default `report`). There is no `--yes`, `--mode`, `--sandbox` or `--approve`: they are refused, as for `job start`.
 
 ## Triggers (all UTC)
 
@@ -40,7 +40,7 @@ Not in v1.3.0: event triggers, SSH execution, wake checks, goal (objective-ledge
 A slot is **missed** when the runner could not serve it: it was not running, the host slept, or the clock jumped forward. A slot is on time when it is within 30 seconds of the runner looking at it.
 
 - **Reported, never silent.** Every missed slot is counted. The runner writes one **gap** per catch-up: `count`, the `first` and `last` slot, the reason (`runner_not_running`, `overlap`, `refused`) in the schedule's record (the last 50 gaps), in `nexus schedule status` and `list`, in the runner log, and as a missed-run receipt `nexus-schedules/<id>.missed-<time>.json` (the last 20 are kept). A gap longer than 200 000 slots is reported as a lower bound (`truncated`).
-- **Never replayed as a burst.** Late slots are never run one by one. With `--on-missed run-once` (the default) **one** catch-up job stands for the whole gap, for its last slot, and its receipt carries `missed: {count, first, last}` and `schedule_occurrence`. With `--on-missed report` no job runs for a gap. If the newest slot is on time, that job is the run; the gap rides in its receipt. Three days of an hourly schedule down is 72 missed slots, one job.
+- **Never replayed as a burst.** Late slots are never run one by one. With `--on-missed report` (the default), no catch-up job runs for a gap; the missed slots are recorded and reported. With `--on-missed run-once`, **one** catch-up job stands for the whole gap, for its last slot, and its receipt carries `missed: {count, first, last}` and `schedule_occurrence`. If the newest slot is on time, that job is the run; the gap rides in its receipt. Three days of an hourly schedule down is 72 missed slots, one job only when catch-up was explicitly requested.
 - **Phase kept.** The next slot is always the next one on the schedule's own grid after now.
 - **Overlap.** A slot that falls due while the schedule's previous job is still running starts nothing: it is recorded as an `overlap` gap (`last outcome SKIPPED_OVERLAP`). Two jobs of one schedule never run at once; `run-now` refuses while one runs.
 - **A refusal is a miss too.** A run that cannot be submitted (untrusted workspace, queue full at 32 jobs, a repository that is not a repository, managed policy) is recorded as a `refused` gap with the reason and the schedule moves on.
