@@ -31,7 +31,11 @@ const client = await spawnSidecar({
 });
 try {
   const result = await client.prompt("Fix add() in add.js so that the test passes.", {
-    onApproval: (request) => (["run_command", "verifier"].includes(request.tool) ? "approve" : "deny"),
+    onApproval: (request) => {
+      if (["run_command", "write_file", "edit_file"].includes(request.tool)) return "approve";
+      if (request.tool === "verifier" && request.review.kind === "verifier" && request.review.command === "node --test" && request.review.detail === "configured") return "approve";
+      return "deny";
+    },
   });
   console.log(result.turn.outcome); // "VERIFIED" only when the verifier passed on the declared deliverable
 } finally {
@@ -88,6 +92,8 @@ When the sidecar's approval policy wants a person to confirm a tool call, `promp
 - Returning exactly `"approve"` lets that one call run.
 - Anything else denies it: `"deny"`, any other value, a rejected promise, a thrown error, or no `onApproval` at all. The default is to deny.
 - There is no way to approve "always". The client sends `always: false` with every approval and has no method that sends another command, so each later call asks again.
+
+An embedder should inspect `request.review` before approving verification. The example above allows only the `node --test` verifier configured by the operator; discovered and model-declared verifier requests are denied.
 
 The sidecar can also ask for a checkpoint choice, when sensitive content blocks the rollback checkpoint it takes before a change. The alternatives either drop the checkpoint or persist the sensitive content, and API version 1 has no way to pick one: the client cancels the turn, and `prompt` resolves with the interrupted result.
 
