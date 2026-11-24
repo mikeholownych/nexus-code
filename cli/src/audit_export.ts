@@ -88,12 +88,26 @@ function repositoryConfiguresPrograms(workspacePath: string): boolean {
   const inside = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: workspacePath, encoding: "utf8", timeout: 10_000 });
   if (inside.status !== 0 || inside.stdout.trim() !== "true") return false; // not a Git working tree: no Git command is run on it
   const listed = spawnSync("git", ["config", "--show-scope", "-z", "--get-regexp", GIT_PROGRAM_KEYS], { cwd: workspacePath, encoding: "utf8", timeout: 10_000 });
-  if (listed.status === 1 && !listed.stdout) return false;
-  if (listed.status !== 0) return true;
+  // Exit 1 with no output: no such key anywhere. Anything else that is not success could not be read.
+  const none = listed.status === 1 && !listed.stdout;
+  if (!none && listed.status !== 0) return true;
   // Records are `scope NUL key LF value NUL`.
-  const fields = listed.stdout.split("\0");
+  const fields = none ? [] : listed.stdout.split("\0");
   for (let index = 0; index + 1 < fields.length; index += 2) {
     if (fields[index] !== "system" && fields[index] !== "global" && fields[index] !== "command") return true;
+  }
+  // A submodule is a repository of its own: its configuration is not in the listing above, and Git reads it when it
+  // looks inside the submodule. A workspace that has one is not hashed. The index is read without touching the working
+  // tree (no filter runs for a listing), and stored module directories count even when nothing is checked out.
+  const staged = spawnSync("git", ["-c", "core.fsmonitor=false", "ls-files", "--stage", "-z"], { cwd: workspacePath, encoding: "utf8", timeout: 10_000, maxBuffer: 256 * 1024 * 1024 });
+  if (staged.status !== 0) return true;
+  if (staged.stdout.split("\0").some((entry) => entry.startsWith("160000 "))) return true;
+  const gitDir = spawnSync("git", ["rev-parse", "--absolute-git-dir"], { cwd: workspacePath, encoding: "utf8", timeout: 10_000 });
+  if (gitDir.status !== 0) return true;
+  try {
+    if (fs.readdirSync(path.join(gitDir.stdout.trim(), "modules")).length > 0) return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return true;
   }
   return false;
 }
