@@ -37,11 +37,13 @@ test("__proto__ is an ordinary key and cannot change the object's prototype", ()
 });
 
 test("nesting deeper than the limit is refused", () => {
-  assert.deepEqual(parseStrictJson("[[[[[[[[1]]]]]]]]"), [[[[[[[[1]]]]]]]]);
-  rejects("[[[[[[[[[1]]]]]]]]]", /nesting is deeper than 8 levels/);
+  assert.deepEqual(parseStrictJson("[[[[[[[[1]]]]]]]]", { maxDepth: 8 }), [[[[[[[[1]]]]]]]]);
+  rejects("[[[[[[[[[1]]]]]]]]]", /nesting is deeper than 8 levels/, { maxDepth: 8 });
   rejects('{"a":{"b":{"c":1}}}', /nesting is deeper than 2 levels/, { maxDepth: 2 });
   // Deep input is refused by the limit, not by running out of stack.
-  rejects("[".repeat(100_000), /nesting is deeper than 8 levels/);
+  rejects("[".repeat(100_000), /nesting is deeper than 8 levels/, { maxDepth: 8 });
+  // Default bound matches BG-1 records (STRICT_JSON_MAX_DEPTH).
+  rejects("[".repeat(33) + "]".repeat(33), /nesting is deeper than 32 levels/);
 });
 
 test("syntax errors are refused with a position", () => {
