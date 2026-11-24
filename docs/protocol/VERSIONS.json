@@ -28,5 +28,10 @@
     "protocol": 1,
     "schemaSha256": "e0cf55a4d8c336fce2ec452aba1a14cfc167b8acc623c4792061f65a6a82c2fe",
     "note": "Add the INFERENCE_SUBMISSION_BUDGET_EXHAUSTED turn reason and optional objective inference submission counts and history completeness; additive protocol v1 fields preserve existing meanings."
+  },
+  {
+    "protocol": 1,
+    "schemaSha256": "a83669f1acbd466529e6fd0531f396a2b9616e11deff7d292ddd91d01fd4fc7e",
+    "note": "Add optional objective elapsed-time accounting fields to turn results; additive sidecar protocol v1 change preserves existing meanings."
   }
 ]
