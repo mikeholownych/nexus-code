@@ -94,16 +94,20 @@ test("approved, it runs; one byte changed, it does not run again and the notice 
   assert.equal(runsOf(log).length, 1, "the program was not started again");
   assert.deepEqual(hookNotices(), [`nexus: project hooks in ${file()} are not approved (changed since approval); review them and run \`nexus hooks approve\``]);
 
-  // Approving the new bytes puts it back in force.
+  // Approving the new bytes puts it back in force. (A whole-second modification time, so it can be put back exactly.)
   fs.rmSync(path.join(repo, "out.txt"));
+  fs.utimesSync(file(), 1_700_000_000, 1_700_000_000);
   approveProjectHooks(repo);
   assert.equal((await dispatch(agent, "write_file", WRITE)).denialReason, "HOOK_DENIED");
   assert.equal(runsOf(log).length, 2);
 
-  // Changing only what the hook does (same size, later mtime) is caught too.
+  // Changing only what the hook does, with the size and the modification time put back as they were, is caught too.
+  const before = fs.statSync(file(), { bigint: true });
   const swapped = fs.readFileSync(file(), "utf8").replace("project-guard", "project-guarD");
   fs.writeFileSync(file(), swapped);
-  fs.utimesSync(file(), new Date(), new Date(Date.now() + 10_000));
+  fs.utimesSync(file(), 1_700_000_000, 1_700_000_000);
+  const after = fs.statSync(file(), { bigint: true });
+  assert.deepEqual([after.size, after.mtimeNs, after.ino], [before.size, before.mtimeNs, before.ino], "the fixture: same size, modification time and inode");
   assert.equal((await dispatch(agent, "write_file", WRITE)).status, "COMPLETED");
   assert.equal(runsOf(log).length, 2);
 });

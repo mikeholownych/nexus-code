@@ -327,8 +327,9 @@ const showPath = (file: string) => (file.startsWith(`${os.homedir()}${path.sep}`
 /**
  * The hooks in force for one agent, attached to its execution spine: `preToolAdmission` is the spine's context
  * admission stage and `postToolEmission` its evidence stage. The spine is reached only after every gate of the
- * dispatcher approved a call, so a hook is never asked about a call a gate denied, and the only thing its answer can
- * change is to turn an approved call into a denied one.
+ * dispatcher approved a call, so no hook is started for a call one of those denied; the spine's own authority stage
+ * (read-only mode, grants, the workspace boundary) runs after the hooks and does not look at what they said. The
+ * only thing a hook's answer can change is to turn a call that would have run into a denied one.
  */
 export class HookRegistry {
   private readonly files = new Map<string, { stamp: string; loaded: LoadedHooksFile }>();
