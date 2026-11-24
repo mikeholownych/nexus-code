@@ -107,15 +107,30 @@ export function parseCron(expr: string): CronSpec {
 }
 
 /**
- * The smallest gap, in minutes, between two slots of one day (and across midnight when every day matches). A trigger
- * must not fire more often than `every` may: five minutes.
+ * True when two calendar days that both match `spec` can fall next to each other (so a last-slot-of-day to
+ * first-slot-of-next-day gap is a real fire interval). Samples a leap year including the year wrap.
+ */
+function matchingDaysCanBeAdjacent(spec: CronSpec): boolean {
+  const start = Date.UTC(2024, 0, 1);
+  for (let i = 0; i < 366; i++) {
+    const a = new Date(start + i * 86_400_000);
+    const b = new Date(start + (i + 1) * 86_400_000);
+    if (dayMatches(spec, a) && dayMatches(spec, b)) return true;
+  }
+  return false;
+}
+
+/**
+ * The smallest gap, in minutes, between two slots of one day (and across midnight when consecutive matching days
+ * exist). A trigger must not fire more often than `every` may: five minutes. Restricted day-of-month or day-of-week
+ * lists still count the midnight wrap when those days can be adjacent (e.g. `1,2`).
  */
 export function cronMinGapMinutes(spec: CronSpec): number {
   const slots: number[] = [];
   for (const hour of [...spec.hour.allowed].sort((a, b) => a - b)) for (const minute of [...spec.minute.allowed].sort((a, b) => a - b)) slots.push(hour * 60 + minute);
   let gap = Infinity;
   for (let i = 1; i < slots.length; i++) gap = Math.min(gap, slots[i] - slots[i - 1]);
-  if (slots.length > 1 && spec.dayOfMonth.star && spec.dayOfWeek.star) gap = Math.min(gap, slots[0] + 1440 - slots[slots.length - 1]);
+  if (slots.length > 1 && matchingDaysCanBeAdjacent(spec)) gap = Math.min(gap, slots[0] + 1440 - slots[slots.length - 1]);
   return gap;
 }
 
@@ -171,8 +186,13 @@ export function parseOnceAt(text: string): string {
 /** A trigger from stored or typed parts, validated. The returned trigger is the normal form (an `at` is a full ISO string). */
 export function validateTrigger(value: ScheduleTrigger): ScheduleTrigger {
   if (value.kind === "cron") {
-    const gap = cronMinGapMinutes(parseCron(value.expr));
+    const spec = parseCron(value.expr);
+    const gap = cronMinGapMinutes(spec);
     if (gap < MIN_EVERY_SECONDS / 60) throw new ScheduleSpecError(`cron '${value.expr.slice(0, 60)}' runs every ${gap} minute${gap === 1 ? "" : "s"} at times; slots are at least ${MIN_EVERY_SECONDS / 60} minutes apart, as for --every.`);
+    // Refuse expressions that never name a real date (e.g. 31 February) so `add` and planted records agree.
+    if (cronNextAfter(spec, Date.UTC(2024, 0, 1)) === undefined) {
+      throw new ScheduleSpecError(`cron '${value.expr.slice(0, 60)}' never matches a date within four years.`);
+    }
     return { kind: "cron", expr: value.expr };
   }
   if (value.kind === "every") {

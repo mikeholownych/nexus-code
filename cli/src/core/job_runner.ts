@@ -29,6 +29,7 @@ import {
 } from "./runner_store.js";
 import { ScheduleEngine, type ScheduleEngineOptions } from "./schedule_engine.js";
 import { UNATTENDED_ENV_SCRUB } from "./unattended.js";
+import { verifierProblem } from "./verifier_command.js";
 import { isWorkspaceListed } from "../workspace_trust.js";
 
 export const DEFAULT_MAX_JOBS = 1;
@@ -105,6 +106,9 @@ export function submissionProblem(job: JobSubmission, spec: unknown): string | u
     return error.message;
   }
   if (specDigest(spec) !== job.specSha256) return "the spec does not match its recorded digest";
+  // Same verifier checks as schedule add / fire: a hand-written inbox request must not skip them.
+  const refused = verifierProblem(job.workspace, job.verifier);
+  if (refused) return refused;
   if (job.policy === "worktree-write") {
     // Every write would be denied, so the job could only ever end blocked: refuse it where the operator can see why.
     const human = humanRequirementForEffect(managedPolicy(), "write_workspace");

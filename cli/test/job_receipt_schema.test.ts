@@ -100,6 +100,26 @@ test("a blocked job's receipt carries the turn's reason, the question and the co
   assert.equal(buildJobReceipt(j, op, { outcome: "BLOCKED", endedAt: ENDED }).reason, "INTERRUPTED");
 });
 
+test("REGRESSION_FREE after a passing verifier is not reported as NOT_RUN", () => {
+  const j = job();
+  const op = operation(j.operationId);
+  const decision = { id: "task#1", unitId: "task", cause: "EXECUTION_FAILED" as const, question: "retry?", options: [{ id: "1", label: "retry", action: { kind: "retry" } as any }] };
+  Object.assign(op.units[0], {
+    status: "BLOCKED",
+    blocked: { since: ENDED, reason: "COMPLETED/REGRESSION_FREE: tests pass without showing the change", decision },
+    failedRun: {
+      at: ENDED,
+      reason: "COMPLETED/REGRESSION_FREE: tests pass without showing the change",
+      summary: "done",
+      verification: { command: "npm test", status: "PASSED", hasExecutedTests: true },
+    },
+  });
+  op.status = "BLOCKED";
+  const receipt = buildJobReceipt(j, op, { outcome: "BLOCKED", endedAt: ENDED });
+  assert.equal(receipt.verifier?.status, "PASSED");
+  assert.equal(receipt.summary.includes("Verifier not run"), false, receipt.summary);
+});
+
 test("a completed job copies each unit's outcome and says nothing was merged; a job that ended outside its operation says why", () => {
   const j = job({ policy: "read-only", verifier: null, origin: { kind: "schedule", scheduleId: "nightly-lint", dueAt: "2026-11-24T03:00:00.000Z" } });
   const op = operation(j.operationId);

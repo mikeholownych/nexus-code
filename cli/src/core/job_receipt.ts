@@ -119,6 +119,14 @@ function verifierState(operation: DurableOperationState | undefined): { status: 
   const recorded = (operation?.units ?? []).flatMap((unit) => [unit.failedRun?.verification, unit.result?.verification]).filter((v) => v !== undefined);
   const last = recorded[recorded.length - 1];
   if (last) return { status: last.status };
+  // REGRESSION_FREE means the verifier passed; independence failed. Prefer an explicit recorded run when present; if a
+  // older record only left the reason text, still do not claim NOT_RUN.
+  for (const unit of operation?.units ?? []) {
+    const text = [unit.blocked?.reason, unit.result?.outcome, unit.failedRun?.reason].filter(Boolean).join(" ");
+    if (/\bREGRESSION_FREE\b/.test(text)) {
+      return { status: "PASSED", detail: "verifier passed; the job ended REGRESSION_FREE (tests did not show the change independently)" };
+    }
+  }
   return { status: "NOT_RUN", detail: "no unit recorded a verifier run: the verifier was not run (a read-only run does not run it, or the job ended before completion was attempted)" };
 }
 

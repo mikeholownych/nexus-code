@@ -63,14 +63,21 @@ test("cron: invalid strings are refused with a reason that names the field", () 
 });
 
 test("cron: slots closer than five minutes are refused like an interval below the floor (validateTrigger), the rest are accepted", () => {
-  for (const expr of ["* * * * *", "*/4 * * * *", "0,2 * * * *", "0-4 3 * * *", "1,58 0,23 * * *"]) {
+  // Includes a restricted day-of-month list whose consecutive days wrap midnight in one minute (59,0 at 23,0 on 1,2).
+  for (const expr of ["* * * * *", "*/4 * * * *", "0,2 * * * *", "0-4 3 * * *", "1,58 0,23 * * *", "59,0 23,0 1,2 * *"]) {
     assert.throws(() => validateTrigger({ kind: "cron", expr }), (error: unknown) => error instanceof ScheduleSpecError && /at least 5 minutes apart/.test(error.message), expr);
   }
-  for (const expr of ["*/5 * * * *", "0,5 * * * *", "58,3 * * * *", "0 3 * * 1-5", "59 23 * * 1", "56 23 * * 1,2", "0 0,12 1 * *"]) {
+  for (const expr of ["*/5 * * * *", "0,5 * * * *", "58,3 * * * *", "0 3 * * 1-5", "59 23 * * 1", "56 23 * * 1,2", "0 0,12 1 * *", "59,0 23,0 1,15 * *"]) {
     assert.doesNotThrow(() => validateTrigger({ kind: "cron", expr }), expr);
   }
   // The pure slot functions still accept a one-minute expression: the floor is a rule of what may be scheduled.
   assert.equal(nextAfter(cron("* * * * *"), 0, at("2026-01-01T00:00:30Z")) , at("2026-01-01T00:01:00Z"));
+});
+
+test("cron: expressions that never name a real date are refused at validateTrigger", () => {
+  for (const expr of ["0 0 30 2 *", "0 0 31 2 *", "0 0 31 4 *"]) {
+    assert.throws(() => validateTrigger({ kind: "cron", expr }), (error: unknown) => error instanceof ScheduleSpecError && /never matches/.test(error.message), expr);
+  }
 });
 
 test("cron: next slots across hours, days, month ends, years and leap days", () => {

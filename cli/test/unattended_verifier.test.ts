@@ -13,7 +13,9 @@ import os from "node:os";
 import path from "node:path";
 import type { AutonomousAgent } from "../src/agent.js";
 import { UnattendedApprovalPolicy } from "../src/core/unattended.js";
-import { verifierProblem } from "../src/core/job_submission.js";
+import { submissionProblem } from "../src/core/job_runner.js";
+import { buildJobSubmission, promptSpec, verifierProblem } from "../src/core/job_submission.js";
+import { DEFAULT_JOB_BUDGETS } from "../src/core/runner_store.js";
 import { makeRepo } from "./helpers/fixtures.js";
 import { hookAgent } from "./helpers/hooks_fixture.js";
 import { toml } from "./helpers/policy_enforcement.js";
@@ -86,4 +88,21 @@ test("an operator verifier string is held to what an interactive command is held
   assert.match(verifierProblem(repo, "make deploy") ?? "", /forbidden by your command rules/);
   assert.equal(verifierProblem(repo, "make test"), undefined);
   fs.rmSync(path.join(home, ".config", "nexus", "command_rules.json"));
+});
+
+test("submissionProblem applies verifierProblem to a hand-written inbox request", () => {
+  const repo = fs.realpathSync(makeRepo({}));
+  temp.push(repo);
+  const ok = buildJobSubmission({
+    workspace: repo,
+    given: promptSpec("look", false),
+    policy: "read-only",
+    verifier: "node --test",
+    deliverableFiles: [],
+    provider: {},
+    budgets: { ...DEFAULT_JOB_BUDGETS },
+    origin: { kind: "cli" },
+  });
+  assert.equal(submissionProblem(ok.job, ok.spec), undefined);
+  assert.match(submissionProblem({ ...ok.job, verifier: "rm -rf /" }, ok.spec) ?? "", /refused by the security policy/);
 });
