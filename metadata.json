@@ -1,0 +1,62 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M86H0WM7EGMDQFV4GKXM61GZ",
+  "strategy": "manual-commit",
+  "branch": "v1/hk1-hooks-lib",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cli/scripts/gen_hooks_schema.mjs",
+    "cli/src/core/content_trust.ts",
+    "cli/src/core/hook_runner.ts",
+    "cli/src/core/hooks.ts",
+    "cli/src/core/process_identity.ts",
+    "cli/src/core/strict_json.ts",
+    "cli/src/core/verify_service.ts",
+    "cli/test/content_trust.test.ts",
+    "cli/test/hook_output_reduce.test.ts",
+    "cli/test/hook_runner.test.ts",
+    "cli/test/hooks_config.test.ts",
+    "cli/test/hooks_schema.test.ts",
+    "cli/test/strict_json.test.ts",
+    "docs/protocol/HOOKS_VERSIONS.json",
+    "docs/protocol/README.md",
+    "docs/protocol/hooks-v1.schema.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0,
+    "subagent_tokens": {
+      "input_tokens": 208,
+      "cache_creation_tokens": 232061,
+      "cache_read_tokens": 28988178,
+      "output_tokens": 135634,
+      "api_call_count": 104
+    }
+  },
+  "redaction": {
+    "replacements": 1466,
+    "layers": {
+      "betterleaks": 2,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 43,
+      "credentialed_uri": 3,
+      "entropy": 1418,
+      "key_context": 0,
+      "provider_token": 2,
+      "shell_stdin": 0
+    }
+  }
+}
