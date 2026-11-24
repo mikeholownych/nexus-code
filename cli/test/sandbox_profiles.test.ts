@@ -6,7 +6,9 @@
 import "./helpers/leak_guard.js";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { isProjectEnvKey } from "../src/config.js";
+import { buildConfigWithPolicy, isProjectEnvKey } from "../src/config.js";
+import { sandboxNetworkEnabled, setSandboxNetworkFlag } from "../src/sandbox.js";
+import { setSandboxNetworkProfile } from "../src/sandbox_network.js";
 import { clampSandbox, clampSandboxNetwork, mergePolicies, type EffectivePolicy } from "../src/core/managed_policy.js";
 import {
   PROFILE_SPECS,
@@ -65,6 +67,45 @@ describe("grammar of --sandbox [engine]:profile", () => {
     assert.match(message, /Valid values: auto, bwrap, docker, none, or /);
     assert.ok(message.length < 400, `message is ${message.length} chars`);
     assert.match((() => { try { parseSandboxValue("docker:read-only"); return ""; } catch (error) { return (error as Error).message; } })(), /read-only confinement needs Bubblewrap/);
+  });
+});
+
+describe("named profile network enforcement", () => {
+  test("buildConfig applies profiles to runtime network access and managed policy", () => {
+    const previous = process.env.NEXUS_SANDBOX_NETWORK;
+    process.env.NEXUS_SANDBOX_NETWORK = "1";
+    try {
+      buildConfigWithPolicy({ endpoint: "http://127.0.0.1:1/v1", model: "fixture", sandbox: ":workspace" }, mergePolicies());
+      assert.equal(sandboxNetworkEnabled(), false, ":workspace must override NEXUS_SANDBOX_NETWORK=1");
+
+      buildConfigWithPolicy({ endpoint: "http://127.0.0.1:1/v1", model: "fixture", sandbox: ":network" }, mergePolicies());
+      assert.equal(sandboxNetworkEnabled(), true, ":network must set the runtime network permission");
+
+      assert.throws(
+        () => buildConfigWithPolicy({ endpoint: "http://127.0.0.1:1/v1", model: "fixture", sandbox: ":network" }, systemPolicy("forbid_network = true")),
+        /--sandbox :network is refused: managed policy forbids network access in the sandbox/,
+      );
+    } finally {
+      if (previous === undefined) delete process.env.NEXUS_SANDBOX_NETWORK;
+      else process.env.NEXUS_SANDBOX_NETWORK = previous;
+      setSandboxNetworkProfile(undefined);
+      setSandboxNetworkFlag(false);
+    }
+  });
+
+  test("a profile overrides CLI and environment opt-ins, then legacy behavior returns without a profile", () => {
+    try {
+      setSandboxNetworkFlag(true);
+      setSandboxNetworkProfile(false);
+      assert.equal(sandboxNetworkEnabled(), false, ":workspace must stay offline despite --sandbox-network");
+      setSandboxNetworkProfile(true);
+      assert.equal(sandboxNetworkEnabled(), true, ":network must enable network access");
+      setSandboxNetworkProfile(undefined);
+      assert.equal(sandboxNetworkEnabled(), true, "legacy CLI opt-in remains effective without a profile");
+    } finally {
+      setSandboxNetworkProfile(undefined);
+      setSandboxNetworkFlag(false);
+    }
   });
 });
 

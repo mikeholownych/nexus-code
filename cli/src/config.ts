@@ -12,7 +12,7 @@ import { providerApiKey } from "./credentials.js";
 import { validateBranchName } from "./worktrunk/paths.js";
 import { validateBaseUrl } from "./provider_safety.js";
 import { DEFAULT_OPERATION_POLICY } from "./core/operation.js";
-import { setSandboxNetworkFlag } from "./sandbox_network.js";
+import { setSandboxNetworkFlag, setSandboxNetworkProfile } from "./sandbox_network.js";
 import { clampApprovalRequest, clampSandbox, clampSandboxNetwork, type EffectivePolicy } from "./core/managed_policy.js";
 import { managedPolicy } from "./core/policy_runtime.js";
 import { readSmallFile } from "./core/checkout_trust.js";
@@ -518,17 +518,22 @@ export function buildConfigWithPolicy(options: any, policy: EffectivePolicy): Ha
   if (!sandboxDecision.allowed) throw new Error(sandboxDecision.message);
   if (sandboxDecision.notice) warnOnce(sandboxDecision.notice);
   if (sandbox === undefined && sandboxDecision.value.mode !== undefined) sandbox = sandboxDecision.value.mode;
-  // GV-1: `sandbox.forbid_network` refuses both ways of asking for network in the sandbox. The variable is read as
-  // sandbox.ts reads it (`sandboxNetworkEnabled`).
-  for (const [asked, origin] of [[Boolean(expanded.options.sandboxNetwork), "--sandbox-network"], [networkEnv, "NEXUS_SANDBOX_NETWORK"]] as const) {
+  // A named profile is an explicit effective setting: :network asks for network, while :workspace and :read-only
+  // override an environment opt-in. Without a profile preserve the legacy flag/environment behavior.
+  const profileNetwork = expanded.profile === undefined ? undefined : expanded.profile === ":network";
+  const networkRequests = profileNetwork === undefined
+    ? [[Boolean(expanded.options.sandboxNetwork), "--sandbox-network"], [networkEnv, "NEXUS_SANDBOX_NETWORK"]] as const
+    : profileNetwork ? [[true, "--sandbox :network"]] as const : [];
+  // GV-1: managed policy refuses every effective request for network access.
+  for (const [asked, origin] of networkRequests) {
     const network = clampSandboxNetwork(policy, asked, origin);
     if (!network.allowed) throw new Error(network.message);
   }
-  // Network inside --sandbox is an explicit operator choice; --yes never implies it.
-  if (expanded.options.sandboxNetwork) {
-    if (sandbox) setSandboxNetworkFlag(true);
-    else warnOnce("--sandbox-network has no effect without --sandbox.");
-  }
+  // Network inside --sandbox is an explicit operator choice; --yes never implies it. Reset module state on every
+  // configuration build so repeated config construction cannot retain an earlier run's choice.
+  setSandboxNetworkFlag(Boolean(expanded.options.sandboxNetwork));
+  setSandboxNetworkProfile(profileNetwork);
+  if (expanded.options.sandboxNetwork && !sandbox) warnOnce("--sandbox-network has no effect without --sandbox.");
   if (provider && options.fallback) warnOnce(`--fallback is ignored for provider '${provider}': a provider connection is pinned to its own endpoint.`);
   const fallbackEndpoints = options.fallback && !provider ? options.fallback.split(",").map((s: string) => s.trim()) : undefined;
   const contextLimit = options.contextLimit ? parseInt(options.contextLimit, 10) : (effectiveSetting("NEXUS_CONTEXT_LIMIT") ? parseInt(effectiveSetting("NEXUS_CONTEXT_LIMIT")!, 10) : undefined);
