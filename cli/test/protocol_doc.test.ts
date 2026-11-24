@@ -79,7 +79,9 @@ test("the worked example is the recorded session, line for line", () => {
 });
 
 test("the page states the limits of what exists and is linked from the schema README", () => {
-  for (const absent of ["No socket or network transport", "No library entry point", "No Agent Client Protocol"]) assert.ok(doc.includes(absent), absent);
+  for (const statement of ["No network transport: no TCP, HTTP or WebSocket listener exists", "No library entry point", "No Agent Client Protocol"]) {
+    assert.ok(doc.includes(statement), statement);
+  }
   const readme = fs.readFileSync(fileURLToPath(new URL("../../docs/protocol/README.md", import.meta.url)), "utf8");
   assert.ok(readme.includes("(../PROTOCOL.md)"));
   // Every relative link on the page resolves.

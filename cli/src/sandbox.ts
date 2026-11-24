@@ -16,6 +16,28 @@ export interface SandboxOptions {
   network?: boolean;
   shell?: string;
   customBwrapArgs?: string[];
+  /** Directories to hide from the command in addition to those registered with `hideDirectoryFromSandbox`. */
+  hideDirectories?: readonly string[];
+}
+
+const hiddenDirectories = new Set<string>();
+
+/**
+ * Hides `dir` (resolved through symlinks) from every Bubblewrap command and worker this process builds from now on.
+ * The sidecar's control socket directory is registered here: its descriptor holds the attach token, so no sandboxed
+ * command may read it, wherever `XDG_RUNTIME_DIR` points. Docker mounts only the workspace, so it needs no mask.
+ */
+export function hideDirectoryFromSandbox(dir: string): void {
+  hiddenDirectories.add(fs.realpathSync(dir));
+}
+
+/** The masks for one bwrap command: those registered and those passed, each resolved. One that no longer exists hides nothing, and bwrap cannot mount over it. */
+function directoriesToHide(extra: readonly string[] = []): string[] {
+  const resolved = new Set<string>();
+  for (const dir of [...hiddenDirectories, ...extra]) {
+    try { resolved.add(fs.realpathSync(dir)); } catch { /* gone */ }
+  }
+  return [...resolved];
 }
 
 /** Structured reason a sandbox refused to confine a command. Evidence only; never an approval or verdict. */
@@ -252,9 +274,10 @@ export function isSandboxAvailable(mode: SandboxMode = "auto"): boolean {
   return probeBwrapSandbox() || probeDockerSandbox();
 }
 
-function isPathWithin(candidate: string, root: string): boolean {
+/** `candidate` is `root` or below it. A first segment that merely starts with two dots (`..hid`) is inside. */
+export function isPathWithin(candidate: string, root: string): boolean {
   const relative = path.relative(root, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return relative === "" || !(relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative));
 }
 
 function appendDirectoryTree(args: string[], target: string, known: Set<string>): void {
@@ -781,6 +804,11 @@ export function wrapSandboxedCommand(
       // Bind through inherited fd 3 so a rename or replacement of the source
       // pathname cannot redirect Bubblewrap to a different directory.
       bwrapArgs.push("--ro-bind", "/proc/self/fd/3", absWorkspace);
+      // This synthetic root holds only /tmp (a fresh tmpfs), $HOME (masked) and the workspace, so a hidden directory
+      // elsewhere is absent already. Mask it where it could be visible: under $HOME, or inside the workspace.
+      for (const dir of directoriesToHide(options.hideDirectories)) {
+        if (isPathWithin(dir, absWorkspace) || (homeIsUsable && isPathWithin(dir, userHome))) bwrapArgs.push("--tmpfs", dir);
+      }
       bwrapArgs.push("--clearenv");
       bwrapArgs.push("--setenv", "PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
       bwrapArgs.push("--setenv", "HOME", "/tmp");
@@ -819,6 +847,8 @@ export function wrapSandboxedCommand(
       const overlays = sandboxWorkspaceOverlays(absWorkspace);
       for (const dir of overlays.dirs) bwrapArgs.push("--tmpfs", dir);
       for (const file of overlays.files) bwrapArgs.push("--ro-bind", "/dev/null", file);
+      // Directories that hold a credential for another Nexus client (the control socket's token), wherever they are.
+      for (const dir of directoriesToHide(options.hideDirectories)) bwrapArgs.push("--tmpfs", dir);
       // bwrap passes its own environment to the command. Start empty and set back only the scrubbed command
       // environment, so a sandboxed command cannot see the operator's credentials either (read-only branch above
       // already starts from --clearenv with a fixed PATH/HOME).
