@@ -32,6 +32,7 @@ import { TaskStateNotFoundError } from "./core/state.js";
 import { buildConfig as buildConfigOrThrow, loadEnvironment, operatorConfigLoadError, withoutProjectEnvironment } from "./config.js";
 import { describeTarget, registerProviderCommands } from "./provider_cli.js";
 import { registerHookCommands } from "./hooks_cli.js";
+import { registerTriggerCommands } from "./triggers_cli.js";
 import { registerPluginPackageCommands } from "./plugins_cli.js";
 import { UsageLedger } from "./usage.js";
 import { DOCTOR_EXIT, DOCTOR_SCHEMA_VERSION, doctorExitCode, renderDoctorJson, renderDoctorText, runDoctor, runRepairs } from "./doctor.js";
@@ -1557,6 +1558,7 @@ registerOperationCommands(program);
 registerBackgroundCommands(program);
 registerProviderCommands(program);
 registerHookCommands(program);
+registerTriggerCommands(program);
 // GV-1: `nexus policy show|check` (src/policy_cli.ts). Read-only, and it runs when a managed file is broken.
 registerPolicyCommands(program);
 
