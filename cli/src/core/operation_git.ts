@@ -349,7 +349,7 @@ export class OperationGit {
       if (dirty) {
         const added = gitResult(entry.worktree, [...unitPin, "add", "-A"]);
         if (!added.ok) return { kind: "failed", reason: `cannot stage ${unit.id}: ${added.stderr.trim()}` };
-        const committed = gitResult(entry.worktree, [...unitPin, 
+        const committed = gitResult(entry.worktree, [...unitPin,
           ...this.mechanicalGitConfig(), "commit", "--no-verify", "-q", "-m", `nexus: ${unit.title}`,
         ]);
         if (!committed.ok) {

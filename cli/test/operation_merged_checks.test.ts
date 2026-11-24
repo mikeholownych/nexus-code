@@ -388,6 +388,25 @@ test("hostile: a passing verifier that changes the merged tree is rejected and t
   assert.deepEqual(f.receipts, []);
 });
 
+test("hostile: a later verifier cannot erase an earlier verifier's tree mutation", async () => {
+  const f = fixture();
+  assert.equal((await f.integrate("u1", "printf 'base\\n' > file.txt")).kind, "integrated");
+  const tip = f.ops.currentTip();
+  write(f.prepare("u2"), "u2.txt", "two\n");
+
+  const outcome = await f.integrate("u2", "printf 'changed\\n' > file.txt");
+
+  assert.ok(outcome.kind === "failed");
+  if (outcome.kind === "failed") {
+    assert.match(outcome.reason, /integration verification changed the integration worktree/);
+    assert.deepEqual(outcome.checks?.map((check) => check.status), ["PASSED"], "stop after the first command changes the tree");
+  }
+  assertUntouched(f, tip);
+  assert.equal(fs.readFileSync(path.join(f.integrationWorktree, "file.txt"), "utf8"), "base\n");
+  assert.equal(f.state.units.u2.integratedCommit, undefined);
+  assert.equal(f.receipts.length, 1, "the previous unit's receipt remains, but u2 is not accepted");
+});
+
 test("hostile: nothing a unit reports marks a merge verified: checks on a receipt are the ones that ran", async () => {
   const f = fixture();
   write(f.prepare("u1"), "u1.txt", "one\n");
