@@ -1,0 +1,7 @@
+[
+  {
+    "schema_version": 1,
+    "schemaSha256": "7c22122600a157162766265323abe8983b7a67b2668da6dcfe8fb6bcfe5b3583",
+    "note": "First published schema of the command-hook contract (HK-1), generated from HooksDocument in cli/src/core/hooks.ts on release/v1.3.0: the hooks file (events pre-tool and post-tool), a hook's standard input and standard output, and the approval store extension_trust.json (kind project-hooks). Nothing was published before it."
+  }
+]

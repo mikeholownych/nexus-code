@@ -15,6 +15,7 @@ import { verifierTimeoutSecs } from "../tester.js";
 import { VERIFY_RESULT_SCHEMA_VERSION, type VerifyJsonResult } from "../verify_contract.js";
 import { git } from "../worktrunk/git.js";
 import type { EffectivePolicy } from "./managed_policy.js";
+import { descendants, startedAt } from "./process_identity.js";
 import { humanRequirementForEffect, managedPolicy } from "./policy_runtime.js";
 import { descendants, processStartTicks as startedAt } from "./process_identity.js";
 
