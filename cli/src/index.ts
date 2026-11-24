@@ -32,6 +32,7 @@ import { TaskStateNotFoundError } from "./core/state.js";
 import { buildConfig as buildConfigOrThrow, loadEnvironment, operatorConfigLoadError, withoutProjectEnvironment } from "./config.js";
 import { describeTarget, registerProviderCommands } from "./provider_cli.js";
 import { registerHookCommands } from "./hooks_cli.js";
+import { registerPluginPackageCommands } from "./plugins_cli.js";
 import { UsageLedger } from "./usage.js";
 import { DOCTOR_EXIT, DOCTOR_SCHEMA_VERSION, doctorExitCode, renderDoctorJson, renderDoctorText, runDoctor, runRepairs } from "./doctor.js";
 import { promptWorkspaceTrust } from "./startup_trust.js";
@@ -1087,28 +1088,31 @@ program
     mcp.shutdownAll();
   });
 
-program
-  .command("plugins")
-  .description("List loaded custom plugins and lifecycle hooks")
-  .option("-w, --workspace <path>", "Workspace directory")
-  .action(async (options: any) => {
-    const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
-    const pm = new PluginManager(ws);
-    const { untrustedWorkspaceExtensions } = await import("./workspace_trust.js");
-    for (const file of untrustedWorkspaceExtensions(ws).filter((f) => !/(^|[\\/])\.?mcp\.json$/.test(f))) {
-      console.log(pc.yellow(`Not loaded (workspace not trusted; run \`nexus trust\`): ${file}`));
-    }
-    await pm.loadPlugins();
-    const plugins = pm.listPlugins();
-    if (plugins.length === 0) {
-      console.log(pc.yellow("\nNo active plugins found in ~/.nexus/plugins/ or ~/.config/nexus/plugins/\n"));
-      return;
-    }
-    console.log(pc.bold(pc.cyan("\n=== Loaded Custom Plugins ===\n")));
-    for (const p of plugins) {
-      console.log(`• ${pc.bold(pc.green(p.name))}: ${p.description} (custom tools: ${p.customToolCount})\n`);
-    }
-  });
+{
+  const pluginsCmd = program
+    .command("plugins")
+    .description("Loaded JS plugins, or installed packages (install|list-installed|remove|verify)")
+    .option("-w, --workspace <path>", "Workspace directory")
+    .action(async (options: any) => {
+      const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
+      const pm = new PluginManager(ws);
+      const { untrustedWorkspaceExtensions } = await import("./workspace_trust.js");
+      for (const file of untrustedWorkspaceExtensions(ws).filter((f) => !/(^|[\\/])\.?mcp\.json$/.test(f))) {
+        console.log(pc.yellow(`Not loaded (workspace not trusted; run \`nexus trust\`): ${file}`));
+      }
+      await pm.loadPlugins();
+      const plugins = pm.listPlugins();
+      if (plugins.length === 0) {
+        console.log(pc.yellow("\nNo active plugins found in ~/.nexus/plugins/ or ~/.config/nexus/plugins/\n"));
+        return;
+      }
+      console.log(pc.bold(pc.cyan("\n=== Loaded Custom Plugins ===\n")));
+      for (const p of plugins) {
+        console.log(`• ${pc.bold(pc.green(p.name))}: ${p.description} (custom tools: ${p.customToolCount})\n`);
+      }
+    });
+  registerPluginPackageCommands(pluginsCmd);
+}
 
 program
   .command("trust [path]")
