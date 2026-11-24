@@ -1262,7 +1262,7 @@ test("PA-2: a mechanically clean merge that breaks an already-integrated unit's 
   fs.writeFileSync(path.join(b.workspace, "value.txt"), "broken\n");
   const second = await ops.integrate(unit("u2"), completed({ verification: { command: "true", status: "PASSED", hasExecutedTests: true } }), { tests: { command: "true", status: "PASSED", hasExecutedTests: true } });
   assert.equal(second.kind, "failed");
-  if (second.kind === "failed") assert.match(second.reason, /integration verification failed on the merged tree|integration verification failed/);
+  if (second.kind === "failed") assert.match(second.reason, /merging u2 breaks the verifier of u1 .* on the merged tree/);
   assert.equal(ops.currentTip(), tipAfterFirst, "semantic conflict must not move integration tip");
   assert.equal(fs.readFileSync(path.join(p.integrationWorktree, "value.txt"), "utf8"), "ok\n");
 });
