@@ -13,7 +13,7 @@ import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./op
 import { acquireFileGuard, releaseFileGuard, type FileGuard } from "./file_guard.js";
 import { withStateStoreGuard } from "./state_store_guard.js";
 import { redactTaskStateForPersistence } from "./persistence_protection.js";
-import { processStartTicks } from "./process_identity.js";
+import { processRunning, processStartTicks } from "./process_identity.js";
 
 // ---------------------------------------------------------------- persistence
 
@@ -368,11 +368,4 @@ export function migrateLegacyAccountIdentities(
   return operation;
 }
 
-function processAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err: any) {
-    return err?.code === "EPERM";
-  }
-}
+const processAlive = processRunning;

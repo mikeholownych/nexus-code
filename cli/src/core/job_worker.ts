@@ -155,8 +155,10 @@ export async function runJobWorker(id: string, options: JobWorkerOptions = {}): 
         store,
         signal: controller.signal,
         entry: existing ? "existing" : "new",
-        // As `nexus operation resume`: a cancelled or paused operation continues; the stale-driver pause and the
-        // executor's recovery of an interrupted tool call apply unchanged.
+        // As `nexus operation resume`: a cancelled or paused operation continues. The stale-driver pause is decided
+        // first, but `prepare` then turns every PAUSED operation back to RUNNABLE, so for a job the pause is overridden:
+        // a crashed job's resumption is the supervised retry, and nobody is at a terminal to resume it. The executor's
+        // recovery of an interrupted tool call still applies. (Goals never take this path: `/goal resume` is explicit.)
         ...(existing ? { prepare: (fresh: DurableOperationState) => {
           if (fresh.status === "CANCELLED") fresh.status = "RUNNING";
           else if (fresh.status === "PAUSED") fresh.status = fresh.wait ? "WAITING" : "RUNNING";

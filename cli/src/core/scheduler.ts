@@ -645,7 +645,8 @@ export class ConvergenceScheduler {
           ].slice(-MAX_REJECTED_OUTPUTS);
         }
         const failedRun = result.failedRun ? { at, reason: result.reason, ...result.failedRun } : u.failedRun;
-        const fp = failureFingerprint(result.cause, result.reason, failedRun);
+        // Persistence redacts the stored key; compare in that same form or a secret-shaped reason never repeats.
+        const fp = redactForPersistence(failureFingerprint(result.cause, redactForPersistence(result.reason), failedRun));
         const prev = u.failureStalls ?? {};
         const cur = prev[fp]?.count ?? 0;
         const next = cur + 1;

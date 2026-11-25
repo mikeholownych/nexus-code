@@ -224,6 +224,7 @@ export type OperationEventType =
   | "OPERATION_BLOCKED"
   | "OPERATION_COMPLETED"
   | "OPERATION_PAUSED"
+  | "OPERATION_BUDGET_CHANGED"
   | "OPERATION_CANCELLED"
   | "DECISION_APPLIED"
   | "CONCURRENCY_LIMIT"
@@ -440,6 +441,8 @@ export interface DurableOperationState {
   activePid?: number;
   /** Hostname of the process last driving this operation. */
   activeHost?: string;
+  /** Kernel start time (`/proc/<pid>/stat` field 22) of that process: tells it from a later process given the same pid. Absent in records from builds before PA-3 identity; those read as unknown identity. */
+  activeStartTicks?: string;
   /** Operator-visible reason the operation was paused (stale recovery, explicit pause, etc.). */
   pauseReason?: string;
   /**

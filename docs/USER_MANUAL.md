@@ -602,6 +602,16 @@ nexus (qwen2.5-coder) my-app ❯ !cargo check
 nexus (qwen2.5-coder) my-app ❯ !npm test
 ```
 
+### Durable work: `/team` and `/goal`
+
+`/team <role|full> <task>` runs the roles as a durable operation: work units with dependencies, saved under `~/.nexus/tasks/`. `/goal <objective>` is the same operation with a fixed objective and a requirement ledger; `/goal status|list|show|pause|resume|cancel|requirements|evidence` manage it. Both survive a restart. `nexus operation status|resume|budget` works on the same records.
+
+- **A goal is complete only with a receipt.** The model saying it is done does nothing. A goal is `COMPLETE` when its verifier passed with executed tests, an independent reviewer on another model accepted, and every requirement is verified or descoped and accepted by you. Otherwise it stays `BLOCKED` and says what is missing.
+- **A goal left running by a dead process resumes PAUSED.** Nexus records the driver as pid, host, kernel start time and boot id. The goal counts as being driven only when all four are present and name a live process on this host. A killed process, a reused pid, a reboot, another host, a record from an older build, or a hand-edited record all read `PAUSED` with the reason, in `/goal status`, `/goal list` and `nexus operation status`, and again when driven. Nothing runs until you resume it. Driver identity is read from `/proc`, so off Linux an interrupted goal always pauses.
+- **Stalls are counted by failure, not by turns.** The same failure three times blocks the unit as `NOT_CONVERGING`.
+- **Token cap.** `NEXUS_OPERATION_MAX_TOTAL_TOKENS` sets a cap when an operation is planned. Change it later with `nexus operation budget <id> --max-total-tokens <n|none>`; the change is written to the operation's journal (who, when, old, new) and applies from the next dispatch. It refuses while another process is driving the operation and does not resume a paused goal. The cap is checked before each dispatch, so a batch that is already running, and the units dispatched together in one batch, can pass it: it bounds new work, not tokens already in flight.
+- **Goal state is not tamper-proof against your own shell.** The agent's file tools refuse `~/.nexus/tasks` (or `$NEXUS_STATE_DIR/tasks`), but a command run without `--sandbox` has your rights and can rewrite a goal's state, caps and stall counts. The files are mode 0600; there is no signature. Use `--sandbox` for work you do not trust.
+
 ### Slash Commands Cheatsheet
 
 | Command | Description |
@@ -615,6 +625,7 @@ nexus (qwen2.5-coder) my-app ❯ !npm test
 
 | `/theme [name]` | View or switch terminal color theme (Catppuccin, Nord, Dracula, etc.) |
 | `/team <role\|full> <task>` | Orchestrate multi-agent team (Researcher, Architect, Implementer, Tester) |
+| `/goal <objective>` | Durable goal with a requirement ledger, verifier receipt and independent review (see Durable work above) |
 | `/image <path> [prompt]` | Ingest multi-modal image / screenshot into vision model context |
 | `/checkpoint [name]` | Create a safe rollback snapshot of the workspace |
 | `/checkpoint diff <id>` | View file diff between current workspace and a checkpoint |
