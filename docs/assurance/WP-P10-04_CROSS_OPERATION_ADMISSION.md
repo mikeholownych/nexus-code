@@ -28,6 +28,8 @@ tests 30, pass 30, fail 0, cancelled 0, skipped 0
 
 The test `tool_dispatch_characterization.test.ts` also passed **17/17** on the current main candidate while checking preserved Claude fixture changes. `npm run build` in `cli/` passed both TypeScript compiler configurations and the package data/build-info steps. `git diff --check` passed. GitHub CI for the corrected PR head remains pending.
 
+The first hosted run on head `0416f964ba29338cc169e05473495e60cbe7e847` exposed that three existing durability tests used two distinct resource IDs with the same provider, endpoint, and model while expecting two concurrent workers. Under this change those descriptors correctly identify one shared inference resource, so the second worker stayed `RUNNABLE`; the crash tests then did not reach their intended checkpoint. The fixtures now use distinct inference identities. On Node 24.11.1 with an isolated temporary `HOME`, `operation_release_acceptance.test.ts` and `operation_release_review.test.ts` passed **28/28** after that correction. Commit `1bc1ca42c1834468bb8015ecaa35807bda3ba220` contains only these fixture updates. Its hosted run `45667017208` is in progress; no result is claimed yet.
+
 ## Enforcement scope and limits
 
 - The guarantee is same-host, same-shared-directory admission on a filesystem where the existing `flock` utility provides effective kernel locks. Cross-host admission and network-filesystem semantics are not qualified.
