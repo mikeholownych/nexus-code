@@ -91,6 +91,22 @@ nexus hooks revoke
      `--posix`, `--norc`, `--noprofile` for `bash` and `zsh`; `--no-warnings`, `--no-deprecation` for `node`;
      `-B`, `-E`, `-I`, `-s`, `-S`, `-u` for Python; `-w`, `-T` for `perl`; `-w` for `ruby`.
 
+  **Where the interpreter is taken from.** Nexus resolves the name itself, to an absolute path, and starts that path.
+  A bare name is looked up in the entries of `PATH` that are trusted directories, then in `/usr/local/bin`,
+  `/usr/bin`, `/bin`, `/usr/sbin`, `/sbin`; an absolute path (`/usr/bin/python3`) must lie in a trusted directory. A
+  directory is trusted when it is an absolute path, belongs to root or to you, cannot be written by group or others,
+  and is not inside the workspace, `/tmp`, `/var/tmp`, `/dev` (so not `/dev/shm`), `/proc`, `/run` or `/sys`; the
+  program itself must meet the same conditions. Empty and relative `PATH` entries (the current directory) are never
+  used. An interpreter in a directory that your group can write (a `~/.local/bin` of mode 775, say) is therefore not
+  found: `chmod g-w` the directory, or use the system's interpreter.
+
+  **The `#!` line.** A script run directly (form 1) must begin with `#!` followed by the absolute path of one of
+  the interpreters above in a trusted directory, and at most one of its options listed above: `#!/bin/sh`,
+  `#!/bin/bash -eu`, `#!/usr/bin/python3 -I`. `#!/usr/bin/env bash` is refused (`env` finds the real program on
+  `PATH`), and so is a relative path (`#!./tool` is looked up in the workspace). For such a script use form 2,
+  `["bash", "./guard.sh"]`: after an explicit shell, `node` or `python` the line is a comment and is not looked at.
+  After `perl` or `ruby`, which act on the line themselves, it must be absent or follow the same rule.
+
   The script must be a regular file in the workspace. What follows it is passed to the script; an argument there (or
   the value of `--option=value` or `-ovalue`) that is an existing path in the workspace must be a regular file too.
 - **Everything else is refused for a project file**, which is then invalid (not run, cannot be approved). That
@@ -106,7 +122,8 @@ nexus hooks revoke
   tool call and the notice names what changed, exactly as for the hooks file itself.
 - **A project hook runs from the approved bytes, not from the workspace.** Just before a hook starts, each covered
   file is read once, those bytes are checked against the approval, and the same bytes are written to a private
-  directory under `~/.nexus/hook-runs/` (owner-only; removed when the hook ends). The command is started with those
+  directory under `~/.nexus/hook-runs/` (owner-only; removed when the hook ends, and one that a killed run left
+  behind is removed by a later run once it is ten minutes old). The command is started with those
   copies in place of the workspace paths, so a file replaced at that very moment cannot be what runs. The working
   directory is still the workspace. Consequences for a script:
   - it runs under a path outside the workspace, so `$0`, `__filename`, `__file__` and `dirname "$0"` do not lead back

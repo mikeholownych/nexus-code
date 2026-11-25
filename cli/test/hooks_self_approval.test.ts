@@ -11,12 +11,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { AutonomousAgent } from "../src/agent.js";
 import { approveExtension, readExtensionTrust } from "../src/core/content_trust.js";
 import { runHookProcess } from "../src/core/hook_runner.js";
-import { HookRegistry, inspectHookSources, verifiedProjectCommand } from "../src/core/hooks.js";
+import { HOOK_RUN_STALE_MS, HookRegistry, inspectHookSources, sweepHookRuns, trustedProgram, verifiedProjectCommand } from "../src/core/hooks.js";
 import { makeRepo, startGateway, type Reply } from "./helpers/fixtures.js";
 import { approveProjectHooks, deniedBy, dispatch, hookAgent, hookScript, loggingHook, runsOf, writeOperatorHooks, writeProjectHooks, type HookAgentOptions } from "./helpers/hooks_fixture.js";
 
@@ -466,7 +466,10 @@ test("the verified command: bytes read once, checked against the approval, copie
   const verified = verifiedProjectCommand(["bash", "-eu", "./guard.sh", "--rules=conf/rules.txt", "plain", "conf/rules.txt"], repo, approved, root);
   assert.ok(!("problem" in verified), JSON.stringify(verified));
   const [bash, flags, copy, option, plain, data] = verified.command;
-  assert.deepEqual([bash, flags, plain], ["bash", "-eu", "plain"], "what is not a workspace file is passed as written");
+  assert.deepEqual([flags, plain], ["-eu", "plain"], "what is not a workspace file is passed as written");
+  // The interpreter is started by the absolute path it was resolved to, not by a name looked up again.
+  assert.equal(bash, (trustedProgram("bash", repo) as { path: string }).path);
+  assert.ok(path.isAbsolute(bash) && ["/usr/local/bin", "/usr/bin", "/bin"].includes(path.dirname(bash)), bash);
   assert.ok(option.startsWith("--rules="));
   for (const [file, content] of [[copy, "#!/bin/sh\nexit 0\n"], [option.slice("--rules=".length), "rule\n"], [data, "rule\n"]]) {
     assert.ok(file.startsWith(`${root}${path.sep}run-`), file);
@@ -493,4 +496,110 @@ test("the verified command: bytes read once, checked against the approval, copie
   fs.mkdirSync(shared, { mode: 0o777 });
   fs.chmodSync(shared, 0o777);
   assert.match((verifiedProjectCommand(["./guard.sh"], repo, approved, shared) as any).problem, /not this user's own/);
+});
+
+test("a #! line or an interpreter name that leads into the workspace does not run, even with an approval on record", async () => {
+  const ran = path.join(scripts, "planted-ran");
+  const planted = `#!/bin/sh\ntouch "${ran}"\n`;
+  const previous = process.env.PATH;
+  // A hostile PATH for the whole case: the current directory, the workspace, an empty entry.
+  process.env.PATH = `.:${repo}::${previous ?? ""}`;
+  try {
+    const cases: Array<{ command: string[]; files: Record<string, string>; pinned: string[]; why: RegExp }> = [
+      { command: ["./shebang.sh"], files: { "shebang.sh": "#!./evil\nexit 0\n", evil: planted }, pinned: ["shebang.sh"], why: /its #! line names "\.\/evil", which is not an absolute path/ },
+      { command: ["./shebang.sh"], files: { "shebang.sh": "#!/proc/self/cwd/evil\nexit 0\n", evil: planted }, pinned: ["shebang.sh"], why: /its #! line names \/proc\/self\/cwd\/evil, which is not one of the interpreters/ },
+      { command: ["./shebang.sh"], files: { "shebang.sh": "#!/usr/bin/env bash\nexit 0\n", bash: planted }, pinned: ["shebang.sh"], why: /env finds the real program on PATH/ },
+      { command: ["/proc/self/cwd/bash", "g.sh"], files: { "g.sh": "#!/bin/sh\nexit 0\n", bash: planted }, pinned: ["g.sh"], why: /\/proc\/self\/cwd\/bash is not a program in a trusted directory/ },
+      { command: ["python3.99", "g.sh"], files: { "g.sh": "#!/bin/sh\nexit 0\n", "python3.99": planted }, pinned: ["g.sh"], why: /python3\.99 was not found in a trusted directory of PATH/ },
+    ];
+    for (const attack of cases) {
+      notices.length = 0;
+      for (const name of ["evil", "bash", "python3.99", "shebang.sh", "g.sh"]) fs.rmSync(path.join(repo, name), { force: true });
+      for (const [name, content] of Object.entries(attack.files)) place(name, content);
+      const hooksFile = writeProjectHooks(repo, { version: 1, hooks: { "pre-tool": [{ name: "planted", tools: ["read_file"], command: attack.command }] } });
+      // An approval as the rule before this one recorded it: the hooks file and the script, nothing about what the script starts.
+      approveExtension({ kind: "project-hooks", scope: repo, key: path.join(".nexus", "hooks.json"), sha256: sha(hooksFile), approvedAt: new Date().toISOString(), summary: "1 hook", files: attack.pinned.map((name) => ({ path: name, sha256: sha(path.join(repo, name)) })) });
+      const next = await dispatch(agentFor(), "read_file", { path: "a.txt" });
+      assert.equal(next.status, "COMPLETED", JSON.stringify(attack.command));
+      assert.equal(next.hooks, undefined, `${JSON.stringify(attack.command)}: no project hook ran`);
+      assert.equal(fs.existsSync(ran), false, `${JSON.stringify(attack.command)}: the workspace's program was not started`);
+      const state = inspectHookSources({ workspace: repo, readOnly: false }).project;
+      assert.equal(state.status, "invalid", JSON.stringify(attack.command));
+      assert.match(state.problem ?? "", attack.why, JSON.stringify(attack.command));
+    }
+    // With that PATH, and a file named bash in the workspace, the system's bash is what a project hook gets.
+    for (const name of ["evil", "python3.99", "shebang.sh"]) fs.rmSync(path.join(repo, name), { force: true });
+    place("bash", planted);
+    place("g.sh", `#!/bin/sh\necho "ran by $0" >> "${log}"\n`);
+    writeProjectHooks(repo, { version: 1, hooks: { "pre-tool": [{ name: "guard", tools: ["read_file"], command: ["bash", "g.sh"] }] } });
+    approveProjectHooks(repo);
+    const receipt = await dispatch(agentFor(), "read_file", { path: "a.txt" });
+    assert.deepEqual(receipt.hooks?.map((run: any) => [run.name, run.exit]), [["guard", 0]]);
+    assert.equal(fs.existsSync(ran), false, "the workspace's file named bash was not the interpreter");
+    assert.match(fs.readFileSync(log, "utf8"), /^ran by .*hook-runs/);
+  } finally {
+    process.env.PATH = previous;
+  }
+});
+
+test("a FIFO put where a pinned file was does not make Nexus wait", { timeout: 120_000 }, () => {
+  const fifo = path.join(scripts, "fifo");
+  execFileSync("mkfifo", [fifo]);
+  // In a process of its own: an open that waited for a writer would hold this one for ever.
+  const probe = path.join(scripts, "probe.mts");
+  fs.writeFileSync(probe, `import { readRegularFile } from ${JSON.stringify(path.join(CLI_DIR, "src", "core", "hooks.ts"))};\ntry { readRegularFile(${JSON.stringify(fifo)}, 1024); console.log("read"); } catch (error) { console.log("refused " + error.code); }\n`);
+  const run = spawnSync(TSX, [probe], { encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL" });
+  assert.equal(run.error, undefined, `the read returned instead of waiting for a writer (${run.error?.message})`);
+  assert.equal(run.stdout.trim(), "refused ENOTREG", run.stderr);
+
+  // Through the run path: the script is replaced by a FIFO after its approval.
+  const script = place("guard.sh", "#!/bin/sh\nexit 0\n");
+  const approved = [{ path: "guard.sh", sha256: sha(script) }];
+  fs.rmSync(script);
+  execFileSync("mkfifo", [script]);
+  const started = Date.now();
+  const verified = verifiedProjectCommand(["./guard.sh"], repo, approved, path.join(scripts, "private"));
+  assert.ok("problem" in verified, "a FIFO is not run");
+  assert.ok(Date.now() - started < 10_000);
+  assert.equal(inspectHookSources({ workspace: repo, readOnly: false }).project.status, "absent");
+});
+
+test("per-run directories a killed run left behind are swept by age; nothing else is touched", () => {
+  const root = path.join(scripts, "sweep");
+  fs.mkdirSync(root, { mode: 0o700 });
+  const now = Date.now();
+  const age = (name: string, ms: number, make: (file: string) => void = (file) => fs.mkdirSync(file, { mode: 0o700 })) => {
+    const file = path.join(root, name);
+    make(file);
+    const at = new Date(now - ms);
+    fs.utimesSync(file, at, at);
+    return file;
+  };
+  age("run-stale", HOOK_RUN_STALE_MS + 60_000);
+  fs.mkdirSync(path.join(root, "run-stale", "0"));
+  fs.writeFileSync(path.join(root, "run-stale", "0", "guard.sh"), "x", { mode: 0o500 });
+  fs.utimesSync(path.join(root, "run-stale"), new Date(now - HOOK_RUN_STALE_MS - 60_000), new Date(now - HOOK_RUN_STALE_MS - 60_000));
+  age("run-fresh", 30_000);
+  age("other-old", HOOK_RUN_STALE_MS * 10);
+  age("run-file", HOOK_RUN_STALE_MS * 10, (file) => fs.writeFileSync(file, "x"));
+  assert.deepEqual(sweepHookRuns(root, now), ["run-stale"]);
+  assert.deepEqual(fs.readdirSync(root).sort(), ["other-old", "run-file", "run-fresh"]);
+  // Not again within the minute, however old things are.
+  age("run-stale-2", HOOK_RUN_STALE_MS * 2);
+  assert.deepEqual(sweepHookRuns(root, now + 30_000), []);
+  assert.deepEqual(sweepHookRuns(root, now + 61_000), ["run-stale-2"]);
+  assert.deepEqual(sweepHookRuns(path.join(root, "missing"), now), []);
+
+  // A run sweeps before it makes its own directory.
+  const second = path.join(scripts, "sweep-on-run");
+  fs.mkdirSync(path.join(second, "run-left-behind"), { recursive: true, mode: 0o700 });
+  const old = new Date(Date.now() - HOOK_RUN_STALE_MS - 60_000);
+  fs.utimesSync(path.join(second, "run-left-behind"), old, old);
+  fs.chmodSync(second, 0o700);
+  const script = place("guard.sh", "#!/bin/sh\nexit 0\n");
+  const verified = verifiedProjectCommand(["./guard.sh"], repo, [{ path: "guard.sh", sha256: sha(script) }], second);
+  assert.ok(!("problem" in verified), JSON.stringify(verified));
+  assert.equal(fs.existsSync(path.join(second, "run-left-behind")), false);
+  verified.cleanup();
+  assert.deepEqual(fs.readdirSync(second), []);
 });

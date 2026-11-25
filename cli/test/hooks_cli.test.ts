@@ -13,6 +13,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { readExtensionTrust } from "../src/core/content_trust.js";
+import { trustedProgram } from "../src/core/hooks.js";
 import { isInteractiveTerminal, registerHookCommands } from "../src/hooks_cli.js";
 
 const CLI_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -391,22 +392,157 @@ test("a project command outside the allowlist cannot be approved and lists as in
   }
 });
 
-test("an interpreter that resolves into the workspace is not taken as the installed one", async () => {
-  workspaceScript("guard.sh");
-  workspaceScript("bin/bash", "exit 0");
+test("an interpreter is taken only from a trusted directory, never from the workspace, the current directory or a temporary one", async () => {
+  workspaceScript("g.sh");
+  // Files in the workspace that carry interpreter names.
+  for (const name of ["bash", "python3.99", "bin/bash", "bin/python3.99"]) workspaceScript(name, "exit 0");
+  const lookup = (name: string, searchPath: string) => trustedProgram(name, workspace, { searchPath });
+  const NOT_FOUND = /was not found in a trusted directory of PATH/;
+  const paths = ["/usr/bin::/bin", ".:/usr/bin", "/usr/bin:.", "bin:/usr/bin", `${workspace}:/usr/bin`, `${workspace}/bin:/usr/bin`, `/usr/bin:${workspace}/bin`, ":", "", "/proc/self/cwd:/usr/bin", `/usr/bin/../..${workspace}/bin`];
+  for (const searchPath of paths) {
+    // A name only the workspace has is not found, whatever PATH says.
+    const missing = lookup("python3.99", searchPath);
+    assert.match((missing as any).problem ?? "", NOT_FOUND, searchPath);
+    // A name the system has resolves to the system's, in a trusted directory.
+    const found = lookup("bash", searchPath) as { path: string };
+    assert.ok(found.path && path.isAbsolute(found.path) && !fs.realpathSync(found.path).startsWith(workspace), `${searchPath}: ${JSON.stringify(found)}`);
+    assert.ok(["/usr/local/bin", "/usr/bin", "/bin"].includes(path.dirname(found.path)), `${searchPath}: ${found.path}`);
+  }
+
+  // The same through the command of a project hook, with the process's own PATH hostile.
   const previous = process.env.PATH;
-  process.env.PATH = `${path.join(workspace, "bin")}${path.delimiter}${previous ?? ""}`;
+  process.env.PATH = `.:${workspace}:${workspace}/bin::/usr/bin:/bin`;
   try {
-    projectHooks(guard(["bash", "guard.sh"]));
-    const listing = (await listJson()).sources[1];
-    assert.equal(listing.status, "invalid");
-    assert.match(listing.problem, /bash resolves to a file inside the workspace \(.*\/bin\/bash\); name it by its path there to run it as a script/);
+    projectHooks(guard(["python3.99", "g.sh"]));
+    const missing = (await listJson()).sources[1];
+    assert.equal(missing.status, "invalid");
+    assert.match(missing.problem, /python3\.99 was not found in a trusted directory of PATH \(one that belongs to root or to you, that others cannot write, and that is not the workspace, the current directory, a temporary directory, \/proc or \/dev\)/);
+    projectHooks(guard(["bash", "g.sh"]));
+    assert.equal((await listJson()).sources[1].status, "not_approved", "the system's bash is found past the hostile entries");
   } finally {
     process.env.PATH = previous;
   }
-  // Named by its path it is a script of the workspace like any other, and pinned.
-  projectHooks(guard(["./bin/bash", "guard.sh"]));
-  assert.deepEqual((await listJson()).sources[1].covered_files.map((file: any) => file.path), ["bin/bash", "guard.sh"]);
+
+  // An absolute path is held to the same test: /proc, /dev, temporary directories and the workspace are refused.
+  const tmp = fs.mkdtempSync("/tmp/nexus-hk1-bash-");
+  const shm = fs.mkdtempSync("/dev/shm/nexus-hk1-bash-");
+  try {
+    for (const dir of [tmp, shm]) fs.copyFileSync("/bin/sh", path.join(dir, "bash"));
+    for (const program of ["/proc/self/cwd/bash", "/proc/self/root/usr/bin/bash", "/dev/fd/0/bash", path.join(tmp, "bash"), path.join(shm, "bash"), "/usr/bin/../../tmp/" + path.basename(tmp) + "/bash", "/nonexistent/bash"]) {
+      projectHooks(guard([program, "g.sh"]));
+      const listing = (await listJson()).sources[1];
+      assert.equal(listing.status, "invalid", program);
+      assert.match(listing.problem, /is not a program in a trusted directory \(one that belongs to root or to you, that others cannot write, and that is not the workspace, a temporary directory, \/proc or \/dev\)/, program);
+    }
+    projectHooks(guard(["/bin/sh", "g.sh"]));
+    assert.equal((await listJson()).sources[1].status, "not_approved");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(shm, { recursive: true, force: true });
+  }
+});
+
+test("a trusted directory belongs to root or the user and is closed to others, and so is the program in it", () => {
+  // Under a scratch directory, with the "temporary directory" rule lifted so that owner and mode are what decide.
+  const dir = path.join(scripts, "tools");
+  fs.mkdirSync(dir, { mode: 0o755 });
+  fs.chmodSync(dir, 0o755);
+  fs.copyFileSync("/bin/sh", path.join(dir, "sh"));
+  fs.chmodSync(path.join(dir, "sh"), 0o755);
+  const lookup = (name = "sh") => trustedProgram(name, workspace, { searchPath: dir, untrustedRoots: ["/proc"] }) as { path?: string; problem?: string };
+  const absolute = () => trustedProgram(path.join(dir, "sh"), workspace, { untrustedRoots: ["/proc"] }) as { path?: string; problem?: string };
+  assert.equal(lookup().path, path.join(fs.realpathSync(dir), "sh"), "the fixture: a closed directory of the user is trusted");
+  assert.equal(absolute().path, path.join(fs.realpathSync(dir), "sh"));
+  const fallback = lookup("sh").path;
+  // A relative PATH entry is never used, even one that (from this process's directory) leads to a trusted directory:
+  // for the hook it would mean a directory of the workspace.
+  fs.copyFileSync("/bin/sh", path.join(dir, "python3.99"));
+  const byAbsolute = trustedProgram("python3.99", workspace, { searchPath: dir, untrustedRoots: ["/proc"] }) as { path?: string };
+  assert.equal(byAbsolute.path, path.join(fs.realpathSync(dir), "python3.99"), "the fixture: found by the absolute entry");
+  const byRelative = trustedProgram("python3.99", workspace, { searchPath: path.relative(process.cwd(), dir), untrustedRoots: ["/proc"] }) as { problem?: string };
+  assert.match(byRelative.problem ?? "", /was not found in a trusted directory of PATH/);
+  fs.rmSync(path.join(dir, "python3.99"));
+
+  for (const mode of [0o775, 0o757, 0o777]) {
+    fs.chmodSync(dir, mode);
+    assert.notEqual(lookup().path, fallback, `a directory of mode ${mode.toString(8)} is skipped`);
+    assert.match(absolute().problem ?? "", /is not a program in a trusted directory/, mode.toString(8));
+  }
+  fs.chmodSync(dir, 0o755);
+  for (const mode of [0o775, 0o757]) {
+    fs.chmodSync(path.join(dir, "sh"), mode);
+    assert.match(absolute().problem ?? "", /is not a program in a trusted directory/, `a program of mode ${mode.toString(8)}`);
+  }
+  fs.chmodSync(path.join(dir, "sh"), 0o644);
+  assert.match(absolute().problem ?? "", /is not a program in a trusted directory/, "not executable");
+
+  // A link in a trusted directory to a file in the workspace, or in a directory others can write.
+  const planted = workspaceScript("planted", "exit 0");
+  fs.rmSync(path.join(dir, "sh"));
+  fs.symlinkSync(planted, path.join(dir, "sh"));
+  assert.match(absolute().problem ?? "", /is not a program in a trusted directory/);
+  const open = path.join(scripts, "open");
+  fs.mkdirSync(open);
+  fs.chmodSync(open, 0o777);
+  fs.copyFileSync("/bin/sh", path.join(open, "sh"));
+  fs.rmSync(path.join(dir, "sh"));
+  fs.symlinkSync(path.join(open, "sh"), path.join(dir, "sh"));
+  assert.match(absolute().problem ?? "", /is not a program in a trusted directory/);
+  // With the rule in place, the scratch directory is refused as a temporary one whatever its mode.
+  fs.rmSync(path.join(dir, "sh"));
+  fs.copyFileSync("/bin/sh", path.join(dir, "sh"));
+  assert.match((trustedProgram(path.join(dir, "sh"), workspace) as any).problem ?? "", /is not a program in a trusted directory/);
+});
+
+test("the #! line of a script a project hook runs must name a trusted, listed interpreter by absolute path", async () => {
+  workspaceScript("evil", "exit 0");
+  const script = (first: string | null) => fs.writeFileSync(path.join(workspace, "hook"), `${first === null ? "" : `${first}\n`}exit 0\n`, { mode: 0o755 });
+  const refused: Array<[string | null, RegExp]> = [
+    ["#!./evil", /hook: its #! line names "\.\/evil", which is not an absolute path \(a relative one is looked up in the workspace\)/],
+    ["#!evil", /which is not an absolute path/],
+    ["#!/proc/self/cwd/evil", /hook: its #! line names \/proc\/self\/cwd\/evil, which is not one of the interpreters a project hook may use/],
+    ["#!/proc/self/cwd/bash", /hook: its #! line: \/proc\/self\/cwd\/bash is not a program in a trusted directory/],
+    [`#!${path.join(workspace, "evil")}`, /which is not one of the interpreters/],
+    ["#!/tmp/bash", /its #! line: \/tmp\/bash is not a program in a trusted directory/],
+    ["#!/usr/bin/env bash", /hook: its #! line names \/usr\/bin\/env, which is not one of the interpreters a project hook may use \(env finds the real program on PATH\)/],
+    ["#!/usr/bin/env -S bash -c evil", /env finds the real program on PATH/],
+    ["#!/usr/bin/awk -f", /names \/usr\/bin\/awk, which is not one of the interpreters/],
+    ["#!/bin/sh -c ./evil", /its #! line passes "-c \.\/evil" to sh, which is not one harmless option of it/],
+    ["#!/bin/sh -c", /passes "-c" to sh/],
+    ["#!/bin/sh -e -u", /passes "-e -u" to sh/],
+    ["#!", /names "", which is not an absolute path/],
+    [null, /hook: it has no #! line, so it cannot be run directly\. Start it with an absolute interpreter path such as #!\/bin\/sh or #!\/usr\/bin\/python3, or name the interpreter in the command \(\["bash", "\.\/guard\.sh"\]\)/],
+    [`#!/bin/sh ${"x".repeat(300)}`, /its #! line is not a complete line of at most 256 bytes/],
+  ];
+  for (const [first, pattern] of refused) {
+    script(first);
+    projectHooks(guard(["./hook"]));
+    const answer = await nexusHooks(["approve", "-w", workspace], true);
+    assert.equal(answer.exitCode, 1, String(first));
+    assert.match(answer.out, pattern, String(first));
+    assert.deepEqual(answer.asked, [], String(first));
+    assert.equal((await listJson()).sources[1].status, "invalid", String(first));
+  }
+  for (const first of ["#!/bin/sh", "#! /bin/sh", "#!/bin/sh -eu", "#!/bin/bash --posix", "#!/usr/bin/bash"]) {
+    script(first);
+    projectHooks(guard(["./hook"]));
+    assert.equal((await listJson()).sources[1].status, "not_approved", first);
+  }
+
+  // After an explicit shell, node or python the line is a comment: nothing acts on it.
+  for (const first of ["#!/usr/bin/env bash", "#!./evil", null]) {
+    script(first);
+    projectHooks(guard(["bash", "./hook"]));
+    assert.equal((await listJson()).sources[1].status, "not_approved", `bash ${first}`);
+  }
+  // perl starts the program the line names, so there the line is held to the rule (when perl is installed at all).
+  if (!("problem" in trustedProgram("perl", workspace))) {
+    for (const [first, status] of [["#!./evil", "invalid"], ["#!/usr/bin/env perl", "invalid"], ["#!/bin/sh", "not_approved"], [null, "not_approved"]] as const) {
+      script(first);
+      projectHooks(guard(["perl", "./hook"]));
+      assert.equal((await listJson()).sources[1].status, status, `perl ${first}`);
+    }
+  }
 });
 
 test("the two accepted forms, and every workspace file they name is covered", async () => {
@@ -437,6 +573,11 @@ test("the two accepted forms, and every workspace file they name is covered", as
   for (const [command, files] of accepted) {
     projectHooks(guard(command));
     const project = (await listJson()).sources[1];
+    // An interpreter this host does not have (in a trusted directory) is refused for that reason, and no other.
+    if (!command[0].includes("/") && "problem" in trustedProgram(command[0], workspace)) {
+      assert.match(project.problem ?? "", /was not found in a trusted directory of PATH/, JSON.stringify(command));
+      continue;
+    }
     assert.equal(project.status, "not_approved", `${JSON.stringify(command)}: ${project.problem ?? ""}`);
     assert.deepEqual((project.covered_files ?? []).map((file: any) => file.path), files, JSON.stringify(command));
   }
