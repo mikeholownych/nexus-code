@@ -14,6 +14,8 @@
  *      `git.integrationVerifiers`, `mergedChecks` on a receipt, `INTEGRATION_REJECTED`). The version is bumped so a
  *      version-5 build refuses a record that may depend on cumulative merged-tree verification. v7 adds the
  *      persisted fingerprint-stall policy/state; older builds must refuse records that depend on that limit.
+ *      The optional `activeStartTicks` (driver start time) was added to v7 additively: no version bump, because a build
+ *      that ignores it only loses the recycled-pid check. A record without it loads and reads as unknown driver identity (paused).
  *   3. A record from a newer build is refused. It is not corrupt: a build that wrote it can still read it, and
  *      quarantining it would destroy evidence. It is also never interpreted as if it were current.
  *
@@ -271,6 +273,9 @@ export function validateOperationState(state: DurableOperationState): void {
   }
   if (state.activePid !== undefined && (!Number.isInteger(state.activePid) || state.activePid <= 0)) {
     throw new InvalidOperationStateError(`operation ${state.id}: activePid must be a positive integer`);
+  }
+  if (state.activeStartTicks !== undefined && (typeof state.activeStartTicks !== "string" || !state.activeStartTicks)) {
+    throw new InvalidOperationStateError(`operation ${state.id}: activeStartTicks must be a non-empty string`);
   }
   if (state.activeHost !== undefined && typeof state.activeHost !== "string") {
     throw new InvalidOperationStateError(`operation ${state.id}: activeHost must be a string`);

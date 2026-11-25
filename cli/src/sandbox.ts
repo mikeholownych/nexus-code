@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { buildCommandEnvironment } from "./command_env.js";
 import { operatorSetting } from "./client.js";
+import { defaultTaskStateDir } from "./core/state.js";
 import { sandboxNetworkFlagSet, sandboxNetworkProfileValue, setSandboxNetworkFlag } from "./sandbox_network.js";
 
 export type SandboxMode = "auto" | "bwrap" | "docker" | "none";
@@ -34,7 +35,9 @@ export function hideDirectoryFromSandbox(dir: string): void {
 /** The masks for one bwrap command: those registered and those passed, each resolved. One that no longer exists hides nothing, and bwrap cannot mount over it. */
 function directoriesToHide(extra: readonly string[] = []): string[] {
   const resolved = new Set<string>();
-  for (const dir of [...hiddenDirectories, ...extra]) {
+  // PA-3: goal state, caps and stall counts live in the task-state directory; a sandboxed command must neither read nor
+  // rewrite them, including when the workspace is, or contains, $HOME (which would otherwise bind it back in).
+  for (const dir of [...hiddenDirectories, defaultTaskStateDir(), ...extra]) {
     try { resolved.add(fs.realpathSync(dir)); } catch { /* gone */ }
   }
   return [...resolved];

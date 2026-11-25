@@ -3,7 +3,7 @@
 Branch `fix/inference-transport-cause`, baseline 9f103ee. Code references are to `cli/src`.
 
 ```
-user workflow/command (/team [experimental], nexus operation [experimental])
+user workflow/command (/team, nexus operation)
   -> orchestration strategy (TeamOrchestrator: roles -> work units)
   -> durable work units + dependencies (DurableOperationState, OperationStore)
   -> convergence scheduler (ConvergenceScheduler decides; OperationRunner owns time, execution, persistence)

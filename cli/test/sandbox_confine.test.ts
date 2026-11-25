@@ -331,3 +331,39 @@ describe("the control socket's directory is hidden from sandboxed commands (PF-3
     assert.match(hidden.stdout, /ok/);
   });
 });
+
+describe("the task-state directory is hidden from --sandbox commands and workers (PA-3)", () => {
+  const taskFile = (dir: string) => {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "g.json"), "SENTINEL-GOAL-STATE");
+    return path.join(dir, "g.json");
+  };
+
+  test("workspace = $HOME: a command can neither read nor rewrite ~/.nexus/tasks", { skip: SKIP }, () => {
+    const { home } = throwawayHome();
+    const file = taskFile(path.join(home, ".nexus", "tasks"));
+    const r = sandboxRun(`cat ${file} 2>&1; echo pwned > ${file} 2>&1; ls ~/.nexus/tasks 2>&1`, home);
+    assert.doesNotMatch(r.stdout, /SENTINEL/);
+    assert.equal(fs.readFileSync(file, "utf8"), "SENTINEL-GOAL-STATE", "the host file is untouched");
+    const readOnly = sandboxRun(`cat ${file} 2>&1`, home, { readOnlyHost: true, network: false, workspaceFd: fs.openSync(home, "r") });
+    assert.doesNotMatch(readOnly.stdout, /SENTINEL/);
+  });
+
+  test("workspace elsewhere and NEXUS_STATE_DIR outside HOME: still hidden and untouched", { skip: SKIP }, () => {
+    const { workspace } = throwawayHome();
+    const state = fs.mkdtempSync(path.join("/var/tmp", "nexus-s2-state-"));
+    cleanup.push(state);
+    const saved = process.env.NEXUS_STATE_DIR;
+    process.env.NEXUS_STATE_DIR = state;
+    try {
+      const file = taskFile(path.join(state, "tasks"));
+      const r = sandboxRun(`cat ${file} 2>&1; echo pwned > ${file} 2>&1`, workspace);
+      assert.doesNotMatch(r.stdout, /SENTINEL/);
+      assert.equal(fs.readFileSync(file, "utf8"), "SENTINEL-GOAL-STATE");
+      const worker = wrapSandboxedWorker(process.execPath, [], workspace, { engines: ["bwrap"] });
+      if (worker.sandboxed) assert.ok(worker.args.includes(fs.realpathSync(path.join(state, "tasks"))), "the worker box masks it too");
+    } finally {
+      if (saved === undefined) delete process.env.NEXUS_STATE_DIR; else process.env.NEXUS_STATE_DIR = saved;
+    }
+  });
+});

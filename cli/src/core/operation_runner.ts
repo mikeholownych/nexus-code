@@ -6,7 +6,6 @@
 import { credentialStorageHome, storedCredentialFor } from "../client.js";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import type { HarnessConfig } from "../types.js";
 import { realRecoveryClock, type RecoveryClock } from "./provider_recovery.js";
 import { ConvergenceScheduler, type Assignment, type Decision, type DurableOperationState, type MergedCheck, type OperationEvent, type OperationMessage, type UnitRunResult, type WorkUnit } from "./operation.js";
@@ -25,7 +24,8 @@ import { computeCandidateIdentitySync } from "./candidate.js";
 import type { InferenceFailure } from "./turn.js";
 import { OperationRevalidator } from "./operation_runner_revalidation.js";
 import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./operation_runner_diagnostics.js";
-import type { OperationStore } from "./operation_runner_persistence.js";
+import { OperationLockedError, type OperationStore } from "./operation_runner_persistence.js";
+import { STALE_PAUSE_PREFIX, clearDriver, liveForeignDriver, stampDriver, staleDriver } from "./driver_identity.js";
 import type { BoundaryRules } from "./boundary_rules.js";
 
 export { OperationStore, OperationLockedError, migrateLegacyAccountIdentities } from "./operation_runner_persistence.js";
@@ -505,7 +505,7 @@ export class OperationRunner {
 
   private pauseForTokenBudget(total: number, cap: number): boolean {
     if (this.state.status === "COMPLETE" || this.state.status === "CANCELLED" || this.state.status === "PAUSED") return false;
-    const reason = `Paused: goal token budget exhausted (${total} of ${cap} tokens consumed across agent runs). Raise policy.maxTotalTokens or cancel the goal.`;
+    const reason = `Paused: goal token budget exhausted (${total} of ${cap} tokens consumed across agent runs). Raise the cap with 'nexus operation budget ${this.state.id} --max-total-tokens <n|none>', then resume, or cancel the goal.`;
     this.state.status = "PAUSED";
     this.state.pauseReason = reason;
     delete this.state.wait;
@@ -851,44 +851,24 @@ export function currentBootId(): string | undefined {
   catch { return undefined; }
 }
 
-function processAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; }
-  catch (err: any) { return err?.code === "EPERM"; }
-}
-
-function pauseForStaleDriver(state: DurableOperationState, bootId: string | undefined, store: OperationStore): string | undefined {
-  if (!["RUNNING", "WAITING"].includes(state.status)) return undefined;
-  // A newly persisted plan is RUNNING before its first assignment, but has no prior driver identity. There is no
-  // interrupted execution to reconcile yet, so let its first driver start it instead of treating the plan as stale.
-  if (state.status === "RUNNING" && state.units.every((unit) =>
-    unit.status === "WAITING_ON_DEPENDENCY" && unit.runs === 0 && unit.agentTaskId === undefined
-  )) return undefined;
-  const host = os.hostname();
-  const liveLock = store.activeLock(state.id);
-  if (liveLock) return undefined; // another live driver owns it; caller should not drive concurrently
-
-  const reasons: string[] = [];
-  if (bootId && state.activeBootId && state.activeBootId !== bootId) {
-    reasons.push(`earlier host boot (${state.activeBootId.slice(0, 12)})`);
-  }
-  if (state.activePid !== undefined && state.activeHost === host && !processAlive(state.activePid)) {
-    reasons.push(`earlier process (pid ${state.activePid}) is no longer running`);
-  }
-  // Missing driver identity on an active operation written before this metadata existed is treated as stale.
-  if (reasons.length === 0 && state.activePid === undefined && state.activeBootId === undefined) {
-    reasons.push("an earlier process left it active without driver identity metadata");
-  }
-  if (reasons.length === 0) return undefined;
-
-  const reason = `Paused on resume: this operation was left active by ${reasons.join("; ")}. It was not cleanly paused before this process started. Resume it explicitly after inspecting its state.`;
+/** Persists the stale-driver verdict (pause with its reason and an event) when the recorded driver is not provably alive. */
+function pauseForStaleDriver(state: DurableOperationState): string | undefined {
+  const verdict = staleDriver(state);
+  if (!verdict) return undefined;
   state.status = "PAUSED";
-  state.pauseReason = reason;
+  state.pauseReason = state.pauseReason && !state.pauseReason.startsWith(STALE_PAUSE_PREFIX) ? `${state.pauseReason} ${verdict.reason}` : verdict.reason;
   delete state.wait;
   delete state.blocked;
   state.updatedAt = new Date().toISOString();
-  state.events.push({ type: "OPERATION_PAUSED", at: state.updatedAt, message: reason, detail: { reason: "stale_driver", previousBootId: state.activeBootId, previousPid: state.activePid, previousHost: state.activeHost } });
+  state.events.push({ type: "OPERATION_PAUSED", at: state.updatedAt, message: verdict.reason, detail: { reason: "stale_driver", cause: verdict.cause, previousBootId: state.activeBootId, previousPid: state.activePid, previousHost: state.activeHost, previousStartTicks: state.activeStartTicks } });
   if (state.events.length > 300) state.events.splice(0, state.events.length - 300);
-  return reason;
+  return verdict.reason;
+}
+
+/** A record naming another live process as its driver is not ours to drive, even when its lock file has gone. */
+function refuseLiveForeignDriver(state: DurableOperationState): void {
+  const pid = liveForeignDriver(state);
+  if (pid !== undefined) throw new OperationLockedError(`Operation ${state.id} is recorded as driven by live pid ${pid} on ${state.activeHost} (its lock is not held); refusing a second driver.`);
 }
 
 export async function driveOperation(state: DurableOperationState, opts: DriveOptions): Promise<DurableOperationState> {
@@ -900,37 +880,24 @@ export async function driveOperation(state: DurableOperationState, opts: DriveOp
     } else if (entry === "existing") {
       state = store.load(state.id);
     }
-    const bootId = currentBootId();
     if (entry === "existing") {
       // `operation decide` records the operator's choice, then resumes under a new driver lock in this same process.
       // Refresh the identity for that handoff so the process that presented the decision is not mistaken for a second
       // crash. If this process dies during resumed work, its identity is stale on the next load.
-      if (resumeAfterDecision && state.status !== "COMPLETE" && state.status !== "CANCELLED") {
-        if (bootId) state.activeBootId = bootId;
-        state.activePid = process.pid;
-        state.activeHost = os.hostname();
-      }
-      pauseForStaleDriver(state, bootId, store);
+      if (resumeAfterDecision && state.status !== "COMPLETE" && state.status !== "CANCELLED") stampDriver(state);
+      refuseLiveForeignDriver(state);
+      pauseForStaleDriver(state);
     }
     prepare?.(state);
-    if (state.status === "PAUSED" && state.pauseReason?.startsWith("Paused on resume:")) {
+    if (state.status === "PAUSED" && state.pauseReason?.startsWith(STALE_PAUSE_PREFIX)) {
       store.save(state);
       return state;
     }
-    if (state.status !== "COMPLETE" && state.status !== "CANCELLED") {
-      if (bootId) state.activeBootId = bootId;
-      state.activePid = process.pid;
-      state.activeHost = os.hostname();
-    } else {
-      delete (state as any).activeBootId;
-      delete (state as any).activePid;
-      delete (state as any).activeHost;
-    }
+    if (state.status !== "COMPLETE" && state.status !== "CANCELLED") stampDriver(state);
+    else clearDriver(state);
     const result = await new OperationRunner(state, { ...runnerOpts, store, persist: (s) => store.save(s) }).run(signal);
     if (result.status === "COMPLETE" || result.status === "CANCELLED" || result.status === "PAUSED") {
-      delete (result as any).activeBootId;
-      delete (result as any).activePid;
-      delete (result as any).activeHost;
+      clearDriver(result);
       store.save(result);
     }
     return result;

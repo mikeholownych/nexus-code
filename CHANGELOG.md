@@ -23,6 +23,7 @@ Inventory of work already on `release/v1.3.0` toward v1.3.0 (version strings sti
 - Command hooks (HK-1): `pre-tool` and `post-tool` programs declared in `~/.config/nexus/hooks.json` or an approved `<workspace>/.nexus/hooks.json`; a hook can deny a tool call and can never approve one or change its input. Approving project hooks needs a person at a terminal and covers the workspace scripts the hooks run. `nexus hooks list|approve|revoke|test`, a `hooks.config` doctor finding, `docs/HOOKS.md`.
 
 ### Fixed
+- PA-3 goal semantics now meet their acceptance: a goal counts as driven only when its recorded driver (pid, host, kernel start time, boot id) names a live process on this host; a dead process, reused pid, other host or boot, or an incomplete record resumes `PAUSED` with a specific reason on the read path (`/goal status|list`, `nexus operation status`) and the drive path alike. Records from builds before `activeStartTicks` read as unknown identity and pause. The task-state directory is a protected path for the agent's file tools. Fingerprint stalls compare the redacted form, so a secret-shaped failure reason now stalls. New `nexus operation budget <id> --max-total-tokens <n|none>` changes the token cap with a journal entry. `/team` and `nexus operation` leave experimental.
 - BG-2 schedule recovery after a crash between job submit and schedule update: restore `lastFire`, decrement `remainingRuns`, and disable at zero so `--max-runs 1` cannot fire again; treat an in-flight job for the same slot as recovery, not overlap.
 
 ### Changed
