@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01HewaMLyLSoay5pz2jX8GMk",
+  "agent_id": "a09c6420fa5ca5fb7",
+  "subagent_type": "reviewer",
+  "task_description": "Hostile re-review PR #798 HK-3",
+  "token_usage": {
+    "input_tokens": 66,
+    "cache_creation_tokens": 75780,
+    "cache_read_tokens": 1712601,
+    "output_tokens": 20169,
+    "api_call_count": 33
+  },
+  "started_at": "2026-11-25T00:25:20.858380032Z",
+  "completed_at": "2026-11-25T00:34:34.886176365Z"
+}

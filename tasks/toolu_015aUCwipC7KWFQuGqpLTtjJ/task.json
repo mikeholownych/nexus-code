@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_015aUCwipC7KWFQuGqpLTtjJ",
+  "agent_id": "a0287b52f3a6989b3",
+  "subagent_type": "reviewer",
+  "task_description": "Delta review PR #805 shebang parsing",
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 32663,
+    "cache_read_tokens": 312814,
+    "output_tokens": 11268,
+    "api_call_count": 11
+  },
+  "started_at": "2026-11-25T00:27:47.142644912Z",
+  "completed_at": "2026-11-25T00:36:34.83939751Z"
+}
