@@ -93,4 +93,32 @@ describe("PR-10 per-provider limits", () => {
     assert.equal(l.admit("a", 1, true, "groq", "m"), undefined);
     assert.match(l.admit("b", 1, true, "groq", "m") ?? "", /cloud request limit reached/);
   });
+
+  test("NEXUS_RECEIPTS=0 hides receipts without bypassing aggregate admission limits", () => {
+    const prior = process.env.NEXUS_RECEIPTS;
+    process.env.NEXUS_RECEIPTS = "0";
+    try {
+      const global = new UsageLedger();
+      global.limits = { maxRequests: 1 };
+      global.providerLimits = {};
+      assert.equal(global.admit("g1", 10, true, "groq", "m"), undefined);
+      global.record(receipt("groq", "m", { inputTokens: 3, outputTokens: 4 }, true, "g1"));
+      assert.equal(global.all().length, 0, "the opt-out still hides request-level receipts");
+      assert.equal(global.cloudTotals().requests, 0, "opted-out detail remains absent from visible totals");
+      assert.match(global.admit("g2", 10, true, "groq", "m") ?? "", /cloud request limit reached/);
+
+      const tokens = ledger({ groq: { maxTokens: 10 } });
+      assert.equal(tokens.admit("t1", 10, true, "groq", "m"), undefined);
+      tokens.record(receipt("groq", "m", { inputTokens: 6, outputTokens: 5 }, true, "t1"));
+      assert.match(tokens.admit("t2", 1, true, "groq", "m") ?? "", /token limit would be exceeded/);
+
+      const cost = ledger({ [PRICED.provider]: { maxCostUsd: 1 } });
+      assert.equal(cost.admit("c1", 1, false, PRICED.provider, PRICED.model), undefined);
+      cost.record(receipt(PRICED.provider, PRICED.model, { inputTokens: 1_000_000, outputTokens: 1_000_000 }, false, "c1"));
+      assert.match(cost.admit("c2", 1, false, PRICED.provider, PRICED.model) ?? "", /cost limit reached/);
+    } finally {
+      if (prior === undefined) delete process.env.NEXUS_RECEIPTS;
+      else process.env.NEXUS_RECEIPTS = prior;
+    }
+  });
 });

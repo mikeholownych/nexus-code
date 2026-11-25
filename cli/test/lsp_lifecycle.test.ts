@@ -14,9 +14,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
+import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { LSP_MAX_DIAGNOSTICS, MAX_OPEN_DOCUMENTS, type LspClient, type LspTimings } from "../src/lsp.js";
+import { LSP_MAX_DIAGNOSTICS, MAX_OPEN_DOCUMENTS, parseLspSharedServerLimit, type LspClient, type LspTimings } from "../src/lsp.js";
 import { FAKE, alive, countingFs, diag, eventually, handles, open, publish, type Opened } from "./helpers/lsp_scripted.js";
 
 const SERVER = process.execPath;
@@ -36,6 +38,15 @@ const starts = (s: Opened) => s.rawLog().filter((e) => e.event === "start").map(
 const BASELINE = handles();
 const stopped = `Language server '${SERVER}' was stopped.`;
 const unavailable = (reason: string) => `lsp_diagnostics unavailable: ${reason} This is not evidence the file is free of errors.`;
+
+test("operator LSP process cap defaults to the manager limit and accepts only bounded positive integers", () => {
+  assert.equal(parseLspSharedServerLimit(undefined), 8);
+  assert.equal(parseLspSharedServerLimit("1"), 1);
+  assert.equal(parseLspSharedServerLimit("64"), 64);
+  for (const invalid of ["", "0", "01", "+1", "1.0", "65", "999999999999999999999"]) {
+    assert.throws(() => parseLspSharedServerLimit(invalid), /NEXUS_MAX_LSP_SERVER_PROCESSES/);
+  }
+});
 
 // ---------------------------------------------------------------------------------------------------------- shutdown
 
@@ -195,6 +206,88 @@ for (const how of ["running", "stopping"] as const) {
     }
   });
 }
+
+test("shared LSP admission survives Nexus parent death until its server supervisor exits", { skip: process.platform === "win32" }, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-lsp-shared-admission-"));
+  const workspace = path.join(root, "workspace");
+  const admissionDirectory = path.join(root, "admission");
+  const logPath = path.join(root, "server.jsonl");
+  const scenarioFile = path.join(root, "scenario.json");
+  fs.mkdirSync(workspace);
+  fs.writeFileSync(path.join(workspace, "a.ts"), "const x = 1;\n");
+  fs.writeFileSync(scenarioFile, JSON.stringify({ log: logPath, ignoreStdinEnd: true }));
+  const workerPath = fileURLToPath(new URL("./helpers/lsp_admission_child.ts", import.meta.url));
+  const workers: Array<{ child: ReturnType<typeof spawn>; lines: ReturnType<typeof createInterface>; next: () => Promise<any> }> = [];
+  const supervisorPids: number[] = [];
+  const startWorker = () => {
+    const child = spawn(process.execPath, ["--import", "tsx", workerPath, workspace, admissionDirectory, FAKE, scenarioFile], {
+      stdio: ["pipe", "pipe", "inherit"],
+      detached: false,
+    });
+    const lines = createInterface({ input: child.stdout! });
+    const iterator = lines[Symbol.asyncIterator]();
+    const next = async () => {
+      let timeout: NodeJS.Timeout | undefined;
+      const timedOut = new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error("timed out waiting for LSP worker")), 10_000); });
+      let item: IteratorResult<string>;
+      try { item = await Promise.race([iterator.next(), timedOut]); }
+      finally { clearTimeout(timeout); }
+      assert.equal(item.done, false, "worker exited before reporting an admission result");
+      return JSON.parse(item.value);
+    };
+    const worker = { child, lines, next };
+    workers.push(worker);
+    return worker;
+  };
+  const killGroup = (pid: number) => {
+    try { process.kill(-pid, "SIGKILL"); } catch {}
+  };
+  try {
+    const first = startWorker();
+    const firstResult = await first.next();
+    assert.equal(firstResult.status, "started", JSON.stringify(firstResult));
+    assert.ok(Number.isSafeInteger(firstResult.pid));
+    supervisorPids.push(firstResult.pid);
+
+    const second = startWorker();
+    assert.deepEqual(await second.next(), { status: "refused" }, "another Nexus process must not exceed the shared cap");
+
+    const firstExit = new Promise<void>((resolve) => first.child.once("exit", () => resolve()));
+    first.child.kill("SIGKILL");
+    await firstExit;
+    assert.ok(alive(firstResult.pid), "the supervised language server remains alive after Nexus is killed");
+
+    second.child.stdin!.write("retry\n");
+    assert.deepEqual(await second.next(), { status: "refused" }, "the orphaned server still owns its kernel slot");
+
+    killGroup(firstResult.pid);
+    assert.ok(await eventually(() => !alive(firstResult.pid), 5_000), "the server supervisor did not exit");
+    second.child.stdin!.write("retry\n");
+    const restarted = await second.next();
+    assert.equal(restarted.status, "started", "the slot becomes available only after the supervised process exits");
+    assert.ok(Number.isSafeInteger(restarted.pid));
+    supervisorPids.push(restarted.pid);
+
+    second.child.stdin!.write("close\n");
+    const exitCode = await new Promise<number | null>((resolve) => second.child.once("close", resolve));
+    assert.equal(exitCode, 0);
+    assert.ok(await eventually(() => supervisorPids.every((pid) => !alive(pid)), 5_000));
+  } finally {
+    for (const worker of workers) {
+      if (worker.child.exitCode === null && worker.child.signalCode === null) {
+        try { worker.child.stdin?.write("close\n"); } catch {}
+      }
+    }
+    for (const pid of supervisorPids) if (alive(pid)) killGroup(pid);
+    for (const worker of workers) {
+      if (worker.child.exitCode === null && worker.child.signalCode === null) {
+        try { worker.child.kill("SIGKILL"); } catch {}
+      }
+      worker.lines.close();
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 // ------------------------------------------------------------------------------------------- requests a server sends
 

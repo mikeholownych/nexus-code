@@ -358,7 +358,7 @@ test("a completed batch member is durable before its batch-mate settles and is n
     import { newOperation } from "./src/core/operation.ts";
     import { driveOperation, OperationStore } from "./src/core/operation_runner.ts";
     const store = new OperationStore(process.env.RELEASE_WORKSPACE, process.env.RELEASE_STATE_DIR);
-    const resources = ["r1", "r2"].map((id) => ({ id, provider: "http://127.0.0.1:9", endpoint: "http://127.0.0.1:9/v1", model: "m", capabilities: ["tools"], rank: 0 }));
+    const resources = ["r1", "r2"].map((id) => ({ id, provider: "http://127.0.0.1:9", endpoint: "http://127.0.0.1:9/" + id + "/v1", model: "m", capabilities: ["tools"], rank: 0 }));
     const state = newOperation("op-batch-durable", "persist each result", [
       { id: "a", title: "a", prompt: "a", executionResources: { cpuMilli: 1000, memoryBytes: 1024 } },
       { id: "b", title: "b", prompt: "b", executionResources: { cpuMilli: 1000, memoryBytes: 1024 } },

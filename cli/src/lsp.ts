@@ -7,6 +7,7 @@ import { buildMcpEnvironment } from "./mcp.js";
 import { MAX_DIAGNOSTIC_MESSAGE, MAX_DIAGNOSTIC_RECORDS, UNTRUSTED_FENCE_END, UNTRUSTED_FENCE_START, fenceUntrusted, sanitizeDiagnosticMessage } from "./diagnostics.js";
 import { MAX_SNAPSHOT_BYTES } from "./file_diff.js";
 import { redactPlain } from "./protocol.js";
+import { MAX_SHARED_RESOURCE_CAPACITY, SharedResourceAdmission, type ResourceSlotLease } from "./core/shared_resource_admission.js";
 import { OFFERED_POSITION_ENCODINGS, DEFAULT_POSITION_ENCODING, TextLines, negotiatedEncoding, rangeToModel, toEncoded, type PositionEncoding } from "./lsp_positions.js";
 import { findProjectRoot, rootLabel, type RootRule } from "./lsp_roots.js";
 
@@ -80,6 +81,17 @@ const LSP_SERVER_MESSAGE_RING = 20;
  * megabytes for a real one), so the number is what bounds a session's memory, not a count of packages. A judgement.
  */
 export const LSP_MAX_SERVERS = 8;
+export function parseLspSharedServerLimit(value: string | undefined): number {
+  if (value === undefined) return LSP_MAX_SERVERS;
+  if (!/^[1-9][0-9]*$/.test(value)) {
+    throw new Error(`NEXUS_MAX_LSP_SERVER_PROCESSES must be an integer from 1 to ${MAX_SHARED_RESOURCE_CAPACITY}`);
+  }
+  const limit = Number(value);
+  if (!Number.isSafeInteger(limit) || limit > MAX_SHARED_RESOURCE_CAPACITY) {
+    throw new Error(`NEXUS_MAX_LSP_SERVER_PROCESSES must be an integer from 1 to ${MAX_SHARED_RESOURCE_CAPACITY}`);
+  }
+  return limit;
+}
 
 /** Limits a test may lower; the product runs with LSP_LIMITS. */
 export interface LspLimits {
@@ -619,6 +631,7 @@ export class LspClient {
   public diagnosticProvider: { identifier?: string; interFileDependencies: boolean; workspaceDiagnostics: boolean } | null = null;
   private diagnosticWaiters: Map<string, Array<() => void>> = new Map();
   private child: ChildProcess | null = null;
+  private admissionLease?: ResourceSlotLease;
   private nextId: number = 1;
   private pending: Map<number, { resolve: (val: any) => void; reject: (err: any) => void }> = new Map();
   private saveOptions?: { includeText?: boolean };
@@ -674,11 +687,25 @@ export class LspClient {
     private installHint?: string,
     private limits: Pick<LspLimits, "fileBytes" | "messageBytes"> = LSP_LIMITS,
     workspacePath: string = rootPath,
+    admissionLease?: ResourceSlotLease,
   ) {
     this.serverCmd = serverCmd;
     this.serverArgs = serverArgs;
     this.rootPath = path.resolve(rootPath);
     this.workspacePath = path.resolve(workspacePath);
+    this.admissionLease = admissionLease;
+  }
+
+  /** Supplies a same-host process slot after the manager has waited for an evicted server to exit. */
+  public setAdmissionLease(lease: ResourceSlotLease): void {
+    if (this.child || this.admissionLease) throw new Error("LSP process admission lease was already set");
+    this.admissionLease = lease;
+  }
+
+  private releaseAdmissionLease(): void {
+    const lease = this.admissionLease;
+    this.admissionLease = undefined;
+    lease?.release();
   }
 
   private setLifecycle(next: LspClient["lifecycle"]): void {
@@ -784,24 +811,45 @@ export class LspClient {
    * there, the process cannot be executed, it exits first, or it does not answer in time (it is then killed).
    */
   public async start(): Promise<void> {
-    if (this.stopping) throw this.notRunning(); // stopped before it was started (the manager was closed while this start waited its turn)
+    if (this.stopping) {
+      this.releaseAdmissionLease();
+      throw this.notRunning(); // stopped before it was started (the manager was closed while this start waited its turn)
+    }
     this.setLifecycle("starting");
     // PATH is cleaned against the whole workspace, not only this project: no directory of the workspace supplies the binary.
     const env = { ...buildLspEnvironment(this.workspacePath), ...this.extraEnv };
     // Looked up where the server's own environment would find it, before anything is spawned.
     const where = /[\\/]/.test(this.serverCmd) ? "" : " on PATH";
     const notInstalled = `Language server not installed: ${this.serverCmd} was not found${where}.${this.installHint ? ` Install it with: ${this.installHint}` : ""}`;
-    if (findCommand(this.serverCmd, env.PATH ?? "", this.rootPath) === null) throw this.fail("not_installed", notInstalled);
+    if (findCommand(this.serverCmd, env.PATH ?? "", this.rootPath) === null) {
+      this.releaseAdmissionLease();
+      throw this.fail("not_installed", notInstalled);
+    }
     let child: ChildProcess;
     try {
       // Its own process group (POSIX: a session of its own), so that stopping it stops what it started. Not unref'd:
       // the process is this client's to end.
       this.ownGroup = process.platform !== "win32";
-      child = spawn(this.serverCmd, this.serverArgs, { cwd: this.rootPath, env, stdio: ["pipe", "pipe", "pipe"], detached: this.ownGroup });
+      const inheritedFd = this.admissionLease?.inheritedFd;
+      let command = this.serverCmd;
+      let args = this.serverArgs;
+      let stdio: any[] = ["pipe", "pipe", "pipe"];
+      if (inheritedFd !== undefined) {
+        // The trusted supervisor keeps the lock descriptor open without exposing it to the language server.
+        const sourceMode = import.meta.url.endsWith(".ts");
+        const supervisor = fileURLToPath(new URL(sourceMode ? "./lsp_process_guard.ts" : "./lsp_process_guard.js", import.meta.url));
+        command = process.execPath;
+        const tsxLoader = sourceMode ? fileURLToPath(new URL("../node_modules/tsx/dist/loader.mjs", import.meta.url)) : undefined;
+        args = [...(tsxLoader ? ["--import", tsxLoader] : []), supervisor, this.serverCmd, ...this.serverArgs];
+        stdio = ["pipe", "pipe", "pipe", inheritedFd];
+      }
+      child = spawn(command, args, { cwd: this.rootPath, env, stdio, detached: this.ownGroup });
     } catch (err: any) {
+      this.releaseAdmissionLease();
       throw this.fail("spawn_failed", `Language server '${this.serverCmd}' failed to start: it could not be executed (${err.code ?? err.message}).`);
     }
     this.child = child;
+    child.once("close", () => this.releaseAdmissionLease());
     try {
       child.stderr?.on("data", (chunk: Buffer) => {
         this.stderrRing = (chunk.length >= STDERR_RING_BYTES ? chunk : Buffer.concat([this.stderrRing, chunk])).subarray(-STDERR_RING_BYTES);
@@ -1721,17 +1769,22 @@ export class LspBridgeManager {
   private gate?: () => string | null;
   private timingOverrides: Partial<LspTimings>;
   private limits: LspLimits;
+  private sharedAdmission?: SharedResourceAdmission;
+  private sharedServerLimit = LSP_MAX_SERVERS;
+  private admissionRefusals: Map<string, string> = new Map();
 
   /**
    * `gate` returns the reason a server must not start right now (untrusted workspace, sandbox), or null to allow it.
    * `timings` and `limits` override the product's (LSP_TIMINGS and each server's own; LSP_LIMITS) for every server: for tests.
    */
-  constructor(workspace: string, opts: { servers?: Record<string, LspServerSpec>; gate?: () => string | null; timings?: Partial<LspTimings>; limits?: Partial<LspLimits> } = {}) {
+  constructor(workspace: string, opts: { servers?: Record<string, LspServerSpec>; gate?: () => string | null; timings?: Partial<LspTimings>; limits?: Partial<LspLimits>; sharedAdmission?: SharedResourceAdmission; sharedServerLimit?: number } = {}) {
     this.workspace = path.resolve(workspace);
     this.gate = opts.gate;
     this.servers = opts.servers ?? {};
     this.timingOverrides = opts.timings ?? {};
     this.limits = { ...LSP_LIMITS, ...opts.limits };
+    this.sharedAdmission = opts.sharedAdmission;
+    this.sharedServerLimit = opts.sharedServerLimit ?? LSP_MAX_SERVERS;
     LspBridgeManager.live.add(this);
     if (!LspBridgeManager.exitHookInstalled) {
       LspBridgeManager.exitHookInstalled = true;
@@ -1878,6 +1931,8 @@ export class LspBridgeManager {
     }
     const afterStart = (client: LspClient | null) => {
       if (client) return this.hold(client, info);
+      const admissionRefusal = this.admissionRefusals.get(key);
+      if (admissionRefusal) return { reason: admissionRefusal };
       const failed = this.failures.get(key);
       return failed ? this.known(route, failed) : { reason: `Language server '${info.cmd}' was stopped before it had started.` };
     };
@@ -1922,32 +1977,62 @@ export class LspBridgeManager {
     // and the new one starts when that process is gone, so there are never more than the limit. Decided here, in one
     // turn with the bookkeeping below, so two calls cannot both take the last place.
     let room: Promise<void> | undefined;
+    let idleToEvict: [string, LspClient] | undefined;
     if (this.clients.size + this.launching.size >= this.limits.servers) {
       const idle = [...this.clients].find(([, c]) => !this.inUse.has(c));
       if (!idle) return { reason: `The limit of ${this.limits.servers} running language servers is reached and each is answering a query or starting; ask again when one has finished.` };
-      this.clients.delete(idle[0]);
-      room = this.stop(idle[1]);
+      idleToEvict = idle;
     }
 
     const client = new LspClient(info.cmd, route.root, info.args ?? [], info.env, info.awaitProgress === true, t, info.installHint, this.limits, this.workspace);
     this.launching.set(key, client);
-    const startup = (room ? room.then(() => client.start()) : client.start())
-      .then(
-        () => {
-          if (this.closed) {
-            void this.stop(client);
+    this.admissionRefusals.delete(key);
+    const startup = (async (): Promise<LspClient | null> => {
+      try {
+        if (this.sharedAdmission && idleToEvict) {
+          this.clients.delete(idleToEvict[0]);
+          room = this.stop(idleToEvict[1]);
+          await room;
+        }
+        let lease: ResourceSlotLease | null = null;
+        if (this.sharedAdmission) {
+          lease = this.sharedAdmission.acquireNamed("lsp-server-processes-v1", this.sharedServerLimit, "LSP server process");
+          if (!lease && idleToEvict) {
+            // The local idle process may itself have filled the shared cap. Releasing it is safe; retry only after exit.
+            this.clients.delete(idleToEvict[0]);
+            room ??= this.stop(idleToEvict[1]);
+            await room;
+            lease = this.sharedAdmission.acquireNamed("lsp-server-processes-v1", this.sharedServerLimit, "LSP server process");
+          }
+          if (!lease) {
+            const reason = `The shared limit of ${this.sharedServerLimit} language server processes across Nexus clients is reached; ask again when one has finished.`;
+            this.admissionRefusals.set(key, reason);
             return null;
           }
-          this.clients.set(key, client);
-          return client;
-        },
-        () => {
+          client.setAdmissionLease(lease);
+        } else if (idleToEvict) {
+          this.clients.delete(idleToEvict[0]);
+          room = this.stop(idleToEvict[1]);
+          await room;
+        }
+        await client.start();
+        if (this.closed) {
           void this.stop(client);
-          if (client.failure) this.failures.set(key, { cause: client.failure, path: pathNow, recheckAt: Date.now() + t.startRecheckMs });
           return null;
-        },
-      )
-      .finally(() => {
+        }
+        this.clients.set(key, client);
+        return client;
+      } catch (error) {
+        // Admission failures are operational refusals, not a failed language-server start; a later query may retry.
+        if (this.sharedAdmission && !client.failure) {
+          const message = error instanceof Error ? error.message : "unknown admission error";
+          this.admissionRefusals.set(key, `Language server admission could not be established: ${message}.`);
+        }
+        void this.stop(client);
+        if (client.failure) this.failures.set(key, { cause: client.failure, path: pathNow, recheckAt: Date.now() + t.startRecheckMs });
+        return null;
+      }
+    })().finally(() => {
         this.starting.delete(key);
         this.launching.delete(key);
         this.release();

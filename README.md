@@ -9,7 +9,7 @@
 
 **Nexus Code** is an open-source, local-first AI coding agent and execution harness. It pairs a TypeScript agent and sidecar with native Rust workspace tools and a Ratatui terminal user interface (TUI), with opt-in sandboxing, human approval modes, and Git worktree isolation.
 
-> **Status:** the latest stable release is [v1.2.2](https://github.com/mikeholownych/nexus-code/releases/tag/v1.2.2). It has no independent external qualification. Its live tool-call validity gate (G1.1-4) was measured once on the release candidate (`v1.2.2-rc.1`: `engineering/deep` and `engineering/lead-reasoning` 200/200 native valid, two of the gateway's aliases; see [`docs/evidence/v1.2.2/G1.1-4-rc.1.md`](docs/evidence/v1.2.2/G1.1-4-rc.1.md)) and was not repeated on the stable archive; see [`docs/releases/v1.2.2.md`](docs/releases/v1.2.2.md) for what is in the release, what is not, and the known limitations. Development plans and this README do not establish release readiness; see [GitHub Releases](https://github.com/mikeholownych/nexus-code/releases) and [`docs/releases/`](docs/releases/).
+> **Status:** the latest stable release is [v1.3.0](https://github.com/mikeholownych/nexus-code/releases/tag/v1.3.0). External qualification is pending; this is not a frontier-grade claim. See [`docs/releases/v1.3.0.md`](docs/releases/v1.3.0.md) for what is in the release, what is not, and the known limitations. Development plans and this README do not establish release readiness; see [GitHub Releases](https://github.com/mikeholownych/nexus-code/releases) and [`docs/releases/`](docs/releases/).
 >
 ---
 
@@ -102,7 +102,7 @@ export PATH="$HOME/.local/bin:$PATH"
 > [!NOTE]
 > To pin a release or install a prerelease, set `NEXUS_VERSION` to a tag from [GitHub Releases](https://github.com/mikeholownych/nexus-code/releases):
 > ```sh
-> curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v1.2.2 sh
+> curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v1.3.0 sh
 > ```
 
 ### 2. Inference Setup

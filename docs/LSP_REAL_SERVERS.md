@@ -27,6 +27,12 @@ The suite runs under a throwaway HOME, so a tool installed only for the current 
 
 The first real run showed the default launch commands for TypeScript, JavaScript and Python were missing `--stdio`; both servers print a usage error and exit without it, so `lsp_diagnostics` for those files was always `unavailable` in practice. Fixed in `getServerForFile`; a test that needs no server pins the arguments.
 
+## Shared language-server process limit
+
+The CLI also applies an operator-owned limit across Nexus processes that use the same credential home and local filesystem. It defaults to 8 running language-server supervisors. Set `NEXUS_MAX_LSP_SERVER_PROCESSES` in the operator configuration to an integer from 1 through 64 to change it. The value is validated when an LSP manager is first created; invalid values prevent the manager from starting.
+
+Admission uses the existing kernel-backed resource-slot mechanism under the credential home. If the shared capacity is full, the tool returns an unavailable result that can be retried after a server exits. A trusted supervisor holds each slot for the lifetime of its language server, including if the Nexus process is killed. This is a same-host guarantee for clients sharing that credential home and filesystem; it does not coordinate across machines or independently configured homes. A language server that deliberately escapes its supervisor's process group may outlive ordinary manager shutdown; the supervisor still holds its admission slot while it remains alive.
+
 ## What it does not cover
 
 - The trust and sandbox gates with a real server (they are tested with the fake server; a gated manager never starts one).
