@@ -156,6 +156,7 @@ export async function runJobWorker(id: string, options: JobWorkerOptions = {}): 
         store,
         signal: controller.signal,
         entry: existing ? "existing" : "new",
+        resumeAfterDecision: existing,
         // As `nexus operation resume`: a cancelled or paused operation continues. The stale-driver pause is decided
         // first, but `prepare` then turns every PAUSED operation back to RUNNABLE, so for a job the pause is overridden:
         // a crashed job's resumption is the supervised retry, and nobody is at a terminal to resume it. The executor's
