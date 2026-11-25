@@ -329,6 +329,8 @@ for (let round = 0; round < 50; round++) {
     try { fs.writeFileSync(lock, JSON.stringify({ pid: 4194301, started: "1" }), { flag: "wx" }); } catch {}
   }
   approveExtension({ kind: "workspace-plugin", scope: "/ws/" + who, key: "p" + round + ".mjs", sha256: "0".repeat(64), approvedAt: new Date().toISOString(), summary: who });
+  // Between two changes a writer lets the others in: one that took the lock again at once would starve them.
+  await new Promise((resolve) => setTimeout(resolve, 5));
 }
 `);
   const children = Array.from({ length: 8 }, (_, who) => spawn(TSX, [worker, String(who)], { env: { ...process.env, HOME: home }, stdio: ["ignore", "ignore", "pipe"] }));

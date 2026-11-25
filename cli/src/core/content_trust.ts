@@ -152,7 +152,8 @@ function withStoreLock<T>(storePath: string, change: () => T): T {
   ensurePrivateDir(path.dirname(storePath));
   const pause = new Int32Array(new SharedArrayBuffer(4));
   for (const deadline = Date.now() + LOCK_WAIT_MS; ;) {
-    const held = createHeld(lock);
+    // A lock that is there is not tried for: a waiter then changes nothing in the directory.
+    const held = !fs.existsSync(lock) && createHeld(lock);
     if (!held) {
       if (takeOverStaleLock(lock)) continue;
       if (Date.now() > deadline) throw new Error(`the approval store is locked by another process (${lock})`);
