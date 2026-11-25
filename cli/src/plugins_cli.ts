@@ -14,6 +14,51 @@ import {
   verifyInstalledPlugin,
 } from "./core/plugin_install.js";
 import { InvalidPluginManifestError } from "./core/plugin_manifest.js";
+import * as path from "node:path";
+import { approveExtension } from "./core/content_trust.js";
+import { readPluginFile, workspacePluginTrustId } from "./plugins.js";
+import { isWorkspaceFile } from "./workspace_trust.js";
+
+export interface PluginTrustDeps {
+  /** Whether a person can be asked: standard input and standard output are both a terminal. */
+  interactive: () => boolean;
+  /** Asks the question and returns the answer. */
+  confirm: (question: string) => Promise<boolean>;
+  log?: (line: string) => void;
+  error?: (line: string) => void;
+}
+
+/**
+ * `nexus plugins trust <file>`: approves one workspace plugin file by the SHA-256 of its bytes. Approving is the act of
+ * a person at a terminal; `--sha256` only says which content is meant. The file is read again after the answer, and
+ * what is recorded is that second reading, which must equal the content that was shown: a file swapped while the
+ * question was open is not approved. Returns the process exit code.
+ */
+export async function trustWorkspacePlugin(workspace: string, pluginPath: string, options: { sha256?: string }, deps: PluginTrustDeps): Promise<number> {
+  const log = deps.log ?? ((line: string) => console.log(line));
+  const fail = (line: string, code: number) => {
+    (deps.error ?? ((text: string) => console.error(pc.red(text))))(line);
+    return code;
+  };
+  const ws = path.resolve(workspace);
+  const abs = path.resolve(ws, pluginPath);
+  if (!isWorkspaceFile(ws, abs)) return fail(`Plugin must be a real file inside the workspace: ${abs}`, 1);
+  const shown = readPluginFile(abs);
+  if ("problem" in shown) return fail(`Not a plugin file that can be approved: ${abs}: ${shown.problem}`, 1);
+  const id = workspacePluginTrustId(ws, abs);
+  log(`${abs}\nsha256 ${shown.sha256}\nThis workspace plugin would run with full process authority (HK-3/D18: in-process, deprecated).`);
+  if (!deps.interactive()) return fail("Not approved: approving a workspace plugin needs a person at a terminal. Review the file, then run `nexus plugins trust` yourself in a terminal.", 2);
+  const pinned = options.sha256?.trim().toLowerCase();
+  if (pinned !== undefined && pinned !== shown.sha256) return fail(`Not approved: --sha256 does not match the file, whose SHA-256 is ${shown.sha256}.`, 2);
+  if (!(await deps.confirm("Approve this workspace plugin for this workspace? [y/N] "))) return fail("Not approved.", 1);
+  // Read again after the answer: the bytes may have been replaced while the question was open.
+  const confirmed = readPluginFile(abs);
+  if ("problem" in confirmed) return fail(`Not approved: could not re-read ${abs}: ${confirmed.problem}`, 2);
+  if (confirmed.sha256 !== shown.sha256) return fail(`Not approved: the file changed while you were asked (was ${shown.sha256}, now ${confirmed.sha256}). Review it and run \`nexus plugins trust\` again.`, 2);
+  approveExtension({ kind: "workspace-plugin", scope: id.scope, key: id.key, sha256: confirmed.sha256, approvedAt: new Date().toISOString(), summary: path.basename(abs) });
+  log(`Approved workspace plugin: ${abs}\nsha256 ${confirmed.sha256}\nUndo with \`nexus plugins revoke ${pluginPath}\`.`);
+  return 0;
+}
 
 /** Attach install/list-installed/remove/verify under an existing `plugins` command. */
 export function registerPluginPackageCommands(plugins: Command): void {

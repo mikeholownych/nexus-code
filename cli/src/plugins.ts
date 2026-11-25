@@ -5,7 +5,9 @@ import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import { ToolDefinition, ExecutionResult } from "./types.js";
 import { isWorkspaceFile, isWorkspaceTrusted, WORKSPACE_PLUGIN_DIRS } from "./workspace_trust.js";
-import { approveExtension, extensionTrustEntry, extensionTrustStorePath, readExtensionTrust, revokeExtension, type ExtensionTrustEntry, type ExtensionTrustId } from "./core/content_trust.js";
+import { extensionTrustEntry, extensionTrustStorePath, noteExtensionLoad, readExtensionTrust, type ExtensionTrustEntry, type ExtensionTrustId } from "./core/content_trust.js";
+import { decodeStrictUtf8, fileStamp, readHardenedFile } from "./core/strict_json.js";
+import { redactSecrets } from "./ui.js";
 import { permitsPlugin, type EffectivePolicy } from "./core/managed_policy.js";
 import { ManagedPolicyError } from "./core/managed_policy_load.js";
 import { emitPolicyNotice, managedPolicy, printableRefusal } from "./core/policy_runtime.js";
@@ -44,20 +46,49 @@ export interface PluginHooks {
   }>;
 }
 
-/** Directories Nexus loads plugin modules (`*.js`, `*.mjs`) from at turn start (REQ-SEC-115). */
-export function pluginDirs(workspace: string, isWorkspaceTrusted = false): string[] {
-  const dirs = [
-    path.join(os.homedir(), ".nexus", "plugins"),
-    path.join(os.homedir(), ".config", "nexus", "plugins"),
-  ];
-  if (isWorkspaceTrusted) dirs.unshift(...WORKSPACE_PLUGIN_DIRS.map((dir) => path.join(workspace, dir)));
-  return dirs;
+export type PluginSource = "global" | "workspace";
+
+/**
+ * Directories Nexus loads plugin modules (`*.js`, `*.mjs`) from, each with what it is: the operator's own (`global`)
+ * or the repository's (`workspace`). The kind travels with the directory; it is never worked out from the path, so a
+ * workspace that is the home directory, or a directory whose name merely begins like the workspace's, is not
+ * mistaken. A workspace directory that is one of the operator's own directories (the workspace is the home
+ * directory) is listed once, as the operator's. The operator's come first: on a name clash theirs is the one kept.
+ */
+export function pluginDirSources(workspace: string, isWorkspaceTrusted = false): Array<{ dir: string; source: PluginSource }> {
+  const real = (dir: string): string => {
+    try {
+      return fs.realpathSync(dir);
+    } catch {
+      return path.resolve(dir);
+    }
+  };
+  const global = [path.join(os.homedir(), ".nexus", "plugins"), path.join(os.homedir(), ".config", "nexus", "plugins")];
+  const sources: Array<{ dir: string; source: PluginSource }> = global.map((dir) => ({ dir, source: "global" }));
+  if (isWorkspaceTrusted) {
+    const own = new Set(global.map(real));
+    for (const relative of WORKSPACE_PLUGIN_DIRS) {
+      const dir = path.join(workspace, relative);
+      if (!own.has(real(dir))) sources.push({ dir, source: "workspace" });
+    }
+  }
+  return sources;
 }
 
-export type PluginTrustStatus = "trusted" | "global" | "untrusted" | "changed" | "invalid" | "policy-refused";
+/** Directories Nexus loads plugin modules (`*.js`, `*.mjs`) from at turn start (REQ-SEC-115). */
+export function pluginDirs(workspace: string, isWorkspaceTrusted = false): string[] {
+  return pluginDirSources(workspace, isWorkspaceTrusted).map((entry) => entry.dir);
+}
+
+/**
+ * `trusted`: approved and loaded (or, for a listing that does not load, approved). `load-failed`: approved, and its
+ * import failed, so it is not active. `shadowed`: approved, and an operator plugin of the same name is used instead.
+ */
+export type PluginTrustStatus = "trusted" | "global" | "untrusted" | "changed" | "invalid" | "policy-refused" | "load-failed" | "shadowed";
 
 export interface PluginTrustRecord {
   path: string;
+  source?: PluginSource;
   name?: string;
   sha256?: string;
   status: PluginTrustStatus;
@@ -71,12 +102,86 @@ export function workspacePluginTrustId(workspace: string, pluginPath: string): E
   return { kind: "workspace-plugin", scope: root, key: rel.split(path.sep).join("/") };
 }
 
+/** A workspace plugin file larger than this is not read. */
+export const PLUGIN_FILE_LIMIT = 1024 * 1024;
+
+/**
+ * The bytes of a workspace plugin file, read once and safely: a regular file that is not a symbolic link and has no
+ * second hard link (either would let the name stand for content kept elsewhere), at most 1 MiB, valid UTF-8 without a
+ * byte order mark or NUL. `problem` says why a file is not read. These are the bytes that are hashed, approved and
+ * imported.
+ */
+export function readPluginFile(filePath: string): { bytes: Buffer; sha256: string } | { problem: string } {
+  try {
+    const read = readHardenedFile(filePath, { maxBytes: PLUGIN_FILE_LIMIT });
+    if (!read) return { problem: "the file does not exist" };
+    const stat = fs.lstatSync(filePath);
+    if (stat.nlink > 1 || fileStamp(filePath) !== read.stamp) return { problem: stat.nlink > 1 ? "the file has more than one hard link" : "the file changed while it was read" };
+    decodeStrictUtf8(read.bytes);
+    return { bytes: read.bytes, sha256: read.sha256 };
+  } catch (error) {
+    return { problem: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** SHA-256 of a workspace plugin file as the loader would read it. Throws when the file is not one the loader reads. */
 export function pluginFileSha256(filePath: string): string {
-  return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+  const read = readPluginFile(filePath);
+  if ("problem" in read) throw new Error(read.problem);
+  return read.sha256;
 }
 
 export function pluginBytesSha256(bytes: Buffer | string): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+const TRUST_COMMAND = "nexus plugins trust";
+
+/** How a workspace plugin's bytes stand against the operator's approvals: no code is run to find out. */
+export function workspacePluginTrust(workspace: string, filePath: string, digest: string, trust = readExtensionTrust(extensionTrustStorePath())): { status: PluginTrustStatus; reason?: string; entry?: ExtensionTrustEntry } {
+  if (trust.problem) return { status: "invalid", reason: `trust store unreadable: ${trust.problem}` };
+  const entry = extensionTrustEntry(trust.entries, workspacePluginTrustId(workspace, filePath));
+  const shown = path.relative(path.resolve(workspace), path.resolve(filePath));
+  if (!entry) return { status: "untrusted", reason: `workspace plugin not approved; review it and run \`${TRUST_COMMAND} ${shown}\` in a terminal (each workspace plugin file needs its own approval)` };
+  if (entry.sha256 !== digest) return { status: "changed", reason: `workspace plugin changed since approval; review it and run \`${TRUST_COMMAND} ${shown}\` in a terminal again` };
+  if (entry.loadFailed) return { status: "load-failed", reason: entry.loadFailed.reason, entry };
+  return { status: "trusted", entry };
+}
+
+/**
+ * Every workspace plugin file with its status, without importing any: for `nexus plugins list` details and the doctor.
+ * A `load-failed` status is what the last session that tried to load the approved bytes recorded.
+ */
+export function inspectWorkspacePlugins(workspace: string): PluginTrustRecord[] {
+  const root = path.resolve(workspace);
+  const trust = readExtensionTrust(extensionTrustStorePath());
+  const records: PluginTrustRecord[] = [];
+  for (const { dir, source } of pluginDirSources(root, true)) {
+    if (source !== "workspace") continue;
+    let names: string[];
+    try {
+      names = fs.readdirSync(dir).sort();
+    } catch {
+      continue;
+    }
+    for (const name of names.filter((entry) => entry.endsWith(".js") || entry.endsWith(".mjs"))) {
+      const file = path.join(dir, name);
+      const read = readPluginFile(file);
+      if ("problem" in read) {
+        records.push({ path: file, source, status: "invalid", reason: read.problem });
+        continue;
+      }
+      const { status, reason } = workspacePluginTrust(root, file, read.sha256, trust);
+      records.push({ path: file, source, sha256: read.sha256, status, ...(reason ? { reason } : {}) });
+    }
+  }
+  return records;
+}
+
+/** One line, without secrets, bounded: why a plugin did not load. */
+function loadFailureText(error: unknown): string {
+  const text = redactSecrets(error instanceof Error ? `${error.name}: ${error.message}` : String(error)).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim();
+  return text.length > 300 ? `${text.slice(0, 299)}…` : text;
 }
 
 /**
@@ -95,6 +200,9 @@ export async function importPluginBytes(filePath: string, bytes: Buffer): Promis
   }
 }
 
+/** How many pending plugin files the first-session notice names before it says "and N more". */
+const PENDING_NOTICE_LIMIT = 10;
+
 export class PluginManager {
   private workspace: string;
   private readOnly: boolean;
@@ -107,6 +215,7 @@ export class PluginManager {
   private readonly notify: (notice: string) => void;
   private policyRefusals: string[] = [];
   private pluginTrustRecords: PluginTrustRecord[] = [];
+  private announced: string | undefined;
 
   constructor(workspace: string, options?: { readOnly?: boolean; trusted?: boolean; flightRecorder?: FlightRecorder; policy?: () => EffectivePolicy; notify?: (notice: string) => void }) {
     this.workspace = path.resolve(workspace);
@@ -127,12 +236,12 @@ export class PluginManager {
    * after it ran. The refusal names the policy source and is told to the operator. A policy that cannot be read admits
    * no plugin; a file that cannot be read throws, and is not imported.
    */
-  private refusedByPolicy(filePath: string): string | undefined {
+  private refusedByPolicy(filePath: string, source: PluginSource, knownSha256?: string): string | undefined {
     let message: string | undefined;
     try {
       const policy = this.policy();
       const real = fs.realpathSync(filePath);
-      const decision = permitsPlugin(policy, { path: real, sha256: sha256(fs.readFileSync(real)), fromWorkspace: isWorkspaceFile(this.workspace, filePath) });
+      const decision = permitsPlugin(policy, { path: real, sha256: knownSha256 ?? sha256(fs.readFileSync(real)), fromWorkspace: source === "workspace" || this.linksIntoWorkspace(filePath, real) });
       if (!decision.allowed) message = decision.message;
     } catch (error) {
       if (!(error instanceof ManagedPolicyError)) throw error;
@@ -145,6 +254,15 @@ export class PluginManager {
     return message;
   }
 
+  /** A file in one of the operator's directories whose content really lies elsewhere, in the workspace (a link). */
+  private linksIntoWorkspace(filePath: string, real: string): boolean {
+    try {
+      return path.dirname(real) !== fs.realpathSync(path.dirname(filePath)) && isWorkspaceFile(this.workspace, real);
+    } catch {
+      return true;
+    }
+  }
+
   /** The plugin files managed policy refused in the last load, each with the policy source. */
   public getPolicyRefusals(): string[] {
     return [...this.policyRefusals];
@@ -152,29 +270,6 @@ export class PluginManager {
 
   public setFlightRecorder(flightRecorder: FlightRecorder): void {
     this.flightRecorder = flightRecorder;
-  }
-
-  private workspacePluginTrusted(filePath: string, bytes: Buffer): { trusted: boolean; sha256?: string; status: PluginTrustStatus; reason?: string } {
-    const digest = pluginBytesSha256(bytes);
-    const id = workspacePluginTrustId(this.workspace, filePath);
-    const trust = readExtensionTrust(extensionTrustStorePath());
-    if (trust.problem) {
-      return { trusted: false, sha256: digest, status: "invalid", reason: `trust store unreadable: ${trust.problem}` };
-    }
-    const entry = extensionTrustEntry(trust.entries, id);
-    if (!entry) {
-      return {
-        trusted: false, sha256: digest, status: "untrusted",
-        reason: "workspace plugin not approved; review it and run `nexus plugins trust <path>` (HK-3 per-plugin trust; in-process workspace plugins are deprecated)",
-      };
-    }
-    if (entry.sha256 !== digest) {
-      return {
-        trusted: false, sha256: digest, status: "changed",
-        reason: "workspace plugin changed since approval; review it and run `nexus plugins trust <path>` again",
-      };
-    }
-    return { trusted: true, sha256: digest, status: "trusted" };
   }
 
   public async loadPlugins(): Promise<void> {
@@ -185,70 +280,100 @@ export class PluginManager {
     this.pluginTrustRecords = [];
 
     const allowWorkspace = this.trusted && !this.readOnly;
-    for (const dir of pluginDirs(this.workspace, allowWorkspace)) {
-      if (!fs.existsSync(dir)) continue;
-      const source: "global" | "workspace" = path.resolve(dir).startsWith(path.resolve(this.workspace)) ? "workspace" : "global";
+    for (const { dir, source } of pluginDirSources(this.workspace, allowWorkspace)) {
+      let files: string[];
       try {
-        const files = fs.readdirSync(dir);
-        for (const file of files) {
-          if (file.endsWith(".js") || file.endsWith(".mjs")) {
-            const pluginPath = path.join(dir, file);
-            await this.loadPluginFile(pluginPath, source);
-          }
-        }
+        files = fs.readdirSync(dir).sort();
       } catch {
-        // Ignore read errors
+        // No such directory, or not readable: nothing to load from it.
+        continue;
+      }
+      for (const file of files) {
+        if (file.endsWith(".js") || file.endsWith(".mjs")) await this.loadPluginFile(path.join(dir, file), source);
       }
     }
+    this.announcePending();
   }
 
-  private async loadPluginFile(filePath: string, source: "global" | "workspace" = "global"): Promise<void> {
+  /**
+   * One notice for the workspace plugins that wait for an approval, with the command for each: since per-plugin trust
+   * a trusted workspace no longer loads its plugins by itself, and a plugin that stops loading must not do so silently.
+   * Once per content of the list for this manager (a session), not on every reload.
+   */
+  private announcePending(): void {
+    const root = this.workspace;
+    const pending = this.pluginTrustRecords.filter((record) => record.status === "untrusted" || record.status === "changed");
+    if (!pending.length) return;
+    const shown = (record: PluginTrustRecord) => path.relative(root, record.path);
+    const lines = pending.slice(0, PENDING_NOTICE_LIMIT).map((record) => `  ${TRUST_COMMAND} ${shown(record)}${record.status === "changed" ? "   (changed since it was approved)" : ""}`);
+    if (pending.length > PENDING_NOTICE_LIMIT) lines.push(`  ... and ${pending.length - PENDING_NOTICE_LIMIT} more: see \`nexus plugins list\``);
+    const notice = `nexus: ${pending.length} workspace plugin${pending.length === 1 ? " is" : "s are"} not loaded. Since v1.3.0 each workspace plugin file needs its own approval; trusting the workspace no longer loads them. Review each file, then run in a terminal:\n${lines.join("\n")}`;
+    if (this.announced === notice) return;
+    this.announced = notice;
+    this.notify(notice);
+  }
+
+  private async loadPluginFile(filePath: string, source: PluginSource): Promise<void> {
+    const record: PluginTrustRecord = { path: filePath, source, status: source === "global" ? "global" : "untrusted" };
+    this.pluginTrustRecords.push(record);
+    let approved: ExtensionTrustId | undefined;
     try {
-      const policyRefusal = this.refusedByPolicy(filePath);
-      if (policyRefusal) {
-        this.pluginTrustRecords.push({ path: filePath, status: "policy-refused", reason: policyRefusal });
-        return;
-      }
       let mod: any;
       if (source === "workspace") {
-        // Read once: hash and import the same bytes so a flip after the check cannot run (HK-3 TOCTOU).
-        let bytes: Buffer;
-        try {
-          bytes = fs.readFileSync(filePath);
-        } catch (error) {
-          this.pluginTrustRecords.push({ path: filePath, status: "invalid", reason: error instanceof Error ? error.message : String(error) });
+        // Read once, safely: the policy decides on, the approval names, and the import runs these same bytes.
+        const read = readPluginFile(filePath);
+        if ("problem" in read) {
+          Object.assign(record, { status: "invalid", reason: read.problem });
+          this.notify(`nexus: workspace plugin ${filePath} is not loaded: ${read.problem}`);
           return;
         }
-        const trust = this.workspacePluginTrusted(filePath, bytes);
-        this.pluginTrustRecords.push({ path: filePath, sha256: trust.sha256, status: trust.status, reason: trust.reason });
-        if (!trust.trusted) {
-          console.error(pc.yellow(`[plugin] skipped (${trust.status}): ${filePath}`));
-          if (trust.reason) console.error(pc.yellow(`  ${trust.reason}`));
+        record.sha256 = read.sha256;
+        const policyRefusal = this.refusedByPolicy(filePath, source, read.sha256);
+        if (policyRefusal) {
+          Object.assign(record, { status: "policy-refused", reason: policyRefusal });
           return;
         }
-        mod = await importPluginBytes(filePath, bytes);
+        const trust = workspacePluginTrust(this.workspace, filePath, read.sha256);
+        // A failure the store remembers is from an earlier load: this load decides afresh.
+        const status = trust.status === "load-failed" ? "trusted" : trust.status;
+        Object.assign(record, { status, reason: status === "trusted" ? undefined : trust.reason });
+        if (status !== "trusted") return;
+        approved = workspacePluginTrustId(this.workspace, filePath);
+        mod = await importPluginBytes(filePath, read.bytes);
       } else {
-        this.pluginTrustRecords.push({ path: filePath, status: "global" });
+        const policyRefusal = this.refusedByPolicy(filePath, source);
+        if (policyRefusal) {
+          Object.assign(record, { status: "policy-refused", reason: policyRefusal });
+          return;
+        }
         mod = await import(pathToFileURL(filePath).href);
       }
       const plugin: PluginHooks = mod.default || mod;
-
-      if (plugin && typeof plugin === "object" && plugin.name) {
-        this.plugins.set(plugin.name, plugin);
-        const rec = this.pluginTrustRecords.find((r) => r.path === filePath);
-        if (rec) rec.name = plugin.name;
-
-        if (Array.isArray(plugin.customTools)) {
-          for (const ct of plugin.customTools) {
-            if (ct.definition?.function?.name && typeof ct.handler === "function") {
-              this.customToolDefs.push(ct.definition);
-              this.customToolsMap.set(ct.definition.function.name, ct.handler);
-            }
-          }
-        }
+      if (!plugin || typeof plugin !== "object" || !plugin.name) throw new Error("the module does not export a plugin object with a name");
+      record.name = plugin.name;
+      const earlier = this.pluginTrustRecords.find((other) => other !== record && other.name === plugin.name && (other.status === "global" || other.status === "trusted"));
+      if (earlier && source === "workspace") {
+        // The operator's plugin of that name was loaded first and stays: a repository cannot replace it.
+        Object.assign(record, { status: "shadowed", reason: `${earlier.source === "global" ? "the operator's" : "another"} plugin ${earlier.path} has the same name '${plugin.name}' and is the one used` });
+        this.notify(`nexus: workspace plugin ${filePath} is not used: ${record.reason}`);
+        return;
       }
+      this.registerPlugin(plugin);
+      if (approved) this.noteLoad(approved, undefined);
+    } catch (error) {
+      // An approved plugin that cannot be imported must not vanish: the failure is recorded, shown and told once.
+      const reason = loadFailureText(error);
+      Object.assign(record, { status: "load-failed", reason });
+      if (approved) this.noteLoad(approved, { at: new Date().toISOString(), reason });
+      this.notify(`nexus: plugin ${filePath} failed to load and is not active: ${reason}${source === "workspace" ? " (a workspace plugin runs from a private copy of its one file: imports of sibling files and of the workspace's packages do not resolve)" : ""}`);
+    }
+  }
+
+  private noteLoad(id: ExtensionTrustId, failure: { at: string; reason: string } | undefined): void {
+    try {
+      noteExtensionLoad(id, failure);
     } catch {
-      // Ignore plugins that fail to load
+      // The store could not be written: the notice and this session's records still say what happened.
     }
   }
 
