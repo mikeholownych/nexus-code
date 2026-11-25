@@ -15,6 +15,25 @@ import { ProcessTreeMemory } from "./process_identity.js";
 import { parseStrictJson } from "./strict_json.js";
 import { withoutUnprintable } from "./printable.js";
 
+/**
+ * Expand a leading `~/` in an argv command to an absolute path under the operator home.
+ * Callers must expand before `runHookProcess`: the runner never joins `os.homedir()` into the
+ * spawn executable (CodeQL js/shell-command-injection-from-environment).
+ */
+export function expandHookArgv(command: string[], home = os.homedir()): string[] | { problem: string } {
+  if (command.length === 0) return { problem: "hook command argv is empty" };
+  const exe = command[0]!;
+  if (exe !== "~" && !exe.startsWith("~/")) return command;
+  const homeRoot = path.resolve(home);
+  const rest = exe === "~" ? "" : exe.slice(2);
+  const resolved = path.resolve(homeRoot, rest);
+  const relative = path.relative(homeRoot, resolved);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    return { problem: `hook command '${exe}' escapes the home directory` };
+  }
+  return [resolved, ...command.slice(1)];
+}
+
 export const HOOK_STDOUT_LIMIT = 64 * 1024;
 export const HOOK_STDERR_LIMIT = 8 * 1024;
 /** Time a hook gets after SIGTERM before it and everything it started is killed. */
@@ -86,9 +105,33 @@ export function runHookProcess(request: HookProcessRequest): Promise<HookProcess
   return new Promise((resolve) => {
     const started = Date.now();
     const killGraceMs = request.killGraceMs ?? HOOK_KILL_GRACE_MS;
-    const [file, args] = typeof request.command === "string"
-      ? ["/bin/sh", ["-c", request.command]]
-      : [request.command[0].startsWith("~/") ? path.join(os.homedir(), request.command[0].slice(2)) : request.command[0], request.command.slice(1)];
+    // Fixed interpreter for shell form; argv form must already be absolute or a PATH name (no `~/` here).
+    let file: string;
+    let args: string[];
+    if (typeof request.command === "string") {
+      file = "/bin/sh";
+      args = ["-c", request.command];
+    } else {
+      const exe = request.command[0] ?? "";
+      if (!exe) {
+        resolve({ exit: null, signal: null, stdout: "", stderr: "", failure: "spawn", detail: "hook command argv is empty", durationMs: 0 });
+        return;
+      }
+      if (exe === "~" || exe.startsWith("~/")) {
+        resolve({
+          exit: null,
+          signal: null,
+          stdout: "",
+          stderr: "",
+          failure: "spawn",
+          detail: "hook argv still starts with '~/'; expand with expandHookArgv before runHookProcess",
+          durationMs: 0,
+        });
+        return;
+      }
+      file = exe;
+      args = request.command.slice(1);
+    }
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     let outBytes = 0;
@@ -104,7 +147,8 @@ export function runHookProcess(request: HookProcessRequest): Promise<HookProcess
 
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(file, args, { cwd: request.cwd, env: request.env, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+      // shell:false — argv only; string commands use fixed /bin/sh (never an env-derived absolute executable).
+      child = spawn(file, args, { cwd: request.cwd, env: request.env, detached: true, stdio: ["pipe", "pipe", "pipe"], shell: false });
     } catch (error) {
       resolve({ exit: null, signal: null, stdout: "", stderr: "", failure: "spawn", detail: error instanceof Error ? error.message : String(error), durationMs: 0 });
       return;

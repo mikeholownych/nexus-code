@@ -43,8 +43,14 @@ test("a worker that ignores SIGTERM is killed after the grace, with the process 
   const b = bench(repo);
   const marker = path.join(b.root, "term-seen");
   // Ignores SIGTERM (it only notes it) and keeps a child running, as a stuck tool would.
+  // Marker path arrives via argv (CodeQL js/bad-code-sanitization): do not splice JSON into -e source.
   const stubborn: StandIn = () => ({
-    command: [process.execPath, "-e", `const fs=require("fs");require("child_process").spawn("sleep",["300"],{stdio:"ignore"});process.on("SIGTERM",()=>fs.writeFileSync(${JSON.stringify(marker)},"term"));setInterval(()=>{},1000);`],
+    command: [
+      process.execPath,
+      "-e",
+      'const fs=require("fs");const marker=process.argv[1];require("child_process").spawn("sleep",["300"],{stdio:"ignore"});process.on("SIGTERM",()=>fs.writeFileSync(marker,"term"));setInterval(()=>{},1000);',
+      marker,
+    ],
   });
   try {
     const runner = b.runner({ standIn: stubborn });

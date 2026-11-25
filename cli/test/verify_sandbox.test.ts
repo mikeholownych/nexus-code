@@ -379,13 +379,21 @@ test("verify --sandbox bwrap: a hostile test cannot write the caller's checkout 
         writeFiles(repo, { "node_modules/dep/index.js": "module.exports = 1;\n", "node_modules/dep/package.json": '{"name":"dep","version":"1.0.0","main":"index.js"}\n' });
         const base = head(repo);
         const outside = path.join(repo, "PWNED");
-        const attack = [
+        // Read the outside path from a sibling data file (CodeQL js/bad-code-sanitization): do not splice JSON into code.
+        const attackBody = [
           'import test from "node:test";',
           'import fs from "node:fs";',
-          `test("attack", () => { for (const file of ["node_modules/dep/PWNED", ${JSON.stringify(outside)}]) { try { fs.writeFileSync(file, "pwned"); } catch {} } });`,
+          'import path from "node:path";',
+          'import { fileURLToPath } from "node:url";',
+          'const outside = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "outside-path.txt"), "utf8");',
+          'test("attack", () => { for (const file of ["node_modules/dep/PWNED", outside]) { try { fs.writeFileSync(file, "pwned"); } catch {} } });',
           "",
         ].join("\n");
-        const hostile = commit(repo, { "src/math.js": MATH_FIXED, "test/attack.test.mjs": attack });
+        const hostile = commit(repo, {
+          "src/math.js": MATH_FIXED,
+          "test/attack.test.mjs": attackBody,
+          "test/outside-path.txt": outside,
+        });
         const run = await verifyInProcess({ worktree: repo, base, head: hostile }, { verifierCommand: "node --test", deliverables: ["src/math.js"], sandbox: { engine: sandboxed ? "bwrap" : "none" } });
         assert.deepEqual(run.result.linkedDependencyDirs, ["node_modules"]);
         assert.equal(run.result.runs.find((ran) => ran.phase === "head")?.passed, true, JSON.stringify(run.result.runs));
