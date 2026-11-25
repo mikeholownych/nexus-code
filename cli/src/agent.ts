@@ -351,6 +351,8 @@ export class AutonomousAgent {
   private compactionQueue: Array<{ ids: string[]; llm: boolean; at: string }> = [];
   /** Durable-write failures during the running turn, reported on its result. */
   private turnPersistenceFailures: string[] = [];
+  /** Mandatory candidate receipt persistence is part of acceptance, not optional telemetry. */
+  private candidateReceiptPersistenceFailure?: string;
   /** A shared objective-budget checkpoint failed; no delegated execution may continue on unpersisted allowance. */
   public objectiveBudgetPersistenceFailure?: string;
   /** Current turn's tool allowance; delegated helpers reserve from this same tracker before each dispatch. */
@@ -1690,6 +1692,11 @@ export class AutonomousAgent {
     } else if (kind === "init") {
       text = `Initial durable task state was not persisted (${message}); restart recovery is unavailable until a later successful checkpoint.`;
       this.initialStatePersistenceFailure = text;
+    } else if (kind === "candidate_receipt") {
+      text = `The mandatory candidate validation receipt could not be saved durably (${message}); verified acceptance is unavailable.`;
+      this.candidateReceiptPersistenceFailure = text;
+      this.verifiedWorktreeCompletion = false;
+      this.activeValidationReceipt = undefined;
     } else if (kind === "final_checkpoint") {
       text = `The turn's final task state could not be saved: ${message}`;
     } else {

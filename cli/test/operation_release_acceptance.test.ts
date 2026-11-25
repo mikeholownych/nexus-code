@@ -285,7 +285,9 @@ test("ACC-V11-MAO-07: killing a real two-unit runner preserves one tool result p
     const stateDir = process.env.RELEASE_STATE_DIR;
     const endpoint = process.env.RELEASE_ENDPOINT;
     const origin = new URL(endpoint).origin;
-    const resources = ["r1", "r2"].map((id) => ({ id, provider: origin, endpoint, model: "m", capabilities: ["tools"], rank: 0 }));
+    // These workers model distinct inference resources. The shared admission layer keys the serving resource by
+    // provider, endpoint and model, so the fixture must give each slot a distinct model identity.
+    const resources = ["r1", "r2"].map((id) => ({ id, provider: origin, endpoint, model: "m-" + id, capabilities: ["tools"], rank: 0 }));
     const store = new OperationStore(workspace, stateDir);
     const executor = new AgentWorkUnitExecutor({
       baseConfig: { endpoint, model: "m", maxSteps: 6, temperature: 0, workspace, shell: "bash", approvalMode: "auto", fullAccess: true },
@@ -368,7 +370,7 @@ test("ACC-V11-GIT-02: a crash after integration enqueue and before merge resumes
     const state = newOperation("op-git02", "queued crash", [
       { id: "u1", title: "u1", prompt: "u1", executionResources: { cpuMilli: 1000, memoryBytes: 1024 } },
       { id: "u2", title: "u2", prompt: "u2", executionResources: { cpuMilli: 1000, memoryBytes: 1024 } },
-    ], ["r1", "r2"].map((id) => ({ id, provider: "http://127.0.0.1:9", endpoint: "http://127.0.0.1:9/v1", model: "m", capabilities: ["tools"], rank: 0 })), Date.now(), { maxConcurrentUnits: 2, executionBudget: { cpuMilli: 2000, memoryBytes: 2048 } });
+    ], ["r1", "r2"].map((id) => ({ id, provider: "http://127.0.0.1:9", endpoint: "http://127.0.0.1:9/" + id + "/v1", model: "m", capabilities: ["tools"], rank: 0 })), Date.now(), { maxConcurrentUnits: 2, executionBudget: { cpuMilli: 2000, memoryBytes: 2048 } });
     const plan = planOperationGit(workspace, state.id);
     state.git = newOperationGitState(plan);
     ensureIntegrationWorktree(plan, state.git);

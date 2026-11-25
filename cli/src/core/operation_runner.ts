@@ -3,9 +3,10 @@
  * waits durably when nothing is runnable, revalidates resources on wake, and persists after every transition so a
  * restarted process continues from the same decision point.
  */
-import { credentialStorageHome, storedCredentialFor } from "../client.js";
+import { credentialStorageHome, operatorSetting, storedCredentialFor } from "../client.js";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import type { HarnessConfig } from "../types.js";
 import { realRecoveryClock, type RecoveryClock } from "./provider_recovery.js";
 import { ConvergenceScheduler, type Assignment, type Decision, type DurableOperationState, type MergedCheck, type OperationEvent, type OperationMessage, type UnitRunResult, type WorkUnit } from "./operation.js";
@@ -27,7 +28,8 @@ import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./op
 import { OperationLockedError, type OperationStore } from "./operation_runner_persistence.js";
 import { STALE_PAUSE_PREFIX, clearDriver, liveForeignDriver, stampDriver, staleDriver } from "./driver_identity.js";
 import type { BoundaryRules } from "./boundary_rules.js";
-import { MAX_OPERATION_ACTIVE_MS } from "./operation_schema.js";
+import { MAX_CONCURRENT_UNITS, MAX_OPERATION_ACTIVE_MS } from "./operation_schema.js";
+import { SharedResourceAdmission, type ResourceSlotLease } from "./shared_resource_admission.js";
 
 export { OperationStore, OperationLockedError, migrateLegacyAccountIdentities } from "./operation_runner_persistence.js";
 export { AgentWorkUnitExecutor } from "./operation_runner_execution.js";
@@ -98,6 +100,8 @@ export interface OperationRunnerOptions {
   maxIterations?: number;
   /** Used for token-budget cap enforcement; when omitted, budget caps are not enforced. */
   store?: OperationStore;
+  /** Cross-operation admission boundary; tests may inject an isolated shared directory. */
+  resourceAdmission?: SharedResourceAdmission;
 }
 
 function planFromState(state: DurableOperationState): OperationGitPlan {
@@ -114,6 +118,18 @@ function planFromState(state: DurableOperationState): OperationGitPlan {
   };
 }
 
+/** Operator-owned cross-operation ceiling; workspace operation specs cannot increase it. */
+function sharedResourceMaximum(): number {
+  const raw = operatorSetting("NEXUS_MAX_SHARED_RESOURCE_UNITS");
+  if (raw === undefined) return 1;
+  if (!/^\d+$/.test(raw)) throw new Error(`Invalid NEXUS_MAX_SHARED_RESOURCE_UNITS='${raw}': expected an integer from 1 to ${MAX_CONCURRENT_UNITS}.`);
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_CONCURRENT_UNITS) {
+    throw new Error(`Invalid NEXUS_MAX_SHARED_RESOURCE_UNITS='${raw}': expected an integer from 1 to ${MAX_CONCURRENT_UNITS}.`);
+  }
+  return value;
+}
+
 /** PA-2: how many verifiers held on the merged tree, for the operator's event line. */
 function mergedChecksNote(checks: readonly MergedCheck[] | undefined): string {
   return checks?.length ? ` (${checks.length} merged-tree ${checks.length === 1 ? "check" : "checks"} passed)` : "";
@@ -124,6 +140,7 @@ export class OperationRunner {
   readonly scheduler: ConvergenceScheduler;
   private readonly clock: RecoveryClock;
   private readonly revalidator: OperationRevalidator;
+  private readonly resourceAdmission: SharedResourceAdmission;
   private readonly git: OperationGit | undefined;
   /** One merge at a time: all units share the operation's integration worktree. */
   private integrationChain: Promise<void> = Promise.resolve();
@@ -136,6 +153,10 @@ export class OperationRunner {
     private readonly opts: OperationRunnerOptions,
   ) {
     this.clock = opts.clock ?? realRecoveryClock;
+    this.resourceAdmission = opts.resourceAdmission ?? new SharedResourceAdmission(
+      path.join(credentialStorageHome(), ".local/state/nexus/resource-admission"),
+      { operatorMaxUnits: sharedResourceMaximum() },
+    );
     this.registry = new ResourceRegistry(state.resources, state.conditions, this.clock, (e) => this.onRegistryEvent(e));
     this.revalidator = new OperationRevalidator(opts.executor, this.registry, opts.onDiagnostic);
     this.scheduler = new ConvergenceScheduler(state, this.registry, () => this.clock.now(), opts.onEvent, opts.onDiagnostic);
@@ -377,14 +398,54 @@ export class OperationRunner {
             return this.state;
           }
         }
+        const admitted: Assignment[] = [];
+        const leases: ResourceSlotLease[] = [];
+        try {
+          for (const assignment of ready) {
+            if (signal?.aborted) break;
+            const lease = this.resourceAdmission.acquire(assignment.resource);
+            if (!lease) continue;
+            leases.push(lease);
+            admitted.push(assignment);
+          }
+        } catch (error) {
+          for (const lease of leases) lease.release();
+          throw error;
+        }
+        if (signal?.aborted) {
+          for (const lease of leases) lease.release();
+          return this.stopForAbort();
+        }
+        if (!admitted.length) {
+          const wakeAt = this.clock.now() + 1_000;
+          this.scheduler.wait({
+            kind: "wait",
+            wakeAt,
+            reason: "shared inference-resource capacity is reserved by another operation",
+            parked: ready.map((assignment) => assignment.unit.id),
+          });
+          this.save();
+          if (this.opts.maxInProcessWaitMs !== undefined && wakeAt - this.clock.now() > this.opts.maxInProcessWaitMs) return this.state;
+          try {
+            await this.clock.sleep(Math.max(0, wakeAt - this.clock.now()), signal);
+          } catch {
+            return this.stopForAbort();
+          }
+          await this.revalidator.revalidate(signal);
+          continue;
+        }
         const owed = new Map<string, OperationMessage[]>();
-        for (const assignment of ready) {
+        for (const assignment of admitted) {
           const messages = undeliveredFor(this.state, assignment.unit.id);
           if (messages.length) owed.set(assignment.unit.id, messages);
         }
-        for (const assignment of ready) this.scheduler.start(assignment);
-        this.save();
-        await this.executeBatch(ready, owed, signal);
+        try {
+          for (const assignment of admitted) this.scheduler.start(assignment);
+          this.save();
+          await this.executeBatch(admitted, owed, signal);
+        } finally {
+          for (const lease of leases) lease.release();
+        }
         if (signal?.aborted) return this.stopForAbort();
         continue;
       }

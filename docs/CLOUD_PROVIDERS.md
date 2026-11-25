@@ -284,6 +284,18 @@ error message; errors name only the variable, the file or Google's error code. N
 workload identity federation, the metadata server, and Anthropic models on Vertex. Verified against fixtures and a local
 mock only; no live call.
 
+## Shared operation capacity
+
+Concurrent Nexus operations share a host-local admission limit for each canonical provider, endpoint, model or serving
+pool, and account identity. The default is one active work unit per identity. To raise that limit, set
+`NEXUS_MAX_SHARED_RESOURCE_UNITS` in the operator's `~/.config/nexus/config.env` or the operator process environment to
+an integer from 1 to 64. This is a limit per resource identity, not a total cap across providers or the whole host; set
+it only as high as the provider or local inference service can safely handle. A resource limit in a workspace operation
+spec may lower the operator limit, but cannot raise it. This coordinates Nexus processes on one host and does not cap
+provider-side work that continues after a connection is lost. Nexus retains at most 1,024 distinct resource identities
+for admission; once that bound is reached, new identities are refused while existing ones remain available. Only reset
+the admission state after confirming that no operation is active.
+
 ## Limitations
 
 - Implemented: OpenRouter, OpenAI (Responses), Anthropic (Messages), generic OpenAI-compatible, ChatGPT plan and

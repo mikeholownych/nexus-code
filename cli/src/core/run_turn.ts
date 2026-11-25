@@ -53,6 +53,15 @@ function taskTimeLimitDetail(budget: any, state: TaskElapsedTurnState): string {
     : `operator time limit ${budget.maxTurnMinutes} min`;
 }
 
+function applyCandidateReceiptPersistenceFailure(
+  failure: string | undefined,
+  persistenceFailure: string | undefined,
+  stopReason: TurnReason | undefined,
+): [string | undefined, TurnReason | undefined] {
+  if (!failure) return [persistenceFailure, stopReason];
+  return [persistenceFailure ?? failure, stopReason ?? "PERSISTENCE_FAILED"];
+}
+
 function initialTaskTimeStopReason(state: TaskElapsedTurnState, persistenceFailure?: string): TurnReason | undefined {
   return state.remainingMs === 0 && !persistenceFailure ? "TIME_BUDGET_EXHAUSTED" : undefined;
 }
@@ -133,6 +142,7 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   this.completionSummary = undefined;
   this.turnPersistenceFailures = this.initialStatePersistenceFailure ? [this.initialStatePersistenceFailure] : [];
+  this.candidateReceiptPersistenceFailure = undefined;
   this.objectiveBudgetPersistenceFailure = undefined;
   this.turnMutations = 0;
   this.turnToolCallSyntax = { native: 0, trailing: 0, structural: 0, invalid: 0, schema: 0 };
@@ -1218,6 +1228,12 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
         interruption ? "the turn was cancelled before it could be applied" : `the turn ended (${stopReason ?? (inferenceFailure as InferenceFailure | null)?.kind ?? (capacityBlock ? "context capacity" : persistenceFailure ? "persistence failure" : "stopped")}) before it could be applied`,
       );
     }
+
+    [persistenceFailure, stopReason] = applyCandidateReceiptPersistenceFailure(
+      this.candidateReceiptPersistenceFailure,
+      persistenceFailure,
+      stopReason,
+    );
 
     triggerNotification("Nexus Code", "Turn finished.", this.surface);
 
