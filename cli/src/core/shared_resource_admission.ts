@@ -7,6 +7,9 @@ import { acquireFileGuard, releaseFileGuard, type FileGuard } from "./file_guard
 import type { ResourceDescriptor } from "./resources.js";
 import { MAX_CONCURRENT_UNITS } from "./operation_schema.js";
 
+/** Persistent lock files are never unlinked while other processes may hold their inodes. Bound unique identities. */
+export const MAX_SHARED_RESOURCE_IDENTITIES = 1_024;
+
 interface CapacityRecord {
   format: "NEXUS_RESOURCE_ADMISSION";
   version: 1;
@@ -118,14 +121,18 @@ function readCapacity(file: string): CapacityRecord | undefined {
 export class SharedResourceAdmission {
   constructor(
     private readonly directory: string,
-    private readonly options: { operatorMaxUnits?: number; guardWaitMs?: number } = {},
+    private readonly options: { operatorMaxUnits?: number; guardWaitMs?: number; maxResourceIdentities?: number } = {},
   ) {
     const operatorMaxUnits = options.operatorMaxUnits ?? 1;
     const guardWaitMs = options.guardWaitMs ?? 1_000;
+    const maxResourceIdentities = options.maxResourceIdentities ?? MAX_SHARED_RESOURCE_IDENTITIES;
     if (!Number.isSafeInteger(operatorMaxUnits) || operatorMaxUnits < 1 || operatorMaxUnits > MAX_CONCURRENT_UNITS) {
       throw new Error(`invalid operator shared-resource capacity; expected 1..${MAX_CONCURRENT_UNITS}`);
     }
     if (!Number.isSafeInteger(guardWaitMs) || guardWaitMs < 0) throw new Error("invalid resource admission guard wait bound");
+    if (!Number.isSafeInteger(maxResourceIdentities) || maxResourceIdentities < 1 || maxResourceIdentities > MAX_SHARED_RESOURCE_IDENTITIES) {
+      throw new Error(`invalid shared-resource identity bound; expected 1..${MAX_SHARED_RESOURCE_IDENTITIES}`);
+    }
   }
 
   private get operatorMaxUnits(): number {
@@ -136,17 +143,43 @@ export class SharedResourceAdmission {
     return this.options.guardWaitMs ?? 1_000;
   }
 
+  private get maxResourceIdentities(): number {
+    return this.options.maxResourceIdentities ?? MAX_SHARED_RESOURCE_IDENTITIES;
+  }
+
+  private acquireIdentityGuard(prefix: string): FileGuard | null {
+    const catalog = acquireFileGuard(path.join(this.directory, "catalog.guard"), {
+      label: "Shared resource catalog guard",
+      waitMs: this.guardWaitMs,
+    });
+    if (!catalog) return null;
+    try {
+      const guardPath = `${prefix}.guard`;
+      const exists = fs.lstatSync(guardPath, { throwIfNoEntry: false }) !== undefined;
+      if (!exists) {
+        const registered = fs.readdirSync(this.directory).filter((name) => /^[0-9a-f]{64}\.guard$/.test(name)).length;
+        if (registered >= this.maxResourceIdentities) {
+          throw new ResourceAdmissionConflictError(
+            `shared resource identity limit (${this.maxResourceIdentities}) reached; refusing to create another admission record`,
+          );
+        }
+      }
+      try {
+        return acquireFileGuard(guardPath, { label: "Shared resource admission guard", waitMs: this.guardWaitMs });
+      } catch (error) {
+        throw new ResourceAdmissionConflictError(`cannot establish shared resource admission: ${(error as Error).message}`);
+      }
+    } finally {
+      releaseFileGuard(catalog);
+    }
+  }
+
   acquire(resource: ResourceDescriptor): ResourceSlotLease | null {
     ensureAdmissionDirectory(this.directory);
     const key = resourceKey(resource);
     const capacity = capacityOf(resource, this.operatorMaxUnits);
     const prefix = path.join(this.directory, key);
-    let mutex: FileGuard | null;
-    try {
-      mutex = acquireFileGuard(`${prefix}.guard`, { label: "Shared resource admission guard", waitMs: this.guardWaitMs });
-    } catch (error) {
-      throw new ResourceAdmissionConflictError(`cannot establish shared resource admission: ${(error as Error).message}`);
-    }
+    const mutex = this.acquireIdentityGuard(prefix);
     if (!mutex) return null;
 
     let slot: FileGuard | null = null;

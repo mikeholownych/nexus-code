@@ -97,6 +97,27 @@ test("workspace resource declarations cannot raise the operator-owned shared cap
   }
 });
 
+test("persistent resource identity files have a race-safe hard bound", () => {
+  const f = fixture();
+  try {
+    const admission = new SharedResourceAdmission(f.dir, { maxResourceIdentities: 1 });
+    const first = admission.acquire(resource());
+    assert.ok(first);
+    first.release();
+
+    assert.throws(
+      () => admission.acquire(resource({ endpoint: "https://another-inference.example.invalid/v1" })),
+      (error: unknown) => error instanceof ResourceAdmissionConflictError && /identity limit \(1\) reached/.test(error.message),
+    );
+    const existingIdentityStillWorks = admission.acquire(resource());
+    assert.ok(existingIdentityStillWorks);
+    existingIdentityStillWorks.release();
+    assert.equal(fs.readdirSync(f.dir).filter((name) => /^[0-9a-f]{64}\.guard$/.test(name)).length, 1);
+  } finally {
+    f.cleanup();
+  }
+});
+
 test("canonical identities hide endpoint credentials and query values", () => {
   const f = fixture();
   try {
@@ -185,6 +206,59 @@ test("simultaneous processes cannot both reserve a shared one-slot resource", as
     const results = await Promise.all(outputs);
     assert.deepEqual(results.map((result) => result.code), [0, 0], results.map((result) => result.stderr).join("\n"));
     assert.deepEqual(results.map((result) => result.stdout.trim()).sort(), ["acquired", "busy"]);
+  } finally {
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    f.cleanup();
+  }
+});
+
+test("simultaneous new identities cannot race past the persistent identity bound", async () => {
+  const f = fixture();
+  const children: ReturnType<typeof spawn>[] = [];
+  try {
+    const readyFiles = [path.join(f.root, "catalog-ready-1"), path.join(f.root, "catalog-ready-2")];
+    const goFile = path.join(f.root, "catalog-go");
+    const source = `
+      import * as fs from "node:fs";
+      import { setTimeout as delay } from "node:timers/promises";
+      import { SharedResourceAdmission } from "./src/core/shared_resource_admission.ts";
+      const id = process.env.RESOURCE_ID;
+      fs.writeFileSync(process.env.READY_FILE, "ready");
+      const until = Date.now() + 5000;
+      while (!fs.existsSync(process.env.GO_FILE) && Date.now() < until) await delay(10);
+      if (!fs.existsSync(process.env.GO_FILE)) throw new Error("start barrier timed out");
+      const admission = new SharedResourceAdmission(process.env.ADMISSION_DIR, { maxResourceIdentities: 1 });
+      try {
+        const lease = admission.acquire({ id, provider: "p", endpoint: "https://" + id + ".example.invalid/v1", model: "m", capabilities: ["chat"] });
+        if (!lease) throw new Error("catalog guard unexpectedly busy");
+        console.log("acquired:" + id);
+        lease.release();
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.includes("identity limit (1) reached")) throw error;
+        console.log("rejected:" + id);
+      }
+    `;
+    children.push(...readyFiles.map((ready, index) => spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", source], {
+      cwd: path.resolve(import.meta.dirname, ".."),
+      env: { ...process.env, ADMISSION_DIR: f.dir, READY_FILE: ready, GO_FILE: goFile, RESOURCE_ID: `identity-${index}` },
+      stdio: ["ignore", "pipe", "pipe"],
+    })));
+    const outputs = children.map((child) => new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+      let stdout = "";
+      let stderr = "";
+      child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });
+      child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
+      child.once("error", reject);
+      child.once("close", (code) => resolve({ code, stdout, stderr }));
+    }));
+    const deadline = Date.now() + 5000;
+    while (readyFiles.some((file) => !fs.existsSync(file)) && Date.now() < deadline) await delay(10);
+    assert.ok(readyFiles.every((file) => fs.existsSync(file)), "both child processes reach the barrier");
+    fs.writeFileSync(goFile, "go");
+    const results = await Promise.all(outputs);
+    assert.deepEqual(results.map((result) => result.code), [0, 0], results.map((result) => result.stderr).join("\n"));
+    assert.deepEqual(results.map((result) => result.stdout.trim().startsWith("acquired:")).sort(), [false, true]);
+    assert.equal(fs.readdirSync(f.dir).filter((name) => /^[0-9a-f]{64}\.guard$/.test(name)).length, 1);
   } finally {
     for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     f.cleanup();
