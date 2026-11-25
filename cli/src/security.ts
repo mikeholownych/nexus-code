@@ -24,18 +24,42 @@ function taskStatePaths(): string[] {
   }
 }
 
-/** Whether `file` is a second name for a file in the task-state directory. Only files with other links are looked up. */
+/** (device, inode) of every file below the state directory at `at`. Rebuilt after STATE_INODE_TTL_MS; never invalidated sooner. */
+let stateInodes: { dir: string; at: number; ids: Set<string> } | undefined;
+const STATE_INODE_TTL_MS = 1500;
+
+function taskStateInodes(dir: string): Set<string> {
+  const now = Date.now();
+  if (stateInodes && stateInodes.dir === dir && now - stateInodes.at < STATE_INODE_TTL_MS) return stateInodes.ids;
+  const ids = new Set<string>();
+  const walk = (current: string): void => {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(current, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) { walk(full); continue; }
+      try {
+        const st = fs.lstatSync(full, { bigint: true });
+        if (st.isFile()) ids.add(`${st.dev}:${st.ino}`);
+      } catch { /* gone */ }
+    }
+  };
+  walk(dir);
+  stateInodes = { dir, at: now, ids };
+  return ids;
+}
+
+/**
+ * Whether `file` is a second name for a file anywhere below the task-state directory (device and inode). Only a
+ * file with other links is looked up, against a snapshot at most STATE_INODE_TTL_MS old: a link made to a file that
+ * appeared within that window is not seen (time-of-check gap, as for every path check here; the TTL is the only
+ * invalidation).
+ */
 function isHardLinkToTaskState(file: string): boolean {
   try {
     const st = fs.statSync(file, { bigint: true });
     if (!st.isFile() || st.nlink < 2n) return false;
-    const dir = fs.realpathSync(defaultTaskStateDir());
-    return fs.readdirSync(dir).some((name) => {
-      try {
-        const other = fs.statSync(path.join(dir, name), { bigint: true });
-        return other.ino === st.ino && other.dev === st.dev;
-      } catch { return false; }
-    });
+    return taskStateInodes(fs.realpathSync(defaultTaskStateDir())).has(`${st.dev}:${st.ino}`);
   } catch {
     return false;
   }

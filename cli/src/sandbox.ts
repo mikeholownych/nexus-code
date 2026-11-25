@@ -4,7 +4,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { buildCommandEnvironment } from "./command_env.js";
 import { operatorSetting } from "./client.js";
-import { defaultTaskStateDir } from "./core/state.js";
 import { sandboxNetworkFlagSet, sandboxNetworkProfileValue, setSandboxNetworkFlag } from "./sandbox_network.js";
 
 export type SandboxMode = "auto" | "bwrap" | "docker" | "none";
@@ -26,18 +25,34 @@ const hiddenDirectories = new Set<string>();
 /**
  * Hides `dir` (resolved through symlinks) from every Bubblewrap command and worker this process builds from now on.
  * The sidecar's control socket directory is registered here: its descriptor holds the attach token, so no sandboxed
- * command may read it, wherever `XDG_RUNTIME_DIR` points. Docker mounts only the workspace, so it needs no mask.
+ * command may read it, wherever `XDG_RUNTIME_DIR` points. Docker masks it too when it lies inside the workspace mount.
  */
 export function hideDirectoryFromSandbox(dir: string): void {
   hiddenDirectories.add(fs.realpathSync(dir));
 }
 
+/**
+ * The state root (`NEXUS_STATE_DIR`, else `~/.nexus`), created owner-only when absent so the mask always applies: a
+ * sandboxed command must not be the one to create it on the host. The whole root is masked, not just `tasks/`, so it
+ * cannot be renamed away and replaced with a forged copy (a tmpfs mount point cannot be renamed).
+ */
+function stateRootToHide(): string | undefined {
+  const root = process.env.NEXUS_STATE_DIR || path.join(os.homedir(), ".nexus");
+  try {
+    fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+    return fs.realpathSync(root);
+  } catch {
+    return undefined;
+  }
+}
+
 /** The masks for one bwrap command: those registered and those passed, each resolved. One that no longer exists hides nothing, and bwrap cannot mount over it. */
 function directoriesToHide(extra: readonly string[] = []): string[] {
   const resolved = new Set<string>();
-  // PA-3: goal state, caps and stall counts live in the task-state directory; a sandboxed command must neither read nor
-  // rewrite them, including when the workspace is, or contains, $HOME (which would otherwise bind it back in).
-  for (const dir of [...hiddenDirectories, defaultTaskStateDir(), ...extra]) {
+  // PA-3: goal state, caps and stall counts live under the state root; a sandboxed command must neither read, rewrite,
+  // nor rename it, including when the workspace is, or contains, $HOME (which would otherwise bind it back in).
+  for (const dir of [...hiddenDirectories, stateRootToHide(), ...extra]) {
+    if (dir === undefined) continue;
     try { resolved.add(fs.realpathSync(dir)); } catch { /* gone */ }
   }
   return [...resolved];

@@ -333,21 +333,32 @@ describe("the control socket's directory is hidden from sandboxed commands (PF-3
   });
 });
 
-describe("the task-state directory is hidden from --sandbox commands and workers (PA-3)", () => {
-  const taskFile = (dir: string) => {
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, "g.json"), "SENTINEL-GOAL-STATE");
-    return path.join(dir, "g.json");
+describe("the state root is hidden from --sandbox commands and workers (PA-3)", () => {
+  const taskFile = (root: string) => {
+    fs.mkdirSync(path.join(root, "tasks"), { recursive: true });
+    fs.writeFileSync(path.join(root, "tasks", "g.json"), "SENTINEL-GOAL-STATE");
+    return path.join(root, "tasks", "g.json");
   };
 
-  test("workspace = $HOME: a command can neither read nor rewrite ~/.nexus/tasks", { skip: SKIP }, () => {
+  test("workspace = $HOME: a command can neither read, rewrite nor rename ~/.nexus", { skip: SKIP }, () => {
     const { home } = throwawayHome();
-    const file = taskFile(path.join(home, ".nexus", "tasks"));
-    const r = sandboxRun(`cat ${file} 2>&1; echo pwned > ${file} 2>&1; ls ~/.nexus/tasks 2>&1`, home);
+    const file = taskFile(path.join(home, ".nexus"));
+    const r = sandboxRun(`cat ${file} 2>&1; echo pwned > ${file} 2>&1; ls ~/.nexus/tasks 2>&1; mv ~/.nexus ~/.nexus.old 2>&1; mkdir -p ~/.nexus/tasks 2>&1; echo forged > ~/.nexus/tasks/goal-forged.json 2>&1`, home);
     assert.doesNotMatch(r.stdout, /SENTINEL/);
+    assert.match(r.stdout, /busy|denied|not permitted|Read-only/i, "the rename is refused");
     assert.equal(fs.readFileSync(file, "utf8"), "SENTINEL-GOAL-STATE", "the host file is untouched");
+    assert.equal(fs.existsSync(path.join(home, ".nexus.old")), false, "the root was not renamed");
+    assert.equal(fs.existsSync(path.join(home, ".nexus", "tasks", "goal-forged.json")), false, "nothing forged on the host");
     const readOnly = sandboxRun(`cat ${file} 2>&1`, home, { readOnlyHost: true, network: false, workspaceFd: fs.openSync(home, "r") });
     assert.doesNotMatch(readOnly.stdout, /SENTINEL/);
+  });
+
+  test("an absent state root is created 0700 before wrapping, so a command cannot plant one on the host", { skip: SKIP }, () => {
+    const { home } = throwawayHome();
+    assert.equal(fs.existsSync(path.join(home, ".nexus")), false, "setup: absent");
+    sandboxRun("mkdir -p ~/.nexus/tasks && echo X > ~/.nexus/tasks/goal-planted.json; ls -A ~/.nexus 2>&1", home);
+    assert.equal(fs.existsSync(path.join(home, ".nexus", "tasks", "goal-planted.json")), false, "nothing planted on the host");
+    assert.equal(fs.statSync(path.join(home, ".nexus")).mode & 0o777, 0o700);
   });
 
   test("workspace elsewhere and NEXUS_STATE_DIR outside HOME: still hidden and untouched", { skip: SKIP }, () => {
@@ -357,24 +368,14 @@ describe("the task-state directory is hidden from --sandbox commands and workers
     const saved = process.env.NEXUS_STATE_DIR;
     process.env.NEXUS_STATE_DIR = state;
     try {
-      const file = taskFile(path.join(state, "tasks"));
+      const file = taskFile(state);
       const r = sandboxRun(`cat ${file} 2>&1; echo pwned > ${file} 2>&1`, workspace);
       assert.doesNotMatch(r.stdout, /SENTINEL/);
       assert.equal(fs.readFileSync(file, "utf8"), "SENTINEL-GOAL-STATE");
       const worker = wrapSandboxedWorker(process.execPath, [], workspace, { engines: ["bwrap"] });
-      if (worker.sandboxed) assert.ok(worker.args.includes(fs.realpathSync(path.join(state, "tasks"))), "the worker box masks it too");
+      if (worker.sandboxed) assert.ok(worker.args.includes(fs.realpathSync(state)), "the worker box masks the root too");
     } finally {
       if (saved === undefined) delete process.env.NEXUS_STATE_DIR; else process.env.NEXUS_STATE_DIR = saved;
     }
-  });
-
-  test("docker argv masks the task-state directory the same way as bwrap (PA-3)", { skip: isDockerAvailable() ? false : "docker is not available" }, () => {
-    const { home } = throwawayHome();
-    taskFile(path.join(home, ".nexus", "tasks"));
-    const wrapped = wrapSandboxedCommand("true", home, { mode: "docker" });
-    assert.equal(wrapped.sandboxed, true, wrapped.warning);
-    const tasks = fs.realpathSync(defaultTaskStateDir());
-    const argv = wrapped.argv ?? [];
-    assert.ok(argv.some((a, i) => a === "--tmpfs" && String(argv[i + 1]).startsWith(`${tasks}:`)), `docker argv must tmpfs-mask ${tasks}; got ${argv.join(" ")}`);
   });
 });

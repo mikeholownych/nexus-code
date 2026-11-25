@@ -186,3 +186,31 @@ describe("docker workspace bind does not re-expose credentials under HOME (harde
     assert.equal(run(home, `cat ${home}/.netrc 2>&1; echo done`).stdout.includes("SENTINEL"), false);
   });
 });
+
+describe("docker masks the whole state root (PA-3)", { skip: HAVE_DOCKER ? false : "docker CLI is not installed" }, () => {
+  test("the argv puts a tmpfs on the state root, creating it 0700 first", () => {
+    const home = throwaway();
+    assert.equal(fs.existsSync(path.join(home, ".nexus")), false);
+    const argv = wrapSandboxedCommand("true", home, { mode: "docker" }).argv!;
+    assert.ok(argv.some((a, i) => argv[i - 1] === "--tmpfs" && a.startsWith(`${fs.realpathSync(path.join(home, ".nexus"))}:`)), argv.join(" "));
+    assert.equal(fs.statSync(path.join(home, ".nexus")).mode & 0o777, 0o700);
+  });
+
+  test("in a real container the root cannot be read, renamed or planted", { skip: spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0 ? false : "docker daemon is not usable" }, () => {
+    const home = fs.mkdtempSync(path.join(fs.existsSync("/var/tmp") ? "/var/tmp" : os.tmpdir(), "nexus-s5-state-"));
+    cleanup.push(home);
+    fs.chmodSync(home, 0o755);
+    process.env.HOME = home;
+    delete process.env.NEXUS_SANDBOX_NETWORK;
+    fs.mkdirSync(path.join(home, ".nexus", "tasks"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".nexus", "tasks", "g.json"), "SENTINEL-GOAL-STATE");
+    const w = wrapSandboxedCommand(`cat ${home}/.nexus/tasks/g.json 2>&1; mv ${home}/.nexus ${home}/.nexus.old 2>&1; echo forged > ${home}/.nexus/tasks/goal-forged.json 2>&1; echo done`, home, { mode: "docker" });
+    assert.equal(w.sandboxed, true, w.warning);
+    const r = spawnSync(w.argv![0], w.argv!.slice(1), { encoding: "utf8", timeout: 120_000, env: buildCommandEnvironment() });
+    assert.ok(!r.stdout.includes("SENTINEL"), r.stdout + r.stderr);
+    assert.equal(fs.readFileSync(path.join(home, ".nexus", "tasks", "g.json"), "utf8"), "SENTINEL-GOAL-STATE");
+    assert.equal(fs.existsSync(path.join(home, ".nexus.old")), false);
+    assert.equal(fs.existsSync(path.join(home, ".nexus", "tasks", "goal-forged.json")), false);
+  });
+});
+
