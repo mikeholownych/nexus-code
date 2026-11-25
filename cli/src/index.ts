@@ -1109,15 +1109,28 @@ program
       await pm.loadPlugins();
       const plugins = pm.listPlugins();
       const records = pm.getPluginTrustRecords();
-      if (options.json) { console.log(JSON.stringify({ plugins, records }, null, 2)); return; }
+      const { workspaceManifestPlugins } = await import("./plugins_cli.js");
+      const manifestPlugins = workspaceManifestPlugins(ws).map((p) => ({ name: p.name, dir: p.dir, status: p.status, ...(p.problem ? { problem: p.problem } : {}), ...(p.changed ? { changed: p.changed } : {}), ...(p.digest ? { treeSha256: p.digest } : {}), hooks: p.hooks.flatMap((file) => [...(file.hooks["pre-tool"] ?? []), ...(file.hooks["post-tool"] ?? [])].map((hook) => hook.name)), skills: p.skills, files: p.files.map((file) => file.path) }));
+      if (options.json) { console.log(JSON.stringify({ plugins, records, manifestPlugins }, null, 2)); return; }
       if (plugins.length === 0) console.log(pc.yellow("\nNo active plugins loaded.\n"));
       else {
         console.log(pc.bold(pc.cyan("\n=== Loaded Custom Plugins ===\n")));
         for (const p of plugins) console.log(`• ${pc.bold(pc.green(p.name))}: ${p.description} (custom tools: ${p.customToolCount})\n`);
       }
+      if (manifestPlugins.length) {
+        console.log(pc.bold(pc.cyan("=== Workspace manifest plugins (command hooks) ===\n")));
+        for (const p of manifestPlugins) {
+          console.log(`• ${p.status === "active" ? pc.green(p.status) : pc.yellow(p.status)} ${pc.bold(p.name)} ${pc.dim(p.dir)}${p.treeSha256 ? pc.dim(` tree sha256 ${p.treeSha256}`) : ""}`);
+          if (p.problem) console.log(`  ${pc.dim(p.problem)}`);
+          if (p.changed) console.log(`  ${pc.dim(`changed since approval: ${p.changed.join(", ")}`)}`);
+          if (p.hooks.length) console.log(`  hooks: ${p.hooks.join(", ")}`);
+          if (p.status === "not_approved" || p.status === "changed") console.log(`  ${pc.dim(`review it, then run \`nexus plugins trust ${path.relative(ws, p.dir)}\` in a terminal`)}`);
+        }
+        console.log();
+      }
       const blocked = records.filter((r) => r.status !== "global" && r.status !== "trusted");
       if (blocked.length) {
-        console.log(pc.bold(pc.yellow("=== Workspace plugins not loaded (require per-plugin approval) ===\n")));
+        console.log(pc.bold(pc.yellow("=== Plugins not active ===\n")));
         for (const r of blocked) {
           console.log(`• ${pc.yellow(r.status)} ${r.path}${r.sha256 ? pc.dim(` sha256 ${r.sha256}`) : ""}`);
           if (r.reason) console.log(`  ${pc.dim(r.reason)}`);
@@ -1127,59 +1140,21 @@ program
     });
   pluginsCmd
     .command("trust <pluginPath>")
-    .description("Approve a workspace plugin by its exact bytes (HK-3; a changed file needs a new approval)")
+    .description("Approve a workspace plugin file by its exact bytes, or a workspace manifest plugin's directory by its tree (a change needs a new approval)")
     .option("-w, --workspace <path>", "Workspace directory")
     .option("--sha256 <hex>", "Approve only if the file has this SHA-256 (you are still asked; approving needs a terminal)")
     .action(async (pluginPath: string, options: any) => {
       const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
-      const abs = path.resolve(ws, pluginPath);
-      if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) { console.error(pc.red(`Not a file: ${abs}`)); process.exitCode = 1; return; }
-      const { workspacePluginTrustId, pluginFileSha256 } = await import("./plugins.js");
-      const { approveExtension } = await import("./core/content_trust.js");
-      const { isWorkspaceFile } = await import("./workspace_trust.js");
-      if (!isWorkspaceFile(ws, abs)) { console.error(pc.red(`Plugin must be a real file inside the workspace: ${abs}`)); process.exitCode = 1; return; }
-      const sha256 = pluginFileSha256(abs);
-      const id = workspacePluginTrustId(ws, abs);
-      console.log(`${abs}\nsha256 ${sha256}\nThis workspace plugin would run with full process authority (HK-3/D18: in-process, deprecated).`);
-      const interactive = Boolean(process.stdin.isTTY) && Boolean(process.stdout.isTTY);
-      if (!interactive) {
-        console.error(pc.red("Not approved: approving a workspace plugin needs a person at a terminal. Review the file, then run `nexus plugins trust` yourself in a terminal."));
-        process.exitCode = 2;
-        return;
-      }
-      const pinned = options.sha256?.trim().toLowerCase();
-      if (pinned !== undefined && pinned !== sha256) {
-        console.error(pc.red(`Not approved: --sha256 does not match the file, whose SHA-256 is ${sha256}.`));
-        process.exitCode = 2;
-        return;
-      }
-      const readline = await import("node:readline/promises");
-      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-      let ok = false;
-      try { ok = /^y(es)?$/i.test((await rl.question("Approve this workspace plugin for this workspace? [y/N] ")).trim()); }
-      finally { rl.close(); }
-      if (!ok) { console.error(pc.red("Not approved.")); process.exitCode = 1; return; }
-      // Re-hash after the prompt so a flip during the question cannot be recorded under the shown digest.
-      let confirmed: string;
-      try {
-        confirmed = pluginFileSha256(abs);
-      } catch (error) {
-        console.error(pc.red(`Not approved: could not re-read ${abs}: ${error instanceof Error ? error.message : String(error)}`));
-        process.exitCode = 2;
-        return;
-      }
-      if (confirmed !== sha256) {
-        console.error(pc.red(`Not approved: the file changed while you were asked (was ${sha256}, now ${confirmed}). Review it and run \`nexus plugins trust\` again.`));
-        process.exitCode = 2;
-        return;
-      }
-      if (pinned !== undefined && pinned !== confirmed) {
-        console.error(pc.red(`Not approved: --sha256 does not match the file after confirmation, whose SHA-256 is ${confirmed}.`));
-        process.exitCode = 2;
-        return;
-      }
-      approveExtension({ kind: "workspace-plugin", scope: id.scope, key: id.key, sha256: confirmed, approvedAt: new Date().toISOString(), summary: path.basename(abs) });
-      console.log(`Approved workspace plugin: ${abs}\nsha256 ${confirmed}\nUndo with \`nexus plugins revoke ${pluginPath}\`.`);
+      const { trustWorkspacePlugin } = await import("./plugins_cli.js");
+      const code = await trustWorkspacePlugin(ws, pluginPath, { sha256: options.sha256 }, {
+        interactive: () => Boolean(process.stdin.isTTY) && Boolean(process.stdout.isTTY),
+        confirm: async (question) => {
+          const readline = await import("node:readline/promises");
+          const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+          try { return /^y(es)?$/i.test((await rl.question(question)).trim()); } finally { rl.close(); }
+        },
+      });
+      if (code) process.exitCode = code;
     });
   pluginsCmd
     .command("revoke <pluginPath>")
@@ -1187,11 +1162,9 @@ program
     .option("-w, --workspace <path>", "Workspace directory")
     .action(async (pluginPath: string, options: any) => {
       const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
+      const { revokeWorkspacePlugin } = await import("./plugins_cli.js");
       const abs = path.resolve(ws, pluginPath);
-      const { workspacePluginTrustId } = await import("./plugins.js");
-      const { revokeExtension } = await import("./core/content_trust.js");
-      const id = workspacePluginTrustId(ws, abs);
-      console.log(revokeExtension(id) ? `No longer approved: ${abs}` : `There was no approval for ${abs}.`);
+      console.log(revokeWorkspacePlugin(ws, pluginPath) ? `No longer approved: ${abs}` : `There was no approval for ${abs}.`);
     });
   registerPluginPackageCommands(pluginsCmd);
   // default: list

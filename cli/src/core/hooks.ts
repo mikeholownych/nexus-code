@@ -14,6 +14,10 @@ import { createHash } from "node:crypto";
 import { extensionTrustEntry, extensionTrustStorePath, readExtensionTrust, revokeExtension, type ExtensionTrustEntry, type ExtensionTrustFile, type ExtensionTrustId, type ExtensionTrustStore } from "./content_trust.js";
 import { hookEnvironment, hookLine, hookOutputDigest, reduceHookOutput, runHookProcess } from "./hook_runner.js";
 import type { ContextAdmissionHook, EvidenceEmissionHook, ExecutionReceipt } from "./spine.js";
+import type { EffectivePolicy } from "./managed_policy.js";
+import { managedPolicy } from "./policy_runtime.js";
+import { isWorkspaceTrusted } from "../workspace_trust.js";
+import { inspectWorkspaceManifestPlugins, type WorkspaceManifestPlugin } from "./workspace_plugins.js";
 import { decodeStrictUtf8, fileStamp, parseStrictJson, readHardenedFile, type KeyPositions } from "./strict_json.js";
 
 export const HOOKS_SCHEMA_VERSION = 1;
@@ -101,7 +105,7 @@ export interface HookOutput {
 }
 
 /** Where a hook was declared. */
-export type HookSource = "operator" | "project";
+export type HookSource = "operator" | "workspace-plugin" | "project";
 
 export type HookDenialReason = "HOOK_DENIED" | "HOOK_FAILED" | "HOOK_OUTPUT_INVALID" | "HOOKS_CONFIG_INVALID";
 
@@ -393,6 +397,13 @@ export interface ProjectCommandPin {
   target: string;
 }
 
+export interface ProjectCommandOptions extends TrustedProgramOptions {
+  /** The directory relative paths of the command are resolved against. Default: the workspace. */
+  base?: string;
+  /** When set, every workspace file the command names must lie in this directory (a plugin's own). */
+  tree?: string;
+}
+
 export interface ProjectCommandPlan {
   pins: ProjectCommandPin[];
   /** The interpreter form: the installed interpreter as an absolute path, to start in place of the name written. */
@@ -441,7 +452,10 @@ export function shebangProblem(bytes: Buffer, workspace: string, interpreter: Pr
  * `-ovalue`) that is an existing workspace path must be a regular file, which is pinned too.
  * `workspace` is the workspace's real path.
  */
-export function planProjectCommand(command: string | string[], workspace: string, options: TrustedProgramOptions = {}): ProjectCommandPlan | { problem: string } {
+export function planProjectCommand(command: string | string[], workspace: string, options: ProjectCommandOptions = {}): ProjectCommandPlan | { problem: string } {
+  // Where relative paths are named from, and (for a plugin) the directory every named file must lie in.
+  const base = options.base ?? workspace;
+  const tree = options.tree;
   const refuse = (problem: string) => ({ problem: `${problem}. ${PROJECT_COMMAND_RULE}` });
   // A shell string can reach any file by any spelling; only an argument list says which files are run.
   if (!Array.isArray(command)) return refuse("a project hook's command must be an array (it is run without a shell)");
@@ -450,7 +464,7 @@ export function planProjectCommand(command: string | string[], workspace: string
   const reference = (index: number, start: number): "none" | "pinned" | { problem: string } => {
     const value = command[index].slice(start);
     if (!value) return "none";
-    const target = path.resolve(workspace, value);
+    const target = path.resolve(base, value);
     if (!inside(workspace, target)) return "none";
     try {
       fs.lstatSync(target);
@@ -466,6 +480,7 @@ export function planProjectCommand(command: string | string[], workspace: string
       return { problem: `${JSON.stringify(value)} is in the workspace and cannot be read as a regular file` };
     }
     if (!inside(workspace, real)) return { problem: `${JSON.stringify(value)} is a symbolic link out of the workspace` };
+    if (tree && !(inside(tree, target) && inside(tree, real))) return { problem: `${JSON.stringify(value)} is outside the plugin's directory` };
     pins.push({ index, start, path: path.relative(workspace, target), target });
     return "pinned";
   };
@@ -474,7 +489,7 @@ export function planProjectCommand(command: string | string[], workspace: string
   let rest = 1;
   let installed: string | undefined;
   let listed: ProjectInterpreter | undefined;
-  if (program.includes("/") && inside(workspace, path.resolve(workspace, program))) {
+  if (program.includes("/") && inside(workspace, path.resolve(base, program))) {
     // (a) A script of the workspace, run directly.
     const found = reference(0, 0);
     if (found === "none") return refuse(`${program} does not exist`);
@@ -606,7 +621,7 @@ export interface VerifiedCommand {
  * the workspace file after this, or between two reads of it, cannot reach the running hook: there is no second read.
  * `privateRoot` is where the per-run directory is made. Returns `problem` when a file is not the approved one.
  */
-export function verifiedProjectCommand(command: string | string[], workspace: string, approved: readonly ExtensionTrustFile[], privateRoot: string, options: TrustedProgramOptions = {}): VerifiedCommand | { problem: string } {
+export function verifiedProjectCommand(command: string | string[], workspace: string, approved: readonly ExtensionTrustFile[], privateRoot: string, options: ProjectCommandOptions = {}): VerifiedCommand | { problem: string } {
   const plan = planProjectCommand(command, workspace, options);
   if ("problem" in plan) return plan;
   const argv = [...(command as string[])];
@@ -734,13 +749,17 @@ export interface HookRegistryOptions {
   run?: typeof runHookProcess;
   /** Where the per-run directories of verified copies are made (tests). */
   privateRoot?: string;
+  /** The managed policy workspace manifest plugins are held to. Default: the process's. */
+  policy?: () => EffectivePolicy;
+  /** Whether the operator trusts the workspace (for its manifest plugins). Default: the workspace trust store. */
+  workspaceTrusted?: () => boolean;
   totalBudgetMs?: number;
 }
 
 interface ResolvedHooks {
   /** Set when the operator's file cannot be used: every call is then denied with this text. */
   invalid?: string;
-  sources: Array<{ source: HookSource; file: HooksFile }>;
+  sources: Array<{ source: HookSource; file: HooksFile; plugin?: WorkspaceManifestPlugin }>;
 }
 
 const showPath = (file: string) => (file.startsWith(`${os.homedir()}${path.sep}`) ? `~${file.slice(os.homedir().length)}` : file);
@@ -836,9 +855,47 @@ export class HookRegistry {
       return { invalid, sources: [] };
     }
     const sources: ResolvedHooks["sources"] = operator.state === "ok" ? [{ source: "operator", file: operator.file }] : [];
+    // The order of sources: the operator's, then the workspace's manifest plugins, then the project's own file.
+    for (const plugin of this.manifestPlugins()) {
+      for (const file of plugin.hooks) sources.push({ source: "workspace-plugin", file, plugin });
+    }
     const project = this.projectFile();
     if (project) sources.push({ source: "project", file: project });
     return { sources };
+  }
+
+  /**
+   * The workspace's manifest plugins that are in force. One that is declared and not in force is told once per state:
+   * a guard the repository ships and that is not running must not look as if it were.
+   */
+  private manifestPlugins(): WorkspaceManifestPlugin[] {
+    const workspace = realWorkspace(this.options.workspace());
+    const readOnly = this.options.readOnly();
+    let plugins: WorkspaceManifestPlugin[];
+    try {
+      plugins = inspectWorkspaceManifestPlugins({
+        workspace,
+        readOnly,
+        trusted: this.options.workspaceTrusted ? this.options.workspaceTrusted() : isWorkspaceTrusted(workspace, readOnly),
+        policy: this.options.policy ?? managedPolicy,
+        approvals: this.approvals().entries,
+      });
+    } catch {
+      return [];
+    }
+    for (const plugin of plugins) {
+      if (plugin.status === "active") continue;
+      const why = plugin.status === "read_only" ? "does not run in read-only mode"
+        : plugin.status === "untrusted_workspace" ? "is not used because the workspace is not trusted (`nexus trust`)"
+        : plugin.status === "policy_refused" ? `is refused by managed policy: ${plugin.problem}`
+        : plugin.status === "invalid" ? `is not used: ${plugin.problem}`
+        : `is not approved${plugin.status === "changed" ? ` (${plugin.changed?.join(", ")} changed since approval)` : ""}; review it and run \`nexus plugins trust ${plugin.id.key}\` in a terminal`;
+      const key = `plugin|${plugin.dir}|${plugin.status}|${plugin.digest ?? ""}|${plugin.problem ?? ""}`;
+      if (this.told.has(key)) continue;
+      this.told.add(key);
+      this.options.notify?.(`nexus: workspace plugin ${plugin.name} (${plugin.dir}) ${why}`);
+    }
+    return plugins.filter((plugin) => plugin.status === "active");
   }
 
   /** A hook queued behind another call must still be the declaration that is trusted now. */
@@ -850,13 +907,21 @@ export class HookRegistry {
       && hooksFor(entry.file, event, toolName).some((current) => JSON.stringify(current) === expected));
   }
 
-  private verifiedCommand(hook: HookDeclaration): VerifiedCommand | { problem: string } {
+  private verifiedCommand(hook: HookDeclaration, source: HookSource): VerifiedCommand | { problem: string } {
     const workspace = realWorkspace(this.options.workspace());
-    const approval = extensionTrustEntry(this.approvals().entries, { kind: "project-hooks", scope: workspace, key: PROJECT_HOOKS_FILE });
     // The state directory, which the sandbox keeps from the agent's commands; the temporary directory when the
     // workspace is the home directory itself.
     const state = path.join(os.homedir(), ".nexus", "hook-runs");
     const root = this.options.privateRoot ?? (inside(workspace, state) ? path.join(os.tmpdir(), `nexus-hook-runs-${process.getuid?.() ?? 0}`) : state);
+    if (source === "workspace-plugin") {
+      // The plugin as it is in force now: its approval names the bytes, and its directory is where scripts are named from.
+      const expected = JSON.stringify(hook);
+      const plugin = this.manifestPlugins().find((candidate) => candidate.hooks.some((file) => HOOK_EVENTS.some((event) => (file.hooks[event] ?? []).some((declared) => JSON.stringify(declared) === expected))));
+      const approval = plugin && extensionTrustEntry(this.approvals().entries, plugin.id);
+      if (!plugin || !approval) return { problem: "the plugin that declares the hook is no longer in force" };
+      return verifiedProjectCommand(hook.command, workspace, approval.files ?? [], root, { base: plugin.dir, tree: plugin.dir });
+    }
+    const approval = extensionTrustEntry(this.approvals().entries, { kind: "project-hooks", scope: workspace, key: PROJECT_HOOKS_FILE });
     return verifiedProjectCommand(hook.command, workspace, approval?.files ?? [], root);
   }
 
@@ -885,7 +950,8 @@ export class HookRegistry {
       }
       const unstarted = (detail: string) => ({ exit: null, signal: null, stdout: "", stderr: "", failure: "spawn" as const, detail, durationMs: 0 });
       // A project hook runs from verified copies of the approved bytes, never from the workspace paths themselves.
-      const verified = source === "project" ? this.verifiedCommand(hook) : undefined;
+      // Everything the workspace supplies (its own hooks file, its manifest plugins) runs from verified copies.
+      const verified = source === "operator" ? undefined : this.verifiedCommand(hook, source);
       if (verified && "problem" in verified) return unstarted(verified.problem);
       return (this.options.run ?? runHookProcess)({
         command: verified ? verified.command : hook.command,

@@ -60,6 +60,7 @@ without stopping the others.
 | `credentials.store` | `~/.config/nexus/credentials.json` is valid JSON and not readable by other users. |
 | `mcp.config` | The MCP config files Nexus reads (`mcpConfigFiles`): valid JSON, each server's command resolves or URL parses. Servers are **not** started. |
 | `plugins.config` | Plugin modules in the directories Nexus loads (`pluginDirs`): listed and checked for world-writable files. Modules are **not** imported. |
+| `plugins.workspace` | The workspace's own plugin files (`.nexus/plugins/`, `plugins/`) and manifest plugins (`.nexus/plugins/<name>/`) against your approvals: a file that is not approved, changed since its approval, unreadable as a plugin file, or approved but failed its last load is a warning, with the `nexus plugins trust <file>` command for each. It passes only when every workspace plugin file is approved and the workspace is trusted. Files are **not** imported. |
 | `hooks.config` | The command hooks files (`~/.config/nexus/hooks.json`, `<workspace>/.nexus/hooks.json`) and the approval store: an invalid operator file is a failure (every tool call is denied until it is fixed); project hooks that are unapproved, changed or invalid, an unusable approval store and a tool name no built-in tool has are warnings. Hooks are **not** run. |
 
 The text report also lists the effective configuration with each value's source, following Nexus's precedence:

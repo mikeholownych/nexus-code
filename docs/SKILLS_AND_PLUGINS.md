@@ -145,6 +145,8 @@ nexus plugins remove <name>
 
 ## 2.3 Workspace plugin trust (HK-3 / D18)
 
+The full rules, how an approved plugin is run, and the migration from earlier versions are in [`PLUGINS.md`](PLUGINS.md).
+
 Global plugins (`~/.nexus/plugins/`, `~/.config/nexus/plugins/`) are operator-managed and load when present.
 
 Workspace plugins (`.nexus/plugins/`, `plugins/`) are repository content. They require **per-plugin trust** keyed by the SHA-256 of the exact plugin bytes. Trusting a workspace (`nexus trust .`) is necessary but no longer sufficient to execute workspace plugin code.

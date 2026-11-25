@@ -613,6 +613,7 @@ export class AutonomousAgent {
       },
       record: (step, callId, tool, run) => this.flightRecorder?.recordHookRun(step, callId, tool, run),
       redact: (value) => InformationFlowBoundary.getGlobalInstance().redactForTelemetry(value),
+      policy: () => this.bridge.getSecurityManager().getEffectivePolicy(),
     });
     this.spine.setHook("contextAdmission", commandHooks.preToolAdmission);
     this.spine.setHook("evidenceEmission", commandHooks.postToolEmission);
