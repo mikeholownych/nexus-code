@@ -214,3 +214,63 @@ describe("docker masks the whole state root (PA-3)", { skip: HAVE_DOCKER ? false
   });
 });
 
+
+describe("docker pins the state root's ancestors and refuses a symlinked root (PA-3)", { skip: HAVE_DOCKER && spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0 ? false : "docker daemon is not usable" }, () => {
+  const scratch = () => {
+    const parent = fs.mkdtempSync(path.join(fs.existsSync("/var/tmp") ? "/var/tmp" : os.tmpdir(), "nexus-s5-anc-"));
+    fs.chmodSync(parent, 0o755);
+    cleanup.push(parent);
+    delete process.env.NEXUS_SANDBOX_NETWORK;
+    return parent;
+  };
+  const dockerRun = (command: string, workspace: string) => {
+    const w = wrapSandboxedCommand(command, workspace, { mode: "docker" });
+    assert.equal(w.sandboxed, true, w.warning);
+    return spawnSync(w.argv![0], w.argv!.slice(1), { encoding: "utf8", timeout: 120_000, env: buildCommandEnvironment() });
+  };
+  const withState = <T>(dir: string | undefined, run: () => T): T => {
+    const saved = process.env.NEXUS_STATE_DIR;
+    if (dir === undefined) delete process.env.NEXUS_STATE_DIR; else process.env.NEXUS_STATE_DIR = dir;
+    try { return run(); } finally { if (saved === undefined) delete process.env.NEXUS_STATE_DIR; else process.env.NEXUS_STATE_DIR = saved; }
+  };
+  const forge = (root: string) => `mkdir -p ${root}/tasks 2>&1; echo FORGED > ${root}/tasks/goal-forged.json 2>&1`;
+
+  test("workspace = parent of HOME: HOME cannot be renamed, nothing is forged", () => {
+    const parent = scratch();
+    const home = path.join(parent, "home");
+    fs.mkdirSync(path.join(home, ".nexus", "tasks"), { recursive: true });
+    process.env.HOME = home;
+    const r = dockerRun(`mv ${home} ${home}-x 2>&1; ${forge(path.join(home, ".nexus"))}; echo done`, parent);
+    assert.match(r.stdout, /busy|cannot move|denied/i, r.stdout + r.stderr);
+    assert.equal(fs.existsSync(`${home}-x`), false);
+    assert.equal(fs.existsSync(path.join(home, ".nexus", "tasks", "goal-forged.json")), false);
+  });
+
+  test("workspace = HOME, root = $HOME/a/b/st: every ancestor is un-renamable", () => {
+    const parent = scratch();
+    const home = path.join(parent, "home");
+    const root = path.join(home, "a", "b", "st");
+    fs.mkdirSync(path.join(root, "tasks"), { recursive: true });
+    process.env.HOME = home;
+    withState(root, () => {
+      const r = dockerRun(`mv ${home}/a/b ${home}/a/b.old 2>&1; mv ${home}/a ${home}/a.old 2>&1; mv ${root} ${root}.old 2>&1; ${forge(root)}; touch ${home}/plain && echo WORKS`, home);
+      assert.equal((r.stdout.match(/busy/gi) ?? []).length, 3, r.stdout + r.stderr);
+      assert.match(r.stdout, /WORKS/);
+      for (const moved of ["a.old", "a/b.old", "a/b/st.old"]) assert.equal(fs.existsSync(path.join(home, moved)), false, moved);
+      assert.equal(fs.existsSync(path.join(root, "tasks", "goal-forged.json")), false);
+    });
+  });
+
+  test("a symlinked state directory inside the workspace is refused", () => {
+    const parent = scratch();
+    const home = path.join(parent, "home");
+    fs.mkdirSync(path.join(home, "real"), { recursive: true });
+    fs.symlinkSync(path.join(home, "real"), path.join(home, "lnk"));
+    process.env.HOME = home;
+    withState(path.join(home, "lnk"), () => {
+      const w = wrapSandboxedCommand("true", home, { mode: "docker" });
+      assert.equal(w.sandboxed, false);
+      assert.match(w.warning ?? "", /through a symlink inside the workspace/);
+    });
+  });
+});

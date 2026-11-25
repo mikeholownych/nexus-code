@@ -379,3 +379,115 @@ describe("the state root is hidden from --sandbox commands and workers (PA-3)", 
     }
   });
 });
+
+describe("the state root cannot be renamed away through an ancestor, a symlink or a workspace inside it (PA-3)", () => {
+  const BUSY = /busy|cannot move|denied|not permitted/i;
+  const scratch = () => {
+    const parent = fs.mkdtempSync(path.join(fs.existsSync("/var/tmp") ? "/var/tmp" : os.tmpdir(), "nexus-s2-anc-"));
+    cleanup.push(parent);
+    return parent;
+  };
+  const withState = <T>(dir: string | undefined, run: () => T): T => {
+    const saved = process.env.NEXUS_STATE_DIR;
+    if (dir === undefined) delete process.env.NEXUS_STATE_DIR; else process.env.NEXUS_STATE_DIR = dir;
+    try { return run(); } finally { if (saved === undefined) delete process.env.NEXUS_STATE_DIR; else process.env.NEXUS_STATE_DIR = saved; }
+  };
+  const seed = (root: string) => {
+    fs.mkdirSync(path.join(root, "tasks"), { recursive: true });
+    fs.writeFileSync(path.join(root, "tasks", "g.json"), "SENTINEL-GOAL-STATE");
+  };
+  const forge = (home: string, root = path.join(home, ".nexus")) => `mkdir -p ${root}/tasks 2>&1; echo FORGED > ${root}/tasks/goal-forged.json 2>&1`;
+  const untouched = (root: string) => {
+    assert.equal(fs.readFileSync(path.join(root, "tasks", "g.json"), "utf8"), "SENTINEL-GOAL-STATE");
+    assert.equal(fs.existsSync(path.join(root, "tasks", "goal-forged.json")), false, "nothing forged on the host");
+  };
+
+  test("workspace = parent of HOME: HOME cannot be renamed and a forged goal file never reaches the host", { skip: SKIP }, () => {
+    const parent = scratch();
+    const home = path.join(parent, "home");
+    fs.mkdirSync(home);
+    process.env.HOME = home;
+    seed(path.join(home, ".nexus"));
+    const r = sandboxRun(`mv ${home} ${home}-x 2>&1; ${forge(home)}`, parent);
+    assert.match(r.stdout, BUSY);
+    assert.equal(fs.existsSync(`${home}-x`), false, "HOME was not renamed");
+    untouched(path.join(home, ".nexus"));
+  });
+
+  test("workspace = HOME, root = $HOME/a/b/st: every ancestor is un-renamable, the root is hidden, the workspace works", { skip: SKIP }, () => {
+    const parent = scratch();
+    const home = path.join(parent, "home");
+    const root = path.join(home, "a", "b", "st");
+    fs.mkdirSync(root, { recursive: true });
+    process.env.HOME = home;
+    seed(root);
+    withState(root, () => {
+      const r = sandboxRun(`mv ${home}/a/b ${home}/a/b.old 2>&1; mv ${home}/a ${home}/a.old 2>&1; mv ${root} ${root}.old 2>&1; ${forge(home, root)}; echo ok > ${home}/plain.txt && rm ${home}/plain.txt && mkdir ${home}/d && touch ${home}/d/f && echo WORKS`, home);
+      assert.equal((r.stdout.match(/busy/gi) ?? []).length, 3, r.stdout);
+      assert.match(r.stdout, /WORKS/);
+      for (const moved of ["a.old", "a/b.old", "a/b/st.old"]) assert.equal(fs.existsSync(path.join(home, moved)), false, moved);
+      untouched(root);
+    });
+  });
+
+  test("a git repository in the workspace still works beside the pinned ancestors", { skip: SKIP }, () => {
+    const parent = scratch();
+    const home = path.join(parent, "home");
+    const root = path.join(home, "a", "st");
+    fs.mkdirSync(root, { recursive: true });
+    process.env.HOME = home;
+    withState(root, () => {
+      const r = sandboxRun(`cd ${home} && git init -q . 2>&1 && echo hi > f.txt && git status --short 2>&1`, home);
+      assert.match(r.stdout, /\?\? f\.txt/);
+    });
+  });
+
+  test("a symlinked state directory inside the workspace is refused with a clear error; outside it, the real path is masked", { skip: SKIP }, () => {
+    const parent = scratch();
+    const home = path.join(parent, "home");
+    fs.mkdirSync(path.join(home, "real"), { recursive: true });
+    fs.symlinkSync(path.join(home, "real"), path.join(home, "lnk"));
+    process.env.HOME = home;
+    withState(path.join(home, "lnk"), () => {
+      const w = wrapSandboxedCommand("true", home, { mode: "bwrap" });
+      assert.equal(w.sandboxed, false);
+      assert.match(w.warning ?? "", /through a symlink inside the workspace.*real path/);
+    });
+    const outside = scratch();
+    fs.mkdirSync(path.join(outside, "real"));
+    fs.symlinkSync(path.join(outside, "real"), path.join(outside, "lnk"));
+    seed(path.join(outside, "real"));
+    withState(path.join(outside, "lnk"), () => {
+      const r = sandboxRun(`cat ${outside}/real/tasks/g.json 2>&1`, home);
+      assert.doesNotMatch(r.stdout, /SENTINEL/);
+    });
+  });
+
+  test("a workspace that is the state directory, or inside its tasks, is refused explicitly", { skip: SKIP }, () => {
+    const parent = scratch();
+    const home = path.join(parent, "home");
+    const root = path.join(home, ".nexus");
+    fs.mkdirSync(path.join(root, "tasks"), { recursive: true });
+    process.env.HOME = home;
+    for (const workspace of [root, path.join(root, "tasks")]) {
+      const w = wrapSandboxedCommand("true", workspace, { mode: "bwrap" });
+      assert.equal(w.sandboxed, false, workspace);
+      assert.match(w.warning ?? "", /Start Nexus outside the state directory/);
+    }
+  });
+
+  test("BG-1: an unattended job worktree under <repo>/.nexus/worktrees works when the repository is HOME", { skip: SKIP }, () => {
+    const parent = scratch();
+    const home = path.join(parent, "home");
+    const worktree = path.join(home, ".nexus", "worktrees", "job-1");
+    fs.mkdirSync(worktree, { recursive: true });
+    fs.mkdirSync(path.join(home, ".nexus", "tasks"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".nexus", "tasks", "g.json"), "SENTINEL-GOAL-STATE");
+    process.env.HOME = home;
+    const r = sandboxRun(`echo built > out.txt && cat out.txt; cat ${home}/.nexus/tasks/g.json 2>&1; mv ${home}/.nexus ${home}/.nexus.old 2>&1`, worktree);
+    assert.match(r.stdout, /built/);
+    assert.doesNotMatch(r.stdout, /SENTINEL/);
+    assert.equal(fs.existsSync(path.join(home, ".nexus", "tasks", "g.json")), true, "host state intact");
+    assert.equal(fs.existsSync(`${home}/.nexus.old`), false);
+  });
+});
