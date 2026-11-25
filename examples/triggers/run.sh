@@ -27,7 +27,7 @@ trap cleanup EXIT
 case "$mode" in
   file) id=example-readme; runner_args=() ;;
   webhook) id=example-hook; runner_args=(--webhook-port 0)
-    : "${NEXUS_EXAMPLE_HOOK_SECRET:?set NEXUS_EXAMPLE_HOOK_SECRET to a secret of at least 16 characters, in the environment the runner is started from}" ;;
+    : "${NEXUS_TRIGGER_EXAMPLE_HOOK:?set NEXUS_TRIGGER_EXAMPLE_HOOK to a secret of at least 16 characters, in the environment the runner is started from}" ;;
   *) echo "usage: run.sh [file|webhook]" >&2; exit 2 ;;
 esac
 

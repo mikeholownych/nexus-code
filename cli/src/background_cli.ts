@@ -321,16 +321,17 @@ export function registerBackgroundCommands(program: Command): void {
     .option("--no-triggers", "Do not fire approved event triggers (docs/TRIGGERS.md)")
     .option("--webhook-port <port>", "Listen for approved webhook triggers on this port (default: no listener)")
     .option("--webhook-host <address>", "Address the webhook listener binds", "127.0.0.1")
+    .option("--webhook-host-name <name>", "A Host name the listener accepts besides its bind address and loopback names (repeatable; for --webhook-allow-remote)", (value: string, previous: string[] = []) => [...previous, value])
     .option("--webhook-allow-remote", "Allow a non-loopback --webhook-host (refused unless an approved webhook trigger has a secret)")
     .action(action(async (options: any) => {
       if (process.platform !== "linux") throw new BackgroundUsageError("nexus runner serve needs Linux.");
       const maxJobs = Number(options.maxJobs);
-      let webhook: { port: number; host: string; allowNonLoopback: boolean } | undefined;
+      let webhook: { port: number; host: string; allowNonLoopback: boolean; hostNames: string[] } | undefined;
       if (options.webhookPort !== undefined) {
         const port = Number(options.webhookPort);
         if (!Number.isInteger(port) || port < 0 || port > 65535) throw new BackgroundUsageError("--webhook-port must be an integer from 0 to 65535.");
         if (options.triggers === false) throw new BackgroundUsageError("--webhook-port needs triggers: remove --no-triggers.");
-        webhook = { port, host: String(options.webhookHost), allowNonLoopback: options.webhookAllowRemote === true };
+        webhook = { port, host: String(options.webhookHost), allowNonLoopback: options.webhookAllowRemote === true, hostNames: options.webhookHostName ?? [] };
       }
       let jobRunner: JobRunner;
       try {

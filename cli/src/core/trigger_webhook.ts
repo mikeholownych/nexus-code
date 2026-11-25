@@ -4,10 +4,10 @@
  *
  * A delivery is `POST /hook/<workspace key>/<trigger id>` with three headers:
  *   X-Nexus-Timestamp  seconds since the epoch; more than 5 minutes from now (or before the listener started) is refused
- *   X-Nexus-Delivery   a unique id of 8..64 characters of [A-Za-z0-9_.-]; one id is accepted once
- *   X-Nexus-Signature  sha256=<hex>, the HMAC-SHA256 of `<timestamp>.<delivery>.<raw body>` under the trigger's secret
+ *   X-Nexus-Delivery   a unique id of 1..128 characters of [A-Za-z0-9_-]; one id is accepted once
+ *   X-Nexus-Signature  v1=<hex>, the HMAC-SHA256 of a versioned, route-bound input under the trigger's secret
  * The order of the checks is the design (docs/TRIGGERS.md):
- *   1. before any body is read: the Host header is a loopback name (DNS rebinding), a route and an approved trigger
+ *   1. before any body is read: the Host header is allowed for this bind, a route and an approved trigger
  *      exist, an Origin header is only accepted if the spec lists it, the declared size is within the cap;
  *   2. the body is read raw up to the cap, under header and request timeouts, then the signature is checked in
  *      constant time (against a dummy key when there is no such trigger, so the work does not tell);
@@ -23,13 +23,41 @@ import type { AddressInfo } from "node:net";
 export const MAX_BODY_BYTES = 64 * 1024;
 export const MAX_HEADER_BYTES = 8 * 1024;
 export const MAX_CONNECTIONS = 32;
+/** Open connections one remote address may hold; loopback gets more because every local caller shares it. */
+export const MAX_PER_ADDRESS = 8;
+export const MAX_PER_LOOPBACK_ADDRESS = 24;
 export const SKEW_SECONDS = 300;
 export const REPLAY_MAX = 4096;
 export const REPLAY_TTL_MS = 2 * SKEW_SECONDS * 1000;
 const REFUSED = JSON.stringify({ error: "refused" });
 const ROUTE = /^\/hook\/([0-9a-f]{12})\/([a-z0-9][a-z0-9-]{0,62})$/;
-const DELIVERY = /^[A-Za-z0-9][A-Za-z0-9_.-]{7,63}$/;
-const SIGNATURE = /^sha256=([0-9a-f]{64})$/;
+/** A delivery id has no `.`, space, newline or non-ASCII character, so it can never be confused with the text around it in the signed string. */
+export const DELIVERY = /^[A-Za-z0-9_-]{1,128}$/;
+const SIGNATURE = /^v1=([0-9a-f]{64})$/;
+export const SIGNATURE_VERSION = "nexus-webhook-v1";
+
+/**
+ * The exact bytes a delivery's signature covers: the version tag, the route path (so a signature for one trigger is
+ * void for another that shares a secret), the timestamp, the delivery id and the body's length, each on its own line,
+ * then the raw body. No field can contain a newline, and the body's length is fixed before the body begins, so there
+ * is one way to read the string back.
+ */
+export function webhookSigningInput(routePath: string, timestamp: string, deliveryId: string, body: Uint8Array): Buffer {
+  return Buffer.concat([Buffer.from(`${SIGNATURE_VERSION}\n${routePath}\n${timestamp}\n${deliveryId}\n${body.length}\n`, "utf8"), body]);
+}
+
+/** The header value of a delivery: `v1=` and the hex HMAC-SHA256 of `webhookSigningInput` under `secret`. */
+export const webhookSignature = (secret: Uint8Array | string, routePath: string, timestamp: string, deliveryId: string, body: Uint8Array): string =>
+  `v1=${createHmac("sha256", secret).update(webhookSigningInput(routePath, timestamp, deliveryId, body)).digest("hex")}`;
+
+/** The Host values a listener accepts: its own loopback names on a loopback bind, its bind address (unless a wildcard), and any host the operator named. */
+export function allowedHostNames(bindHost: string, extra: readonly string[] = []): Set<string> {
+  const names = new Set<string>(["127.0.0.1", "localhost", "[::1]"]);
+  const wildcard = bindHost === "0.0.0.0" || bindHost === "::";
+  if (!isLoopbackAddress(bindHost) && !wildcard) names.add(bindHost.toLowerCase());
+  for (const name of extra) names.add(name.toLowerCase());
+  return names;
+}
 
 export const isLoopbackAddress = (host: string): boolean => /^127(?:\.\d{1,3}){3}$/.test(host) || host === "::1" || host === "localhost";
 
@@ -62,6 +90,10 @@ export interface WebhookOptions {
   maxBodyBytes?: number;
   requestTimeoutMs?: number;
   maxConnections?: number;
+  maxPerAddress?: number;
+  maxPerLoopbackAddress?: number;
+  /** Host names (besides the bind address and loopback names) a request may carry: the operator's own DNS names for a remote bind. */
+  hostNames?: readonly string[];
   now?: () => number;
 }
 
@@ -116,6 +148,21 @@ export class WebhookListener {
     }, (req, res) => this.handle(req, res));
     server.maxConnections = this.options.maxConnections ?? MAX_CONNECTIONS;
     server.maxRequestsPerSocket = 1;
+    const perAddress = new Map<string, number>();
+    server.on("connection", (socket) => {
+      const address = (socket.remoteAddress ?? "unknown").replace(/^::ffff:/, "");
+      const cap = isLoopbackAddress(address) ? (this.options.maxPerLoopbackAddress ?? MAX_PER_LOOPBACK_ADDRESS) : (this.options.maxPerAddress ?? MAX_PER_ADDRESS);
+      const open = (perAddress.get(address) ?? 0) + 1;
+      if (open > cap) {
+        socket.destroy();
+        return;
+      }
+      perAddress.set(address, open);
+      socket.once("close", () => {
+        const left = (perAddress.get(address) ?? 1) - 1;
+        if (left <= 0) perAddress.delete(address); else perAddress.set(address, left);
+      });
+    });
     server.on("clientError", (_error, socket) => {
       if (socket.writable) socket.end("HTTP/1.1 400 Bad Request\r\nconnection: close\r\ncontent-length: 0\r\n\r\n");
       else socket.destroy();
@@ -130,7 +177,7 @@ export class WebhookListener {
     this.server = server;
     this.startedAtSeconds = Math.floor(this.now() / 1000);
     const address = server.address() as AddressInfo;
-    this.hostNames = new Set(["127.0.0.1", "localhost", "[::1]", ...(isLoopbackAddress(host) ? [] : [host.toLowerCase()])]);
+    this.hostNames = allowedHostNames(host, this.options.hostNames);
     this.boundPort = address.port;
     return { host: address.address, port: address.port };
   }
@@ -213,7 +260,7 @@ export class WebhookListener {
     const seconds = /^\d{9,11}$/.test(timestamp) ? Number(timestamp) : undefined;
     const fresh = seconds !== undefined && Math.abs(nowMs / 1000 - seconds) <= SKEW_SECONDS && seconds >= this.startedAtSeconds;
     // The work is the same whatever failed: an HMAC is always computed, against a dummy key when there is no trigger.
-    const mac = createHmac("sha256", target?.secret ?? this.dummy).update(`${timestamp}.${delivery}.`).update(body).digest();
+    const mac = createHmac("sha256", target?.secret ?? this.dummy).update(webhookSigningInput(`/hook/${workspaceKey}/${id}`, timestamp, delivery, body)).digest();
     const given = Buffer.from(signature ?? "0".repeat(64), "hex");
     const signed = timingSafeEqual(mac, given) && signature !== undefined;
     if (!(target !== undefined && signed && fresh && DELIVERY.test(delivery))) return refuse();

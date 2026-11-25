@@ -20,11 +20,11 @@ import { parseTriggerFile, specSha256, triggerFilePath } from "./trigger_load.js
 import { isInside, specPathProblem, workspaceKey } from "./trigger_paths.js";
 import { WorkspaceRateLimiter, type RateLimitDecision } from "./trigger_rate_limit.js";
 import { planTriggerRun, type TriggerEvent } from "./trigger_run.js";
-import type { TriggerRate, TriggerSpec } from "./trigger_spec.js";
+import { SECRET_ENV_PREFIX, type TriggerRate, type TriggerSpec } from "./trigger_spec.js";
 import { decideTriggerTrust, readTriggerTrustStore, triggerMayRun, triggerTrustStorePath, workspaceMayHaveTriggers } from "./trigger_trust.js";
 import { DEFAULT_MAX_TOTAL_DIRS, DirBudget, FileTriggerWatcher, type WatchFactory } from "./trigger_watch.js";
 import { WebhookListener, type WebhookDelivery, type WebhookOutcome, type WebhookTarget } from "./trigger_webhook.js";
-import { MAX_TRACKED_TRIGGERS, NO_DROPS, readTriggerState, triggerKey, triggerStatePaths, takeReleases, writeTriggerState, type TriggerDrops, type TriggerRuntime, type TriggerStatus } from "./trigger_state.js";
+import { MAX_TRACKED_TRIGGERS, NO_DROPS, readTriggerState, triggerKey, triggerStatePaths, takeReleases, writeTriggerState, type TriggerDrops, type TriggerRuntime, type TriggerStatus, type TriggerStateDoc } from "./trigger_state.js";
 
 export const DEFAULT_TRIGGER_SCAN_MS = 5_000;
 /** An inline or environment webhook secret shorter than this is not armed (the spec parser enforces it for inline ones). */
@@ -39,6 +39,7 @@ export interface WebhookConfig {
   maxBodyBytes?: number;
   requestTimeoutMs?: number;
   maxConnections?: number;
+  hostNames?: readonly string[];
 }
 
 export interface TriggerFirerOptions {
@@ -57,6 +58,8 @@ export interface TriggerFirerOptions {
   webhook?: false | WebhookConfig;
   watch?: { debounceMs?: number; maxDirs?: number; maxTotalDirs?: number; maxPending?: number; watch?: WatchFactory };
   workspaceLimits?: TriggerRate;
+  /** State writer seam for failure-injection tests; production uses the private atomic writer. */
+  writeState?: (doc: TriggerStateDoc) => void;
 }
 
 interface Armed {
@@ -81,7 +84,6 @@ export class TriggerFirer {
   private readonly runtime = new Map<string, TriggerRuntime>();
   private readonly budget: DirBudget;
   private readonly reported = new Map<string, string>();
-  private readonly failuresSeen = new Set<string>();
   private readonly secretEnv = new Set<string>();
   private limiter: WorkspaceRateLimiter | undefined;
   private limiterProblem: string | undefined;
@@ -104,7 +106,7 @@ export class TriggerFirer {
 
   /** The environment variables that hold webhook secrets; the runner removes them from a worker's environment. */
   secretEnvNames(): string[] {
-    return [...this.secretEnv];
+    return [...this.secretEnv].filter((name) => name.startsWith(SECRET_ENV_PREFIX));
   }
 
   /** Where the listener is, once open. */
@@ -238,7 +240,7 @@ export class TriggerFirer {
     }
     // webhook
     if (!this.options.webhook) return { armed: false, note: "the webhook listener is off: start the runner with --webhook-port" };
-    const name = spec.event.secretEnv;
+    const name = spec.event.secretEnv?.startsWith(SECRET_ENV_PREFIX) ? spec.event.secretEnv : undefined;
     if (name) this.secretEnv.add(name);
     const secret = spec.event.secret ?? (name ? (this.options.env ?? process.env)[name] : undefined);
     if (!secret || secret.length < MIN_ENV_SECRET) return { armed: false, note: name ? `the secret environment variable ${name} is not set, or is shorter than ${MIN_ENV_SECRET} characters` : "the secret is shorter than 16 characters" };
@@ -310,6 +312,9 @@ export class TriggerFirer {
     const limiter = this.ensureLimiter();
     const decision = limiter.checkAndRecord(a.workspace, a.id, a.spec.rate, new Date(nowMs));
     this.dirty = true;
+    // A trigger is not submitted until its consumed budget is durably recorded. A failed write leaves the dirty state
+    // pending for retry and denies this firing, so a restart cannot silently restore an older, more permissive budget.
+    if (!this.persist()) return { admitted: false, reason: "limiter state could not be persisted; no job was started" };
     return decision;
   }
 
@@ -472,15 +477,48 @@ export class TriggerFirer {
     const limiter = this.limiter;
     if (!limiter || this.armed.size === 0) return;
     const jobs = this.jobsNow();
-    const live = new Set(jobs.map((job) => job.id));
-    for (const id of this.failuresSeen) if (!live.has(id)) this.failuresSeen.delete(id);
+    const byTrigger = new Map<string, JobRecord[]>();
     for (const job of jobs) {
-      if (job.origin.kind !== "trigger" || (job.state !== "FAILED" && job.state !== "TIMED_OUT") || this.failuresSeen.has(job.id)) continue;
-      this.failuresSeen.add(job.id);
-      const a = this.armed.get(triggerKey(job.workspace, job.origin.triggerId));
-      if (!a) continue;
-      limiter.recordFailure(a.workspace, a.id, a.spec.rate, this.options.now(), `job ${job.id} ${job.state.toLowerCase()}`);
+      if (job.origin.kind !== "trigger") continue;
+      const key = triggerKey(job.workspace, job.origin.triggerId);
+      byTrigger.set(key, [...(byTrigger.get(key) ?? []), job]);
+    }
+    for (const triggerJobs of byTrigger.values()) {
+      triggerJobs.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    }
+    // Initialize every armed trigger before it can fire in this tick. Legacy state has no cursor, so history already
+    // present is the baseline; jobs started from now on have outcomes recorded exactly once across restarts.
+    for (const key of this.armed.keys()) {
+      const rt = this.runtime.get(key);
+      if (!rt || rt.outcomesInitialized) continue;
+      const triggerJobs = byTrigger.get(key) ?? [];
+      // Skip legacy outcomes already present at upgrade time, but keep an in-flight job in the queue so its
+      // eventual outcome is still folded in after restart.
+      const latest = [...triggerJobs].reverse().find((job) => isTerminal(job.state));
+      if (latest) rt.lastOutcome = { createdAt: latest.createdAt, jobId: latest.id };
+      rt.outcomesInitialized = true;
       this.dirty = true;
+    }
+    for (const [key, triggerJobs] of byTrigger) {
+      const rt = this.runtime.get(key);
+      if (!rt?.outcomesInitialized) continue;
+      const a = this.armed.get(key);
+      let waitingForOlder = false;
+      for (const job of triggerJobs) {
+        const cursor = rt.lastOutcome;
+        if (cursor && (job.createdAt < cursor.createdAt || (job.createdAt === cursor.createdAt && job.id <= cursor.jobId))) continue;
+        if (waitingForOlder) continue;
+        if (!isTerminal(job.state)) {
+          waitingForOlder = true;
+          continue;
+        }
+        if (a && job.origin.approvedSha256 === a.sha) {
+          if (job.state === "COMPLETE") limiter.recordSuccess(a.workspace, a.id, this.options.now());
+          else limiter.recordFailure(a.workspace, a.id, a.spec.rate, this.options.now(), `job ${job.id} ${job.state.toLowerCase()}`);
+        }
+        rt.lastOutcome = { createdAt: job.createdAt, jobId: job.id };
+        this.dirty = true;
+      }
     }
   }
 
@@ -504,6 +542,7 @@ export class TriggerFirer {
       maxBodyBytes: config.maxBodyBytes,
       requestTimeoutMs: config.requestTimeoutMs,
       maxConnections: config.maxConnections,
+      hostNames: config.hostNames,
       now: () => this.now(),
     });
     this.starting = listener.start().then((address) => {
@@ -532,11 +571,11 @@ export class TriggerFirer {
 
   // ---------------------------------------------------------------- state
 
-  private persist(): void {
-    this.dirty = false;
-    if (!this.limiter && this.runtime.size === 0) return;
+  private persist(): boolean {
+    if (!this.dirty) return true;
+    if (!this.limiter && this.runtime.size === 0) { this.dirty = false; return true; }
     try {
-      writeTriggerState(this.statePaths, {
+      const doc: TriggerStateDoc = {
         format: "nexus-trigger-state",
         version: 1,
         updatedAt: this.options.now().toISOString(),
@@ -544,9 +583,15 @@ export class TriggerFirer {
         ...(this.limiterProblem ? { limiterProblem: this.limiterProblem } : {}),
         ...(this.listenerInfo ? { listener: this.listenerInfo } : {}),
         triggers: [...this.runtime.values()].slice(0, MAX_TRACKED_TRIGGERS),
-      });
+      };
+      if (this.options.writeState) this.options.writeState(doc);
+      else writeTriggerState(this.statePaths, doc);
+      this.dirty = false;
+      return true;
     } catch (error) {
+      this.dirty = true;
       this.options.log(`triggers: the state could not be written: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
     }
   }
 

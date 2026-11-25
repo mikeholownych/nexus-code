@@ -139,17 +139,17 @@ test("a webhook through the real runner: bad and replayed deliveries start nothi
   const gw = await stalledGateway();
   try {
     await trustRepo(world, repo);
-    approveInRepo(world, repo, [webhookSpec("hook", "NEXUS_TEST_HOOK_SECRET")]);
-    await world.startRunner(["--webhook-port", "0"], { LOCAL_LLM_ENDPOINT: gw.url, LOCAL_LLM_MODEL: "m", NEXUS_TEST_HOOK_SECRET: SECRET });
+    approveInRepo(world, repo, [webhookSpec("hook", "NEXUS_TRIGGER_TEST_HOOK")]);
+    await world.startRunner(["--webhook-port", "0"], { LOCAL_LLM_ENDPOINT: gw.url, LOCAL_LLM_MODEL: "m", NEXUS_TRIGGER_TEST_HOOK: SECRET });
     await armed(world, "hook");
     const listener = await until(() => state(world)?.listener, 30_000, () => "the listener");
     assert.equal(listener.host, "127.0.0.1");
     const url = hookPath(repo, "hook");
     const body = '{"x":1}';
-    assert.equal(((await post(listener.port, url, body, signed("wrong-wrong-wrong-wrong-wrong", body))) as any).status, 401);
-    assert.equal(((await post(listener.port, url, body, { ...signed(SECRET, body), "x-nexus-signature": "sha256=" + "0".repeat(64) })) as any).status, 401);
+    assert.equal(((await post(listener.port, url, body, signed("wrong-wrong-wrong-wrong-wrong", url, body))) as any).status, 401);
+    assert.equal(((await post(listener.port, url, body, { ...signed(SECRET, url, body), "x-nexus-signature": "v1=" + "0".repeat(64) })) as any).status, 401);
     assert.equal(triggerJobs(world, "hook").length, 0);
-    const good = signed(SECRET, body, { delivery: "delivery-0001" });
+    const good = signed(SECRET, url, body, { delivery: "delivery-0001" });
     assert.equal(((await post(listener.port, url, body, good)) as any).status, 202);
     assert.equal(((await post(listener.port, url, body, good)) as any).status, 401, "the same signed request again is a replay");
     const job = await until(() => triggerJobs(world, "hook")[0], 60_000, () => "the job");
@@ -157,7 +157,7 @@ test("a webhook through the real runner: bad and replayed deliveries start nothi
     await until(() => world.job(job.id)?.attempts[0], 150_000, () => "a worker");
     const environ = fs.readFileSync(`/proc/${world.job(job.id)!.attempts[0]!.pid}/environ`, "latin1");
     assert.match(environ, /LOCAL_LLM_ENDPOINT=/, "the worker has the operator's environment");
-    assert.equal(environ.includes("NEXUS_TEST_HOOK_SECRET"), false, "and not the webhook secret");
+    assert.equal(environ.includes("NEXUS_TRIGGER_TEST_HOOK"), false, "and not the webhook secret");
     assert.equal(environ.includes(SECRET), false);
     const stopped = await world.run(["job", "stop", job.id]);
     assert.equal(stopped.code, 0, stopped.stderr);

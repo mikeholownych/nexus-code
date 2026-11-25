@@ -57,6 +57,20 @@ test("a directory created later is watched too", async () => {
   } finally { w.close(); rm(dir); }
 });
 
+test("a missing literal glob root is noticed when it is created later", async () => {
+  const dir = repo();
+  const w = make(dir, ["generated/**/*.ts"]);
+  try {
+    w.reconcile();
+    assert.ok(w.dirs >= 1, "the existing workspace parent is watched while the literal prefix is absent");
+    fs.mkdirSync(path.join(dir, "generated"));
+    const all = await collect(w, () => false, 300);
+    fs.writeFileSync(path.join(dir, "generated", "later.ts"), "x");
+    const changed = await collect(w, (b) => paths(b).includes("generated/later.ts"));
+    assert.ok(paths([...all, ...changed]).includes("generated/later.ts"));
+  } finally { w.close(); rm(dir); }
+});
+
 test(".git and .nexus never produce an event and are not even watched, whatever the glob", async () => {
   const dir = repo();
   const w = make(dir, ["**"]);

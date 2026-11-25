@@ -53,6 +53,10 @@ export interface TriggerRuntime {
   fired: number;
   refused: number;
   lastFire?: { at: string; jobId: string; eventId: string };
+  /** Outcome history was initialized against the existing job list (legacy state has no cursor). */
+  outcomesInitialized?: boolean;
+  /** The newest terminal trigger job whose outcome has been folded into the persisted failure counter. */
+  lastOutcome?: { createdAt: string; jobId: string };
   lastRefusal?: { at: string; reason: string };
   dropped: TriggerDrops;
   /** Webhook: the URL path that delivers to it. */
@@ -97,7 +101,7 @@ export function ensureTriggerDir(paths: TriggerStatePaths): void {
 }
 
 function parseRuntime(label: string, value: unknown): TriggerRuntime {
-  const t = strictObject(label, value, ["workspace", "id", "kind", "status", "armed", "fired", "refused", "dropped"], ["note", "seenApproved", "lastFire", "lastRefusal", "webhookPath", "watchedDirs"]);
+  const t = strictObject(label, value, ["workspace", "id", "kind", "status", "armed", "fired", "refused", "dropped"], ["note", "seenApproved", "lastFire", "outcomesInitialized", "lastOutcome", "lastRefusal", "webhookPath", "watchedDirs"]);
   const drops = strictObject(`${label}.dropped`, t.dropped, Object.keys(NO_DROPS));
   const runtime: TriggerRuntime = {
     workspace: text(`${label}.workspace`, t.workspace, 4096),
@@ -111,9 +115,14 @@ function parseRuntime(label: string, value: unknown): TriggerRuntime {
   };
   if (t.note !== undefined) runtime.note = text(`${label}.note`, t.note, 500);
   if (t.seenApproved === true) runtime.seenApproved = true;
+  if (t.outcomesInitialized === true) runtime.outcomesInitialized = true;
   if (t.lastFire !== undefined) {
     const f = strictObject(`${label}.lastFire`, t.lastFire, ["at", "jobId", "eventId"]);
     runtime.lastFire = { at: timestamp(`${label}.lastFire.at`, f.at), jobId: text(`${label}.lastFire.jobId`, f.jobId, 32), eventId: text(`${label}.lastFire.eventId`, f.eventId, 64) };
+  }
+  if (t.lastOutcome !== undefined) {
+    const o = strictObject(`${label}.lastOutcome`, t.lastOutcome, ["createdAt", "jobId"]);
+    runtime.lastOutcome = { createdAt: timestamp(`${label}.lastOutcome.createdAt`, o.createdAt), jobId: text(`${label}.lastOutcome.jobId`, o.jobId, 32) };
   }
   if (t.lastRefusal !== undefined) {
     const f = strictObject(`${label}.lastRefusal`, t.lastRefusal, ["at", "reason"]);

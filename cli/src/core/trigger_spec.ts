@@ -146,7 +146,9 @@ const ID_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const GLOB_RE = /^[^\0]*$/;
 const PATH_SEGMENT_BAD = /(\.\.|^\/|\/\.\.)/;
 const SECRET_RE = /^[A-Za-z0-9_-]+$/;
-const SECRET_ENV_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
+/** A webhook secret is read from, and withheld from workers as, a variable of this family only: a spec cannot name `PATH` or an endpoint setting. */
+export const SECRET_ENV_PREFIX = "NEXUS_TRIGGER_";
+const SECRET_ENV_RE = /^NEXUS_TRIGGER_[A-Z0-9_]{1,49}$/;
 const ORIGIN_RE = /^(https?:\/\/)?[^\s/]+$/;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -265,7 +267,7 @@ export function parseTriggerSpec(text: string, options?: { allowWorktreeWrite?: 
   let secretEnv: string | undefined;
   if (event.secretEnv !== undefined) {
     if (!isString(event.secretEnv) || !SECRET_ENV_RE.test(event.secretEnv))
-      fail("event.secretEnv must name an environment variable matching /^[A-Z][A-Z0-9_]{0,63}$/");
+      fail(`event.secretEnv must name an environment variable starting with ${SECRET_ENV_PREFIX} (for example NEXUS_TRIGGER_DEPLOY_SECRET), so a spec cannot name PATH, HOME or an endpoint setting`);
     secretEnv = event.secretEnv;
   }
 

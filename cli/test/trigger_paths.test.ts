@@ -41,7 +41,7 @@ test("spec paths: unsupported syntax, odd segments, excluded directories and sym
     assert.equal(specPathProblem(ws, spec(["missing/**"])), undefined, "a directory that does not exist yet is looked at again later");
     for (const [glob, why] of [["escape/**", /resolves outside the workspace/], ["escape/a.ts", /resolves outside/], ["src/{a,b}.ts", /syntax this firer does not support/], ["src/[a].ts", /syntax/], ["./src/**", /clean relative path/], ["src//a", /clean relative path/], [".git/**", /no event may come from/], ["x/.nexus/y", /no event may come from/]] as const)
       assert.match(specPathProblem(ws, spec([glob])) ?? "", why, glob);
-    assert.equal(specPathProblem(ws, parseTriggerSpec(JSON.stringify({ ...fileSpec("w", ["a"]), event: { kind: "webhook", secretEnv: "X_SECRET" } }))), undefined);
+    assert.equal(specPathProblem(ws, parseTriggerSpec(JSON.stringify({ ...fileSpec("w", ["a"]), event: { kind: "webhook", secretEnv: "NEXUS_TRIGGER_X" } }))), undefined);
   } finally { fs.rmSync(ws, { recursive: true, force: true }); fs.rmSync(out, { recursive: true, force: true }); }
 });
 

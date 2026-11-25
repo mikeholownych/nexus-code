@@ -6,7 +6,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createHmac } from "node:crypto";
 import http from "node:http";
 import { makeRepo } from "./fixtures.js";
 import { newJobRecord, runnerPaths, type JobRecord, type JobSubmission, type RunnerPaths } from "../../src/core/runner_store.js";
@@ -14,6 +13,7 @@ import { TriggerFirer, type TriggerFirerOptions } from "../../src/core/trigger_f
 import { entryForSpec, approveTrigger } from "../../src/core/trigger_trust.js";
 import { parseTriggerSpec, type TriggerSpec } from "../../src/core/trigger_spec.js";
 import { workspaceKey } from "../../src/core/trigger_paths.js";
+import { webhookSignature } from "../../src/core/trigger_webhook.js";
 import { trackResource } from "./leak_guard.js";
 
 export const RATE = { maxPerMinute: 5, maxPerHour: 60, maxPerDay: 500 };
@@ -106,12 +106,11 @@ export function triggerWorld(): TriggerWorld {
   return world;
 }
 
-/** The headers of a delivery signed as the docs describe. */
-export function signed(secret: string, body: string | Buffer, opts: { timestamp?: number; delivery?: string } = {}): Record<string, string> {
+/** The headers of a delivery signed as the docs describe (`routePath` is the URL path the delivery is posted to). */
+export function signed(secret: string, routePath: string, body: string | Buffer, opts: { timestamp?: number; delivery?: string } = {}): Record<string, string> {
   const timestamp = String(opts.timestamp ?? Math.floor(Date.now() / 1000));
   const delivery = opts.delivery ?? `d-${Math.random().toString(16).slice(2, 14)}`;
-  const mac = createHmac("sha256", secret).update(`${timestamp}.${delivery}.`).update(body).digest("hex");
-  return { "x-nexus-timestamp": timestamp, "x-nexus-delivery": delivery, "x-nexus-signature": `sha256=${mac}` };
+  return { "x-nexus-timestamp": timestamp, "x-nexus-delivery": delivery, "x-nexus-signature": webhookSignature(secret, routePath, timestamp, delivery, Buffer.from(body)) };
 }
 
 export const hookPath = (repo: string, id: string): string => `/hook/${workspaceKey(repo)}/${id}`;
@@ -119,11 +118,17 @@ export const hookPath = (repo: string, id: string): string => `/hook/${workspace
 /** One request to the loopback listener; resolves with the status and body, or the error code of a connection that was cut. */
 export function post(port: number, urlPath: string, body: string | Buffer, headers: Record<string, string> = {}, options: { host?: string } = {}): Promise<{ status: number; body: string } | { error: string }> {
   return new Promise((resolve) => {
-    const req = http.request({ host: "127.0.0.1", port, path: urlPath, method: "POST", agent: false, headers: { host: options.host ?? `127.0.0.1:${port}`, "content-length": String(Buffer.byteLength(body)), ...headers } }, (res) => {
+    let req: http.ClientRequest;
+    try {
+      req = http.request({ host: "127.0.0.1", port, path: urlPath, method: "POST", agent: false, headers: { host: options.host ?? `127.0.0.1:${port}`, "content-length": String(Buffer.byteLength(body)), ...headers } }, (res) => {
       let text = "";
       res.on("data", (c) => (text += c));
       res.on("end", () => resolve({ status: res.statusCode ?? 0, body: text }));
     });
+    } catch (error) {
+      resolve({ error: (error as NodeJS.ErrnoException).code ?? String(error) });
+      return;
+    }
     req.on("error", (error: NodeJS.ErrnoException) => resolve({ error: error.code ?? error.message }));
     req.end(body);
   });

@@ -14,7 +14,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { globToRegExp, globWatchRoot, isExcludedEventPath, resolveInside, EXCLUDED_SEGMENTS } from "./trigger_paths.js";
+import { globToRegExp, globWatchRoot, isExcludedEventPath, isInside, resolveInside, EXCLUDED_SEGMENTS } from "./trigger_paths.js";
 
 export const DEFAULT_MAX_DIRS = 256;
 export const DEFAULT_MAX_TOTAL_DIRS = 1024;
@@ -101,17 +101,48 @@ export class FileTriggerWatcher {
     const walk: Array<[string, number]> = [...roots.entries()];
     for (let i = 0; i < walk.length; i++) {
       const [dir, depth] = walk[i]!;
-      if (!this.watchers.has(dir)) {
+      let watchDir = dir;
+      let rootMissing = false;
+      try {
+        if (!fs.statSync(dir).isDirectory()) {
+          this.note(`cannot watch ${path.relative(this.options.workspace, dir) || "."}: not a directory`);
+          continue;
+        }
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT" && code !== "ENOTDIR") {
+          this.note(`cannot watch ${path.relative(this.options.workspace, dir) || "."}: ${code ?? "error"}`);
+          continue;
+        }
+        rootMissing = true;
+        watchDir = path.dirname(dir);
+        while (isInside(watchDir, this.options.workspace)) {
+          try {
+            if (fs.statSync(watchDir).isDirectory()) break;
+          } catch { /* walk up to the nearest directory that exists */ }
+          const parent = path.dirname(watchDir);
+          if (parent === watchDir) break;
+          watchDir = parent;
+        }
+        if (!isInside(watchDir, this.options.workspace)) {
+          this.note(`cannot watch ${path.relative(this.options.workspace, dir) || "."}: no existing parent inside the workspace`);
+          continue;
+        }
+      }
+      if (!this.watchers.has(watchDir)) {
         if (this.watchers.size >= maxDirs || !this.options.budget.take()) {
           this.truncated = true;
           this.note(`watching stopped at ${this.watchers.size} directories (limit ${maxDirs}, shared limit ${this.options.budget.max}); changes in the others are not seen`);
           continue;
         }
-        if (!this.attach(dir)) {
+        if (!this.attach(watchDir)) {
           this.options.budget.give(1);
           continue;
         }
       }
+      // Watch the nearest existing parent only to notice a missing literal prefix appearing. The next rename event
+      // requests a rescan, which will attach the exact glob root and walk its descendants.
+      if (rootMissing) continue;
       if (depth <= 0) continue;
       let entries: fs.Dirent[];
       try {

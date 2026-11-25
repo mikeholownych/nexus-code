@@ -35,7 +35,7 @@ async function runExample(mode: "file" | "webhook") {
     approveInRepo(world, repo, { copyFrom: path.join(EXAMPLE, "triggers.json") });
     child = spawn("bash", [path.join(EXAMPLE, "run.sh"), mode], {
       cwd: repo,
-      env: { ...world.env, NEXUS_BIN: shim, LOCAL_LLM_ENDPOINT: gateway.url, LOCAL_LLM_MODEL: "m", NEXUS_EXAMPLE_HOOK_SECRET: "0123456789abcdef0123" },
+      env: { ...world.env, NEXUS_BIN: shim, LOCAL_LLM_ENDPOINT: gateway.url, LOCAL_LLM_MODEL: "m", NEXUS_TRIGGER_EXAMPLE_HOOK: "0123456789abcdef0123" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     child.stdout!.on("data", (chunk) => { stdout += chunk; });

@@ -273,7 +273,7 @@ export function registerTriggerCommands(program: Command, deps: TriggersCliDeps 
       }
       let mayRun = false;
       for (const one of ids) mayRun = printTriggerStatus(one, { now: clock(), workspace, real, parsed, entries, runner });
-      process.exitCode = id !== undefined && !mayRun ? 1 : 0;
+      process.exitCode = (id !== undefined && !mayRun) || runner.problem ? 1 : 0;
     });
 
   triggers
@@ -354,8 +354,11 @@ function printTriggerStatus(id: string, ctx: StatusContext): boolean {
   const decision = decideTriggerTrust(ctx.entries, ctx.real, spec, spec ? specSha256(spec) : undefined);
   const runtime = ctx.runner.doc?.triggers.find((t) => t.workspace === ctx.real && t.id === id);
   const view = limiterView(ctx.runner.doc?.limiter, ctx.real, id, ctx.now);
-  const may = triggerMayRun(decision);
+  // The runner denies every firing while its state is refused or its limiter is locked, so nothing "may run" then.
+  const refused = ctx.runner.problem ?? ctx.runner.doc?.limiterProblem;
+  const may = triggerMayRun(decision) && !refused;
   console.log(`trigger ${hookLine(id, 80)} in ${ctx.workspace}`);
+  if (refused) console.log(`  ${pc.red(`REFUSED STATE: ${hookLine(refused, 400)}`)}`);
   console.log(`  trusted: ${decision.workspaceTrusted ? "yes" : "no"} (the trusted-workspaces store; NEXUS_TRUST_WORKSPACE=1 does not count for triggers)`);
   if (ctx.parsed.problem) console.log(`  spec file: ${hookLine(ctx.parsed.problem, 400)}`);
   console.log(`  status: ${decision.status}`);

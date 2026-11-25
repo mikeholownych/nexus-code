@@ -14,7 +14,7 @@
       "format": "nexus-trigger",
       "version": 1,
       "id": "example-hook",
-      "event": { "kind": "webhook", "secretEnv": "NEXUS_EXAMPLE_HOOK_SECRET" },
+      "event": { "kind": "webhook", "secretEnv": "NEXUS_TRIGGER_EXAMPLE_HOOK" },
       "action": { "prompt": "A webhook delivery arrived. Read README.md and report its first line. Do not modify files.", "policy": "read-only" },
       "rate": { "maxPerMinute": 2, "maxPerHour": 10, "maxPerDay": 50 },
       "bounds": { "maxToolInvocations": 20, "maxRounds": 10, "maxTurnMinutes": 10 }

@@ -185,7 +185,6 @@ export class TriggerRateLimiter {
     if (gated) return { admitted: false, reason: gated };
 
     insertAscending(this.admittedAt, t);
-    this.consecutiveFailures = 0;
     return { admitted: true };
   }
 
@@ -197,6 +196,11 @@ export class TriggerRateLimiter {
     const quarantine = this.activeQuarantine(t);
     if (quarantine) return { admitted: false, reason: "quarantined", quarantined: quarantine };
     return this.fail(t, reason, reason);
+  }
+
+  /** A completed trigger job resets the consecutive run-failure count; admission alone is not a success. */
+  public recordSuccess(): void {
+    this.consecutiveFailures = 0;
   }
 
   /** Release a quarantine (the operator's action; also the only way out of a fail-closed restore). */
@@ -361,6 +365,14 @@ export class WorkspaceRateLimiter {
     const decision = limiter.recordFailure(now, reason);
     this.mirrorQuarantine(limiterKey(workspace, triggerId), limiter, now);
     return decision;
+  }
+
+  /** A successful trigger job breaks the failure streak without changing its admission window. */
+  public recordSuccess(workspace: string, triggerId: string, now: Date): void {
+    const limiter = this.limiters.get(limiterKey(workspace, triggerId));
+    if (!limiter) return;
+    limiter.recordSuccess();
+    this.mirrorQuarantine(limiterKey(workspace, triggerId), limiter, now);
   }
 
   /** The operator's release of one trigger's quarantine (the firer's `nexus triggers release`). */
