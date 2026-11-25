@@ -117,6 +117,34 @@
       "operational_impact": "Static diagnostics may regress between local review and merge without a required CI signal.",
       "recommended_action": "Add Clippy to protected CI after baseline confirmation; maintain strict TS build and introduce only targeted complexity diagnostics for critical functions.",
       "priority": "P2"
+    },
+    {
+      "id": "P10-007",
+      "source_rule": "Nexus adaptation AI-B/AI-D",
+      "subsystem": "acceptance_and_persistence",
+      "severity": "high",
+      "maturity": "M4",
+      "status": "confirmed",
+      "description": "A mandatory candidate receipt persistence failure was confirmed to yield VERIFIED on main 387647343ab5293549324756441cfa688f230ff0. PR #850 fixed the tested worktree-backed path: the failure now clears completion state and returns FAILED/PERSISTENCE_FAILED instead of VERIFIED.",
+      "observed_revision": "387647343ab5293549324756441cfa688f230ff0",
+      "resolution_status": "resolved_for_tested_worktree_receipt_path",
+      "resolution_revision": "e0139857ba189b2c7f695a4cdd6990ff4521c520",
+      "source_locations": [
+        "cli/src/core/spine_handlers.ts:466-515@e0139857ba189b2c7f695a4cdd6990ff4521c520",
+        "cli/src/agent.ts:1695-1700@e0139857ba189b2c7f695a4cdd6990ff4521c520",
+        "cli/src/core/run_turn.ts:56-63,1232-1236,1477-1480@e0139857ba189b2c7f695a4cdd6990ff4521c520"
+      ],
+      "test_evidence": [
+        "Pre-fix: cli/test/p10_receipt_persistence.test.ts from test commit 296d6dc39 failed on main 387647343ab5293549324756441cfa688f230ff0; injected persistenceAttempted=true and persistence.durable=false, but outcome was VERIFIED.",
+        "Post-fix: cli/test/p10_receipt_persistence.test.ts:76-99 passed 1/1 at fa6c2eb65120a1a96ce737a967182e0ca4d5f364 on Node 24.11.1 after an isolated Rust core build. It also asserts source/candidate/verifier/runtime/policy receipt identity and candidate retention."
+      ],
+      "resolution_evidence": [
+        "PR #850 merged as 8cc750bc3213cc5c79852394894c78c8b798df1e.",
+        "Post-merge CI and CodeQL completed successfully on main e0139857ba189b2c7f695a4cdd6990ff4521c520 (CI run 45713176567; CodeQL run 45713176504)."
+      ],
+      "operational_impact": "Before remediation, Nexus could report verified completion without durable acceptance evidence. The tested failure now blocks acceptance; other specialized completion/export paths and immutable external retention are not established by this result.",
+      "recommended_action": "Preserve the failing-write regression test; apply the same durable-receipt precondition to alternate acceptance paths and verify exported evidence retains the receipt identity.",
+      "priority": "P1"
     }
   ]
 }
