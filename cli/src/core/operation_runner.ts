@@ -1065,8 +1065,13 @@ function refuseLiveForeignDriver(state: DurableOperationState): void {
   if (pid !== undefined) throw new OperationLockedError(`Operation ${state.id} is recorded as driven by live pid ${pid} on ${state.activeHost} (its lock is not held); refusing a second driver.`);
 }
 
-function isStaleDriverPaused(state: DurableOperationState): boolean {
-  return state.status === "PAUSED" && typeof state.pauseReason === "string" && state.pauseReason.startsWith(STALE_PAUSE_PREFIX);
+function hasStaleDriverPause(state: DurableOperationState): boolean {
+  return state.status === "PAUSED" && state.pauseReason?.startsWith(STALE_PAUSE_PREFIX) === true;
+}
+
+/** Unattended: block before prepare. Always block after prepare if still stale. */
+function shouldBlockStalePause(state: DurableOperationState, resumeAfterDecision: boolean | undefined): boolean {
+  return hasStaleDriverPause(state) && resumeAfterDecision !== true;
 }
 
 export async function driveOperation(state: DurableOperationState, opts: DriveOptions): Promise<DurableOperationState> {
@@ -1079,22 +1084,16 @@ export async function driveOperation(state: DurableOperationState, opts: DriveOp
       state = store.load(state.id);
     }
     if (entry === "existing") {
-      // `operation decide` records the operator's choice, then resumes under a new driver lock in this same process.
-      // Refresh the identity for that handoff so the process that presented the decision is not mistaken for a second
-      // crash. If this process dies during resumed work, its identity is stale on the next load.
       if (resumeAfterDecision && state.status !== "COMPLETE" && state.status !== "CANCELLED") stampDriver(state);
       refuseLiveForeignDriver(state);
       pauseForStaleDriver(state);
-      // Unattended paths must not reach `prepare` while stale-paused (#807): a hostile/legacy prepare that
-      // clears PAUSED would otherwise resume. Explicit operator resume sets resumeAfterDecision and may prepare.
-      if (isStaleDriverPaused(state) && resumeAfterDecision !== true) {
+      if (shouldBlockStalePause(state, resumeAfterDecision)) {
         store.save(state);
         return state;
       }
     }
-    // Explicit operator resume clears a stale pause inside `prepare`. After prepare, any remaining stale pause stops.
     prepare?.(state);
-    if (isStaleDriverPaused(state)) {
+    if (hasStaleDriverPause(state)) {
       store.save(state);
       return state;
     }
@@ -1111,10 +1110,6 @@ export async function driveOperation(state: DurableOperationState, opts: DriveOp
   }
 }
 
-/**
- * Applies an operator decision under the driver lock: validated against the persisted decision (DecisionRejected
- * otherwise), recorded on the unit, persisted. The next run re-evaluates the operation from there.
- */
 export function applyOperatorDecision(
   store: OperationStore,
   id: string,
