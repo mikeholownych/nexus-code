@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_015gLzGqgomZtnXaRaJAw82x",
+  "agent_id": "a88f34e8c89df42f5",
+  "subagent_type": "general-purpose",
+  "task_description": "Build BG-3 trigger firer",
+  "token_usage": {
+    "input_tokens": 218,
+    "cache_creation_tokens": 383888,
+    "cache_read_tokens": 29841886,
+    "output_tokens": 196587,
+    "api_call_count": 109
+  },
+  "started_at": "2026-11-25T00:07:08.517113748Z",
+  "completed_at": "2026-11-25T00:41:01.546127113Z"
+}
