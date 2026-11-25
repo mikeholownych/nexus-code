@@ -6,7 +6,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Detailed per-release documentation is maintained in [`docs/releases/`](docs/releases/).
 
-## [v1.3.0] - Unreleased
+## [v1.3.0] - 2026-11-25
 
 Work on `release/v1.3.0` for v1.3.0; version strings are `1.3.0-rc.1` in the release-candidate commit ([`docs/releases/v1.3.0-rc.1.md`](docs/releases/v1.3.0-rc.1.md)). Full unit table and open gaps: [`docs/releases/v1.3.0-READINESS.md`](docs/releases/v1.3.0-READINESS.md). External qualification pending; not a frontier-grade claim.
 
