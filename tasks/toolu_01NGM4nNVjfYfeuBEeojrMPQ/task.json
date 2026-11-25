@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01NGM4nNVjfYfeuBEeojrMPQ",
+  "agent_id": "ac985d7a18cac0481",
+  "subagent_type": "reviewer",
+  "task_description": "Delta re-review PR #809 sandbox root mask",
+  "token_usage": {
+    "input_tokens": 56,
+    "cache_creation_tokens": 50052,
+    "cache_read_tokens": 1147645,
+    "output_tokens": 15598,
+    "api_call_count": 28
+  },
+  "started_at": "2026-11-25T02:03:58.300997084Z",
+  "completed_at": "2026-11-25T02:24:30.627584025Z"
+}

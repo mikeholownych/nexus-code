@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_014VZCMq6FVmx7SjDCDdzouA",
+  "agent_id": "a3625e888ee2d5710",
+  "subagent_type": "reviewer",
+  "task_description": "Re-review PR #808 HK-3 fixes",
+  "token_usage": {
+    "input_tokens": 204,
+    "cache_creation_tokens": 179207,
+    "cache_read_tokens": 11794319,
+    "output_tokens": 81961,
+    "api_call_count": 102
+  },
+  "started_at": "2026-11-25T01:40:15.950460093Z",
+  "completed_at": "2026-11-25T02:12:56.420114328Z"
+}
