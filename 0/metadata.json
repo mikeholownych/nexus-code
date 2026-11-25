@@ -1,0 +1,44 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M8A7JVJM67GXCZXEQQ3TXGHK",
+  "session_id": "bf80f725-4a7a-4837-a559-6cb930055d07",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-25T20:50:33.119726932Z",
+  "branch": "v1/security-containment-800",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cli/src/browser.ts",
+    "cli/src/core/authority.ts",
+    "cli/src/core/candidate.ts",
+    "cli/src/core/observation_identity.ts",
+    "cli/src/lsp.ts",
+    "cli/src/path_within.ts",
+    "cli/src/safe_fs.ts",
+    "cli/src/security.ts",
+    "cli/src/skills.ts",
+    "cli/src/tester.ts",
+    "cli/src/workspace_trust.ts",
+    "cli/src/worktrunk/copy.ts",
+    "cli/src/worktrunk/paths.ts",
+    "cli/test/path_containment.test.ts",
+    "docs/evidence/v1.3.1/WP-131-08-containment-800.md"
+  ],
+  "agent": "Cursor",
+  "model": "default",
+  "turn_id": "1c683a0e58ab",
+  "compact_transcript_start": 0,
+  "redaction": {
+    "replacements": 0,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
