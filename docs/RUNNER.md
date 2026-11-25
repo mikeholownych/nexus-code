@@ -43,8 +43,10 @@ Receipts record the starting commit, policy, verifier, budgets, attempts, unatte
 
 A runner that is serving also fires [schedules](SCHEDULES.md): `nexus schedule add` stores an operator's `cron`, `every` or `once` order, and each run is a job like the ones above. Missed runs are counted and reported, never replayed in a burst.
 
+It also fires approved [event triggers](TRIGGERS.md) (a file change, or a signed webhook when started with `--webhook-port`): each is a job like the ones above with `origin.kind = "trigger"`, and the receipt names the trigger and the event. Without an approved trigger the runner opens no watcher, no listener and no socket.
+
 ## State and limits
 
-Runner state is stored in `${NEXUS_STATE_DIR:-~/.nexus}/runner`, in owner-only directories and files (schedules in its `nexus-schedules/` directory). JSON records are size bounded, versioned, strictly parsed, refuse duplicate keys, symbolic links, unexpected keys, and unsafe permissions, and are atomically replaced with file and directory syncs. Event logs are redacted and capped at 16 MiB; worker stderr is capped at 32 MiB. Ended jobs keep their record and receipt; event and stderr logs are pruned after 30 days. Same-user programs can alter this state, so it is not a security boundary against the account that runs Nexus.
+Runner state is stored in `${NEXUS_STATE_DIR:-~/.nexus}/runner`, in owner-only directories and files (schedules in its `nexus-schedules/` directory, trigger state and the rate limiter in `nexus-triggers/`). JSON records are size bounded, versioned, strictly parsed, refuse duplicate keys, symbolic links, unexpected keys, and unsafe permissions, and are atomically replaced with file and directory syncs. Event logs are redacted and capped at 16 MiB; worker stderr is capped at 32 MiB. Ended jobs keep their record and receipt; event and stderr logs are pruned after 30 days. Same-user programs can alter this state, so it is not a security boundary against the account that runs Nexus.
 
 The runner requires Linux `/proc` process identity and `flock`. It is experimental and does not support Windows or macOS, multi-user scheduling, automatic result merging, or running jobs without a supervising process. Keep the runner on the same Nexus version as its workers; stop it before upgrading.

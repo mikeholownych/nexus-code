@@ -34,7 +34,14 @@ export const TERMINAL_JOB_STATES: readonly JobState[] = ["COMPLETE", "BLOCKED", 
 export type JobPolicy = "read-only" | "worktree-write";
 export const JOB_POLICIES: readonly JobPolicy[] = ["read-only", "worktree-write"];
 
-export type JobOrigin = { kind: "cli" } | { kind: "schedule"; scheduleId: string; dueAt: string };
+/**
+ * Who asked for the job. A trigger job (BG-3) names the trigger, the one event it stands for (`eventId` is unique per
+ * trigger: a second job for the same event is never made) and the SHA-256 of the approved spec it was fired from.
+ */
+export type JobOrigin =
+  | { kind: "cli" }
+  | { kind: "schedule"; scheduleId: string; dueAt: string }
+  | { kind: "trigger"; triggerId: string; eventId: string; eventKind: "file-change" | "webhook"; approvedSha256: string };
 
 export interface JobProvider {
   endpoint?: string;
@@ -272,6 +279,8 @@ const OPERATION_ID = /^bg-[0-9a-f]{12}$/;
 const COMMIT = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const SCHEDULE_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
+const TRIGGER_ID = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const EVENT_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 
 /** `job-<12 hex>` and the operation id that goes with it: a new operation id is what makes the worktree fresh. */
@@ -342,7 +351,17 @@ function parseOrigin(label: string, value: unknown): JobOrigin {
     const o = strictObject(label, value, ["kind", "scheduleId", "dueAt"]);
     return { kind, scheduleId: text(`${label}.scheduleId`, o.scheduleId, 40, SCHEDULE_ID), dueAt: timestamp(`${label}.dueAt`, o.dueAt) };
   }
-  throw new RunnerStoreError(`${label}.kind must be one of cli, schedule.`);
+  if (kind === "trigger") {
+    const o = strictObject(label, value, ["kind", "triggerId", "eventId", "eventKind", "approvedSha256"]);
+    return {
+      kind,
+      triggerId: text(`${label}.triggerId`, o.triggerId, 63, TRIGGER_ID),
+      eventId: text(`${label}.eventId`, o.eventId, 64, EVENT_ID),
+      eventKind: oneOf(`${label}.eventKind`, o.eventKind, ["file-change", "webhook"] as const),
+      approvedSha256: text(`${label}.approvedSha256`, o.approvedSha256, 64, SHA256),
+    };
+  }
+  throw new RunnerStoreError(`${label}.kind must be one of cli, schedule, trigger.`);
 }
 
 function parseProvider(label: string, value: unknown): JobProvider {

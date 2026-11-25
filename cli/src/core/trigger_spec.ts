@@ -6,7 +6,7 @@
  * anything: there is no "allow this trigger", "auto-fire this trigger" or "widen this policy" key. Every field either
  * narrows what may run or records how tightly it is bounded.
  *
- * BG-3 itself (the trigger firer that watches files and HTTP) is deferred to v1.4. This module is the trust and abuse
+ * The trigger firer (trigger_firer.ts) imports this module. It is the trust and abuse
  * model that unblocks it: a firer built later imports `parseTriggerSpec`, `TriggerSpec`, `validateTriggerSpec`,
  * `defaultTriggerBounds` and the rate-limit constants from here and can trust that a spec it reads has already been
  * shaped and bounded by this code.
@@ -146,7 +146,9 @@ const ID_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const GLOB_RE = /^[^\0]*$/;
 const PATH_SEGMENT_BAD = /(\.\.|^\/|\/\.\.)/;
 const SECRET_RE = /^[A-Za-z0-9_-]+$/;
-const SECRET_ENV_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
+/** A webhook secret is read from, and withheld from workers as, a variable of this family only: a spec cannot name `PATH` or an endpoint setting. */
+export const SECRET_ENV_PREFIX = "NEXUS_TRIGGER_";
+const SECRET_ENV_RE = /^NEXUS_TRIGGER_[A-Z0-9_]{1,49}$/;
 const ORIGIN_RE = /^(https?:\/\/)?[^\s/]+$/;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -265,7 +267,7 @@ export function parseTriggerSpec(text: string, options?: { allowWorktreeWrite?: 
   let secretEnv: string | undefined;
   if (event.secretEnv !== undefined) {
     if (!isString(event.secretEnv) || !SECRET_ENV_RE.test(event.secretEnv))
-      fail("event.secretEnv must name an environment variable matching /^[A-Z][A-Z0-9_]{0,63}$/");
+      fail(`event.secretEnv must name an environment variable starting with ${SECRET_ENV_PREFIX} (for example NEXUS_TRIGGER_DEPLOY_SECRET), so a spec cannot name PATH, HOME or an endpoint setting`);
     secretEnv = event.secretEnv;
   }
 
@@ -297,7 +299,7 @@ export function parseTriggerSpec(text: string, options?: { allowWorktreeWrite?: 
   if (!isString(policy) || !TRIGGER_POLICIES.includes(policy as TriggerPolicy))
     fail(`action.policy must be one of ${TRIGGER_POLICIES.join(", ")}`);
   if (policy === "worktree-write" && !allowWorktreeWrite)
-    fail("action.policy worktree-write is refused unless the operator passed --allow-worktree-write");
+    fail("action.policy worktree-write is refused: v1.3.0 triggers are read-only (the allowWorktreeWrite parser option exists for tests; no command sets it)");
 
   let verifier: string | undefined;
   if (action.verifier !== undefined) {
