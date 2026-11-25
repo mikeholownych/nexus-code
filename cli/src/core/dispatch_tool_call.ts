@@ -6,7 +6,8 @@ import { type EffectClass } from "./capabilities.js";
 import { argsFingerprint } from "./operation_identity.js";
 import { PolicyContext } from "./approval_policy.js";
 import { isWorkspaceTrusted } from "../workspace_trust.js";
-import { ExecutionReceipt, InvocationContext, extractTargetResources } from "./spine.js";
+import { ExecutionReceipt, extractTargetResources } from "./spine.js";
+import { afterToolCall, executeToolCall } from "./tool_pipeline.js";
 import { repairJsonWithClass, isWriteOrExecTool } from "../parser.js";
 import { oneLine } from "../skills.js";
 import { VERIFICATION_CONFIG_PROTECTED, splitSubcommands, type VerificationEditContext, type VerificationShellChange } from "../security.js";
@@ -14,17 +15,11 @@ import { decideManagedCommand, describeSource, permitsEgressHost, type Effective
 import { approvalDecisionSource, clampApprovalSettings, humanRequirementForEffect, type HumanRequirement } from "./policy_runtime.js";
 import { sandboxNetworkNotice } from "../sandbox.js";
 import { sandboxDenialEvent, sandboxEngineLabel } from "../sandbox_events.js";
-import { hasExecutedTests, isVerifierDeliverableBound, isFilteredVerifierCommand } from "../tester.js";
-import { toolGroupOf } from "./tool_groups.js";
-import { judgeWithoutCopy, trustedDeliverablesFromBaseline } from "./independent_check.js";
-import { createHash } from "node:crypto";
-import { failedCheckFrom, attemptEvidence, recordAttempt, convergenceSignal, convergenceHistory } from "./objective.js";
 import { recordTestEdit, recordUnverifiableTestEdit } from "./regression_obligations.js";
-import { FILE_EDIT_TOOLS, describeChange, editTarget, snapshot } from "../file_diff.js";
 import { roleToolAllowList, roleToolDenyList } from "./roles.js";
 import { decideCommand, describePrefix, type CommandVerdict, type CommandRuleDecision } from "./command_rules.js";
 import { redactSecrets } from "../ui.js";
-import { MAY_OUTLIVE_COMMAND, ConfirmHandler, observationKey, egressOriginOf, READ_ONLY_TOOLS, logAudit } from "./agent_support.js";
+import { ConfirmHandler, observationKey, egressOriginOf, READ_ONLY_TOOLS } from "./agent_support.js";
 import { buildNeedsInput, type NeedsInputQuestion } from "./needs_input.js";
 import {
   skillConstraintsEnabled,
@@ -666,272 +661,19 @@ export async function dispatchToolCallImpl(this: any, call: ToolCall,
       return { receipt, shouldExit: false };
     }
   }
-  this.ui.startSpinner(`Executing ${toolName}...`);
-  await this.pluginManager.notifyToolCall(toolName, args);
-
-  const context: InvocationContext = {
-    workspaceRoot: this.config.workspace,
-    dryRun: this.config.dryRun,
-    readOnly: this.isReadOnly(),
-    bridge: this.bridge,
-    metadata: { actor, stepIndex: currentStep, verificationAuthority, sandbox: this.config.sandbox, sandboxProfile: this.config.sandboxProfile },
-    defaultHandler: async (tName, tArgs) => {
-      if (this.mcpManager.isMcpTool(tName)) {
-        return await this.mcpManager.executeMcpTool(tName, tArgs);
-      }
-      if (this.pluginManager.isCustomTool(tName)) {
-        return await this.pluginManager.executeCustomTool(tName, tArgs);
-      }
-      return await this.pluginManager.executeToolPipeline(
-        tName,
-        tArgs,
-        async (pipeArgs: any) => this.bridge.executeTool(tName, pipeArgs, verificationAuthority)
-      );
-    },
-  };
-
-  const effectiveTaskId = this.activeWorktree?.taskId || this.currentTaskId;
-  // Worktree task IDs scope tool authority and execution receipts, but durable state is
-  // intentionally keyed by the parent session ID (see checkpointDurableState). Keep the
-  // operation journal on that durable identity so recordOperationStart/End can find the
-  // state initialized before a speculative worktree is created.
-  const durableTaskId = this.currentTaskId;
-  if (typeof (this.client as any)?.setTaskId === "function") this.client.setTaskId(effectiveTaskId);
-  if (typeof (this.plannerClient as any)?.setTaskId === "function") this.plannerClient.setTaskId(effectiveTaskId);
-  if (typeof (this.coderClient as any)?.setTaskId === "function") this.coderClient.setTaskId(effectiveTaskId);
-  const operationSeq = ++this.operationSeq;
-  // A run_command that may run work past the call: its own `background` or `service_name`, or a command that
-  // backgrounds itself. Counted here, after approval (a denied call returned earlier and counts nothing): the turn is
-  // then never lifted to "no change", because the process can still write after the turn ends.
-  if (toolName === "run_command" && (args.background || args.service_name || MAY_OUTLIVE_COMMAND.test(String(args.command ?? "")))) this.turnBackgroundCommands++;
-  // The file as it is right before this operation (after any approval wait), so the reported diff is this
-  // operation's change only and never includes edits already in the working tree.
-  const watchesObligations = Boolean(this.objective?.obligations?.length);
-  const diffTarget = (this.observer?.onFileChange || watchesObligations) && !this.config.dryRun ? editTarget(toolName, args, this.config.workspace) : undefined;
-  const before = diffTarget ? snapshot(diffTarget) : undefined;
-  if (this.durable && this.stateManager && durableTaskId) {
-    try {
-      this.stateManager.recordOperationStart(durableTaskId, {
-        invocationId: call.id,
-        seq: operationSeq,
-        toolName,
-        targetResources: args.path ? [args.path] : (args.target_file ? [args.target_file] : undefined),
-        argsSummary: JSON.stringify(args).slice(0, 200),
-        argsHash: argsFingerprint(toolName, args),
-      });
-      if (reissuesInterrupted) this.interruptedCall = undefined;
-    } catch (err: any) {
-      this.reportPersistenceFailure("operation_start", err);
-    }
-  }
-
-  // Capture before every workspace-mutating operation, not just direct file
-  // tools. A successful run_command can change the candidate and set the
-  // unverified-change latch before a later file edit; waiting for that edit
-  // would then make captureChangeBaseline fail closed without a baseline.
-  // Subagents are intentionally non-durable, but their edits still need a
-  // pre-change verifier snapshot so the parent cannot mistake an unbound
-  // passing test run for independent verification.
-  if (FILE_EDIT_TOOLS.has(toolName) || this.mayWrite(toolName)) {
-    await this.captureChangeBaseline(onConfirm);
-  }
-  // A tool of a group not offered yet still runs (the model may know it from earlier); offer its group from now on.
-  const calledGroup = toolGroupOf(toolName);
-  if (calledGroup) this.enabledToolGroups.add(calledGroup);
-  const workspaceAvailableBeforeBytes = toolName === "run_command" && process.env.NEXUS_EVAL_TOOL_RECEIPTS === "1"
-    ? this.workspaceAvailableBytes()
-    : null;
-  let receipt: ExecutionReceipt;
-  try {
-    // activate_skill stamps attribution inside the handler; other tools inherit the current activation.
-    const priorAttr = toolName === "activate_skill" ? {} : skillAttr();
-    receipt = await this.spine.execute(
-      {
-        invocationId: call.id,
-        taskId: effectiveTaskId,
-        actor,
-        executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
-        toolName,
-        args,
-        stepIndex: currentStep,
-        skillAttribution: priorAttr,
-      },
-      context
-    );
-    if (toolName === "activate_skill" && receipt.success) {
-      receipt = { ...receipt, ...skillAttr() };
-    }
-    recordReceipt(receipt);
-  } finally {
-    this.syncVerificationAttempts();
-  }
-
-  if (toolName === "run_command" && actor === "agent" && process.env.NEXUS_EVAL_TOOL_RECEIPTS === "1") {
-    try {
-      const result = JSON.parse(receipt.output || "{}");
-      if (typeof result.command === "string" && typeof result.timed_out === "boolean") {
-        this.evaluationToolReceipts.push({
-          invocationId: `run-command-${dispatch}`,
-          tool: "run_command",
-          commandSha256: createHash("sha256").update(result.command).digest("hex"),
-          timeoutSecs: Number.isSafeInteger(args.timeout_secs) ? args.timeout_secs : 60,
-          exitCode: Number.isSafeInteger(result.exit_code) ? result.exit_code : null,
-          timedOut: result.timed_out,
-          workspaceAvailableBeforeBytes,
-          workspaceAvailableAfterBytes: this.workspaceAvailableBytes(),
-        });
-      }
-    } catch {
-      // An absent or malformed runner envelope is deliberately not evaluator evidence.
-    }
-  }
-
-  if (this.durable && this.stateManager && durableTaskId) {
-    try {
-      this.stateManager.recordOperationEnd(durableTaskId, call.id, {
-        success: receipt.success,
-        error: receipt.error,
-        outcomeUnknown: receipt.outcomeUnknown,
-      }, operationSeq);
-    } catch (err: any) {
-      this.reportPersistenceFailure("operation_end", err);
-    }
-  }
-
-  await this.pluginManager.notifyToolResult(toolName, {
-    success: receipt.success,
-    output: receipt.output,
-    error: receipt.error,
-  });
-  // A run_tests result is a verifier attempt on the current workspace (what a requirement's `verified` rests on).
-  if (toolName === "run_tests" && this.objective && this.durable) {
-    try {
-      const parsed = JSON.parse(receipt.output || "{}");
-      const state = this.verifierState();
-      if (state && typeof parsed.command === "string" && parsed.command !== "none" && !parsed.noVerifier) {
-        const rawOutput = typeof parsed.report === "string" ? parsed.report : (receipt.output || "");
-        const hasExecuted = hasExecutedTests(rawOutput);
-        const baselineTests = this.changeBaseline?.tests;
-        const isDeliverableBound = !this.verificationBaselineInvalidated && hasExecuted && isVerifierDeliverableBound(
-          this.config.workspace,
-          Array.from(this.modifiedFiles),
-          parsed.command,
-          rawOutput,
-          trustedDeliverablesFromBaseline(this.changeBaseline),
-          baselineTests ?? undefined,
-        );
-        const filtered = Boolean(args.filter) || isFilteredVerifierCommand(parsed.command);
-        // Without the copy run (task_completed does that): independent only when unmodified pre-change tests that
-        // failed before now pass. A configured verifier is the operator's check.
-        const configuredCommand = this.config.authoritativeVerifierCommand?.trim();
-        // With no change pending, the tests are the repository's own: a pass is independent of Nexus.
-        const changePending = this.modifiedFiles.size > 0 || this.hasPendingModifications;
-        const judged = !changePending || (configuredCommand && parsed.command === configuredCommand) ? undefined : judgeWithoutCopy(this.config.workspace, parsed.command, this.changeBaseline);
-        recordAttempt(this.objective, {
-          command: parsed.command,
-          ...state,
-          isDeliverableBound,
-          ...(judged ? { independent: judged !== "needs-copy" && judged.independent } : {}),
-          filtered,
-          status: parsed.passed === true && receipt.success && hasExecuted ? "PASSED" : "FAILED",
-          ...(parsed.passed === true ? {} : { failedCheck: failedCheckFrom(`${rawOutput}\n${receipt.error ?? ""}`), ...attemptEvidence(`${rawOutput}\n${receipt.error ?? ""}`, typeof parsed.exitCode === "number" ? parsed.exitCode : undefined, { timedOut: parsed.timedOut === true, executorFailed: parsed.executorFailed === true }) }),
-        }, undefined, rawOutput);
-        // VC-7: the DV-2 stop signal is judged on this path too, so a loop that only edits and calls run_tests (never
-        // task_completed) ends BLOCKED with its attempt history instead of waiting for the step limit.
-        if (this.objective && !this.turnConvergence) {
-          const signal = convergenceSignal(this.objective, this.config.continuation?.verifierConvergenceAttempts, parsed.command);
-          if (signal.state !== "converging") {
-            this.turnConvergenceUpTo = this.objective.verification.at(-1)?.n;
-            this.turnConvergence = { state: signal.state, evidence: signal.evidence, attempts: convergenceHistory(signal.attempts) };
-          }
-        }
-      }
-    } catch {}
-  }
-  // Track file modifications
-  if (receipt.success && ["write_file", "edit_file", "patch_file", "delete_file"].includes(toolName)) {
-    const p = args.path || args.target_file || args.file_path;
-    if (typeof p === "string" && p.trim()) {
-      this.modifiedFiles.add(path.resolve(this.config.workspace, p.trim()));
-    }
-  }
-  // Only a successful operation that actually changed its file is reported as a change.
-  if (diffTarget && before && receipt.success) {
-    try {
-      const display = path.relative(this.config.workspace, diffTarget) || path.basename(diffTarget);
-      const change = describeChange(display, before, snapshot(diffTarget));
-      if (change) {
-        this.modifiedFiles.add(diffTarget);
-        if (this.objective?.obligations?.length) {
-          const after = snapshot(diffTarget);
-          recordTestEdit(this.objective, { path: display, before: before.state === "text" ? before.content : "", after: after.state === "text" ? after.content : "" });
-        }
-        this.observer?.onFileChange?.({ dispatch, callId: call.id, tool: toolName, path: display, change });
-      }
-    } catch {}
-  }
-  // VR-3: a sandbox refusal is a typed receipt and flight record. Only structured denials from confinement code paths
-  // become events; text matching on arbitrary errors would mislabel ordinary failures as sandbox denials.
-  const sandboxEvent = receipt.sandboxEvents?.[0];
-  if (sandboxEvent) this.recordSandboxDenialEvent?.(sandboxEvent);
-
-  this.ui.stopSpinner(receipt.success);
-
-  logAudit({
-    workspace: this.config.workspace,
-    tool: toolName,
-    args,
-    success: receipt.success,
-    durationMs: receipt.durationMs,
-    error: receipt.error,
-  });
-
-  if (this.flightRecorder) {
-    this.flightRecorder.recordToolResult(
-      currentStep,
-      call.id,
-      toolName,
-      receipt.success,
-      receipt.output,
-      receipt.durationMs,
-      receipt.error
-    );
-    if (sandboxEvent) this.flightRecorder.recordSandboxDenial(currentStep, sandboxEvent);
-    if (toolName === "update_plan" && receipt.success) {
-      this.flightRecorder.recordDurableState(currentStep, {
-        plan: this.activePlan,
-      });
-    }
-    if (
-      receipt.success &&
-      ["write_file", "edit_file", "patch_file"].includes(toolName)
-    ) {
-      this.flightRecorder.recordFileDiff(
-        currentStep,
-        args.path || args.target_file || args.file_path || "unknown",
-        receipt.output,
-        args.replacements
-      );
-    }
-    if (toolName === "task_completed" && receipt.success) {
-      this.flightRecorder.recordSessionEnd(
-        args.summary || "Task completed.",
-        true,
-        this.totalTokens
-      );
-    }
-  }
-
-  this.ui.printToolResult(
+  const execution = await executeToolCall(this, {
+    call,
+    currentStep,
+    actor,
+    onConfirm,
     toolName,
-    receipt.success,
-    receipt.output,
-    receipt.error
-  );
-  this.observer?.onToolEnd?.({ dispatch, callId: call.id, tool: toolName, success: receipt.success, output: receipt.output, error: receipt.error });
-  if (receipt.success) this.turnRemovedObservations.delete(observationKey(toolName, call.function.arguments));
-
-  const shouldExit = toolName === "task_completed" && receipt.success;
-  return { receipt, shouldExit };
+    args,
+    dispatch,
+    verificationAuthority,
+    reissuesInterrupted,
+    skillAttr,
+    recordReceipt,
+  });
+  return afterToolCall(this, execution);
 }
 
