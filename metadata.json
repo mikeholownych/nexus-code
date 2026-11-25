@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M8AEDE4XNR4TR7AEB1YRWR8S",
+  "strategy": "manual-commit",
+  "branch": "v1/sec-codeql",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cli/src/core/hook_runner.ts",
+    "cli/src/core/hooks.ts",
+    "cli/src/tester.ts",
+    "cli/test/hook_runner.test.ts",
+    "cli/test/hooks_self_approval.test.ts",
+    "cli/test/runner_deadline.test.ts",
+    "cli/test/triggers_cli.test.ts",
+    "cli/test/verify_sandbox.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "redaction": {
+    "replacements": 0,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
