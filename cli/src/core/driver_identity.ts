@@ -83,3 +83,10 @@ export function withDerivedPause<T extends DurableOperationState>(state: T, read
   if (!verdict) return state;
   return { ...state, status: "PAUSED", pauseReason: state.pauseReason ? `${state.pauseReason} ${verdict.reason}` : verdict.reason };
 }
+
+/** The pid of a recorded driver that is provably alive and is not this process, else undefined. The lock may be gone; the record still names it. */
+export function liveForeignDriver(state: DurableOperationState, reader: ProcessIdentityReader = systemProcessIdentity, host = os.hostname()): number | undefined {
+  if (state.status !== "RUNNING" && state.status !== "WAITING") return undefined;
+  if (state.activePid === undefined || state.activePid === process.pid || isUndriven(state)) return undefined;
+  return staleDriver(state, reader, host) ? undefined : state.activePid;
+}

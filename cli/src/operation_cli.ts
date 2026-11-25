@@ -438,7 +438,7 @@ export function registerOperationCommands(program: Command): void {
         let ops: DurableOperationState[];
         try {
           ops = options.replay
-            ? (id ? [store.loadForReplay(id)] : store.listForReplay())
+            ? (id ? [store.loadForReplay(id)] : store.listForReplay()).map((state) => withDerivedPause(state))
             : (id ? [store.load(id)] : store.list()).map((state) => withDerivedPause(state));
         } catch (error: any) {
           console.error(pc.red(`Cannot read operation ${safeTerminal(id ?? "(all)")}: ${safeTerminal(String(error?.message ?? error))}`));
@@ -659,7 +659,7 @@ export function registerOperationCommands(program: Command): void {
         // A pipe is not a live view; render the current snapshot once so scripts get an answer instead of a hang.
         let state: DurableOperationState;
         try {
-          state = store.load(watchId);
+          state = withDerivedPause(store.load(watchId));
         } catch (error: any) {
           console.error(pc.red(`Cannot read operation ${safeTerminal(watchId)}: ${safeTerminal(String(error?.message ?? error))}`));
           process.exitCode = 2;
@@ -675,7 +675,7 @@ export function registerOperationCommands(program: Command): void {
       process.once("SIGINT", onSignal);
       try {
         const result = await watchOperation({
-          load: () => store.load(watchId),
+          load: () => withDerivedPause(store.load(watchId)),
           render: (state) =>
             renderOperationView(buildOperationView(state, { events: Math.floor(eventLimit) }), {
               width: process.stdout.columns ?? 0,

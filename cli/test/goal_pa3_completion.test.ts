@@ -193,3 +193,35 @@ test("the budget command is refused while another process drives the operation",
     f.cleanup();
   }
 });
+
+test("a symlinked state directory is protected under its real spelling, and a hard link to a state file is refused", async () => {
+  // Guards: taskStatePaths() (realpath spelling) and isHardLinkToTaskState() in security.ts.
+  const { SecurityManager } = await import("../src/security.js");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pa3c-link-"));
+  const real = path.join(root, "real-state");
+  const via = path.join(root, "home-link");
+  const workspace = path.join(root, "ws");
+  fs.mkdirSync(path.join(real, "tasks"), { recursive: true });
+  fs.mkdirSync(workspace);
+  fs.symlinkSync(real, via);
+  const saved = process.env.NEXUS_STATE_DIR;
+  process.env.NEXUS_STATE_DIR = via;
+  try {
+    const record = path.join(real, "tasks", "goal-1.json");
+    fs.writeFileSync(record, "{}");
+    const sm = new SecurityManager(workspace);
+    assert.equal(sm.isPathProtected(path.join(via, "tasks", "goal-1.json")).protected, true, "the configured spelling");
+    assert.equal(sm.isPathProtected(record).protected, true, "the real-path spelling");
+    const link = path.join(workspace, "innocent.txt");
+    const plain = path.join(workspace, "plain.txt");
+    fs.writeFileSync(plain, "x");
+    assert.equal(sm.isPathProtected(plain).protected, false, "control: an ordinary file");
+    fs.linkSync(record, link);
+    const verdict = sm.isPathProtected("innocent.txt");
+    assert.equal(verdict.protected, true, "a hard link is the same file");
+    assert.match(verdict.reason ?? "", /hard link/);
+  } finally {
+    if (saved === undefined) delete process.env.NEXUS_STATE_DIR; else process.env.NEXUS_STATE_DIR = saved;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

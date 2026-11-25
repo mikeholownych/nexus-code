@@ -24,8 +24,8 @@ import { computeCandidateIdentitySync } from "./candidate.js";
 import type { InferenceFailure } from "./turn.js";
 import { OperationRevalidator } from "./operation_runner_revalidation.js";
 import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./operation_runner_diagnostics.js";
-import type { OperationStore } from "./operation_runner_persistence.js";
-import { STALE_PAUSE_PREFIX, clearDriver, stampDriver, staleDriver } from "./driver_identity.js";
+import { OperationLockedError, type OperationStore } from "./operation_runner_persistence.js";
+import { STALE_PAUSE_PREFIX, clearDriver, liveForeignDriver, stampDriver, staleDriver } from "./driver_identity.js";
 import type { BoundaryRules } from "./boundary_rules.js";
 
 export { OperationStore, OperationLockedError, migrateLegacyAccountIdentities } from "./operation_runner_persistence.js";
@@ -865,6 +865,12 @@ function pauseForStaleDriver(state: DurableOperationState): string | undefined {
   return verdict.reason;
 }
 
+/** A record naming another live process as its driver is not ours to drive, even when its lock file has gone. */
+function refuseLiveForeignDriver(state: DurableOperationState): void {
+  const pid = liveForeignDriver(state);
+  if (pid !== undefined) throw new OperationLockedError(`Operation ${state.id} is recorded as driven by live pid ${pid} on ${state.activeHost} (its lock is not held); refusing a second driver.`);
+}
+
 export async function driveOperation(state: DurableOperationState, opts: DriveOptions): Promise<DurableOperationState> {
   const { store, signal, entry, prepare, resumeAfterDecision, ...runnerOpts } = opts;
   const release = store.acquire(state.id);
@@ -879,6 +885,7 @@ export async function driveOperation(state: DurableOperationState, opts: DriveOp
       // Refresh the identity for that handoff so the process that presented the decision is not mistaken for a second
       // crash. If this process dies during resumed work, its identity is stale on the next load.
       if (resumeAfterDecision && state.status !== "COMPLETE" && state.status !== "CANCELLED") stampDriver(state);
+      refuseLiveForeignDriver(state);
       pauseForStaleDriver(state);
     }
     prepare?.(state);

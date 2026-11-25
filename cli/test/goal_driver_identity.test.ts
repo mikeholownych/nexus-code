@@ -1,7 +1,7 @@
 import "./helpers/leak_guard.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -9,8 +9,8 @@ import { GoalOrchestrator } from "../src/goal.js";
 import { executeGoalCommand } from "../src/goal_command.js";
 import { createLedger } from "../src/core/objective.js";
 import { OperationLockedError, OperationStore, driveOperation, type WorkUnitExecutor } from "../src/core/operation_runner.js";
-import { stampDriver, staleDriver, withDerivedPause } from "../src/core/driver_identity.js";
-import { bootId, processStartTicks } from "../src/core/process_identity.js";
+import { liveForeignDriver, stampDriver, staleDriver, withDerivedPause } from "../src/core/driver_identity.js";
+import { bootId, processRunning, processStartTicks } from "../src/core/process_identity.js";
 import type { DurableOperationState } from "../src/core/operation.js";
 import type { ResourceDescriptor } from "../src/core/resources.js";
 import type { HarnessConfig } from "../src/types.js";
@@ -236,5 +236,73 @@ test("a platform that cannot prove a boot id or start time fails closed", () => 
     assert.equal(staleDriver(operation, { ...reader, startTicks: () => undefined })?.cause, "process_gone");
   } finally {
     void f.cleanup();
+  }
+});
+
+test("nexus operation watch, status --replay and --dag show a killed driver as PAUSED, not RUNNING", { skip: !linux && "driver identity needs /proc" }, async () => {
+  const f = fixture();
+  try {
+    const child = f.live();
+    const id = "goal-identity-cli";
+    seed(f, id, { activePid: child.pid, activeHost: host, activeBootId: boot, activeStartTicks: processStartTicks(child.pid)! });
+    await exited(child);
+    const cliDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+    const run = (...args: string[]) => {
+      const out = spawnSync(process.execPath, ["--import", "tsx", path.join(cliDir, "src/index.ts"), "operation", ...args, "-w", f.workspace], {
+        cwd: cliDir, encoding: "utf8", timeout: 60_000,
+        env: { ...process.env, HOME: f.stateDir, XDG_CONFIG_HOME: path.join(f.stateDir, ".config"), NEXUS_STATE_DIR: f.stateDir, NO_COLOR: "1" },
+      });
+      return `${out.stdout}${out.stderr}`;
+    };
+    for (const args of [["watch", id], ["status", id, "--replay", "--json"], ["status", id, "--dag"], ["status", id]]) {
+      const text = run(...args);
+      assert.match(text, /PAUSED/, args.join(" "));
+      assert.doesNotMatch(text.split("\n")[0] ?? "", /RUNNING/, `${args.join(" ")}: first line`);
+    }
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("a zombie driver (exited, not reaped) is gone: no start time, not running, its lock holder is not live", { skip: !linux && "driver identity needs /proc" }, async () => {
+  const f = fixture();
+  try {
+    // The shell backgrounds a child that exits at once, then becomes `sleep`, which never reaps it.
+    const parent = spawn("sh", ["-c", "sh -c 'exit 0' & echo $!; exec sleep 60"], { stdio: ["ignore", "pipe", "ignore"] });
+    f.children.push(parent);
+    const zombie = await new Promise<number>((resolve) => parent.stdout!.once("data", (chunk) => resolve(Number(String(chunk).trim()))));
+    const deadline = Date.now() + 5_000;
+    while (!fs.readFileSync(`/proc/${zombie}/stat`, "utf8").includes(") Z") && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+    assert.match(fs.readFileSync(`/proc/${zombie}/stat`, "utf8"), /\) Z/, "setup: a real zombie");
+    assert.equal(processStartTicks(zombie), undefined);
+    assert.equal(processRunning(zombie), false);
+    assert.equal(processRunning(parent.pid!), true, "control: the live parent is running");
+
+    const id = "goal-identity-zombie";
+    seed(f, id, { activePid: zombie, activeHost: host, activeBootId: boot, activeStartTicks: "123" });
+    fs.writeFileSync(path.join(f.store.manager.getBaseDir(), `${id}.lock`), JSON.stringify({ pid: zombie, host, at: new Date().toISOString() }));
+    assert.equal(f.store.activeLock(id), undefined, "a zombie does not hold the lock");
+    assert.match(new GoalOrchestrator(f.config, { store: f.store, resources: f.resources }).list()[0].reason ?? "", /no longer running/);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("a record naming another live process as its driver is refused even when no lock file exists", { skip: !linux && "driver identity needs /proc" }, async () => {
+  const f = fixture();
+  try {
+    const child = f.live();
+    const id = "goal-identity-nolock";
+    seed(f, id, { activePid: child.pid, activeHost: host, activeBootId: boot, activeStartTicks: processStartTicks(child.pid)! });
+    const { calls, executor } = counting();
+    await assert.rejects(driveOperation(f.store.load(id), { store: f.store, executor, workspace: f.workspace, entry: "existing" }), new RegExp(`live pid ${child.pid}`));
+    assert.deepEqual(calls, [], "no unit ran under a second driver");
+    assert.equal(f.store.load(id).status, "RUNNING");
+    // This process as the recorded driver is not "foreign".
+    const own = seed(f, "goal-identity-own", {});
+    stampDriver(own);
+    assert.equal(liveForeignDriver(own), undefined);
+  } finally {
+    await f.cleanup();
   }
 });

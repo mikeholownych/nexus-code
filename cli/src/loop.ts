@@ -469,6 +469,8 @@ export class LoopOrchestrator {
           ...(this.options.onEvent ? { onEvent: this.options.onEvent } : {}),
           ...(this.options.maxInProcessWaitMs !== undefined ? { maxInProcessWaitMs: this.options.maxInProcessWaitMs } : {}),
           entry: "existing",
+          // A loop continues its own iteration operation, so a stale-driver pause on it is overridden here: the loop was
+          // started or resumed by the operator and re-drives only the iteration it owns. These are not goals (`goal-` ids).
           prepare: (fresh) => { if (fresh.status === "PAUSED") fresh.status = fresh.wait ? "WAITING" : "RUNNING"; },
         });
       } catch (error) {

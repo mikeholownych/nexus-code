@@ -20,15 +20,36 @@ export interface ProcessIdentityReader {
   bootId(): string | undefined;
 }
 
-/** When the kernel started `pid` (field 22 of its stat line), or undefined when it is gone or this is not Linux. */
+/**
+ * When the kernel started `pid` (field 22 of its stat line), or undefined when it is gone or this is not Linux.
+ * A zombie (state Z) or dead (X) process has exited and runs nothing, so it counts as gone.
+ */
 export function processStartTicks(pid: number): string | undefined {
   if (!Number.isSafeInteger(pid) || pid <= 0) return undefined;
   try {
     const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
     // The command name (field 2) may contain spaces and parentheses, so fields are counted after its closing one.
-    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] || undefined;
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    if (fields[0] === "Z" || fields[0] === "X") return undefined;
+    return fields[19] || undefined;
   } catch {
     return undefined;
+  }
+}
+
+/** Whether `pid` is a running process: signalable and not a zombie. Where `/proc` cannot say, the signal decides. */
+export function processRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+  } catch (err: any) {
+    return err?.code === "EPERM";
+  }
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const state = stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3);
+    return state !== "Z" && state !== "X";
+  } catch {
+    return true;
   }
 }
 
