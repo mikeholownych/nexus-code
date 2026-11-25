@@ -26,6 +26,7 @@ import {
   type WorkerResult,
 } from "./runner_store.js";
 import { scrubUnattendedEnv, UnattendedApprovalPolicy, UnattendedClampError, unattendedConfig } from "./unattended.js";
+import { STALE_PAUSE_PREFIX } from "./driver_identity.js";
 
 /** The event log stops growing here; one last line says so. */
 export const EVENT_LOG_LIMIT = 16 * 1024 * 1024;
@@ -160,6 +161,7 @@ export async function runJobWorker(id: string, options: JobWorkerOptions = {}): 
         // a crashed job's resumption is the supervised retry, and nobody is at a terminal to resume it. The executor's
         // recovery of an interrupted tool call still applies. (Goals never take this path: `/goal resume` is explicit.)
         ...(existing ? { prepare: (fresh: DurableOperationState) => {
+          if (fresh.status === "PAUSED" && fresh.pauseReason?.startsWith(STALE_PAUSE_PREFIX)) return;
           if (fresh.status === "CANCELLED") fresh.status = "RUNNING";
           else if (fresh.status === "PAUSED") fresh.status = fresh.wait ? "WAITING" : "RUNNING";
           fresh.policy.maxWaitMs = Math.max(1, Math.min(fresh.policy.maxWaitMs, remainingMs));

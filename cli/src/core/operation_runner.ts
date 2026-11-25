@@ -1081,6 +1081,13 @@ export async function driveOperation(state: DurableOperationState, opts: DriveOp
       if (resumeAfterDecision && state.status !== "COMPLETE" && state.status !== "CANCELLED") stampDriver(state);
       refuseLiveForeignDriver(state);
       pauseForStaleDriver(state);
+      // If a stale-driver pause was applied and this is not an explicit operator resume, do not allow the prepare
+      // hook to override it. Unattended job/loop resumptions must not silently clear a stale pause; the operator
+      // must explicitly acknowledge and resume.
+      if (state.status === "PAUSED" && state.pauseReason?.startsWith(STALE_PAUSE_PREFIX) && !resumeAfterDecision) {
+        store.save(state);
+        return state;
+      }
     }
     prepare?.(state);
     if (state.status === "PAUSED" && state.pauseReason?.startsWith(STALE_PAUSE_PREFIX)) {

@@ -10,6 +10,7 @@ import type { DurableLoopCondition, DurableLoopIteration, DurableLoopState, Dura
 import { TeamOrchestrator } from "./team.js";
 import type { ResourceDescriptor } from "./core/resources.js";
 import type { HarnessConfig } from "./types.js";
+import { STALE_PAUSE_PREFIX } from "./core/driver_identity.js";
 
 export const LOOP_ID_PREFIX = "loop-";
 export const DEFAULT_LOOP_MAX_ITERATIONS = 3;
@@ -469,9 +470,10 @@ export class LoopOrchestrator {
           ...(this.options.onEvent ? { onEvent: this.options.onEvent } : {}),
           ...(this.options.maxInProcessWaitMs !== undefined ? { maxInProcessWaitMs: this.options.maxInProcessWaitMs } : {}),
           entry: "existing",
+          resumeAfterDecision: true,
           // A loop continues its own iteration operation, so a stale-driver pause on it is overridden here: the loop was
           // started or resumed by the operator and re-drives only the iteration it owns. These are not goals (`goal-` ids).
-          prepare: (fresh) => { if (fresh.status === "PAUSED") fresh.status = fresh.wait ? "WAITING" : "RUNNING"; },
+          prepare: (fresh) => { if (fresh.status === "PAUSED" && fresh.pauseReason?.startsWith(STALE_PAUSE_PREFIX)) return; if (fresh.status === "PAUSED") fresh.status = fresh.wait ? "WAITING" : "RUNNING"; },
         });
       } catch (error) {
         if (error instanceof OperationLockedError) return { id, status: "RUNNING", state: this.load(id) };
