@@ -1,6 +1,6 @@
 /**
- * BG-1/BG-2: whether an operator verifier command may be used on an unattended job. Shared by schedule add, fire-time
- * submission, and inbox `submissionProblem`, so a hand-written request cannot skip the checks the CLI applies.
+ * BG-1/BG-2: what the operator's verifier command must look like. Shared by every place a verifier is accepted (a job
+ * submission, a schedule at add and at fire, and the runner when it reads a request), so no route is looser than another.
  */
 import * as os from "node:os";
 import * as path from "node:path";
