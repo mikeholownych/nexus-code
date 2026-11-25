@@ -13,5 +13,10 @@
     "schema_version": 1,
     "schemaSha256": "371d3cea1e49dac7b9b819f5bac82529fbd549ce0f6165ea595bf20f36c93a37",
     "note": "BG-2 review: the receipt's `verifier` gains the optional members `status` (the verifier run the operation recorded, or NOT_RUN) and `detail` (what NOT_RUN means), so a job whose verifier never ran says so. Version stays 1: both members are optional additions to a report and nothing published changed meaning."
+  },
+  {
+    "schema_version": 1,
+    "schemaSha256": "fe8944ac0e8135db03f959c4eb690d727d1277ca2473795e6a8f4c5dd790748c",
+    "note": "BG-3: the receipt of a job an event trigger started gains the optional `trigger_id` and `trigger_event` {id, kind, approved_sha256}. Version stays 1: both are optional additions to a report and nothing published changed meaning."
   }
 ]

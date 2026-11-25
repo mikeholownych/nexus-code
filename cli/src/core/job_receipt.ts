@@ -41,6 +41,10 @@ export interface JobReceipt {
   schedule_id: string | null;
   /** The slot of the schedule this job stands for (for a catch-up, the last slot that was missed); absent for a job started by hand. */
   schedule_occurrence?: string;
+  /** BG-3: the trigger that started this job; absent for a job started by hand or by a schedule. */
+  trigger_id?: string;
+  /** BG-3: the one event the job stands for, and the SHA-256 of the approved spec it was fired from. */
+  trigger_event?: { id: string; kind: "file-change" | "webhook"; approved_sha256: string };
   /** No operator was present: no call was approved by a person, and none was approved "always". */
   unattended: true;
   workspace: string;
@@ -162,6 +166,7 @@ export function buildJobReceipt(job: JobRecord, operation: DurableOperationState
     job_id: job.id,
     schedule_id: job.origin.kind === "schedule" ? job.origin.scheduleId : null,
     ...(job.origin.kind === "schedule" ? { schedule_occurrence: job.origin.dueAt } : {}),
+    ...(job.origin.kind === "trigger" ? { trigger_id: job.origin.triggerId, trigger_event: { id: job.origin.eventId, kind: job.origin.eventKind, approved_sha256: job.origin.approvedSha256 } } : {}),
     unattended: true,
     workspace: job.workspace,
     base_commit: job.baseCommit,

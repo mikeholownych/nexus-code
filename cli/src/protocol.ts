@@ -145,6 +145,8 @@ export type SidecarEvent =
         mode: "auto" | "review" | "read-only";
         sandbox: string;
         trusted: boolean;
+        /** The effective sandbox profile (`:workspace`, `:read-only`, `:network` or `unconfined`); additive (SB-1). */
+        profile?: string;
       };
     }
   | { type: "assistant.delta"; turn_id: string; text: string }

@@ -38,5 +38,10 @@
     "protocol": 1,
     "schemaSha256": "3e6303a93bfb521b1beb13d2e4ad2fd0ab713f1aa6006c1d0dd787a241b532f3",
     "note": "Add the error codes UNAUTHORIZED, NOT_CONTROLLER and NOT_PERMITTED for the optional unix-socket transport (sidecar --listen); additive, protocol stays 1, and the stdio transport never sends them."
+  },
+  {
+    "protocol": 1,
+    "schemaSha256": "15ac74eb0d8e812b2c449e0863c97441242f983fa938722a2a1cd1e2d7bdce2d",
+    "note": "SB-1: session.state posture gains the optional string profile (the effective sandbox profile: :workspace, :read-only, :network or unconfined); additive, protocol stays 1. An older client ignores the field; a newer client that finds none from an older sidecar shows no profile."
   }
 ]

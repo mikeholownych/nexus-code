@@ -82,7 +82,7 @@ This supersedes v1.2.1 unit RD-5 (ACP server mode), which moves here.
 |---|---|---|---|---|
 | BG-1 | Detached runner: a user-level job runner that owns durable operations so a run survives its CLI process (decision D15: a documented `systemd --user` unit versus a self-daemonizing mode); foreground mode unchanged | kill the CLI, the run continues and resumes cleanly; the SI-7 kill test passes against the runner | L | P1 |
 | BG-2 | Schedules: a spec (trigger `cron`, `every` or `once`; objective ledger id; `max_rounds`; timeout; policy `read-only` or `worktree-write`; optional deterministic wake `check` command with hard limits, reference opencode `schedule/check.ts:23-39`: 30 s, 20 tool calls, 32 KB, cannot create schedules or worktrees) stored beside operations (`next_due_at`, `remaining_runs`, `last_outcome` as in opencode `core/src/schedule/sql.ts`); `nexus schedule add\|list\|rm\|run-now`; each run in a fresh worktree; unattended flag in every receipt; no allow-always; delivery is a receipt plus a pointer file | a scheduled run on a seeded failing verifier ends BLOCKED and says so; an unattended run asking for approval is denied, not blocked forever; missed runs are reported, not silently skipped | L | P1 |
-| BG-3 | Event triggers (file change, webhook) | deferred: needs a trust and abuse model first | M | P2 (v1.4) |
+| BG-3 | Event triggers (file change, webhook) | in scope (owner, 2026-11-24): trust model (#803) and firer (`docs/TRIGGERS.md`); read-only, experimental | M | P2 |
 
 ### GV: governance
 

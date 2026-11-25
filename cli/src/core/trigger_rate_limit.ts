@@ -28,6 +28,7 @@
  * file it persists to `DEFAULT_PROTECTED_PATHS` in security.ts (an agent that can rewrite it can reset the limits).
  */
 
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { TRIGGER_RATE_CEILING, validTriggerRate, type TriggerRate } from "./trigger_spec.js";
 
@@ -134,6 +135,12 @@ export class TriggerRateLimiter {
     this.cooldownMs = (options?.cooldownMinutes ?? DEFAULT_QUARANTINE_COOLDOWN_MINUTES) * MINUTE_MS;
   }
 
+  /** Whether any admitted firing is still inside the last day: such a window must not be forgotten. */
+  public hasLiveWindow(nowMs: number): boolean {
+    pruneDay(this.admittedAt, nowMs);
+    return this.admittedAt.length > 0;
+  }
+
   /** The rate the limiter enforces. */
   public currentRate(): TriggerRate {
     return { ...this.rate };
@@ -178,7 +185,6 @@ export class TriggerRateLimiter {
     if (gated) return { admitted: false, reason: gated };
 
     insertAscending(this.admittedAt, t);
-    this.consecutiveFailures = 0;
     return { admitted: true };
   }
 
@@ -190,6 +196,11 @@ export class TriggerRateLimiter {
     const quarantine = this.activeQuarantine(t);
     if (quarantine) return { admitted: false, reason: "quarantined", quarantined: quarantine };
     return this.fail(t, reason, reason);
+  }
+
+  /** A completed trigger job resets the consecutive run-failure count; admission alone is not a success. */
+  public recordSuccess(): void {
+    this.consecutiveFailures = 0;
   }
 
   /** Release a quarantine (the operator's action; also the only way out of a fail-closed restore). */
@@ -333,7 +344,9 @@ export class WorkspaceRateLimiter {
     if (this.quarantines.size >= this.maxQuarantines && !this.quarantines.has(key))
       return { admitted: false, reason: "limiter state full" };
 
-    const limiter = this.limiterFor(workspace, triggerId, rate);
+    const limiter = this.limiterFor(workspace, triggerId, rate, t);
+    if (!limiter) return { admitted: false, reason: "limiter state full" };
+    if (!this.workspaceRoom(workspace, t)) return { admitted: false, reason: "limiter state full" };
     const decision = limiter.checkAndRecord(now, (nowMs) => this.workspaceReason(workspace, nowMs));
     if (decision.admitted) this.recordWorkspaceAdmission(workspace, t);
     this.mirrorQuarantine(key, limiter, now);
@@ -342,10 +355,24 @@ export class WorkspaceRateLimiter {
 
   /** Records a failure the firer observed (crash, gate denial). Counts toward the trigger's quarantine. */
   public recordFailure(workspace: string, triggerId: string, rate: TriggerRate, now: Date, reason: string): RateLimitDecision {
-    const limiter = this.limiterFor(workspace, triggerId, rate);
+    const key = limiterKey(workspace, triggerId);
+    const t = now.getTime();
+    if (!Number.isFinite(t)) return { admitted: false, reason: "invalid clock" };
+    if (this.quarantines.size >= this.maxQuarantines) this.purgeExpiredQuarantines(t);
+    if (this.quarantines.size >= this.maxQuarantines && !this.quarantines.has(key)) return { admitted: false, reason: "limiter state full" };
+    const limiter = this.limiterFor(workspace, triggerId, rate, t);
+    if (!limiter) return { admitted: false, reason: "limiter state full" };
     const decision = limiter.recordFailure(now, reason);
     this.mirrorQuarantine(limiterKey(workspace, triggerId), limiter, now);
     return decision;
+  }
+
+  /** A successful trigger job breaks the failure streak without changing its admission window. */
+  public recordSuccess(workspace: string, triggerId: string, now: Date): void {
+    const limiter = this.limiters.get(limiterKey(workspace, triggerId));
+    if (!limiter) return;
+    limiter.recordSuccess();
+    this.mirrorQuarantine(limiterKey(workspace, triggerId), limiter, now);
   }
 
   /** The operator's release of one trigger's quarantine (the firer's `nexus triggers release`). */
@@ -427,24 +454,49 @@ export class WorkspaceRateLimiter {
     return allValid;
   }
 
-  /** Get or create the limiter for (`workspace`, `triggerId`), at the spec's current `rate`. */
-  private limiterFor(workspace: string, triggerId: string, rate: TriggerRate): TriggerRateLimiter {
+  /**
+   * Get or create the limiter for (`workspace`, `triggerId`), at the spec's current `rate`. At capacity a limiter is
+   * evicted only when its window is empty (nothing admitted in the last day, no quarantine: forgetting it forgets
+   * nothing); when every held limiter has a live window the new one is refused (undefined) rather than letting a
+   * rotation of ids reset a cap.
+   */
+  private limiterFor(workspace: string, triggerId: string, rate: TriggerRate, nowMs: number): TriggerRateLimiter | undefined {
     const key = limiterKey(workspace, triggerId);
     let limiter = this.limiters.get(key);
     if (limiter) {
       this.limiters.delete(key); // least-recently-used order
     } else {
+      if (this.limiters.size >= this.maxLimiters && !this.evictIdleLimiter(nowMs)) return undefined;
       limiter = new TriggerRateLimiter(rate);
       const surviving = this.quarantines.get(key);
       if (surviving) limiter.adoptQuarantine(surviving);
     }
     limiter.setRate(rate);
     this.limiters.set(key, limiter);
-    while (this.limiters.size > this.maxLimiters) {
-      const oldest = this.limiters.keys().next().value as string;
-      this.limiters.delete(oldest); // a live quarantine survives in `this.quarantines`
-    }
     return limiter;
+  }
+
+  private evictIdleLimiter(nowMs: number): boolean {
+    for (const [key, limiter] of this.limiters) {
+      if (limiter.hasLiveWindow(nowMs) || limiter.quarantineState(new Date(nowMs))) continue;
+      this.limiters.delete(key);
+      return true;
+    }
+    return false;
+  }
+
+  /** Whether a workspace window exists or can be made without discarding a live one. */
+  private workspaceRoom(workspace: string, nowMs: number): boolean {
+    const key = canonicalWorkspace(workspace);
+    if (this.workspaceAdmits.has(key) || this.workspaceAdmits.size < this.maxWorkspaces) return true;
+    for (const [other, stamps] of this.workspaceAdmits) {
+      pruneDay(stamps, nowMs);
+      if (stamps.length === 0) {
+        this.workspaceAdmits.delete(other);
+        return true;
+      }
+    }
+    return false;
   }
 
   private mirrorQuarantine(key: string, limiter: TriggerRateLimiter, now: Date): void {
@@ -457,7 +509,7 @@ export class WorkspaceRateLimiter {
   }
 
   private workspaceReason(workspace: string, nowMs: number): string | undefined {
-    const stamps = this.workspaceAdmits.get(workspace);
+    const stamps = this.workspaceAdmits.get(canonicalWorkspace(workspace));
     if (!stamps) return undefined;
     pruneDay(stamps, nowMs);
     const counts = countWindows(stamps, nowMs);
@@ -466,18 +518,27 @@ export class WorkspaceRateLimiter {
       : undefined;
   }
 
-  private recordWorkspaceAdmission(workspace: string, nowMs: number): void {
+  private recordWorkspaceAdmission(workspaceGiven: string, nowMs: number): void {
+    const workspace = canonicalWorkspace(workspaceGiven);
     let stamps = this.workspaceAdmits.get(workspace);
     if (stamps) this.workspaceAdmits.delete(workspace); else stamps = [];
     insertAscending(stamps, nowMs);
     this.workspaceAdmits.set(workspace, stamps);
-    while (this.workspaceAdmits.size > this.maxWorkspaces) this.workspaceAdmits.delete(this.workspaceAdmits.keys().next().value as string);
+  }
+}
+
+/** The workspace as its real path (a path that does not exist is used as given), so two spellings of one directory share a window. */
+function canonicalWorkspace(workspace: string): string {
+  if (!workspace || !path.isAbsolute(workspace)) throw new Error("the workspace must be an absolute path");
+  try {
+    return fs.realpathSync(workspace);
+  } catch {
+    return path.normalize(workspace);
   }
 }
 
 function limiterKey(workspace: string, triggerId: string): string {
-  if (!workspace || !path.isAbsolute(workspace)) throw new Error("the workspace must be an absolute real path");
-  return `${workspace}\u0000${triggerId}`;
+  return `${canonicalWorkspace(workspace)}\u0000${triggerId}`;
 }
 
 function validKey(value: unknown): value is string {
