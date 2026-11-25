@@ -28,7 +28,7 @@ import { allProviders, providerSource } from "./providers.js";
 import { effortLevels } from "./core/models_snapshot.js";
 import { mcpConfigFiles } from "./mcp.js";
 import { isBwrapAvailable, sandboxHomeMounts, sandboxNetworkEnabled, sandboxWorkspaceOverlays } from "./sandbox.js";
-import { describeSandboxPosture } from "./sandbox_profile.js";
+import { describeSandboxPosture, parseSandboxValue } from "./sandbox_profile.js";
 import { pluginDirs } from "./plugins.js";
 import { policyFindings, processPolicyReport } from "./policy_cli.js";
 import { USER_POLICY_FILE_NAME } from "./core/managed_policy_load.js";
@@ -595,8 +595,17 @@ const shellCheck: Check = async (ctx, signal) => {
 };
 
 /** Effective confinement posture and the residual holes it does not close (SB-1). */
+/** The engine word of a raw `--sandbox` value (`bwrap:network` gives `bwrap`, `:read-only` gives none); a value that does not parse gives none. */
+function flagEngine(raw: unknown): string | boolean | undefined {
+  if (raw === undefined || raw === null || raw === false) return undefined;
+  if (raw === true) return true;
+  try { return parseSandboxValue(String(raw)).engine; } catch { return undefined; }
+}
+
 const sandboxCheck: Check = async (ctx) => {
-  const sandbox = ctx.config?.sandbox ?? ctx.flags.sandbox;
+  // The resolved configuration decides: its `sandbox` is what the tools launch from, and undefined means no engine (a bare
+  // profile such as :read-only names none). The raw flag is read only when there is no configuration, and then without its profile.
+  const sandbox = ctx.config ? ctx.config.sandbox : flagEngine(ctx.flags.sandbox);
   const posture = describeSandboxPosture({
     sandbox,
     readOnly: Boolean(ctx.config?.approvalMode === "read-only" || ctx.flags.readOnly),
