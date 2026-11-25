@@ -81,8 +81,16 @@ scope changes unavailable in read-only mode.
 
 ## Integrity of goal state
 
-Goal state, caps and stall counts live in `<state dir>/tasks/<id>.json` (`NEXUS_STATE_DIR` or `~/.nexus`), mode 0600. Integrity rests on that file mode and on the agent's file tools refusing the directory (it is a protected path, like the runner's). It is not signed. A command the agent runs **without `--sandbox` runs with the operator's rights and can rewrite goal state**, including its caps, stall counts and driver identity; under `--sandbox` shell writes there are blocked. Use `--sandbox` for untrusted work. A hand-edited record is still loaded fail-closed: a malformed field is refused and an incomplete driver identity pauses the goal, but a careful edit that is internally consistent is accepted. No signature scheme is added.
-- No inference-provider or homelab-ai changes are required. Provider-neutral end-to-end qualification remains separate.
+Goal state, caps and stall counts live in `<state dir>/tasks/<id>.json` (`NEXUS_STATE_DIR` or `~/.nexus`), mode 0600. Integrity rests on that file mode and on three refusals; it is not signed.
+
+What holds:
+- The agent's **file tools** (read, write, edit, delete, batch read) refuse the directory under both its configured and its real-path spelling (a symlinked `$HOME`), and refuse a hard link to a state file (device and inode compared). The advisory command check (`isCommandBlocked`) does **not** look at it.
+- Under **`--sandbox`** (bwrap) the real task-state directory is masked, for commands and for the sandboxed worker, whether the workspace is elsewhere, is `$HOME`, or contains it. A sandboxed command can neither read nor write it. Docker mounts only the workspace, so it needs no mask unless the workspace itself contains the state directory.
+- A hand-edited record is loaded fail-closed: a malformed field is refused and an incomplete driver identity pauses the goal. A careful, internally consistent edit is accepted.
+
+What does not hold: a command the agent runs **without `--sandbox`** runs with the operator's rights and can rewrite goal state, including caps, stall counts and driver identity, and can run `nexus operation budget`. Use `--sandbox` for untrusted work. No signature scheme is added.
+
+A record naming another live process as its driver is refused by `driveOperation` even when its lock file is gone; a zombie driver counts as gone. Unattended job and loop resumes override the stale pause (issue #807); `/goal resume` does not.
 
 ## Reference coding
 
