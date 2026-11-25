@@ -31,7 +31,9 @@ impl PostureInfo {
     /// (an unconfined session with the sandbox off, or the legacy `none` text).
     pub fn profile_to_show(&self) -> Option<&str> {
         let profile = self.profile.as_deref()?;
-        if self.sandbox.starts_with(profile) || (profile == "unconfined" && matches!(self.sandbox.as_str(), "off" | "none")) {
+        if self.sandbox.starts_with(profile)
+            || (profile == "unconfined" && matches!(self.sandbox.as_str(), "off" | "none"))
+        {
             return None;
         }
         Some(profile)
@@ -616,8 +618,14 @@ mod tests {
         };
         assert_eq!(posture("off", Some("unconfined")).profile_to_show(), None);
         assert_eq!(posture("none", Some("unconfined")).profile_to_show(), None);
-        assert_eq!(posture("off", Some(":read-only")).profile_to_show(), Some(":read-only"));
-        assert_eq!(posture("none", Some(":read-only")).profile_to_show(), Some(":read-only"));
+        assert_eq!(
+            posture("off", Some(":read-only")).profile_to_show(),
+            Some(":read-only")
+        );
+        assert_eq!(
+            posture("none", Some(":read-only")).profile_to_show(),
+            Some(":read-only")
+        );
         assert_eq!(posture("off", None).profile_to_show(), None);
     }
 
