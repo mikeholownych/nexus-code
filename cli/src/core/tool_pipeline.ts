@@ -1,10 +1,21 @@
 /**
- * The execution and post-execution phases of `dispatchToolCallImpl` (MT-2 slice 3a).
- * These helpers preserve the caller's side-effect order; approval and admission remain in the dispatcher.
+ * The extracted argument, admission, execution, and post-execution phases of `dispatchToolCallImpl`.
+ * These helpers preserve the caller's side-effect order; approval decisions remain in the dispatcher.
  */
 import { createHash } from "node:crypto";
 import * as path from "node:path";
 import type { ToolCall } from "../types.js";
+import { normalizeToolArguments } from "./tool_arguments.js";
+import { forbiddenDeletion } from "../tools.js";
+import { repairJsonWithClass, isWriteOrExecTool } from "../parser.js";
+import { roleToolAllowList, roleToolDenyList } from "./roles.js";
+import { extractTargetResources, type ExecutionReceipt } from "./spine.js";
+import * as fs from "node:fs";
+import {
+  skillConstraintsEnabled,
+  resolveSkillToolAllowed,
+  skillIntegrityMode,
+} from "./skill_activation.js";
 import { FILE_EDIT_TOOLS, describeChange, editTarget, snapshot } from "../file_diff.js";
 import { hasExecutedTests, isFilteredVerifierCommand, isVerifierDeliverableBound } from "../tester.js";
 import type { ConfirmHandler } from "./agent_support.js";
@@ -20,9 +31,249 @@ import { recordTestEdit } from "./regression_obligations.js";
 import { toolGroupOf } from "./tool_groups.js";
 import { MAY_OUTLIVE_COMMAND, logAudit, observationKey } from "./agent_support.js";
 import { argsFingerprint } from "./operation_identity.js";
-import type { ExecutionReceipt, InvocationContext } from "./spine.js";
+import type { InvocationContext } from "./spine.js";
 
 type FileSnapshot = ReturnType<typeof snapshot>;
+
+export function parseToolArguments(call: ToolCall): { args: any; structurallyRepaired: boolean } {
+  const toolName = call.function.name;
+  let args: any = {};
+  let structurallyRepaired = (call as any).repaired === "structural";
+
+  try {
+    args =
+      typeof call.function.arguments === "string"
+        ? JSON.parse(call.function.arguments)
+        : call.function.arguments;
+  } catch {
+    if (typeof call.function.arguments === "string") {
+      try {
+        const { value, repaired } = repairJsonWithClass(call.function.arguments);
+        if (repaired === "structural") structurallyRepaired = true;
+        args = value && typeof value === "object" ? value : { raw: call.function.arguments };
+      } catch {
+        structurallyRepaired = true;
+        args = toolName === "task_completed" ? {} : { raw: call.function.arguments };
+      }
+    } else {
+      args = toolName === "task_completed" ? {} : { raw: call.function.arguments };
+    }
+  }
+
+  return { args, structurallyRepaired };
+}
+
+/** Argument normalization and the pre-approval admission checks, in their original order. */
+export function admitToolCall(
+  this: any,
+  call: ToolCall,
+  currentStep: number,
+  actor: "agent" | "subagent",
+  toolName: string,
+  args: any,
+  structurallyRepaired: boolean,
+): { args: any } | { receipt: ExecutionReceipt; shouldExit: boolean } {
+  if (structurallyRepaired && isWriteOrExecTool(toolName)) {
+    return {
+      receipt: {
+        invocationId: call.id,
+        taskId: this.activeWorktree?.taskId || this.currentTaskId,
+        actor,
+        executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+        capabilityId: this.capabilityRegistry.getByToolName(toolName)?.id || toolName,
+        toolName,
+        targetResources: [],
+        success: false,
+        output: "",
+        error: `Tool call "${toolName}" rejected: arguments required structural JSON repair (truncated or unclosed string/bracket). Re-issue the call with complete valid JSON arguments.`,
+        durationMs: 0,
+        candidateMutated: false,
+        status: "DENIED",
+        timestamp: new Date().toISOString(),
+        simulated: Boolean(this.config.dryRun),
+      },
+      shouldExit: false,
+    };
+  }
+
+  args = normalizeToolArguments(toolName, args, this.getEffectiveTools());
+
+  const skillAttr = () => this.skillActivations?.attribution?.() ?? {};
+  const recordReceipt = (receipt: ExecutionReceipt) => {
+    this.lastToolReceipts = [...(this.lastToolReceipts || []), receipt].slice(-32);
+    return receipt;
+  };
+
+  // Delegated authority is checked at the dispatcher as well as when schemas are built. This is the
+  // enforcement point for malformed/native/text tool calls and extension tools alike.
+  if (this.delegatedToolAllowList && !this.delegatedToolAllowList.has(toolName)) {
+    return {
+      receipt: recordReceipt({
+        invocationId: call.id,
+        taskId: this.activeWorktree?.taskId || this.currentTaskId,
+        actor,
+        executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+        capabilityId: this.capabilityRegistry.getByToolName(toolName)?.id || toolName,
+        toolName,
+        targetResources: extractTargetResources(toolName, args),
+        success: false,
+        output: "",
+        error: `Delegation authority denied tool '${toolName}'.`,
+        durationMs: 0,
+        candidateMutated: false,
+        status: "DENIED",
+        denialReason: "DELEGATION_AUTHORITY",
+        timestamp: new Date().toISOString(),
+        simulated: Boolean(this.config.dryRun),
+        ...skillAttr(),
+      }),
+      shouldExit: false,
+    };
+  }
+
+  // A restricted role is refused any tool outside its allow-list, whatever the model was told or claims. A write or
+  // exec call in read-only mode is left to the read-only check, which refuses it with its own reason.
+  const roleAllowed = roleToolAllowList(this.role);
+  const roleDenied = roleToolDenyList(this.role);
+  const denyListed = Boolean(roleDenied?.has(toolName));
+  if (denyListed || (roleAllowed && !roleAllowed.has(toolName) && !(this.isReadOnly() && isWriteOrExecTool(toolName)))) {
+    return {
+      receipt: recordReceipt({
+        invocationId: call.id,
+        taskId: this.activeWorktree?.taskId || this.currentTaskId,
+        actor,
+        executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+        capabilityId: this.capabilityRegistry.getByToolName(toolName)?.id || toolName,
+        toolName,
+        targetResources: [],
+        success: false,
+        output: "",
+        error: denyListed
+          ? `Tool "${toolName}" is not available to role '${this.role}': tools that reach outside the task (${[...roleDenied!].join(", ")}) are not part of that role. Do the work with the tools you have, or report what you could not do.`
+          : `Tool "${toolName}" is not permitted for role '${this.role}'. Permitted tools: ${[...roleAllowed!].join(", ")}.`,
+        durationMs: 0,
+        candidateMutated: false,
+        status: "DENIED",
+        timestamp: new Date().toISOString(),
+        simulated: Boolean(this.config.dryRun),
+        ...skillAttr(),
+      }),
+      shouldExit: false,
+    };
+  }
+
+  // WP-GS-03: optional skill constraint intersection (never expands session authority).
+  if (toolName !== "activate_skill" && skillConstraintsEnabled()) {
+    const cur = this.skillActivations?.current?.();
+    if (cur && !resolveSkillToolAllowed(toolName, cur.constraints)) {
+      return {
+        receipt: recordReceipt({
+          invocationId: call.id,
+          taskId: this.activeWorktree?.taskId || this.currentTaskId,
+          actor,
+          executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+          capabilityId: this.capabilityRegistry.getByToolName(toolName)?.id || toolName,
+          toolName,
+          targetResources: extractTargetResources(toolName, args),
+          success: false,
+          output: "",
+          error: `Skill constraint denied: tool '${toolName}' is not permitted while skill '${cur.skillName}' is active.`,
+          durationMs: 0,
+          candidateMutated: false,
+          status: "DENIED",
+          denialReason: "SKILL_CONSTRAINT",
+          timestamp: new Date().toISOString(),
+          simulated: Boolean(this.config.dryRun),
+          ...skillAttr(),
+        }),
+        shouldExit: false,
+      };
+    }
+  }
+
+  // WP-GS-02 live integrity: block tools if activated skill file drifted.
+  if (toolName !== "activate_skill" && skillIntegrityMode() === "live") {
+    const cur = this.skillActivations?.current?.();
+    if (cur) {
+      const check = this.skillActivations.liveIntegrityBlocked(() => {
+        try {
+          const raw = fs.readFileSync(cur.sourcePath, "utf8");
+          const close = raw.indexOf("\n---", 3);
+          if (raw.startsWith("---") && close > 0) return raw.slice(close + 4).trim();
+          return raw.trim();
+        } catch {
+          return null;
+        }
+      });
+      if (check.blocked) {
+        return {
+          receipt: recordReceipt({
+            invocationId: call.id,
+            taskId: this.activeWorktree?.taskId || this.currentTaskId,
+            actor,
+            executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+            capabilityId: this.capabilityRegistry.getByToolName(toolName)?.id || toolName,
+            toolName,
+            targetResources: [],
+            success: false,
+            output: "",
+            error: check.reason || "SKILL_INTEGRITY",
+            durationMs: 0,
+            candidateMutated: false,
+            status: "DENIED",
+            denialReason: "SKILL_INTEGRITY",
+            timestamp: new Date().toISOString(),
+            simulated: Boolean(this.config.dryRun),
+            ...skillAttr(),
+          }),
+          shouldExit: false,
+        };
+      }
+    }
+  }
+
+  try {
+    const isPublicEgress = ["search_web", "fetch_web", "browser_navigate", "browser_type"].includes(toolName);
+    if (!isPublicEgress) {
+      const serialized = JSON.stringify(args);
+      const restored = this.securityManager.getVault().restore(serialized, { isAuthorizedSink: true });
+      if (restored !== serialized) {
+        args = JSON.parse(restored);
+      }
+    }
+  } catch {}
+
+  if (this.flightRecorder) {
+    this.flightRecorder.recordToolCall(currentStep, call.id, toolName, args);
+  }
+
+  // Safety guard against dangerous deletion targets: denied before dispatch or any approval prompt.
+  const refusedDeletion = toolName === "delete_file" ? forbiddenDeletion(this.config.workspace, String(args.path || "")) : null;
+  if (refusedDeletion) {
+    return {
+      receipt: {
+        invocationId: call.id,
+        taskId: this.activeWorktree?.taskId || this.currentTaskId,
+        actor,
+        executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+        capabilityId: this.capabilityRegistry.getByToolName(toolName)?.id || "fs_delete",
+        toolName,
+        targetResources: extractTargetResources(toolName, args),
+        success: false,
+        output: "",
+        error: `${refusedDeletion}.`,
+        durationMs: 0,
+        candidateMutated: false,
+        status: "DENIED",
+        timestamp: new Date().toISOString(),
+        simulated: Boolean(this.config.dryRun),
+      },
+      shouldExit: false,
+    };
+  }
+
+  return { args };
+}
 
 export interface ToolExecutionInput {
   call: ToolCall;
