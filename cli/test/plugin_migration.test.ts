@@ -152,7 +152,8 @@ test("a policy refusal beats an approval", async () => {
   await disabled.pm.loadPlugins();
   assert.deepEqual(names(disabled.pm), ["mine"]);
   assert.equal(status(disabled.pm, file), "policy-refused");
-  assert.match(disabled.notices.join("\n"), new RegExp(`managed policy disables plugins from the workspace\\. \\[policy: system ${FAKE_SYSTEM.replace(/[.]/g, "\\.")} plugins\\.disable_workspace\\]`));
+  // Literal substring (not RegExp): avoids CodeQL js/incomplete-sanitization on path escaping.
+  assert.ok(disabled.notices.join("\n").includes(`managed policy disables plugins from the workspace. [policy: system ${FAKE_SYSTEM} plugins.disable_workspace]`));
 
   const notListed = manager({ policy: () => effective(toml("[plugins]", `allow = ["sha256:${mineSha}"]`)) });
   await notListed.pm.loadPlugins();
