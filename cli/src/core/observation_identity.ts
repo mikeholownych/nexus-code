@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { isPathStrictlyWithin, pathEscapesRoot } from "../path_within.js";
 
 /**
  * Resource identity of workspace file reads, independent of the interface that performed them: `read_file`,
@@ -66,9 +67,9 @@ export function normalizeWorkspacePath(workspace: string, p: string, cwd = works
   if (typeof p !== "string" || !p.trim()) return undefined;
   const root = path.resolve(workspace);
   const abs = path.resolve(cwd, p.trim());
-  const rel = path.relative(root, abs);
-  if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return undefined;
-  return rel.split(path.sep).join("/");
+  // Strictly below workspace; `..hid` is inside (#800).
+  if (!isPathStrictlyWithin(abs, root)) return undefined;
+  return path.relative(root, abs).split(path.sep).join("/");
 }
 
 const positive = (v: unknown): number | undefined => (typeof v === "number" && Number.isInteger(v) && v >= 1 ? v : undefined);
@@ -89,8 +90,7 @@ export function shellReadRequest(command: string, workspace: string, cwd = works
   if (cd) {
     const target = unquote(cd[1]);
     const rel = path.resolve(cwd, target);
-    const fromRoot = path.relative(path.resolve(workspace), rel);
-    if (fromRoot.startsWith("..") || path.isAbsolute(fromRoot)) return undefined;
+    if (pathEscapesRoot(rel, path.resolve(workspace))) return undefined;
     dir = rel;
     rest = rest.slice(cd[0].length).trim();
   }

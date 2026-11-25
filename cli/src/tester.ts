@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { operatorSetting } from "./client.js";
 import { buildMcpEnvironment } from "./mcp.js";
 import { extractCompilerDiagnostics, Diagnostic } from "./diagnostics.js";
+import { pathEscapesRoot } from "./path_within.js";
 
 export interface TestRunResult {
   command: string;
@@ -443,7 +444,8 @@ export function typecheckSignatures(check: Pick<DiscoveredTypecheck, "configPath
   return parseTypecheckDiagnostics(output).located.map(({ file, text }) => {
     const abs = path.isAbsolute(file) ? file : path.resolve(bases[1], file);
     const rel = path.relative(root, abs);
-    return `${rel.startsWith("..") ? file : rel}\n${text}`;
+    // Prefer workspace-relative form; `..hid` is inside (#800), not an escape.
+    return `${pathEscapesRoot(abs, root) ? file : rel}\n${text}`;
   });
 }
 

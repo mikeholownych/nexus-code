@@ -8,6 +8,7 @@
 import * as crypto from "node:crypto";
 import * as path from "node:path";
 import { ancestryProblem } from "../safe_fs.js";
+import { isPathStrictlyWithin } from "../path_within.js";
 
 export class WorktreePathError extends Error {
   constructor(message: string) {
@@ -118,8 +119,8 @@ export function resolveWorktreePath(input: ResolveInput): { path: string; root: 
   if (!path.isAbsolute(rendered)) throw new WorktreePathError("rendered worktree path is not absolute");
   const target = path.resolve(rendered);
   const root = allowedRoot(input.repoPath, input.layout);
-  const relative = path.relative(root, target);
-  const inside = relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+  // Strictly below allowed root; `..hid` under the root is inside (#800).
+  const inside = isPathStrictlyWithin(target, root);
   if (!inside && !input.allowOutside) {
     throw new WorktreePathError(`worktree path is outside ${input.layout === "nexus" ? ".nexus/worktrees/" : "the repository's parent directory"}; refusing (operator config worktree.allowOutside overrides)`);
   }

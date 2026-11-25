@@ -10,6 +10,7 @@ import { redactPlain } from "./protocol.js";
 import { MAX_SHARED_RESOURCE_CAPACITY, SharedResourceAdmission, type ResourceSlotLease } from "./core/shared_resource_admission.js";
 import { OFFERED_POSITION_ENCODINGS, DEFAULT_POSITION_ENCODING, TextLines, negotiatedEncoding, rangeToModel, toEncoded, type PositionEncoding } from "./lsp_positions.js";
 import { findProjectRoot, rootLabel, type RootRule } from "./lsp_roots.js";
+import { isPathWithin, pathEscapesRoot } from "./path_within.js";
 
 const LSP_TOOLCHAIN_VARS = ["RUSTUP_HOME", "CARGO_HOME", "RUSTUP_TOOLCHAIN", "GOPATH", "GOROOT", "GOCACHE", "GOMODCACHE"];
 /**
@@ -412,16 +413,10 @@ function realOrNull(p: string): string | null {
   }
 }
 
-/** The containment rule for documents; `child` and `root` are real paths. */
-const outsideRoot = (root: string, child: string): boolean => {
-  const rel = path.relative(root, child);
-  return rel.startsWith("..") || path.isAbsolute(rel);
-};
+/** The containment rule for documents; `child` and `root` are real paths. `..hid` is inside (#800). */
+const outsideRoot = (root: string, child: string): boolean => pathEscapesRoot(child, root);
 
-const isInside = (parent: string, child: string): boolean => {
-  const rel = path.relative(parent, child);
-  return rel === "" || (rel !== ".." && !rel.startsWith(".." + path.sep) && !path.isAbsolute(rel));
-};
+const isInside = (parent: string, child: string): boolean => isPathWithin(child, parent);
 
 /**
  * The environment a language server starts with: the MCP allowlist (no credentials) plus the toolchain locations the

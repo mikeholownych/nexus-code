@@ -17,6 +17,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { redactSecrets } from "../ui.js";
 import { mkdirVerified, SafePathError } from "../safe_fs.js";
+import { isPathWithin } from "../path_within.js";
 import { findEntry, shownPath, WorktreeError, type CommandResult, type WorktreeContext } from "./core.js";
 import { git } from "./git.js";
 import { currentEntry, openRepo } from "./repo.js";
@@ -54,8 +55,8 @@ function ancestors(rel: string): string[] {
 }
 
 function insideOrEqual(parent: string, child: string): boolean {
-  const rel = path.relative(parent, child);
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  // `..hid` under parent is inside (#800).
+  return isPathWithin(child, parent);
 }
 
 class CopyLimitError extends Error {}

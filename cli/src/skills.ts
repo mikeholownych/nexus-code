@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
+import { pathEscapesRoot } from "./path_within.js";
 import { redactSecrets } from "./ui.js";
 import { watcherSkillDirs, skillSymlinkPolicy } from "./core/skill_activation.js";
 
@@ -328,8 +329,7 @@ export class SkillManager {
         try {
           const real = fs.realpathSync(filePath);
           const root = context.isWorkspace ? this.workspace : os.homedir();
-          const rel = path.relative(path.resolve(root), real);
-          if (rel.startsWith("..") || path.isAbsolute(rel)) {
+          if (pathEscapesRoot(real, path.resolve(root))) {
             if (symlinkPolicy === "deny") return;
             console.warn(
               `⚠️ Skill '${name}' resolves outside ${context.isWorkspace ? "workspace" : "HOME"} (${real}); treating as untrusted instructions.`

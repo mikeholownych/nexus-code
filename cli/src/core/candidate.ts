@@ -10,6 +10,7 @@ import { execFileSync } from "node:child_process";
 import { verifyCheckout } from "./checkout_trust.js";
 import { CandidateMutationEvent, CandidateMutationHook } from "./spine.js";
 import { TOOLCHAIN_PREFIX, UNVERIFIED_UNTRUSTED, defaultVersionProbe, type VersionProbe } from "../material_deps.js";
+import { isPathWithin } from "../path_within.js";
 
 export type CandidateFileStatus = "modified" | "added" | "deleted" | "untracked" | "typechange";
 
@@ -1085,9 +1086,8 @@ export class CandidateTracker {
                 ? path.resolve(rawPath)
                 : path.resolve(resolvedWs, rawPath);
 
-              const rel = path.relative(resolvedWs, resolvedTarget);
-              const isInside = !rel.startsWith("..") && !path.isAbsolute(rel);
-              if (isInside) {
+              // `..hid` under the workspace is inside (#800).
+              if (isPathWithin(resolvedTarget, resolvedWs)) {
                 touchesCandidate = true;
                 break;
               }

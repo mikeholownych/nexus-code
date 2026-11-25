@@ -15,6 +15,7 @@ import {
   extractTargetResources,
 } from "./spine.js";
 import { CapabilityRegistry, defaultRegistry } from "./capabilities.js";
+import { isPathWithin, pathEscapesRoot } from "../path_within.js";
 
 export type AuthorityScope = "exact" | "subtree" | "workspace" | "full_access";
 
@@ -633,8 +634,7 @@ export class AuthorityAdmissionEngine {
     if ((capId === "proc_exec" || capId === "command_execution" || request.toolName === "run_command") && request.args?.cwd) {
       const cwdStr = String(request.args.cwd).trim();
       const targetCwd = path.isAbsolute(cwdStr) ? path.normalize(cwdStr) : path.resolve(wsRoot, cwdStr);
-      const rel = path.relative(wsRoot, targetCwd);
-      if (rel.startsWith("..") || path.isAbsolute(rel)) {
+      if (pathEscapesRoot(targetCwd, wsRoot)) {
         return {
           confined: false,
           reason: `RES-002: Security Violation: Working directory '${cwdStr}' escapes workspace jail.`,
@@ -652,9 +652,8 @@ export class AuthorityAdmissionEngine {
         ? path.normalize(cleanPath)
         : path.resolve(wsRoot, cleanPath);
 
-      // Verify path stays within workspaceRoot (RES-004)
-      const relToWs = path.relative(wsRoot, absTarget);
-      if (relToWs.startsWith("..") || path.isAbsolute(relToWs)) {
+      // Verify path stays within workspaceRoot (RES-004). `..hid` is inside (#800).
+      if (pathEscapesRoot(absTarget, wsRoot)) {
         return {
           confined: false,
           reason: `RES-004: Security Violation: Path '${cleanPath}' escapes workspace jail.`,
@@ -688,8 +687,7 @@ export class AuthorityAdmissionEngine {
         }
         const matchesSubtree = allowedResources.some((r) => {
           const absAllowed = path.isAbsolute(r) ? path.normalize(r) : path.resolve(wsRoot, r);
-          const rel = path.relative(absAllowed, absTarget);
-          return !rel.startsWith("..") && !path.isAbsolute(rel);
+          return isPathWithin(absTarget, absAllowed);
         });
         if (!matchesSubtree) {
           return {

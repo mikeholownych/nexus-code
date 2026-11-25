@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { InformationFlowBoundary } from "./core/egress.js";
 import { ensurePrivateDir, writePrivateFile } from "./core/durable_file.js";
+import { pathEscapesRoot } from "./path_within.js";
 import pc from "picocolors";
 
 export interface ConsoleLogMessage {
@@ -95,9 +96,8 @@ export class BrowserDriver {
       const filePath = targetUrl.startsWith("file://") ? targetUrl.replace("file://", "") : targetUrl;
       const absPath = path.isAbsolute(filePath) ? path.normalize(filePath) : path.resolve(this.workspace, filePath);
 
-      // Verify workspace confinement (RES-001, RES-002)
-      const relToWs = path.relative(this.workspace, absPath);
-      if (relToWs.startsWith("..") || path.isAbsolute(relToWs)) {
+      // Verify workspace confinement (RES-001, RES-002). `..hid` is inside (#800).
+      if (pathEscapesRoot(absPath, this.workspace)) {
         this.consoleLogs.push({
           type: "error",
           text: `Security Violation: Local file navigation escaped workspace confinement: ${targetUrl}`,
@@ -116,8 +116,7 @@ export class BrowserDriver {
           // Check canonical realpath to prevent symlink traversal
           const realTarget = fs.realpathSync(absPath);
           const realWs = fs.realpathSync(this.workspace);
-          const realRel = path.relative(realWs, realTarget);
-          if (realRel.startsWith("..") || path.isAbsolute(realRel)) {
+          if (pathEscapesRoot(realTarget, realWs)) {
             this.consoleLogs.push({
               type: "error",
               text: `Security Violation: Symlink escaped workspace confinement: ${targetUrl}`,
@@ -260,9 +259,8 @@ export class BrowserDriver {
     const filename = outputPath || path.join(outDir, `screenshot-${Date.now()}.png`);
     const resolvedPath = path.isAbsolute(filename) ? path.normalize(filename) : path.resolve(this.workspace, filename);
 
-    // Verify workspace confinement (RES-001, RES-002)
-    const rel = path.relative(this.workspace, resolvedPath);
-    if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    // Verify workspace confinement (RES-001, RES-002). `..hid` is inside (#800).
+    if (pathEscapesRoot(resolvedPath, this.workspace)) {
       throw new Error(`Security Violation: Screenshot output path escapes workspace jail: ${outputPath}`);
     }
 
