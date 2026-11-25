@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01UUrmuwABRrBpYkSY2aUW4c",
+  "agent_id": "af9c758e5e74da609",
+  "subagent_type": "reviewer",
+  "task_description": "Hostile review PR #805 hooks allowlist",
+  "token_usage": {
+    "input_tokens": 60,
+    "cache_creation_tokens": 79961,
+    "cache_read_tokens": 1891678,
+    "output_tokens": 26062,
+    "api_call_count": 30
+  },
+  "started_at": "2026-11-24T23:42:49.158661464Z",
+  "completed_at": "2026-11-24T23:51:35.211184226Z"
+}

@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01DDaBpby5YBMc5USsPiMBQE",
+  "agent_id": "a40cb1aaaefbcb27b",
+  "subagent_type": "reviewer",
+  "task_description": "Review PR #804 MT-2 registry",
+  "token_usage": {
+    "input_tokens": 72,
+    "cache_creation_tokens": 94041,
+    "cache_read_tokens": 2489907,
+    "output_tokens": 28392,
+    "api_call_count": 36
+  },
+  "started_at": "2026-11-24T23:29:07.281960134Z",
+  "completed_at": "2026-11-24T23:45:18.370972568Z"
+}

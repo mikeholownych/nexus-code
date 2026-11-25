@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01V18grc6q37SCBioWiKW7JJ",
+  "agent_id": "ad50109815f450d81",
+  "subagent_type": "reviewer",
+  "task_description": "Security review PR #803 BG-3 trust",
+  "token_usage": {
+    "input_tokens": 46,
+    "cache_creation_tokens": 87598,
+    "cache_read_tokens": 1568699,
+    "output_tokens": 21314,
+    "api_call_count": 23
+  },
+  "started_at": "2026-11-24T23:44:55.165597541Z",
+  "completed_at": "2026-11-24T23:54:29.567914879Z"
+}
