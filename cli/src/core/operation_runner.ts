@@ -1065,6 +1065,12 @@ function refuseLiveForeignDriver(state: DurableOperationState): void {
   if (pid !== undefined) throw new OperationLockedError(`Operation ${state.id} is recorded as driven by live pid ${pid} on ${state.activeHost} (its lock is not held); refusing a second driver.`);
 }
 
+function shouldBlockStalePause(state: DurableOperationState, resumeAfterDecision: boolean | undefined): boolean {
+  const resume = resumeAfterDecision === true;
+  const hasStalePause = state.status === "PAUSED" && state.pauseReason?.startsWith(STALE_PAUSE_PREFIX) === true;
+  return hasStalePause && !resume;
+}
+
 export async function driveOperation(state: DurableOperationState, opts: DriveOptions): Promise<DurableOperationState> {
   const { store, signal, entry, prepare, resumeAfterDecision, ...runnerOpts } = opts;
   const release = store.acquire(state.id);
@@ -1075,22 +1081,16 @@ export async function driveOperation(state: DurableOperationState, opts: DriveOp
       state = store.load(state.id);
     }
     if (entry === "existing") {
-      // `operation decide` records the operator's choice, then resumes under a new driver lock in this same process.
-      // Refresh the identity for that handoff so the process that presented the decision is not mistaken for a second
-      // crash. If this process dies during resumed work, its identity is stale on the next load.
       if (resumeAfterDecision && state.status !== "COMPLETE" && state.status !== "CANCELLED") stampDriver(state);
       refuseLiveForeignDriver(state);
       pauseForStaleDriver(state);
-      // If a stale-driver pause was applied and this is not an explicit operator resume, do not allow the prepare
-      // hook to override it. Unattended job/loop resumptions must not silently clear a stale pause; the operator
-      // must explicitly acknowledge and resume.
-      if (state.status === "PAUSED" && state.pauseReason?.startsWith(STALE_PAUSE_PREFIX) && !resumeAfterDecision) {
+      if (shouldBlockStalePause(state, resumeAfterDecision)) {
         store.save(state);
         return state;
       }
     }
     prepare?.(state);
-    if (state.status === "PAUSED" && state.pauseReason?.startsWith(STALE_PAUSE_PREFIX)) {
+    if (shouldBlockStalePause(state, resumeAfterDecision)) {
       store.save(state);
       return state;
     }
