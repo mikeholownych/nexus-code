@@ -33,5 +33,10 @@
     "schema_version": 3,
     "schemaSha256": "5b284ddc2abab71ab9f47176107fe1cc8f79c74bfa2d9a544dcac3acf726ac17",
     "note": "Additive, schema_version stays 3 (VR-3 sandbox denial receipts). New optional sandboxEvents member on the result: typed refusals with kind, engine, profile, operation, category, reason and at. Older documents omit it; no member was removed, renamed, or changed type or meaning. A denial is evidence only: it never raises a verdict and the engine-unavailable reason still maps to BLOCKED."
+  },
+  {
+    "schema_version": 3,
+    "schemaSha256": "07f6b5dd053dd75d3088a4743efdaae2765f03fe58475fd8cc96948d0538ae06",
+    "note": "Description-only update: clarify that sandbox denial profile labels reflect SB-1 named profiles when present and default otherwise. The schema structure and validation contract are unchanged; schema_version remains 3."
   }
 ]

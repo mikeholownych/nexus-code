@@ -18,5 +18,10 @@
     "schema_version": 4,
     "schemaSha256": "bafcd99e7a1d7d958b700f0e9c8cff0cebdc6f4a3b8113f8767e55cdca095de8",
     "note": "The `_nexus/verify` result names what it covered: three new required members, `workspace` (the canonical path of the session's directory, as in the receipt), `base_pinned_commit` and `base_pinned_at` (the commit the change was measured from and when this process pinned it for that workspace). Requests are unchanged. Additive for a client that reads results; v1, v2 and v3 remain unchanged."
+  },
+  {
+    "schema_version": 4,
+    "schemaSha256": "83cde247b7904d0e1e52b873c483bf848fa377af33445859c379f80d6c4b56bc",
+    "note": "Description-only update: clarify that sandbox denial profile labels reflect SB-1 named profiles when present and default otherwise. The schema structure and validation contract are unchanged; schema_version remains 4."
   }
 ]

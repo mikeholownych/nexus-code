@@ -36,7 +36,7 @@ test("structured sandbox denials become typed receipt and flight events through 
   flight.startSession({ model: "test-model", endpoint: "local-test", taskPrompt: "deny me" });
   const recorded: any[] = [];
   const agent: any = {
-    config: { workspace: dir, sandbox: "bwrap" },
+    config: { workspace: dir, sandbox: "bwrap", sandboxProfile: ":workspace" },
     flightRecorder: flight,
     ui: { stopSpinner() {}, printToolCall() {}, startSpinner() {}, printToolResult() {} },
     activity() {},
@@ -71,8 +71,9 @@ test("structured sandbox denials become typed receipt and flight events through 
     durationMs: 1,
     sandboxDenial: { kind: "unavailable", category: "engine", reason: "No supported sandbox engine is available." },
   };
+  let seenContext: any;
   agent.spine = {
-    execute: async () => ({
+    execute: async (_invocation: unknown, context: any) => (seenContext = context, {
       invocationId: "c1", taskId: "t1", actor: "agent", executionDomain: "agent_orchestration",
       capabilityId: "run_command", toolName: "run_command", targetResources: [],
       success: false, output: "", error: receipt.error, durationMs: 1, candidateMutated: false,
@@ -87,6 +88,8 @@ test("structured sandbox denials become typed receipt and flight events through 
   assert.equal(out.receipt.sandboxEvents?.length, 1);
   assert.deepEqual([out.receipt.sandboxEvents![0].kind, out.receipt.sandboxEvents![0].engine, out.receipt.sandboxEvents![0].category, out.receipt.sandboxEvents![0].profile], ["unavailable", "bwrap", "engine", "default"]);
   assert.equal(recorded.length, 1);
+  // SB-1: dispatch hands the session's named profile to the spine, which stamps it on the denial event.
+  assert.equal(seenContext.metadata.sandboxProfile, ":workspace");
 
   const replayed = FlightPlayer.loadFlight(dir, "vr3-dispatch");
   const denial = replayed.events.find((entry) => entry.type === "sandbox_unavailable");
@@ -200,4 +203,22 @@ test("ExecutionSpine converts structured sandboxDenial into receipt sandboxEvent
   assert.equal(receipt.sandboxEvents?.[0].operation, "run_command");
   assert.equal(receipt.sandboxEvents?.[0].profile, "default");
   assert.ok(!("verdict" in (receipt.sandboxEvents?.[0] ?? {})));
+});
+
+test("ExecutionSpine stamps the session's sandbox profile on the denial event, and only falls back to default when none is given", async () => {
+  const spine = new ExecutionSpine();
+  spine.registerHandler("run_command", async () => ({
+    success: false,
+    output: "",
+    error: "Configured sandbox violation: filesystem-isolated shell execution is unavailable.",
+    sandboxDenial: { kind: "unavailable" as const, category: "engine" as const, reason: "No supported sandbox engine is available." },
+  }));
+  const run = (metadata: Record<string, unknown>) => spine.execute(
+    { invocationId: "inv-p", taskId: "task-p", toolName: "run_command", args: { command: "echo hi" } },
+    { workspaceRoot: "/tmp/ws", metadata },
+  );
+  assert.equal((await run({ sandbox: "bwrap", sandboxProfile: ":network" })).sandboxEvents?.[0].profile, ":network");
+  assert.equal((await run({ sandbox: "bwrap", sandboxProfile: ":read-only" })).sandboxEvents?.[0].profile, ":read-only");
+  assert.equal((await run({ sandbox: "bwrap" })).sandboxEvents?.[0].profile, "default");
+  assert.equal((await run({ sandbox: "bwrap", sandboxProfile: undefined })).sandboxEvents?.[0].profile, "default");
 });

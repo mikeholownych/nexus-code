@@ -88,7 +88,8 @@ import { persistableEndpoint } from "./core/endpoint_identity.js";
 import { clampAlwaysApproval } from "./core/managed_policy.js";
 import { SessionSocketServer, listeningLine } from "./session_socket.js";
 import { realpathAllowingMissing, socketRuntimeDir, socketRuntimeDirPath } from "./core/socket_files.js";
-import { hideDirectoryFromSandbox, isPathWithin } from "./sandbox.js";
+import { hideDirectoryFromSandbox, isPathWithin, sandboxNetworkEnabled } from "./sandbox.js";
+import { describeSandboxPosture, sandboxPostureText } from "./sandbox_profile.js";
 
 export interface SidecarOptions {
   app: ApplicationCore;
@@ -1376,7 +1377,8 @@ export class SidecarServer {
     const facts = surfaceFacts(this.app, this.sessionId);
     const git = getGitInfo(config.workspace);
     const trusted = isWorkspaceTrusted(config.workspace, Boolean(config.readOnly));
-    const sandboxStatus = config.sandbox ? (typeof config.sandbox === "string" ? config.sandbox : "on") : "off";
+    // SB-1: the one describer, as /status and `nexus doctor` use it.
+    const sandboxInput = { sandbox: config.sandbox, readOnly: config.approvalMode === "read-only", network: sandboxNetworkEnabled(), profile: config.sandboxProfile };
     return {
       type: "session.state",
       workspace: config.workspace,
@@ -1392,8 +1394,9 @@ export class SidecarServer {
       endpoint_kind: facts.endpoint_kind,
       posture: {
         mode: facts.mode,
-        sandbox: sandboxStatus,
+        sandbox: sandboxPostureText(sandboxInput),
         trusted,
+        profile: describeSandboxPosture(sandboxInput).profile,
       },
     };
   }
