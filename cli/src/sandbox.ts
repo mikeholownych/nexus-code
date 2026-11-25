@@ -4,7 +4,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { buildCommandEnvironment } from "./command_env.js";
 import { operatorSetting } from "./client.js";
-import { defaultTaskStateDir } from "./core/state.js";
 import { sandboxNetworkFlagSet, sandboxNetworkProfileValue, setSandboxNetworkFlag } from "./sandbox_network.js";
 
 export type SandboxMode = "auto" | "bwrap" | "docker" | "none";
@@ -26,18 +25,89 @@ const hiddenDirectories = new Set<string>();
 /**
  * Hides `dir` (resolved through symlinks) from every Bubblewrap command and worker this process builds from now on.
  * The sidecar's control socket directory is registered here: its descriptor holds the attach token, so no sandboxed
- * command may read it, wherever `XDG_RUNTIME_DIR` points. Docker mounts only the workspace, so it needs no mask.
+ * command may read it, wherever `XDG_RUNTIME_DIR` points. Docker masks it too when it lies inside the workspace mount.
  */
 export function hideDirectoryFromSandbox(dir: string): void {
   hiddenDirectories.add(fs.realpathSync(dir));
 }
 
+/** What the sandbox does about the state root for one workspace: refuse, or mask `root` and pin the `pins` above it. */
+interface StateRootPlan {
+  /** Why no sandboxed command may be built; the command is refused rather than run with the root exposed. */
+  refusal?: string;
+  /** The real state root, created 0700 when absent, to be masked with a tmpfs. */
+  root?: string;
+  /** Directories between the workspace and the root, to bind onto themselves: a mount point cannot be renamed or removed. */
+  pins: string[];
+}
+
+/**
+ * The state root (`NEXUS_STATE_DIR`, else `~/.nexus`) is masked whole, not just `tasks/`, and created owner-only when
+ * absent, so a sandboxed command can neither read it, nor be the one to create it on the host. A tmpfs mount point
+ * cannot be renamed, but a directory above it inside the writable workspace could, so those ancestors are pinned too.
+ * Refused outright: a state path that reaches the root through a symlink inside the workspace (the link itself could be
+ * renamed or replaced), and a workspace that is the root or inside its tasks directory.
+ */
+function stateRootPlan(absWorkspace: string): StateRootPlan {
+  const configured = path.resolve(process.env.NEXUS_STATE_DIR || path.join(os.homedir(), ".nexus"));
+  let workspaceReal = absWorkspace;
+  try { workspaceReal = fs.realpathSync(absWorkspace); } catch { /* absent: lexical */ }
+  const parts = configured.split(path.sep).filter(Boolean);
+  for (let i = 1; i <= parts.length; i++) {
+    const prefix = path.sep + parts.slice(0, i).join(path.sep);
+    if (prefix === absWorkspace || !isPathWithin(prefix, absWorkspace)) continue;
+    try {
+      if (fs.lstatSync(prefix).isSymbolicLink()) {
+        return { pins: [], refusal: `The state directory is reached through a symlink inside the workspace (${prefix}); a sandboxed command could rename or replace it. Set NEXUS_STATE_DIR to its real path.` };
+      }
+    } catch { /* absent: created below */ }
+  }
+  let root: string;
+  try {
+    fs.mkdirSync(configured, { recursive: true, mode: 0o700 });
+    root = fs.realpathSync(configured);
+  } catch (error: any) {
+    const reason = String(error?.message ?? error).replace(/[\r\n\x00-\x1f\x7f]/g, " ").slice(0, 240);
+    return { pins: [], refusal: `The Nexus state directory (${configured}) could not be created or resolved for sandbox protection: ${reason}. Fix the path or permissions before running a sandboxed command.` };
+  }
+  const inside = (dir: string) => isPathWithin(workspaceReal, dir) || isPathWithin(absWorkspace, dir);
+  if (inside(root) && (workspaceReal === root || inside(path.join(root, "tasks")))) {
+    return { pins: [], refusal: `The workspace (${absWorkspace}) is the Nexus state directory (${root}) or inside its tasks directory, which hold goal state and which the sandbox must hide. Start Nexus outside the state directory, or point NEXUS_STATE_DIR elsewhere.` };
+  }
+  // A workspace elsewhere below the root (a worktree under <repo>/.nexus/worktrees, or any workspace inside an external
+  // NEXUS_STATE_DIR) cannot have the root masked, because the mask would hide the workspace. Mask what holds goal
+  // state, `<root>/tasks`, instead: a tmpfs mount point cannot be read through, written or renamed. The root's other
+  // contents that lie outside the workspace are read-only to the sandbox (write profile) or absent (read-only profile).
+  if (inside(root)) {
+    try {
+      const tasks = path.join(root, "tasks");
+      fs.mkdirSync(tasks, { recursive: true, mode: 0o700 });
+      return { pins: [], root: fs.realpathSync(tasks) };
+    } catch (error: any) {
+      const reason = String(error?.message ?? error).replace(/[\r\n\x00-\x1f\x7f]/g, " ").slice(0, 240);
+      return { pins: [], refusal: `The Nexus tasks directory under ${root} could not be created for sandbox protection: ${reason}.` };
+    }
+  }
+  const pins: string[] = [];
+  if (isPathWithin(root, workspaceReal)) {
+    for (let dir = path.dirname(root); dir !== workspaceReal && isPathWithin(dir, workspaceReal); dir = path.dirname(dir)) pins.unshift(dir);
+  }
+  return { root, pins };
+}
+
+const refuseStateRoot = (cmd: string, reason: string): SandboxedCommandResult => ({
+  command: cmd,
+  sandboxed: false,
+  engine: "none",
+  warning: reason,
+  denial: { kind: "denied", category: "policy", reason },
+});
+
 /** The masks for one bwrap command: those registered and those passed, each resolved. One that no longer exists hides nothing, and bwrap cannot mount over it. */
-function directoriesToHide(extra: readonly string[] = []): string[] {
+function directoriesToHide(root: string | undefined, extra: readonly string[] = []): string[] {
   const resolved = new Set<string>();
-  // PA-3: goal state, caps and stall counts live in the task-state directory; a sandboxed command must neither read nor
-  // rewrite them, including when the workspace is, or contains, $HOME (which would otherwise bind it back in).
-  for (const dir of [...hiddenDirectories, defaultTaskStateDir(), ...extra]) {
+  for (const dir of [...hiddenDirectories, root, ...extra]) {
+    if (dir === undefined) continue;
     try { resolved.add(fs.realpathSync(dir)); } catch { /* gone */ }
   }
   return [...resolved];
@@ -111,7 +181,8 @@ export interface SandboxHomeMounts {
   refused: Array<{ path: string; reason: string }>;
 }
 
-function deniedReason(candidate: string, home: string): string | undefined {
+function deniedReason(candidate: string, home: string, stateRoots: readonly string[] = []): string | undefined {
+  if (stateRoots.some((root) => isPathWithin(candidate, root) || isPathWithin(root, candidate))) return "overlaps the Nexus state directory";
   for (const entry of HOME_DENIED) {
     const denied = path.join(home, entry);
     if (BROAD_DENIED.has(entry)) {
@@ -128,6 +199,10 @@ function deniedReason(candidate: string, home: string): string | undefined {
 /** The directories under HOME a write-mode sandbox binds back read-only. Pure function of HOME, PATH and the operator setting. */
 export function sandboxHomeMounts(env: NodeJS.ProcessEnv = process.env): SandboxHomeMounts {
   const home = path.resolve(env.HOME || os.homedir());
+  const stateRoots = new Set([path.resolve(env.NEXUS_STATE_DIR || path.join(home, ".nexus"))]);
+  for (const configured of [...stateRoots]) {
+    try { stateRoots.add(fs.realpathSync(configured)); } catch { /* absent: retain lexical path */ }
+  }
   const result: SandboxHomeMounts = { home, mounts: [], masked: [], refused: [] };
   if (home === "/") return result;
   const seen = new Set<string>();
@@ -135,7 +210,7 @@ export function sandboxHomeMounts(env: NodeJS.ProcessEnv = process.env): Sandbox
     const candidate = path.resolve(raw.startsWith("~/") ? path.join(home, raw.slice(2)) : raw);
     if (!isPathWithin(candidate, home) || candidate === home || seen.has(candidate)) return;
     seen.add(candidate);
-    const refusal = deniedReason(candidate, home);
+    const refusal = deniedReason(candidate, home, [...stateRoots]);
     if (refusal) {
       if (source !== "default") result.refused.push({ path: candidate, reason: refusal });
       return;
@@ -150,7 +225,7 @@ export function sandboxHomeMounts(env: NodeJS.ProcessEnv = process.env): Sandbox
     // A symlink must not lead into a credential directory.
     const realHome = (() => { try { return fs.realpathSync(home); } catch { return home; } })();
     if (isPathWithin(real, realHome)) {
-      const viaLink = deniedReason(real, realHome);
+      const viaLink = deniedReason(real, realHome, [...stateRoots]);
       if (viaLink) {
         result.refused.push({ path: candidate, reason: `resolves to a path ${viaLink}` });
         return;
@@ -164,7 +239,7 @@ export function sandboxHomeMounts(env: NodeJS.ProcessEnv = process.env): Sandbox
     if (!isPathWithin(resolved, home)) continue;
     // `<prefix>/bin` needs its prefix for lib/ (npm, node_modules); prefix must itself be a safe directory.
     const prefix = path.basename(resolved) === "bin" ? path.dirname(resolved) : resolved;
-    if (prefix !== resolved && prefix !== home && !deniedReason(prefix, home)) consider(prefix, "PATH");
+    if (prefix !== resolved && prefix !== home && !deniedReason(prefix, home, [...stateRoots])) consider(prefix, "PATH");
     else consider(resolved, "PATH");
   }
   for (const raw of (operatorSetting(SANDBOX_HOME_READONLY_SETTING) ?? "").split(",").map((v) => v.trim()).filter(Boolean)) {
@@ -730,6 +805,8 @@ export function wrapSandboxedCommand(
       engine: "none",
     };
   }
+  const state = stateRootPlan(absWorkspace);
+  if (state.refusal) return refuseStateRoot(cmd, state.refusal);
 
   // 1. Try Bubblewrap (bwrap)
   if (mode === "bwrap" || (mode === "auto" && isBwrapAvailable())) {
@@ -809,7 +886,7 @@ export function wrapSandboxedCommand(
       bwrapArgs.push("--ro-bind", "/proc/self/fd/3", absWorkspace);
       // This synthetic root holds only /tmp (a fresh tmpfs), $HOME (masked) and the workspace, so a hidden directory
       // elsewhere is absent already. Mask it where it could be visible: under $HOME, or inside the workspace.
-      for (const dir of directoriesToHide(options.hideDirectories)) {
+      for (const dir of directoriesToHide(state.root, options.hideDirectories)) {
         if (isPathWithin(dir, absWorkspace) || (homeIsUsable && isPathWithin(dir, userHome))) bwrapArgs.push("--tmpfs", dir);
       }
       bwrapArgs.push("--clearenv");
@@ -846,12 +923,14 @@ export function wrapSandboxedCommand(
         }
       }
       bwrapArgs.push("--bind", absWorkspace, absWorkspace);
+      // The state root's ancestors inside the workspace become mount points: they cannot be renamed away and replaced.
+      for (const dir of state.pins) bwrapArgs.push("--bind", dir, dir);
       // The workspace bind above would re-expose credential paths when the workspace is, or contains, $HOME.
       const overlays = sandboxWorkspaceOverlays(absWorkspace);
       for (const dir of overlays.dirs) bwrapArgs.push("--tmpfs", dir);
       for (const file of overlays.files) bwrapArgs.push("--ro-bind", "/dev/null", file);
       // Directories that hold a credential for another Nexus client (the control socket's token), wherever they are.
-      for (const dir of directoriesToHide(options.hideDirectories)) bwrapArgs.push("--tmpfs", dir);
+      for (const dir of directoriesToHide(state.root, options.hideDirectories)) bwrapArgs.push("--tmpfs", dir);
       // bwrap passes its own environment to the command. Start empty and set back only the scrubbed command
       // environment, so a sandboxed command cannot see the operator's credentials either (read-only branch above
       // already starts from --clearenv with a fixed PATH/HOME).
@@ -942,6 +1021,8 @@ export function wrapSandboxedCommand(
     const containerEnv = { ...buildCommandEnvironment(), HOME: "/tmp", PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", TMPDIR: "/tmp" };
     for (const [name, value] of Object.entries(containerEnv)) dockerArgs.push("--env", `${name}=${value}`);
     dockerArgs.push("-v", `${absWorkspace}:${absWorkspace}`);
+    // Ancestors of the state root inside the workspace are nested bind mounts, so they cannot be renamed or removed.
+    for (const dir of state.pins) dockerArgs.push("-v", `${dir}:${dir}`);
     // When the workspace is HOME or above it, the bind would bring credential paths back (same hole as bwrap's
     // workspace bind, see sandboxWorkspaceOverlays). Docker mounts by destination depth, so these nested mounts sit
     // on top of the workspace mount. The docker socket and /run/user cannot lie inside a workspace bind, so they
@@ -950,7 +1031,7 @@ export function wrapSandboxedCommand(
     for (const dir of overlays.dirs) dockerArgs.push("--tmpfs", `${dir}:ro,nosuid,nodev,size=1m`);
     for (const file of overlays.files) dockerArgs.push("-v", `/dev/null:${file}:ro`);
     // PA-3: same task-state / socket hides as bwrap (nested tmpfs over the workspace bind).
-    for (const dir of directoriesToHide(options.hideDirectories)) {
+    for (const dir of directoriesToHide(state.root, options.hideDirectories)) {
       dockerArgs.push("--tmpfs", `${dir}:ro,nosuid,nodev,size=1m`);
     }
     dockerArgs.push("-w", absWorkspace, image, "sh", "-c", cmd);
