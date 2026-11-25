@@ -199,7 +199,7 @@ test("a job record round-trips, and the reader refuses what a hand edit could ad
   assert.equal(edit((r) => { r.budgets.unlimited = true; }), "job record.budgets: unknown key 'unlimited'.");
   assert.equal(edit((r) => { r.provider.apiKey = "sk-x"; }), "job record.provider: unknown key 'apiKey'.");
   assert.equal(edit((r) => { r.origin = { kind: "cli", scheduleId: "x" }; }), "job record.origin: unknown key 'scheduleId'.");
-  assert.equal(edit((r) => { r.origin = { kind: "webhook" }; }), "job record.origin.kind must be one of cli, schedule.");
+  assert.equal(edit((r) => { r.origin = { kind: "webhook" }; }), "job record.origin.kind must be one of cli, schedule, trigger.");
   assert.equal(edit((r) => { r.verifier = "a\nb"; }), "job record.verifier is not valid.");
   assert.equal(edit((r) => { r.maxAutoResumes = 1000; }), "job record.maxAutoResumes must be an integer from 0 to 16.");
   assert.equal(edit((r) => { r.attempts = [{ n: 1, startedAt: job.createdAt, pid: 1, startTicks: "x", bootId: "b" }]; }), "job record.attempts[0].startTicks is not valid.");

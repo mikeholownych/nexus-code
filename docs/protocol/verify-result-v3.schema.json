@@ -50,7 +50,7 @@
       ]
     },
     "SandboxEventEngine": {
-      "description": "VR-3: the profile-agnostic shape of a sandbox refusal. A denial is evidence for a receipt and a flight record; it is\nnever an approval and never raises a verdict. `profile` is `\"default\"` until SB-1 introduces named profiles, so the\nshape does not have to change when those names arrive.",
+      "description": "VR-3: the profile-agnostic shape of a sandbox refusal. A denial is evidence for a receipt and a flight record; it is\nnever an approval and never raises a verdict. `profile` is the named SB-1 profile the session was started with\n(`:workspace`, `:read-only`, `:network`) and `\"default\"` when none was named (a refusal from `verify`, or a session\nthat set only the legacy flags), so the shape did not have to change when those names arrived.",
       "enum": [
         "auto",
         "bwrap",

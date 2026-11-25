@@ -8,7 +8,7 @@ import type { DurableOperationState, OperationEvent, WorkUnit } from "./core/ope
 import { ResourceRegistry, type Eligibility, type ResourceConditionRecord, type ResourceDescriptor } from "./core/resources.js";
 import { safeTerminal } from "./ui.js";
 
-export const OPERATION_VIEW_SCHEMA_VERSION = 2;
+export const OPERATION_VIEW_SCHEMA_VERSION = 3;
 
 export interface OperationViewUnit {
   id: string;
@@ -123,6 +123,14 @@ export interface OperationView {
   status: DurableOperationState["status"];
   createdAt: string;
   updatedAt: string;
+  activeBudget: {
+    elapsedMs: number;
+    limitMs: number;
+    remainingMs: number;
+    historyComplete: boolean;
+    intervalOpen: boolean;
+  };
+  pauseReason?: string;
   /** True when no further transition is expected without an operator decision. */
   terminal: boolean;
   counts: {
@@ -361,6 +369,14 @@ export function buildOperationView(
   options: OperationViewOptions = {},
 ): OperationView {
   const now = options.now ?? Date.now();
+  const activeLimit = state.policy.maxTotalActiveMs;
+  const createdAt = Date.parse(state.createdAt);
+  const activeElapsedMs = state.activeElapsedHistoryComplete
+    ? state.activeElapsedMs + (state.activeSinceMs === undefined
+      ? 0
+      : now < state.activeSinceMs ? activeLimit : now - state.activeSinceMs)
+    : Math.max(state.activeElapsedMs, Number.isFinite(createdAt) && createdAt <= now ? now - createdAt : activeLimit);
+  const boundedActiveElapsedMs = Math.min(activeLimit, Math.max(0, activeElapsedMs));
   const registry = new ResourceRegistry(state.resources, state.conditions, { now: () => now, random: () => 0.5 });
   const { depth, missing, cycles } = unitDepths(state.units);
   const edges = state.units.flatMap((unit) => unit.dependsOn.map((from) => ({ from, to: unit.id })));
@@ -438,6 +454,14 @@ export function buildOperationView(
     status: state.status,
     createdAt: state.createdAt,
     updatedAt: state.updatedAt,
+    activeBudget: {
+      elapsedMs: boundedActiveElapsedMs,
+      limitMs: activeLimit,
+      remainingMs: Math.max(0, activeLimit - boundedActiveElapsedMs),
+      historyComplete: state.activeElapsedHistoryComplete,
+      intervalOpen: state.activeSinceMs !== undefined,
+    },
+    ...(state.pauseReason ? { pauseReason: state.pauseReason } : {}),
     terminal: state.status === "COMPLETE" || state.status === "CANCELLED" || state.status === "PAUSED",
     counts: {
       total: state.units.length,
@@ -564,6 +588,10 @@ export function renderOperationView(view: OperationView, options: RenderOptions 
   );
   lines.push(`  ${text(view.objective, width)}`);
   lines.push(`  updated ${text(view.updatedAt, width)}`);
+  lines.push(
+    `  active time ${formatElapsed(view.activeBudget.elapsedMs)} / ${formatElapsed(view.activeBudget.limitMs)} · ${view.activeBudget.historyComplete ? "complete history" : "conservative history estimate"}${view.activeBudget.intervalOpen ? " · interval open" : ""}`,
+  );
+  if (view.pauseReason) lines.push(`  pause reason: ${text(view.pauseReason, width)}`);
   if (view.git) {
     lines.push(`  isolated: ${text(view.git.integrationBranch, width)} (${text(view.git.integrationWorktree, width)})`);
   }
@@ -648,4 +676,12 @@ export function renderOperationView(view: OperationView, options: RenderOptions 
   }
 
   return lines.join("\n");
+}
+
+function formatElapsed(ms: number): string {
+  const seconds = Math.floor(Math.max(0, ms) / 1_000);
+  const hours = Math.floor(seconds / 3_600);
+  const minutes = Math.floor((seconds % 3_600) / 60);
+  const remainder = seconds % 60;
+  return hours > 0 ? `${hours}h ${minutes}m ${remainder}s` : minutes > 0 ? `${minutes}m ${remainder}s` : `${remainder}s`;
 }

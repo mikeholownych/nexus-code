@@ -13,5 +13,10 @@
     "schema_version": 1,
     "schemaSha256": "0574b41b9a3c2c42ea63119c883f16d2db536f435a0c6102d7b5bf64a7436a66",
     "note": "BG-2 review: the status document embeds the job receipt, whose `verifier` gains the optional `status` and `detail` (see JOB_RECEIPT_VERSIONS.json). Version stays 1 for the same reason."
+  },
+  {
+    "schema_version": 1,
+    "schemaSha256": "b5501573c759591cbc210dca0c5b7f3946b803f4d4a0bb4f15e7a5247516f0c5",
+    "note": "BG-3: the status document embeds the job record (origin gains the trigger variant) and the job receipt (gains the optional `trigger_id` and `trigger_event`); see JOB_VERSIONS.json and JOB_RECEIPT_VERSIONS.json. Version stays 1 for the same reason."
   }
 ]

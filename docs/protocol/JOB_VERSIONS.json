@@ -3,5 +3,10 @@
     "schema_version": 1,
     "schemaSha256": "01bec70814c970b4bfaa73d9fc4f2a2d8f22897774157712229c667f8855d689",
     "note": "First published schema of the detached runner's job record nexus-job (BG-1), generated from JobRecordDocument in cli/src/core/runner_store.ts on release/v1.3.0. The record carries its version in the member 'version'; this ledger keys it as schema_version like the other ledgers. Nothing was published before it. The reader refuses a record of any other version, so every added, removed or changed member bumps JOB_RECORD_VERSION."
+  },
+  {
+    "schema_version": 1,
+    "schemaSha256": "8d3d7340531736b87f396b0c1a4e4496c419e2ec094eb7e4bc984b848a39eebf",
+    "note": "BG-3: a job's `origin` gains the variant {kind: trigger, triggerId, eventId, eventKind, approvedSha256}, for a job an approved event trigger fired. Version stays 1: the variants the previous entry published are unchanged and no release carried BG-1 before this, so no published reader meets the new one."
   }
 ]

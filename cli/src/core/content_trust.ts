@@ -137,7 +137,7 @@ function write(storePath: string, entries: ExtensionTrustEntry[]): void {
   writePrivateFile(storePath, `${JSON.stringify(store, null, 2)}\n`, { durable: true });
 }
 
-const LOCK_WAIT_MS = 10_000;
+const LOCK_WAIT_MS = 30_000;
 /** A lock whose holder cannot be identified is taken over once it is this old. */
 const LOCK_UNREADABLE_STALE_MS = 30_000;
 
@@ -152,26 +152,15 @@ function withStoreLock<T>(storePath: string, change: () => T): T {
   ensurePrivateDir(path.dirname(storePath));
   const pause = new Int32Array(new SharedArrayBuffer(4));
   for (const deadline = Date.now() + LOCK_WAIT_MS; ;) {
-    let fd: number | undefined;
-    try {
-      fd = fs.openSync(lock, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
-      fs.writeSync(fd, JSON.stringify({ pid: process.pid, started: startedAt(process.pid) ?? "" }));
-    } catch (error: any) {
-      if (fd !== undefined) fs.closeSync(fd);
-      if (error?.code !== "EEXIST") throw error;
-      if (lockIsStale(lock)) {
-        try {
-          fs.unlinkSync(lock);
-        } catch {
-          // another writer took it over first
-        }
-        continue;
-      }
+    // A lock that is there is not tried for: a waiter then changes nothing in the directory.
+    const held = !fs.existsSync(lock) && createHeld(lock);
+    if (!held) {
+      if (takeOverStaleLock(lock)) continue;
       if (Date.now() > deadline) throw new Error(`the approval store is locked by another process (${lock})`);
-      Atomics.wait(pause, 0, 0, 15);
+      // A short, uneven pause: long enough not to spin, short and varied enough that no waiter is always late.
+      Atomics.wait(pause, 0, 0, 1 + Math.floor(Math.random() * 4));
       continue;
     }
-    fs.closeSync(fd);
     try {
       return change();
     } finally {
@@ -184,18 +173,106 @@ function withStoreLock<T>(storePath: string, change: () => T): T {
   }
 }
 
-function lockIsStale(lock: string): boolean {
+/**
+ * Whether the lock file is one whose holder is gone. A holder is named by pid and kernel start time; where start times
+ * cannot be read at all (no /proc), nothing can be said about a pid, and a lock is live while it is younger than 30 s.
+ * `started` is how a pid's start time is read (tests).
+ */
+export function lockIsStale(lock: string, started: (pid: number) => string | undefined = startedAt): boolean {
   try {
-    const holder = JSON.parse(fs.readFileSync(lock, "utf8"));
-    if (Number.isInteger(holder?.pid) && typeof holder.started === "string") return startedAt(holder.pid) !== holder.started;
-  } catch {
-    // just created and not written yet, or not a lock of ours
-  }
-  try {
-    return Date.now() - fs.lstatSync(lock).mtimeMs > LOCK_UNREADABLE_STALE_MS;
+    return staleHolder(fs.readFileSync(lock, "utf8"), Date.now() - fs.lstatSync(lock).mtimeMs, started);
   } catch {
     return false;
   }
+}
+
+function staleHolder(content: string, ageMs: number, started: (pid: number) => string | undefined): boolean {
+  // This process's own start time is the probe: if even that cannot be read, no pid can be judged.
+  if (started(process.pid) !== undefined) {
+    try {
+      const holder = JSON.parse(content);
+      if (Number.isInteger(holder?.pid) && typeof holder.started === "string") return started(holder.pid) !== holder.started;
+    } catch {
+      // not a lock of ours
+    }
+  }
+  return ageMs > LOCK_UNREADABLE_STALE_MS;
+}
+
+let takeovers = 0;
+
+/**
+ * Creates `file` as a lock held by this process, or returns false when it exists. The file appears with its holder
+ * already written in it (a private file linked into place): a lock is never seen empty, so what a taker reads is
+ * always who holds it.
+ */
+function createHeld(file: string): boolean {
+  const mine = `${file}.new-${process.pid}-${++takeovers}`;
+  try {
+    fs.writeFileSync(mine, JSON.stringify({ pid: process.pid, started: startedAt(process.pid) ?? "" }), { flag: "wx", mode: 0o600 });
+    fs.linkSync(mine, file);
+    return true;
+  } catch (error: any) {
+    if (error?.code !== "EEXIST") throw error;
+    return false;
+  } finally {
+    try {
+      fs.unlinkSync(mine);
+    } catch {
+      // not created
+    }
+  }
+}
+
+/** Moves `file` aside under a name of this process's own and removes it. Only one rename of a given file succeeds. */
+function moveAside(file: string): void {
+  const aside = `${file}.stale-${process.pid}-${++takeovers}`;
+  try {
+    fs.renameSync(file, aside);
+    fs.unlinkSync(aside);
+  } catch {
+    // another taker moved it first
+  }
+}
+
+const isStale = (file: string): boolean => {
+  try {
+    return staleHolder(fs.readFileSync(file, "utf8"), Date.now() - fs.lstatSync(file).mtimeMs, startedAt);
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Removes a stale lock so that it can be taken, in a way two takers cannot both win. Judging a lock stale and
+ * removing it are two steps, and between them another taker may have removed it and a live holder taken its place;
+ * a rename cannot tell the two files apart. So removal is done by one taker at a time, under a second lock, and the
+ * lock is judged again there: while that is held nobody else removes a lock, so the file that is judged is the file
+ * that is moved aside. Returns whether the caller should try again to take the lock.
+ */
+function takeOverStaleLock(lock: string): boolean {
+  if (fs.existsSync(lock) && !isStale(lock)) return false;
+  const guard = `${lock}.takeover`;
+  if (!createHeld(guard)) {
+    // Do not reap a stale guard by pathname. Two processes can both judge it stale; after one moves it, the other
+    // can move a replacement guard belonging to the new taker. Without an OS compare-and-swap primitive, the safe
+    // response is to stop and require an operator to inspect the narrowly scoped recovery guard.
+    if (isStale(guard)) {
+      throw new Error(`the approval store has an abandoned stale-lock recovery guard (${guard}); inspect that no process is recovering the store, then remove the guard before retrying`);
+    }
+    // The taker that holds the guard is about to free the lock: wait for it like for any holder.
+    return false;
+  }
+  try {
+    if (isStale(lock)) moveAside(lock);
+  } finally {
+    try {
+      fs.unlinkSync(guard);
+    } catch {
+      // already gone
+    }
+  }
+  return true;
 }
 
 /** Records the approval of exactly `entry.sha256`, replacing an earlier approval of the same item. A store that could not be read is replaced. */

@@ -132,14 +132,16 @@ test("snapshot / restore round-trips", () => {
   assert.equal(restored.checkAndRecord(advance(0)).admitted, false);
 });
 
-test("admitted attempts reset consecutiveFailures", () => {
+test("admission does not reset consecutive run failures; only a completed run does", () => {
   const rate = { maxPerMinute: 2, maxPerHour: 10, maxPerDay: 100 };
   const limiter = new TriggerRateLimiter(rate, { maxFailures: 3, cooldownMinutes: 60 });
   limiter.checkAndRecord(advance(0)); // admitted
   limiter.checkAndRecord(advance(0)); // admitted (cap 2/min reached)
   limiter.checkAndRecord(advance(0)); // denied fail 1
   limiter.checkAndRecord(advance(minute + 1)); // admitted again -> resets failures
-  assert.equal(limiter.checkAndRecord(advance(0)).admitted, true); // still within limits, failures reset
+  assert.equal(limiter.snapshot().consecutiveFailures, 1, "admitting another run is not evidence that the prior run succeeded");
+  limiter.recordSuccess();
+  assert.equal(limiter.snapshot().consecutiveFailures, 0);
 });
 
 test("constants", () => {

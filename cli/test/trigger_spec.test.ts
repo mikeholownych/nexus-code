@@ -169,14 +169,16 @@ test("a short inline secret is refused and the message points at the environment
 });
 
 test("secretEnv names an environment variable and is an alternative to secret", () => {
-  const spec = parseTriggerSpec(webhook({ secretEnv: "DEPLOY_HOOK_SECRET" }));
-  assert.equal(spec.event.secretEnv, "DEPLOY_HOOK_SECRET");
+  const spec = parseTriggerSpec(webhook({ secretEnv: "NEXUS_TRIGGER_DEPLOY_HOOK" }));
+  assert.equal(spec.event.secretEnv, "NEXUS_TRIGGER_DEPLOY_HOOK");
   assert.equal(spec.event.secret, undefined);
-  assert.ok(canonicalizeTriggerSpec(spec).includes('"secretEnv":"DEPLOY_HOOK_SECRET"'), "the variable's name is part of what is hashed");
+  assert.ok(canonicalizeTriggerSpec(spec).includes('"secretEnv":"NEXUS_TRIGGER_DEPLOY_HOOK"'), "the variable's name is part of what is hashed");
   assert.throws(() => parseTriggerSpec(webhook({ secretEnv: "lower" })), /secretEnv/);
+  for (const reserved of ["PATH", "HOME", "LOCAL_LLM_ENDPOINT", "NEXUS_APPROVAL_MODE", "NEXUS_TRUST_WORKSPACE", "NEXUS_STATE_DIR", "NEXUS_TRIGGER", "NEXUS_TRIGGERX_A", "LD_PRELOAD", "NODE_OPTIONS"])
+    assert.throws(() => parseTriggerSpec(webhook({ secretEnv: reserved })), /must name an environment variable starting with NEXUS_TRIGGER_/, reserved);
   assert.throws(() => parseTriggerSpec(webhook({ secretEnv: "A B" })), /secretEnv/);
-  assert.throws(() => parseTriggerSpec(webhook({ secretEnv: "X", secret: "abcdef0123456789abcd" })), /not both/);
-  assert.throws(() => parseTriggerSpec(serialize({ ...baseSpec, event: { kind: "file-change", paths: ["x"], secretEnv: "X" } })), /may not set/);
+  assert.throws(() => parseTriggerSpec(webhook({ secretEnv: "NEXUS_TRIGGER_X", secret: "abcdef0123456789abcd" })), /not both/);
+  assert.throws(() => parseTriggerSpec(serialize({ ...baseSpec, event: { kind: "file-change", paths: ["x"], secretEnv: "NEXUS_TRIGGER_X" } })), /may not set/);
 });
 
 test("validTriggerRate is the one rule for specs and restored limiter state", () => {

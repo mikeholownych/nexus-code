@@ -20,7 +20,7 @@ import {
   ProtocolError, encodeEvent, parseCommand, type ErrorCode, type SidecarCommand,
 } from "./protocol.js";
 import {
-  newSocketName, newToken, prepareSocketPath, socketRuntimeDir, sweepStaleSockets, tokenMatches, writeDescriptor,
+  assertPrivateDir, newSocketName, newToken, prepareSocketPath, socketRuntimeDir, sweepStaleSockets, tokenMatches, writeDescriptor,
 } from "./core/socket_files.js";
 
 /** Longest line before a connection has attached. An attach line is about 130 bytes. */
@@ -117,6 +117,9 @@ export class SessionSocketServer {
 
   async listen(): Promise<SocketInfo> {
     const dir = this.options.dir ?? socketRuntimeDir();
+    // The directory is what keeps another user from the socket between bind and chmod, so it is checked for a caller-supplied
+    // path as well, before anything is bound in it.
+    assertPrivateDir(dir);
     await sweepStaleSockets(dir);
     const name = this.options.name ?? newSocketName();
     const socketPath = path.join(dir, `${name}.sock`);

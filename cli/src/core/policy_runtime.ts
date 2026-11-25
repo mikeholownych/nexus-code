@@ -17,6 +17,7 @@
  * use it), and the process host below is a module-private constant built from `resolveProductionPolicyInputs`.
  */
 import * as path from "node:path";
+import { printable } from "./printable.js";
 import { resolveProductionPolicyInputs, type ProductionPolicyInputs } from "./managed_policy_inputs.js";
 import {
   inspectManagedTiers,
@@ -136,9 +137,9 @@ export function emitPolicyNotice(notice: string): void {
   process.stderr.write(`${notice}\n`);
 }
 
-/** A refusal that quotes a name a configuration file chose (an MCP server, a plugin file), made safe to print: control characters become `?`. */
+/** A refusal that quotes a name a configuration file chose (an MCP server, a plugin file), made safe to print: control and formatting characters are written out as `\\uXXXX` (core/printable.ts). */
 export function printableRefusal(message: string): string {
-  return message.replace(/[\u0000-\u001f\u007f-\u009f]/g, "?");
+  return printable(message, Number.MAX_SAFE_INTEGER);
 }
 
 /** How a project file whose relaxations were not applied gets approved in this release. */

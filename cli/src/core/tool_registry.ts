@@ -133,7 +133,22 @@ export class ToolRegistry {
       .map((tool, index) => ({ tool, index }))
       .sort((a, b) => OFFER_RANK[a.tool.offer] - OFFER_RANK[b.tool.offer] || a.index - b.index)
       .map(({ tool }) => tool.spec.toolDefinition);
-    const all = [...own, ...ctx.extensions];
+    // Extensions are offered only when this registry admitted them. Keep the first definition for each admitted name,
+    // and never let an extension replace a built-in that is currently hidden by its offer rule.
+    const availableExtensions = new Set(
+      [...this.tools.entries()]
+        .filter(([, tool]) => tool.binding.kind === "extension")
+        .map(([name]) => name),
+    );
+    const names = new Set(own.map((tool) => tool.function.name));
+    const extensions: ToolDefinition[] = [];
+    for (const tool of ctx.extensions) {
+      const name = tool.function.name;
+      if (!availableExtensions.delete(name) || names.has(name)) continue;
+      names.add(name);
+      extensions.push(tool);
+    }
+    const all = [...own, ...extensions];
     return ctx.admits ? all.filter((tool) => ctx.admits!(tool.function.name)) : all;
   }
 
@@ -177,5 +192,15 @@ export function createToolRegistry(): ToolRegistry {
   return registry;
 }
 
-/** The shipped catalogue, for the lists derived from it. Not an agent's registry: nothing is registered into it later. */
-export const baselineTools: ToolRegistry = createToolRegistry();
+/** The read-only shipped catalogue surface used by derived lists. */
+export interface BaselineToolCatalog {
+  baselineDefinitions(): ToolDefinition[];
+  serveMcpDefinitions(): ToolDefinition[];
+}
+
+/** The shipped catalogue is private; callers receive defensive copies and cannot register or remove tools. */
+const baselineRegistry = createToolRegistry();
+export const baselineTools: BaselineToolCatalog = Object.freeze({
+  baselineDefinitions: () => baselineRegistry.baselineDefinitions().map((tool) => structuredClone(tool)),
+  serveMcpDefinitions: () => baselineRegistry.serveMcpDefinitions().map((tool) => structuredClone(tool)),
+});

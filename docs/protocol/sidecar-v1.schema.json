@@ -1918,6 +1918,10 @@
                     "review"
                   ]
                 },
+                "profile": {
+                  "description": "The effective sandbox profile (`:workspace`, `:read-only`, `:network` or `unconfined`); additive (SB-1).",
+                  "type": "string"
+                },
                 "sandbox": {
                   "type": "string"
                 },

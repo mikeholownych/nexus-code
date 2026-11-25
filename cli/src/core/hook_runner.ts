@@ -13,6 +13,7 @@ import { buildMcpEnvironment } from "../mcp.js";
 import type { HookDenialReason, HookEvent, HookSource } from "./hooks.js";
 import { ProcessTreeMemory } from "./process_identity.js";
 import { parseStrictJson } from "./strict_json.js";
+import { withoutUnprintable } from "./printable.js";
 
 export const HOOK_STDOUT_LIMIT = 64 * 1024;
 export const HOOK_STDERR_LIMIT = 8 * 1024;
@@ -62,7 +63,7 @@ export function hookEnvironment(hook: { event: HookEvent; name: string; source: 
 
 /** One line, bounded: what a hook said, safe to show and to store. */
 export function hookLine(text: string, limit = REASON_LIMIT): string {
-  const line = text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim();
+  const line = withoutUnprintable(text).replace(/\s+/g, " ").trim();
   return line.length > limit ? `${line.slice(0, limit - 1)}…` : line;
 }
 

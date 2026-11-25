@@ -5,6 +5,7 @@
 import * as path from "node:path";
 import { inspectHookSources } from "./core/hooks.js";
 import { listHookSources } from "./hooks_cli.js";
+import { printable } from "./core/printable.js";
 
 export interface HooksDiagnosis {
   status: "pass" | "warn" | "fail" | "skip";
@@ -15,6 +16,12 @@ export interface HooksDiagnosis {
 
 /** `home` is the operator's home directory, where the hooks file and the approval store live. */
 export function diagnoseHooks(workspace: string, home: string): HooksDiagnosis {
+  // Paths, hook names and file problems come from files anyone may have written: nothing of them is reported raw.
+  const found = diagnose(workspace, home);
+  return { ...found, explanation: printable(found.explanation, 1000), evidence: found.evidence.map((line) => printable(line, 800)), ...(found.action ? { action: printable(found.action, 1000) } : {}) };
+}
+
+function diagnose(workspace: string, home: string): HooksDiagnosis {
   const config = path.join(home, ".config", "nexus");
   const sources = inspectHookSources({ workspace, readOnly: false, operatorFile: path.join(config, "hooks.json"), trustStorePath: path.join(config, "extension_trust.json") });
   const [operator, project] = listHookSources(sources);

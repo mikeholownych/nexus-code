@@ -14,6 +14,8 @@ A tool is one registered pair: a **spec** (what the model sees and what the tool
 
 That is all: the model-visible list, the dispatch route, the parser's known names and the serve-mcp list follow. Run `tool_registry`, `tool_surface_characterization` and `tool_dispatch_characterization`; the last two are golden files that change on purpose when the catalogue grows (see `cli/test/helpers/tool_characterization.ts` for how to re-record, and review the diff). A new tool also needs a row in the ACP kind table (`acp/mapping.ts`); without one it is reported to ACP clients as `other`.
 
+The exported `baselineTools` value is a read-only view of the shipped catalogue. It has no registration or capability-mutation methods, and each list call returns copies. Agent registries are separate and remain mutable for agent-local and approved extension tools.
+
 ```ts
 const registry = new ToolRegistry();
 registry.register({
@@ -39,8 +41,8 @@ It has no member that lowers an effect, marks a tool approval-free, or overrides
 
 ## How a call is routed
 
-`ExecutionSpine` resolves the handler in this order: a handler registered on the spine; the handler on the tool's `native` binding; the handler set on its capability (the bridged tools get theirs from `registerBridgeCapabilities`, which asks `isBridgeBound`, the same predicate that gives them the `bridge` binding). With none, the call goes to the invocation context's default handler (MCP, plugin and plugin pipeline) and then to the bridge. A tool the registry does not hold is refused (FAIL-001).
+`ExecutionSpine` resolves the handler in this order: a handler registered on the spine; the handler on the tool's `native` binding; the handler set on its capability (the bridged tools get theirs from `registerBridgeCapabilities`, which asks `isBridgeBound`, the same predicate that gives them the `bridge` binding). A later capability handler does not replace a native binding; the spine handler is the explicit override. With none, the call goes to the invocation context's default handler (MCP, plugin and plugin pipeline) and then to the bridge. A tool the registry does not hold is refused (FAIL-001).
 
 ## Model-visible order
 
-`modelTools` returns the registered tools whose offer rule holds, ordered by rule (`group` and `skills`, `until-all-groups`, `objective`, `requirements`, `always`, `mask`) and by registration order within a rule, then the connected MCP and plugin tools, then the role allow and deny lists and a delegated allow-list. Changing this order changes every provider request and breaks the prompt cache, so `tool_surface_characterization` pins it byte for byte.
+`modelTools` returns the registered tools whose offer rule holds, ordered by rule (`group` and `skills`, `until-all-groups`, `objective`, `requirements`, `always`, `mask`) and by registration order within a rule, then the connected MCP and plugin tools, then the role allow and deny lists and a delegated allow-list. Extensions are offered only if the agent registry admitted them. A repeated extension name is offered once in registration order, and a built-in name stays reserved even when hidden by its offer rule. This keeps an MCP or plugin definition from duplicating or replacing a built-in in a model request. Changing this order changes every provider request and breaks the prompt cache, so `tool_surface_characterization` pins it byte for byte.

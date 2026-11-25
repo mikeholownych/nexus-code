@@ -37,7 +37,7 @@ fi
 rc=0
 while IFS= read -r file; do
   [ -f "$file" ] || continue
-  if ! rustfmt --edition 2024 --check "$file"; then
+  if ! rustfmt --edition 2024 --check --config skip_children=true "$file"; then
     echo "[fmt] FAILED: $file" >&2
     rc=1
   fi

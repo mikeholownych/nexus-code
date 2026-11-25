@@ -35,6 +35,8 @@ managed tiers.
 | `plugins.disable_workspace` | yes | A plugin file of the workspace is not imported, whether or not the workspace is trusted and whatever `plugins.allow` says. |
 | `workspace.disable_env_trust` | yes | `NEXUS_TRUST_WORKSPACE=1` grants no trust and applies no project relaxation; a notice says so. |
 
+A named sandbox profile (`--sandbox :workspace`, `:read-only`, `:network`) meets these clamps like the flags it stands for: `sandbox.forbid_network` refuses `--sandbox :network`, `sandbox.required` refuses `none`, and the stricter of profile and policy applies. A profile never loosens a policy. See [SANDBOX_PROFILES.md](SANDBOX_PROFILES.md).
+
 ### MCP servers and plugins
 
 The allowlists are read from the two managed files only. A project file cannot set them, and nothing a workspace file,
