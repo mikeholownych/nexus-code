@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01GHhKGKCbqn36JSELv5z977",
+  "agent_id": "af86a440db84776b9",
+  "subagent_type": "general-purpose",
+  "task_description": "Refresh v1.3.0 readiness and draft notes",
+  "token_usage": {
+    "input_tokens": 84,
+    "cache_creation_tokens": 176367,
+    "cache_read_tokens": 5671024,
+    "output_tokens": 35128,
+    "api_call_count": 42
+  },
+  "started_at": "2026-11-25T03:42:43.318429915Z",
+  "completed_at": "2026-11-25T03:50:23.951187246Z"
+}

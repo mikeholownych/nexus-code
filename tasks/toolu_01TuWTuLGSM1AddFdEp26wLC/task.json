@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01TuWTuLGSM1AddFdEp26wLC",
+  "agent_id": "a42201ac5976186d5",
+  "subagent_type": "reviewer",
+  "task_description": "Hostile review PR #812 BG-3 firer",
+  "token_usage": {
+    "input_tokens": 120,
+    "cache_creation_tokens": 158793,
+    "cache_read_tokens": 6924954,
+    "output_tokens": 44270,
+    "api_call_count": 60
+  },
+  "started_at": "2026-11-25T03:44:31.49221837Z",
+  "completed_at": "2026-11-25T04:00:23.180963039Z"
+}
