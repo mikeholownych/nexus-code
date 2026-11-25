@@ -512,7 +512,7 @@ export class TriggerFirer {
           waitingForOlder = true;
           continue;
         }
-        if (a && job.origin.approvedSha256 === a.sha) {
+        if (a && job.origin.kind === "trigger" && job.origin.approvedSha256 === a.sha) {
           if (job.state === "COMPLETE") limiter.recordSuccess(a.workspace, a.id, this.options.now());
           else limiter.recordFailure(a.workspace, a.id, a.spec.rate, this.options.now(), `job ${job.id} ${job.state.toLowerCase()}`);
         }
