@@ -367,7 +367,7 @@ jobs:
         # The event's base SHA can be older than that parent, and then `base...HEAD` also lists files that changed
         # on the base branch. Any other checkout keeps the event's SHA.
         env:
-          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          EVENT_BASE: ${{ github.event.pull_request.base.sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before || '') }}
         run: |
           base="$EVENT_BASE"
           if [ "$GITHUB_EVENT_NAME" = pull_request ] && git rev-parse --verify --quiet 'HEAD^2^{commit}' >/dev/null; then

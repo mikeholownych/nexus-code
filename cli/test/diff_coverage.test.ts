@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import * as assert from "node:assert/strict";
 import path from "node:path";
-import { parseAddedLines, parseLcov } from "../scripts/diff_coverage.mjs";
+import { parseAddedLines, parseLcov, resolveDiffBase } from "../scripts/diff_coverage.mjs";
 import { optionValue, resolveCoverageOut } from "../scripts/script_args.mjs";
 
 test("diff coverage reads only added lines from zero-context hunks", () => {
@@ -63,4 +63,12 @@ test("diff coverage ignores non-instrumented lines and normalises lcov paths", (
   assert.equal(hits.get("cli/src/other.ts")!.get(9), 4);
   // A comment/blank line has no DA record and must not count against the gate.
   assert.equal(hits.get("cli/src/protocol.ts")!.has(4), false);
+});
+
+
+test("diff coverage treats missing or all-zero base as unavailable, not a git diff error", () => {
+  assert.deepEqual(resolveDiffBase("", () => { throw new Error("should not run"); }), { base: null, reason: "no base revision available" });
+  assert.deepEqual(resolveDiffBase("0000000000000000000000000000000000000000", () => { throw new Error("should not run"); }), { base: null, reason: "no base revision available" });
+  assert.deepEqual(resolveDiffBase("deadbeef", () => { throw new Error("fatal: bad object deadbeef"); }), { base: null, reason: "fatal: bad object deadbeef" });
+  assert.deepEqual(resolveDiffBase("abc123", () => "abc123\n"), { base: "abc123", reason: null });
 });

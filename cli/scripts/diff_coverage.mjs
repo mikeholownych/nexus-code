@@ -15,11 +15,22 @@ const lcovPath = path.resolve(root, arg("lcov", "cli/coverage/lcov.info"));
 const base = arg("base", "HEAD~1");
 const min = Number(arg("min", "0"));
 const includeWorktree = has("include-worktree");
+const ZERO_SHA = "0000000000000000000000000000000000000000";
 
 function git(args) {
   const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
   if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${(result.stderr || "").trim()}`);
   return result.stdout;
+}
+
+export function resolveDiffBase(requestedBase, gitRunner = git) {
+  if (!requestedBase || requestedBase === ZERO_SHA) return { base: null, reason: "no base revision available" };
+  try {
+    gitRunner(["rev-parse", "--verify", "--quiet", `${requestedBase}^{commit}`]);
+  } catch (error) {
+    return { base: null, reason: error instanceof Error ? error.message : String(error) };
+  }
+  return { base: requestedBase, reason: null };
 }
 
 /** Repo-relative paths of changed production TypeScript files. */
@@ -85,7 +96,8 @@ function readLcov(file) {
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
-  const files = changedFiles();
+  const resolved = resolveDiffBase(base);
+  const files = resolved.base ? changedFiles() : [];
   const lcov = fs.existsSync(lcovPath) ? readLcov(lcovPath) : new Map();
   const rows = [];
   let eligible = 0;
@@ -101,7 +113,9 @@ if (isMain) {
   }
   const percent = eligible ? (covered / eligible) * 100 : null;
   const report = {
-    base,
+    base: resolved.base,
+    baseRequested: base,
+    baseUnavailableReason: resolved.reason,
     lcov: path.relative(root, lcovPath),
     threshold: min,
     eligible,
@@ -109,11 +123,15 @@ if (isMain) {
     percent: percent === null ? null : Math.round(percent * 100) / 100,
     files: rows,
   };
-  for (const row of rows) {
-    console.log(`${row.file}: ${row.covered}/${row.coverable} coverable added lines (${row.added} added)`);
+  if (!resolved.base) {
+    console.log(`Diff coverage skipped: ${resolved.reason}.`);
+  } else {
+    for (const row of rows) {
+      console.log(`${row.file}: ${row.covered}/${row.coverable} coverable added lines (${row.added} added)`);
+    }
+    if (percent === null) console.log("No coverable added TypeScript lines; diff coverage is not applicable.");
+    else console.log(`Diff coverage: ${percent.toFixed(2)}% (${covered}/${eligible}), threshold ${min}%`);
   }
-  if (percent === null) console.log("No coverable added TypeScript lines; diff coverage is not applicable.");
-  else console.log(`Diff coverage: ${percent.toFixed(2)}% (${covered}/${eligible}), threshold ${min}%`);
   if (arg("json", "")) fs.writeFileSync(path.resolve(root, arg("json")), `${JSON.stringify(report, null, 2)}\n`);
   const passed = percent === null || percent >= min;
   if (!passed) console.error(`Diff coverage ${percent.toFixed(2)}% is below the ${min}% gate.`);
