@@ -110,6 +110,42 @@ export interface UsageTotals {
   cacheReportedPromptTokens: number;
 }
 
+function emptyUsageTotals(): UsageTotals {
+  return { requests: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, unpricedRequests: 0, uncertainRequests: 0, estimatedRequests: 0, cachedTokens: 0, cacheReportedPromptTokens: 0 };
+}
+
+/** Add one cloud receipt to aggregate accounting without retaining its request-level details. */
+function addReceiptToTotals(t: UsageTotals, r: InferenceReceipt, priceForProvider?: string): void {
+  // Requests refused before sending (disclosure, limits, missing credential) cost nothing.
+  if (r.disclosure !== "cloud" || r.failureKind === "policy_denied" || r.failureKind === "configuration_error") return;
+  t.requests++;
+  t.inputTokens += r.usage?.inputTokens ?? 0;
+  t.outputTokens += r.usage?.outputTokens ?? 0;
+  if (r.usage?.cachedInputTokens !== undefined) {
+    t.cachedTokens += r.usage.cachedInputTokens;
+    // Anthropic and Bedrock report input apart from cache reads and writes; the others count cached tokens inside input.
+    const apart = r.protocol === "anthropic-messages" || r.protocol === "bedrock-converse";
+    t.cacheReportedPromptTokens += (r.usage.inputTokens ?? 0) + (apart ? r.usage.cachedInputTokens + (r.usage.cacheWriteTokens ?? 0) : 0);
+  }
+  if (r.costConfidence === "provider-reported") t.costUsd += r.usage?.costUsd ?? 0;
+  else if (priceForProvider !== undefined) {
+    // Per-provider limits count a request the provider did not price at the snapshot's price for the model that ran.
+    const estimate = snapshotCost(r.providerId, r.effectiveModel ?? r.selectedModel, r.usage);
+    if (estimate === undefined) t.unpricedRequests++;
+    else {
+      t.costUsd += estimate;
+      t.estimatedRequests++;
+    }
+  } else t.unpricedRequests++;
+  if (r.usageConfidence === "uncertain") t.uncertainRequests++;
+}
+
+function addTotals(target: UsageTotals, extra: UsageTotals | undefined): UsageTotals {
+  if (!extra) return target;
+  for (const key of Object.keys(target) as Array<keyof UsageTotals>) target[key] += extra[key];
+  return target;
+}
+
 export class UsageLedger {
   private static instance?: UsageLedger;
   static global(): UsageLedger {
@@ -121,6 +157,9 @@ export class UsageLedger {
   }
 
   private receipts: InferenceReceipt[] = [];
+  /** Aggregate-only accounting for cloud requests whose detailed receipts were opted out. */
+  private readonly suppressedTotals = emptyUsageTotals();
+  private readonly suppressedProviderTotals = new Map<string, UsageTotals>();
   private reserved = new Map<string, number>();
   private reservedBy = new Map<string, string>();
   /** Workspaces whose `.nexus/.gitignore` has been verified by this process. */
@@ -145,7 +184,7 @@ export class UsageLedger {
       const refusal = this.admitProvider(providerId, own, estimatedTokens, costReported, model);
       if (refusal) return refusal;
     }
-    const t = this.cloudTotals();
+    const t = this.admissionTotals();
     const pendingTokens = [...this.reserved.values()].reduce((a, b) => a + b, 0);
     const { maxRequests, maxTokens, maxCostUsd } = this.limits;
     if (maxRequests !== undefined && t.requests + this.reserved.size + 1 > maxRequests) {
@@ -164,7 +203,7 @@ export class UsageLedger {
   }
 
   private admitProvider(providerId: string, limits: SpendingLimits, estimatedTokens: number, costReported: boolean, model?: string): string | undefined {
-    const t = this.cloudTotals(providerId);
+    const t = this.admissionTotals(providerId);
     const inFlight = [...this.reservedBy.entries()].filter(([, id]) => id === providerId).map(([req]) => this.reserved.get(req) ?? 0);
     const pendingTokens = inFlight.reduce((a, b) => a + b, 0);
     const name = `NEXUS_CLOUD_LIMITS[${providerId}]`;
@@ -192,7 +231,16 @@ export class UsageLedger {
   record(receipt: InferenceReceipt, workspace?: string): void {
     this.reserved.delete(receipt.requestId);
     this.reservedBy.delete(receipt.requestId);
-    if (process.env.NEXUS_RECEIPTS === "0") return;
+    if (process.env.NEXUS_RECEIPTS === "0") {
+      // Receipt opt-out keeps request-level details out of memory and disk, but must not reset admission limits.
+      addReceiptToTotals(this.suppressedTotals, receipt);
+      if (receipt.providerId) {
+        let totals = this.suppressedProviderTotals.get(receipt.providerId);
+        if (!totals) this.suppressedProviderTotals.set(receipt.providerId, totals = emptyUsageTotals());
+        addReceiptToTotals(totals, receipt, receipt.providerId);
+      }
+      return;
+    }
     this.receipts.push(receipt);
     if (!workspace) return;
     // Receipts land in the user's workspace: keep them out of the user's `git status` without touching Git metadata.
@@ -219,33 +267,18 @@ export class UsageLedger {
   }
 
   cloudTotals(providerId?: string): UsageTotals {
-    const t: UsageTotals = { requests: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, unpricedRequests: 0, uncertainRequests: 0, estimatedRequests: 0, cachedTokens: 0, cacheReportedPromptTokens: 0 };
+    const t = emptyUsageTotals();
     for (const r of this.receipts) {
       if (providerId !== undefined && r.providerId !== providerId) continue;
-      // Requests refused before sending (disclosure, limits, missing credential) cost nothing.
-      if (r.disclosure !== "cloud" || r.failureKind === "policy_denied" || r.failureKind === "configuration_error") continue;
-      t.requests++;
-      t.inputTokens += r.usage?.inputTokens ?? 0;
-      t.outputTokens += r.usage?.outputTokens ?? 0;
-      if (r.usage?.cachedInputTokens !== undefined) {
-        t.cachedTokens += r.usage.cachedInputTokens;
-        // Anthropic and Bedrock report input apart from cache reads and writes; the others count cached tokens inside input.
-        const apart = r.protocol === "anthropic-messages" || r.protocol === "bedrock-converse";
-        t.cacheReportedPromptTokens += (r.usage.inputTokens ?? 0) + (apart ? r.usage.cachedInputTokens + (r.usage.cacheWriteTokens ?? 0) : 0);
-      }
-      if (r.costConfidence === "provider-reported") t.costUsd += r.usage?.costUsd ?? 0;
-      else if (providerId !== undefined) {
-        // Per-provider limits count a request the provider did not price at the snapshot's price for the model that ran.
-        const estimate = snapshotCost(r.providerId, r.effectiveModel ?? r.selectedModel, r.usage);
-        if (estimate === undefined) t.unpricedRequests++;
-        else {
-          t.costUsd += estimate;
-          t.estimatedRequests++;
-        }
-      } else t.unpricedRequests++;
-      if (r.usageConfidence === "uncertain") t.uncertainRequests++;
+      addReceiptToTotals(t, r, providerId);
     }
     return t;
+  }
+
+  /** Admission includes aggregate-only receipts hidden by NEXUS_RECEIPTS=0; user-visible totals do not. */
+  private admissionTotals(providerId?: string): UsageTotals {
+    const t = this.cloudTotals(providerId);
+    return addTotals(t, providerId === undefined ? this.suppressedTotals : this.suppressedProviderTotals.get(providerId));
   }
 
   /** One line for /tokens and run summaries; undefined when no cloud request was made. */
