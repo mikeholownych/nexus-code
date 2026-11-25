@@ -157,6 +157,48 @@ describe("doctor findings name the actual failure", () => {
     setSandboxNetworkProfile(undefined);
   });
 
+  describe("sandbox.confinement for read-only mode with no --sandbox engine (SB-1)", () => {
+    /** Runs the doctor with `bwrap` either a stub that succeeds or absent from PATH, whatever the host has installed. */
+    async function withBwrap<T>(available: boolean, run: () => Promise<T>): Promise<T> {
+      const bin = tmp("nexus-doctor-bin-");
+      const previous = process.env.PATH;
+      if (available) {
+        fs.writeFileSync(path.join(bin, "bwrap"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      }
+      process.env.PATH = bin;
+      try {
+        return await run();
+      } finally {
+        process.env.PATH = previous;
+        fs.rmSync(bin, { recursive: true, force: true });
+      }
+    }
+    const readOnly = (o: Partial<HarnessConfig> = {}) => cfg({ approvalMode: "read-only", readOnly: true, ...o });
+
+    test("bare read-only without bwrap warns instead of passing", async () => {
+      const finding = find(await withBwrap(false, () => doctor({ config: readOnly() })), "sandbox.confinement")!;
+      assert.equal(finding.status, "warn");
+      assert.match(finding.explanation, /:read-only/);
+      assert.match(finding.explanation, /bubblewrap \(bwrap\) is not available/);
+    });
+
+    test("bare :read-only profile without bwrap warns too", async () => {
+      const finding = find(await withBwrap(false, () => doctor({ config: readOnly({ sandboxProfile: ":read-only" }) })), "sandbox.confinement")!;
+      assert.equal(finding.status, "warn");
+    });
+  });
+
+  test("the report posture carries the effective profile from the describer", async () => {
+    const plain = await doctor({ config: cfg() });
+    assert.equal(plain.posture?.profile, "unconfined");
+    assert.equal(plain.posture?.profileSource, "default (no sandbox requested)");
+    assert.equal(plain.posture?.sandbox, "off");
+    const named = await doctor({ config: cfg({ sandbox: "bwrap", sandboxProfile: ":workspace" }) });
+    assert.equal(named.posture?.profile, ":workspace");
+    assert.equal(named.posture?.sandbox, ":workspace (bwrap, network off, --sandbox :workspace)");
+    assert.equal(named.schemaVersion, 2);
+  });
+
   test("sandbox.confinement says where the worker runs under Docker and names the files-only worker (CS-10)", async () => {
     const evidence = find(await doctor({ config: cfg({ sandbox: "docker" }) }), "sandbox.confinement")!.evidence.join("\n");
     if (process.platform === "linux") {

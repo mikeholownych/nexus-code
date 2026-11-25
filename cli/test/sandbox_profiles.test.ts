@@ -6,7 +6,15 @@
 import "./helpers/leak_guard.js";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import { buildConfigWithPolicy, isProjectEnvKey } from "../src/config.js";
+import { ApplicationCore } from "../src/core/app.js";
+import { InteractiveRepl } from "../src/repl.js";
+import { SidecarServer } from "../src/sidecar.js";
+import { runDoctor } from "../src/doctor.js";
+import { DEFAULT_CONTINUATION, type HarnessConfig } from "../src/types.js";
+import { makeHome, makeRepo } from "./helpers/fixtures.js";
 import { sandboxNetworkEnabled, setSandboxNetworkFlag } from "../src/sandbox.js";
 import { setSandboxNetworkProfile } from "../src/sandbox_network.js";
 import { clampSandbox, clampSandboxNetwork, mergePolicies, type EffectivePolicy } from "../src/core/managed_policy.js";
@@ -359,5 +367,71 @@ describe("the posture describer", () => {
     assert.match(all(":read-only"), /operator's own user/);
     assert.doesNotMatch(all(":read-only"), /broad host reads/);
     for (const name of SANDBOX_PROFILE_NAMES) assert.match(all(name), /no seccomp/);
+  });
+});
+
+describe("the profile is visible on every surface through the one describer", () => {
+  const ANSI = /\u001b\[[0-9;]*m/g;
+
+  /** One session configuration read back through the sidecar event, the REPL status line and the doctor report. */
+  async function surfaces(overrides: Partial<HarnessConfig>) {
+    const repo = makeRepo();
+    const home = makeHome();
+    const previousHome = process.env.HOME;
+    process.env.HOME = home;
+    const realLog = console.log;
+    const logs: string[] = [];
+    try {
+      const config = { endpoint: "http://127.0.0.1:1/v1", model: "m", maxSteps: 6, temperature: 0, workspace: repo, shell: "bash", continuation: { ...DEFAULT_CONTINUATION }, ...overrides } as HarnessConfig;
+      const app = new ApplicationCore(config);
+      const events: any[] = [];
+      const server = new SidecarServer({ app, mode: (config.approvalMode ?? "review") as any, write: (line) => events.push(JSON.parse(line)), historyFile: path.join(home, "history") });
+      (server as any).emitSessionState();
+      const state = events.filter((e) => e.type === "session.state").at(-1);
+      const repl = new InteractiveRepl(app, (config.approvalMode ?? "review") as any);
+      console.log = (...args: unknown[]) => void logs.push(args.join(" "));
+      try { (repl as any).printStatus(false); } finally { console.log = realLog; }
+      const line = logs.join("\n").replace(ANSI, "").split("\n").find((l) => l.startsWith("mode: ")) ?? "";
+      const replSandbox = /· sandbox: (.*) · workspace:/.exec(line)?.[1];
+      const report = await runDoctor({ config, home, timeoutMs: 1500 });
+      app.shutdown();
+      return { state, replSandbox, report, line };
+    } finally {
+      console.log = realLog;
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  }
+
+  test("a named profile reads the same on session.state, the REPL status line and the doctor report", async () => {
+    const { state, replSandbox, report, line } = await surfaces({ sandbox: "bwrap", sandboxProfile: ":workspace", approvalMode: "review" });
+    const expected = sandboxPostureText({ sandbox: "bwrap", readOnly: false, network: false, profile: ":workspace" });
+    assert.equal(expected, ":workspace (bwrap, network off, --sandbox :workspace)");
+    assert.equal(state.posture.sandbox, expected);
+    assert.equal(state.posture.profile, ":workspace");
+    assert.equal(replSandbox, expected, line);
+    assert.doesNotMatch(line, /managed policy/, "the REPL never invents a managed-policy source");
+    assert.equal(report.posture?.sandbox, expected);
+    assert.equal(report.posture?.profile, ":workspace");
+    assert.equal(report.posture?.profileSource, "--sandbox :workspace");
+  });
+
+  test("without a named profile the sandbox text is what it always was, and the profile is derived", async () => {
+    const plain = await surfaces({ approvalMode: "review" });
+    assert.equal(plain.state.posture.sandbox, "off");
+    assert.equal(plain.state.posture.profile, "unconfined");
+    assert.equal(plain.replSandbox, "off");
+    assert.equal(plain.report.posture?.sandbox, "off");
+    const legacy = await surfaces({ sandbox: true, approvalMode: "review" });
+    assert.equal(legacy.state.posture.sandbox, "on");
+    assert.equal(legacy.state.posture.profile, ":workspace");
+    assert.equal(legacy.replSandbox, "on");
+    assert.equal(legacy.report.posture?.sandbox, "on");
+    assert.equal(legacy.report.posture?.profile, ":workspace");
+    const readOnly = await surfaces({ approvalMode: "read-only", readOnly: true });
+    assert.equal(readOnly.state.posture.profile, ":read-only");
+    assert.equal(readOnly.report.posture?.profile, ":read-only");
   });
 });

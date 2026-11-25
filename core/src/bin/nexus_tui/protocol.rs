@@ -21,6 +21,21 @@ pub struct PostureInfo {
     pub mode: String,
     pub sandbox: String,
     pub trusted: bool,
+    /// The effective sandbox profile (`:workspace`, `:read-only`, `:network` or `unconfined`). Absent from an older sidecar.
+    #[serde(default)]
+    pub profile: Option<String>,
+}
+
+impl PostureInfo {
+    /// The profile to show beside the sandbox text, or none when the text already says it or there is nothing to add
+    /// (an unconfined session with the sandbox off).
+    pub fn profile_to_show(&self) -> Option<&str> {
+        let profile = self.profile.as_deref()?;
+        if self.sandbox.starts_with(profile) || (profile == "unconfined" && self.sandbox == "off") {
+            return None;
+        }
+        Some(profile)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -640,6 +655,31 @@ mod tests {
                     mode: "review".into(),
                     sandbox: "off".into(),
                     trusted: false,
+                    profile: None,
+                }),
+                read_only: None,
+                context_tokens: None,
+                context_limit: None,
+                endpoint_kind: None,
+            })
+        );
+        // SB-1: the effective sandbox profile is an additive, optional field of the posture.
+        assert_eq!(
+            parse_event(
+                r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"review","git":null,"busy":false,"posture":{"mode":"review","sandbox":":workspace (bwrap, network off, --sandbox :workspace)","trusted":true,"profile":":workspace"}}"#
+            ),
+            Ok(Event::SessionState {
+                workspace_name: "app".into(),
+                model: "m".into(),
+                mode: "review".into(),
+                git: None,
+                busy: false,
+                session: None,
+                posture: Some(PostureInfo {
+                    mode: "review".into(),
+                    sandbox: ":workspace (bwrap, network off, --sandbox :workspace)".into(),
+                    trusted: true,
+                    profile: Some(":workspace".into()),
                 }),
                 read_only: None,
                 context_tokens: None,

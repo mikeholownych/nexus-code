@@ -204,6 +204,30 @@ test("action: a hostile prompt and option values are data, never shell", async (
   assert.equal(fs.existsSync(marker), false, `${run.out}\n${run.err}`.slice(-600));
 });
 
+// ------------------------------------------------------------------ sandbox profiles (SB-1)
+
+test("examples/sandbox-profiles: the doctor shows each named profile and the refusal of a conflicting network flag, with no model", { timeout: 280_000 }, () => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-sb1-example-"));
+  try {
+    const shim = path.join(scratch, "nexus");
+    fs.writeFileSync(shim, `#!/bin/sh\nexec "${TSX}" "${path.join(CLI_DIR, "src", "index.ts")}" "$@"\n`, { mode: 0o755 });
+    const clean: NodeJS.ProcessEnv = { ...process.env };
+    for (const key of Object.keys(clean)) if (/^(LOCAL_LLM_|LOCAL_HARNESS_|NEXUS_)/.test(key)) delete clean[key];
+    delete clean.NODE_TEST_CONTEXT;
+    // HOME is replaced by the script itself; this one only keeps anything it reads before that away from the real one.
+    const run = spawnSync("bash", [path.join(ROOT, "examples", "sandbox-profiles", "run.sh")], { encoding: "utf8", env: { ...clean, HOME: scratch, NEXUS: shim, NO_COLOR: "1" }, timeout: 260_000 });
+    assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`.slice(-1500));
+    assert.match(run.stdout, /--- nexus --sandbox :workspace doctor\nprofile: :workspace \(--sandbox :workspace\)\nsandbox: :workspace \(auto, network off, --sandbox :workspace\)/);
+    assert.match(run.stdout, /--- nexus --sandbox :read-only doctor\nprofile: :read-only \(--sandbox :read-only\)\nsandbox: :read-only \(bwrap, network off, --sandbox :read-only\)/);
+    assert.match(run.stdout, /--- nexus --sandbox :network doctor\nprofile: :network \(--sandbox :network\)\nsandbox: :network \(auto, network on, --sandbox :network\)/);
+    assert.match(run.stdout, /--- no profile named[^\n]*\nprofile: unconfined \(default \(no sandbox requested\)\)\nsandbox: off/);
+    assert.match(run.stdout, /refused: --sandbox-network conflicts with --sandbox :workspace: this profile has no network\. Use --sandbox :network\./);
+    assert.deepEqual(fs.readdirSync(scratch), ["nexus"], "the script wrote nothing into the HOME it was started with");
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
 // ------------------------------------------------------------------ attach (PF-3)
 
 test("examples/attach: a second client attaches to a running session, a wrong token is refused, the observer sees the turn", async () => {

@@ -1270,6 +1270,7 @@ fn render_status(frame: &mut Frame, area: Rect, state: &LiveState) {
                 let trust_str = if posture.trusted { "trusted" } else { "untrusted" };
                 segments.push((5, vec![
                     Span::styled(format!(" · sandbox: {}", posture.sandbox), muted),
+                    Span::styled(posture.profile_to_show().map(|p| format!(" · profile: {p}")).unwrap_or_default(), muted),
                     Span::styled(format!(" · workspace: {trust_str}"), muted),
                 ], None));
             } else if session.mode == "review" {
@@ -5049,6 +5050,30 @@ mod surface_tests {
         assert!(status.contains("mode: review"), "status missing mode: review: {status}");
         assert!(status.contains("sandbox: off"), "status missing sandbox: {status}");
         assert!(status.contains("workspace: untrusted"), "status missing untrusted: {status}");
+    }
+
+    #[test]
+    fn the_status_bar_shows_the_sandbox_profile_only_when_it_adds_something() {
+        let line = |sandbox: &str, profile: &str| {
+            let mut state = state(true);
+            let event = format!(
+                r#"{{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"review","git":null,"busy":false,"posture":{{"mode":"review","sandbox":"{sandbox}","trusted":true,"profile":"{profile}"}}}}"#
+            );
+            feed(&mut state, &[event.as_str()]);
+            let (rows, _) = screen(&mut state, 140, 12);
+            rows[0].clone()
+        };
+        // A read-only session whose sandbox text is `off` names the profile it is in.
+        let status = line("off", ":read-only");
+        assert!(status.contains("sandbox: off · profile: :read-only"), "{status}");
+        // An explicit profile is already in the sandbox text: not repeated.
+        let status = line(":workspace (bwrap, network off, --sandbox :workspace)", ":workspace");
+        assert!(status.contains("sandbox: :workspace (bwrap"), "{status}");
+        assert!(!status.contains("profile:"), "{status}");
+        // An unconfined session with the sandbox off keeps the header it always had.
+        let status = line("off", "unconfined");
+        assert!(status.contains("sandbox: off · workspace: trusted"), "{status}");
+        assert!(!status.contains("profile:"), "{status}");
     }
 
     #[test]

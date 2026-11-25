@@ -5,7 +5,7 @@
     {
       "expect": [
         {"v":1,"type":"hello","protocol":1,"pid":"<any:number>","commands":"<any:array>","protocol_min":1,"protocol_max":1,"capabilities":["answer","checkpoint.choice","model.select","models.list","provider.connect","provider.disconnect","receipt","slash","steer","tool.detail"],"experimental":[]},
-        {"v":1,"type":"session.state","workspace":"<workspace>","workspace_name":"<workspace-name>","model":"m","mode":"auto","git":{"branch":"main","dirty":0},"busy":false,"session":"<id:session>","read_only":false,"context_tokens":"<any:number>","context_limit":65536,"endpoint_kind":"local","posture":{"mode":"auto","sandbox":"off","trusted":false}}
+        {"v":1,"type":"session.state","workspace":"<workspace>","workspace_name":"<workspace-name>","model":"m","mode":"auto","git":{"branch":"main","dirty":0},"busy":false,"session":"<id:session>","read_only":false,"context_tokens":"<any:number>","context_limit":65536,"endpoint_kind":"local","posture":{"mode":"auto","sandbox":"off","trusted":false,"profile":"unconfined"}}
       ]
     },
     {
