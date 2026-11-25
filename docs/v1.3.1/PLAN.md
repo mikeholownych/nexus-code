@@ -209,12 +209,14 @@ Parallelism is allowed across independent WPs with worktree/claim discipline and
 | CodeQL fixes alter security-sensitive behavior | Targeted regression tests, minimal fixes, avoid behavior drift in hook/sandbox/policy. |
 | npm publish exposes packaging mistakes | `files` allowlist, dry-run, install-from-tarball smoke, owner-gated publish. |
 
-## 8. Owner decisions / inputs needed
+## 8. Owner decisions / inputs recorded
 
-- Confirm exact stale-pause behavior for #807 (block-until-operator-resume vs record-and-continue with explicit operator ack) — default recommendation: **block/keep paused with visible reason; no auto-clear**.
-- npm package name/scope and publish registry/access policy (D13 extension).
-- Whether #1 corpus sealing requires external data/access the agent cannot obtain.
-- Any owner-approved CodeQL dismissal rationale (if not fixed).
+- **#807 (recorded 2026-11-25):** default behavior approved — **block/keep paused with visible reason; no auto-clear**. Unattended job/loop stale-driver resume must not silently override pause; explicit operator resume/ack required.
+- **npm publish (recorded 2026-11-25):** in scope for v1.3.1, but npm package and publishing account are **not yet set up**. WP-131-10 must include package naming/scope decision, account/access setup checklist, dry-run/tarball audit, CI/release workflow wiring, and owner-gated first publish. No real publish without owner authorization.
+- **Testing infrastructure (recorded 2026-11-25):** local AI inference gateway and OpenAI ChatGPT subscription are authorized for testing. Deterministic tests remain release-gate authority; live-gateway/provider tests must record environment, model, and measured results.
+- **CodeQL (recorded 2026-11-25):** alerts must be **fixed**, or closed only with **specific reasoning/proof of false positive documented** (owner-approved rationale). Default: fix.
+- **#1 T2/T3 corpus:** still needs confirmation whether external data/access is required; close/seal with evidence or explicit owner-approved supersession.
+- **Remote branch (recorded 2026-11-25):** `release/v1.3.1` created on origin from `origin/main` (`e578571b`). Agents push PRs against `release/v1.3.1`.
 
 ## 9. Reference coding / XERJ
 
