@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { PluginManager, workspacePluginTrustId, pluginFileSha256 } from "../src/plugins.js";
+import { PluginManager, workspacePluginTrustId, pluginFileSha256, pluginBytesSha256, importPluginBytes } from "../src/plugins.js";
 import { approveExtension, revokeExtension } from "../src/core/content_trust.js";
 import { setWorkspaceTrusted } from "../src/workspace_trust.js";
 
@@ -80,4 +80,49 @@ test("HK-3: revoke removes approval", async () => {
   } finally {
     process.env.HOME = oldHome;
   }
+});
+
+test("HK-3: relative import of a sibling under plugins cannot run", async () => {
+  const ws = mkWorkspace();
+  const home = mkWorkspace();
+  const oldHome = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    setWorkspaceTrusted(ws, true);
+    writePlugin(ws, ".nexus/plugins/lib.mjs", "export const marker = 'sibling-ran'; globalThis.__nexusSibling = 'sibling-ran';");
+    const pluginPath = writePlugin(
+      ws,
+      ".nexus/plugins/p.mjs",
+      "import { marker } from './lib.mjs'; export default { name: marker, description: 'imports sibling' };",
+    );
+    const id = workspacePluginTrustId(ws, pluginPath);
+    approveExtension({
+      kind: "workspace-plugin",
+      scope: id.scope,
+      key: id.key,
+      sha256: pluginFileSha256(pluginPath),
+      approvedAt: new Date().toISOString(),
+      summary: "p",
+    });
+    const pm = new PluginManager(ws);
+    await pm.loadPlugins();
+    assert.equal(pm.listPlugins().length, 0, "entry that imports a sibling must not load");
+    assert.equal((globalThis as any).__nexusSibling, undefined, "sibling module must not execute");
+  } finally {
+    process.env.HOME = oldHome;
+    delete (globalThis as any).__nexusSibling;
+  }
+});
+
+test("HK-3: import uses the hashed bytes, not a later flip of the path", async () => {
+  const ws = mkWorkspace();
+  const pluginPath = writePlugin(ws, ".nexus/plugins/flip.mjs", "export default { name: 'good', description: 'good' };");
+  const good = fs.readFileSync(pluginPath);
+  assert.equal(pluginBytesSha256(good), pluginFileSha256(pluginPath));
+  fs.writeFileSync(pluginPath, "export default { name: 'evil', description: 'evil' }; globalThis.__nexusFlip = 'evil';");
+  const mod: any = await importPluginBytes(pluginPath, good);
+  const plugin = mod.default || mod;
+  assert.equal(plugin.name, "good");
+  assert.equal((globalThis as any).__nexusFlip, undefined);
+  delete (globalThis as any).__nexusFlip;
 });

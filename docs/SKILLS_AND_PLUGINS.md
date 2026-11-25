@@ -157,4 +157,8 @@ nexus plugins revoke .nexus/plugins/p.js  # withdraw approval
 
 A changed workspace plugin file needs a new approval. Managed policy may refuse plugins.
 
-**Migration note (HK-3/D18):** in-process workspace JS plugins remain supported for now but are deprecated as a trust boundary. They run with full process authority. Prefer operator-managed/global plugins or future subprocess/manifest plugin packaging.
+**Single-file load:** Nexus hashes the entry file's bytes once and imports those same bytes from a private temp copy (not the path on disk). Relative `import` / `require` of siblings under the plugins directory therefore cannot run: only the approved entry file executes. Keep a workspace plugin as one self-contained file.
+
+**Approving needs a real terminal** (same limit as `nexus hooks approve`): `nexus plugins trust` refuses when stdin/stdout are not a TTY. An unsandboxed command that can drive a PTY still has the operator's rights and can approve; under `--sandbox` the trust store is unreachable. Prefer reviewing the file yourself in a terminal.
+
+**Migration note (HK-3/D18):** in-process workspace JS plugins remain supported for now but are deprecated as a trust boundary. They run with full process authority. Prefer operator-managed/global plugins or future subprocess/manifest plugin packaging. Subprocess isolation of workspace plugin hooks is Phase D / v1.4.
