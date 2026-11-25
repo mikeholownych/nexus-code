@@ -17,23 +17,27 @@ afterEach(() => {
   while (cleanup.length) fs.rmSync(cleanup.pop()!, { recursive: true, force: true });
 });
 
-test("a workspace nested under an external custom state root is refused instead of exposing sibling state", () => {
+test("a workspace nested under an external custom state root keeps task state masked", () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pa3-custom-state-"));
   cleanup.push(base);
   const home = path.join(base, "home");
   const state = path.join(base, "external-state");
   const workspace = path.join(state, "worktrees", "job-1");
+  const sentinel = path.join(state, "tasks", "goal.json");
   fs.mkdirSync(home);
   fs.mkdirSync(workspace, { recursive: true });
-  fs.mkdirSync(path.join(state, "tasks"));
-  fs.writeFileSync(path.join(state, "tasks", "goal.json"), "SENTINEL-GOAL-STATE");
+  fs.mkdirSync(path.dirname(sentinel), { recursive: true });
+  fs.writeFileSync(sentinel, "SENTINEL-GOAL-STATE");
   process.env.HOME = home;
   process.env.NEXUS_STATE_DIR = state;
 
-  const wrapped = wrapSandboxedCommand(`cat ${path.join(state, "tasks", "goal.json")}`, workspace, { mode: "bwrap" });
-  assert.equal(wrapped.sandboxed, false);
-  assert.equal(wrapped.denial?.category, "policy");
-  assert.match(wrapped.warning ?? "", /workspace .* inside the external Nexus state directory/);
+  const wrapped = wrapSandboxedCommand(`cat ${sentinel} 2>&1 || true; echo WORKSPACE_WRITABLE`, workspace, { mode: "bwrap" });
+  assert.equal(wrapped.sandboxed, true, wrapped.warning);
+  const result = spawnSync(wrapped.argv![0], wrapped.argv!.slice(1), { encoding: "utf8", env: buildCommandEnvironment(), timeout: 20_000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /WORKSPACE_WRITABLE/);
+  assert.doesNotMatch(result.stdout + result.stderr, /SENTINEL-GOAL-STATE/);
+  assert.equal(fs.readFileSync(sentinel, "utf8"), "SENTINEL-GOAL-STATE", "host state stays intact");
 });
 
 test("an unresolvable state root fails closed instead of running without its mask", () => {
@@ -71,9 +75,10 @@ test("an operator HOME mount cannot re-expose state beside a worktree nested bel
   assert.ok(mounts.refused.some((entry) => entry.path === state && /overlaps the Nexus state directory/.test(entry.reason)));
   assert.ok(!mounts.mounts.some((entry) => entry.path === state));
 
-  const wrapped = wrapSandboxedCommand(`cat ${sentinel} 2>&1`, workspace, { mode: "bwrap" });
+  const wrapped = wrapSandboxedCommand(`cat ${sentinel} 2>&1 || true; echo COMMAND_DONE`, workspace, { mode: "bwrap" });
   assert.equal(wrapped.sandboxed, true, wrapped.warning);
   const result = spawnSync(wrapped.argv![0], wrapped.argv!.slice(1), { encoding: "utf8", env: buildCommandEnvironment(), timeout: 20_000 });
   assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /COMMAND_DONE/);
   assert.doesNotMatch(result.stdout + result.stderr, /SENTINEL-GOAL-STATE/);
 });
