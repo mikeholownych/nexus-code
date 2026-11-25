@@ -10,6 +10,7 @@ import { approvalHint, emitPolicyNotice, processPolicyHost } from "./core/policy
 import { FILE_EDIT_TOOLS } from "./file_diff.js";
 import { linkRecord, verifyChain, type ChainLink, type ChainVerdict } from "./core/hash_chain.js";
 import { runnerRoot } from "./core/runner_store.js";
+import { defaultTaskStateDir } from "./core/state.js";
 
 export type VerificationMode = "off" | "record" | "approve" | "block";
 export type VerificationClass = "ci" | "build" | "test_config" | "verifier_script" | "test_file" | "package_scripts" | "policy";
@@ -406,7 +407,8 @@ export class SecurityManager {
     if (inspector.notice) say(inspector.notice);
     return {
       blockedCommands: [...DEFAULT_BLOCKED_COMMANDS, ...loaded.project.blockedCommandPatterns],
-      protectedPaths: [...DEFAULT_PROTECTED_PATHS, runnerRoot(), ...effective.paths.protected.values],
+      // PA-3: the task-state directory holds goal state, caps and stall counts; the agent must not edit its own limits.
+      protectedPaths: [...DEFAULT_PROTECTED_PATHS, runnerRoot(), defaultTaskStateDir(), ...effective.paths.protected.values],
       allowedDomains: projectDomains ? (projectDomains.length > 0 ? [...projectDomains] : [NO_HOST]) : undefined,
       verificationPaths: {
         mode: effectiveVerificationMode(effective).value,
