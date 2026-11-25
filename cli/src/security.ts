@@ -10,6 +10,7 @@ import { approvalHint, emitPolicyNotice, processPolicyHost } from "./core/policy
 import { FILE_EDIT_TOOLS } from "./file_diff.js";
 import { linkRecord, verifyChain, type ChainLink, type ChainVerdict } from "./core/hash_chain.js";
 import { runnerRoot } from "./core/runner_store.js";
+import { extensionTrustStorePath } from "./core/content_trust.js";
 
 export type VerificationMode = "off" | "record" | "approve" | "block";
 export type VerificationClass = "ci" | "build" | "test_config" | "verifier_script" | "test_file" | "package_scripts" | "policy";
@@ -179,6 +180,15 @@ const DEFAULT_PROTECTED_PATHS = [
   "id_rsa*",
   "id_ed25519*",
 ];
+
+/**
+ * HK-1: the operator's hooks file and the store of hook approvals, by absolute path. The names above match them from
+ * outside; these match them when the workspace is their own directory, where the relative name is just `hooks.json`.
+ */
+function hookTrustFiles(): string[] {
+  const store = extensionTrustStorePath();
+  return [store, path.join(path.dirname(store), "hooks.json")];
+}
 
 const SCRIPT_NAMES = ["test", "verify", "ci", "check", "lint"];
 /** [class, globs]; a glob matches a workspace-relative path, case-insensitively, `**\/` meaning any depth (zero or more directories). */
@@ -408,7 +418,7 @@ export class SecurityManager {
     if (inspector.notice) say(inspector.notice);
     return {
       blockedCommands: [...DEFAULT_BLOCKED_COMMANDS, ...loaded.project.blockedCommandPatterns],
-      protectedPaths: [...DEFAULT_PROTECTED_PATHS, runnerRoot(), ...effective.paths.protected.values],
+      protectedPaths: [...DEFAULT_PROTECTED_PATHS, runnerRoot(), ...hookTrustFiles(), ...effective.paths.protected.values],
       allowedDomains: projectDomains ? (projectDomains.length > 0 ? [...projectDomains] : [NO_HOST]) : undefined,
       verificationPaths: {
         mode: effectiveVerificationMode(effective).value,

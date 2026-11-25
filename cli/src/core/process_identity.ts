@@ -112,6 +112,17 @@ export class ProcessTreeMemory {
     }
   }
 
+  /** Remembers the members of process group `pgid` as they are now (its leader may already be gone). */
+  rememberGroup(pgid: number): void {
+    const listing = spawnSync("ps", ["-A", "-o", "pid=,pgid="], { encoding: "utf8", timeout: 5_000 });
+    for (const line of (listing.stdout ?? "").split("\n")) {
+      const [pid, group] = line.trim().split(/\s+/).map(Number);
+      if (group !== pgid || !(pid > 0) || this.seen.has(pid)) continue;
+      const started = startedAt(pid);
+      if (started !== undefined) this.seen.set(pid, started);
+    }
+  }
+
   /** The remembered processes that are still the same processes. */
   survivors(): number[] {
     return [...this.seen].filter(([pid, started]) => startedAt(pid) === started).map(([pid]) => pid);
