@@ -64,9 +64,15 @@ HOME=/tmp node --import /home/mike/nexus-code/cli/node_modules/tsx/dist/loader.m
 
 **Result:** `FAIL` — the opt-out path bypasses the configured in-process request limit. This probe did not exercise provider inference or billing. The separate-process/restart reset follows from the process-static singleton and in-memory arrays; it was not represented as an executed cross-process experiment here.
 
+### Local remediation evidence
+
+Commit `77430b996` on branch `codex/p10-04-admission-baseline` changes `UsageLedger` to keep aggregate-only request/token/cost counters for opted-out cloud receipts. `NEXUS_RECEIPTS=0` still leaves `all()` and user-visible `cloudTotals()` empty and writes no receipt file; admission uses the private aggregates. The counters retain only totals globally and by provider, not request ids, endpoints, model names, or prompt data. They remain process-local and are not durable.
+
+On Node 24.11.1, `cli/test/provider_limits.test.ts` passed **10/10**, including request, token, and snapshot-cost limits with receipt opt-out. `cli/test/provider_robustness.test.ts` passed **27/27**, including the existing local-receipt opt-out behavior. TypeScript check `./cli/node_modules/.bin/tsc --noEmit -p cli/tsconfig.json` exited **0**. The first robustness-test attempt could not resolve `dotenv` because the isolated worktree had no installed dependencies; it passed after the existing dependency directory was made available to the isolated worktree. No production configuration or shared source checkout was changed.
+
 ### Ownership conclusion
 
-Nexus has useful local bounds and cleanup mechanisms: operation-local scheduling, the process-wide in-process usage ledger, ACP's per-connection cap, per-manager LSP limits, per-container Docker limits, bounded unattended-job queues/output, and state-retention GC. They do not compose into one cross-session resource budget. The clearest immediately reproducible admission defect is that the receipt opt-out also removes the accounting state needed by provider-limit enforcement. The next implementation slice should first decouple enforcement counters from optional receipts, then decide and implement which operator-configured resource identities and scopes need atomic cross-process leases. It should not claim host-wide CPU/memory or exact provider spend containment without OS isolation or authoritative provider accounting.
+Nexus has useful local bounds and cleanup mechanisms: operation-local scheduling, the process-wide in-process usage ledger, ACP's per-connection cap, per-manager LSP limits, per-container Docker limits, bounded unattended-job queues/output, and state-retention GC. They do not compose into one cross-session resource budget. The receipt-opt-out bypass is fixed on this branch. Separate processes and restarts still reset provider usage limits, and operation schedulers still admit independently against the same resource identity. The next implementation step is to decide and implement which operator-configured resource identities and scopes need atomic cross-process leases. It should not claim host-wide CPU/memory or exact provider spend containment without OS isolation or authoritative provider accounting.
 
 No production files were changed for this baseline. The root checkout and the existing P10-03 and P10-02 worktrees were not modified.
 
