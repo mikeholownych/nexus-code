@@ -53,6 +53,15 @@ function taskTimeLimitDetail(budget: any, state: TaskElapsedTurnState): string {
     : `operator time limit ${budget.maxTurnMinutes} min`;
 }
 
+function applyCandidateReceiptPersistenceFailure(
+  failure: string | undefined,
+  persistenceFailure: string | undefined,
+  stopReason: TurnReason | undefined,
+): [string | undefined, TurnReason | undefined] {
+  if (!failure) return [persistenceFailure, stopReason];
+  return [persistenceFailure ?? failure, stopReason ?? "PERSISTENCE_FAILED"];
+}
+
 function initialTaskTimeStopReason(state: TaskElapsedTurnState, persistenceFailure?: string): TurnReason | undefined {
   return state.remainingMs === 0 && !persistenceFailure ? "TIME_BUDGET_EXHAUSTED" : undefined;
 }
@@ -1220,10 +1229,11 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
       );
     }
 
-    if (this.candidateReceiptPersistenceFailure) {
-      persistenceFailure ??= this.candidateReceiptPersistenceFailure;
-      stopReason ??= "PERSISTENCE_FAILED";
-    }
+    [persistenceFailure, stopReason] = applyCandidateReceiptPersistenceFailure(
+      this.candidateReceiptPersistenceFailure,
+      persistenceFailure,
+      stopReason,
+    );
 
     triggerNotification("Nexus Code", "Turn finished.", this.surface);
 
