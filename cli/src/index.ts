@@ -1158,8 +1158,27 @@ program
       try { ok = /^y(es)?$/i.test((await rl.question("Approve this workspace plugin for this workspace? [y/N] ")).trim()); }
       finally { rl.close(); }
       if (!ok) { console.error(pc.red("Not approved.")); process.exitCode = 1; return; }
-      approveExtension({ kind: "workspace-plugin", scope: id.scope, key: id.key, sha256, approvedAt: new Date().toISOString(), summary: path.basename(abs) });
-      console.log(`Approved workspace plugin: ${abs}\nsha256 ${sha256}\nUndo with \`nexus plugins revoke ${pluginPath}\`.`);
+      // Re-hash after the prompt so a flip during the question cannot be recorded under the shown digest.
+      let confirmed: string;
+      try {
+        confirmed = pluginFileSha256(abs);
+      } catch (error) {
+        console.error(pc.red(`Not approved: could not re-read ${abs}: ${error instanceof Error ? error.message : String(error)}`));
+        process.exitCode = 2;
+        return;
+      }
+      if (confirmed !== sha256) {
+        console.error(pc.red(`Not approved: the file changed while you were asked (was ${sha256}, now ${confirmed}). Review it and run \`nexus plugins trust\` again.`));
+        process.exitCode = 2;
+        return;
+      }
+      if (pinned !== undefined && pinned !== confirmed) {
+        console.error(pc.red(`Not approved: --sha256 does not match the file after confirmation, whose SHA-256 is ${confirmed}.`));
+        process.exitCode = 2;
+        return;
+      }
+      approveExtension({ kind: "workspace-plugin", scope: id.scope, key: id.key, sha256: confirmed, approvedAt: new Date().toISOString(), summary: path.basename(abs) });
+      console.log(`Approved workspace plugin: ${abs}\nsha256 ${confirmed}\nUndo with \`nexus plugins revoke ${pluginPath}\`.`);
     });
   pluginsCmd
     .command("revoke <pluginPath>")

@@ -2,10 +2,16 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { PluginManager, workspacePluginTrustId, pluginFileSha256, pluginBytesSha256, importPluginBytes } from "../src/plugins.js";
-import { approveExtension, revokeExtension } from "../src/core/content_trust.js";
+import { approveExtension, revokeExtension, readExtensionTrust } from "../src/core/content_trust.js";
 import { setWorkspaceTrusted } from "../src/workspace_trust.js";
+
+const CLI_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const TSX = path.join(CLI_DIR, "node_modules", ".bin", "tsx");
+const INDEX = path.join(CLI_DIR, "src", "index.ts");
 
 function mkWorkspace(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "nexus-plugin-trust-"));
@@ -125,4 +131,29 @@ test("HK-3: import uses the hashed bytes, not a later flip of the path", async (
   assert.equal(plugin.name, "good");
   assert.equal((globalThis as any).__nexusFlip, undefined);
   delete (globalThis as any).__nexusFlip;
+});
+
+test("HK-3: plugins trust from a non-TTY (agent run_command style) records nothing", { timeout: 240_000 }, () => {
+  const ws = mkWorkspace();
+  const home = mkWorkspace();
+  const pluginPath = writePlugin(ws, ".nexus/plugins/p.js", "export default { name:'p', description:'p' };");
+  const hash = pluginFileSha256(pluginPath);
+  const run = spawnSync(TSX, [INDEX, "plugins", "trust", pluginPath, "-w", ws, "--sha256", hash], {
+    encoding: "utf8",
+    env: { ...process.env, HOME: home },
+    // No TTY: stdin/stdout are pipes (same as agent run_command).
+    input: "y\n",
+    timeout: 200_000,
+  });
+  const said = `${run.stdout}\n${run.stderr}`;
+  assert.match(said, new RegExp(`sha256 ${hash}`));
+  assert.match(said, /Not approved: approving a workspace plugin needs a person at a terminal/);
+  assert.equal(run.status, 2);
+  const oldHome = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    assert.deepEqual(readExtensionTrust().entries, [], "nothing was recorded");
+  } finally {
+    process.env.HOME = oldHome;
+  }
 });

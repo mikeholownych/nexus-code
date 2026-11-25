@@ -157,7 +157,7 @@ nexus plugins revoke .nexus/plugins/p.js  # withdraw approval
 
 A changed workspace plugin file needs a new approval. Managed policy may refuse plugins.
 
-**Single-file load:** Nexus hashes the entry file's bytes once and imports those same bytes from a private temp copy (not the path on disk). Relative `import` / `require` of siblings under the plugins directory therefore cannot run: only the approved entry file executes. Keep a workspace plugin as one self-contained file.
+**Single-file load:** Nexus hashes the entry file's bytes once and imports those same bytes from a private temp copy (not the path on disk). Relative `import` / `require` of siblings under the plugins directory therefore cannot run: only the approved entry file executes. Keep a workspace plugin as one self-contained file. Absolute/`file:`/`createRequire` loads of other workspace paths inside an approved entry still run with process authority — approving that entry approves those loads; do not approve code that reaches outside itself.
 
 **Approving needs a real terminal** (same limit as `nexus hooks approve`): `nexus plugins trust` refuses when stdin/stdout are not a TTY. An unsandboxed command that can drive a PTY still has the operator's rights and can approve; under `--sandbox` the trust store is unreachable. Prefer reviewing the file yourself in a terminal.
 
