@@ -1,0 +1,57 @@
+#732 requested changes have landed
+
+---
+
+proceed and continue iteratively until v1.3.0 release
+
+---
+
+claude agent is back from rate limit.. taki back merge and ci work
+
+---
+
+proceed
+
+---
+
+take over what claude code has been running in this repo. Claude is rate-limited.
+
+---
+
+claude was also working on the updates for #782
+
+---
+
+close #785 as superseded by #788/#790, with a note that PA-2 acceptance criterion is satisfied by landed+qualified regressions.
+
+---
+
+what about #787 I don't see any review notes?
+
+---
+
+same for 789/790/791
+
+---
+
+/goal continue reviewing v1.3.0 PRs until all roadmap items are complete. Then, take required action to release.
+
+---
+
+proceed
+
+---
+
+#799 was not ready for merging.
+
+---
+
+there were follow-ups being requested in the comments. be sure all follow-ups are addressed before any merge going forward.
+
+---
+
+continue
+
+---
+
+proceed with SB-1 slices 2–3
