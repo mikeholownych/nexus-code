@@ -54,7 +54,7 @@ test("shared slots compose across independent operation admission instances", ()
 test("configured capacity is shared and conflicting active declarations fail closed", () => {
   const f = fixture();
   try {
-    const admission = new SharedResourceAdmission(f.dir);
+    const admission = new SharedResourceAdmission(f.dir, { operatorMaxUnits: 2 });
     const twoSlots = resource({ maxConcurrentUnits: 2 });
     const first = admission.acquire(twoSlots);
     const second = admission.acquire(twoSlots);
@@ -70,6 +70,28 @@ test("configured capacity is shared and conflicting active declarations fail clo
     const changed = admission.acquire(resource({ maxConcurrentUnits: 1 }));
     assert.ok(changed, "a new capacity declaration is accepted once the resource is idle");
     changed.release();
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("workspace resource declarations cannot raise the operator-owned shared capacity", () => {
+  const f = fixture();
+  try {
+    const admission = new SharedResourceAdmission(f.dir);
+    const first = admission.acquire(resource({ maxConcurrentUnits: 64 }));
+    assert.ok(first);
+    assert.equal(
+      admission.acquire(resource({ maxConcurrentUnits: 64 })),
+      null,
+      "operation specs may request local concurrency but cannot raise the default cross-operation ceiling",
+    );
+    first.release();
+
+    const operatorAllowsTwo = new SharedResourceAdmission(f.dir, { operatorMaxUnits: 2 });
+    const lowerDeclaredCapacity = operatorAllowsTwo.acquire(resource({ maxConcurrentUnits: 1 }));
+    assert.ok(lowerDeclaredCapacity);
+    lowerDeclaredCapacity.release();
   } finally {
     f.cleanup();
   }

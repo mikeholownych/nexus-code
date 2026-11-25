@@ -57,12 +57,13 @@ function resourceKey(resource: ResourceDescriptor): string {
   return createHash("sha256").update(identity).digest("hex");
 }
 
-function capacityOf(resource: ResourceDescriptor): number {
-  const capacity = resource.maxConcurrentUnits ?? 1;
-  if (!Number.isSafeInteger(capacity) || capacity < 1 || capacity > MAX_CONCURRENT_UNITS) {
+function capacityOf(resource: ResourceDescriptor, operatorMaximum: number): number {
+  const declared = resource.maxConcurrentUnits ?? operatorMaximum;
+  if (!Number.isSafeInteger(declared) || declared < 1 || declared > MAX_CONCURRENT_UNITS) {
     throw new ResourceAdmissionConflictError("resource maxConcurrentUnits is invalid; shared admission refused");
   }
-  return capacity;
+  // A workspace operation spec may supply this descriptor. It can lower the operator-owned ceiling, never raise it.
+  return Math.min(declared, operatorMaximum);
 }
 
 function ensureAdmissionDirectory(dir: string): void {
@@ -111,18 +112,34 @@ function readCapacity(file: string): CapacityRecord | undefined {
 
 /**
  * Atomically reserves slots across operation IDs and Nexus processes on the same host/filesystem.
- * `maxConcurrentUnits` is the operator-declared capacity for a canonical provider/endpoint/model/account identity.
- * Concurrent declarations for that identity must agree; an active mismatched declaration fails closed.
+ * `operatorMaxUnits` is the operator-owned ceiling; a resource descriptor can lower it, never raise it. Concurrent
+ * effective declarations for one identity must agree; an active mismatch fails closed.
  */
 export class SharedResourceAdmission {
-  constructor(private readonly directory: string, private readonly guardWaitMs = 1_000) {
+  constructor(
+    private readonly directory: string,
+    private readonly options: { operatorMaxUnits?: number; guardWaitMs?: number } = {},
+  ) {
+    const operatorMaxUnits = options.operatorMaxUnits ?? 1;
+    const guardWaitMs = options.guardWaitMs ?? 1_000;
+    if (!Number.isSafeInteger(operatorMaxUnits) || operatorMaxUnits < 1 || operatorMaxUnits > MAX_CONCURRENT_UNITS) {
+      throw new Error(`invalid operator shared-resource capacity; expected 1..${MAX_CONCURRENT_UNITS}`);
+    }
     if (!Number.isSafeInteger(guardWaitMs) || guardWaitMs < 0) throw new Error("invalid resource admission guard wait bound");
+  }
+
+  private get operatorMaxUnits(): number {
+    return this.options.operatorMaxUnits ?? 1;
+  }
+
+  private get guardWaitMs(): number {
+    return this.options.guardWaitMs ?? 1_000;
   }
 
   acquire(resource: ResourceDescriptor): ResourceSlotLease | null {
     ensureAdmissionDirectory(this.directory);
     const key = resourceKey(resource);
-    const capacity = capacityOf(resource);
+    const capacity = capacityOf(resource, this.operatorMaxUnits);
     const prefix = path.join(this.directory, key);
     let mutex: FileGuard | null;
     try {

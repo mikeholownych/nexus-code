@@ -3,7 +3,7 @@
  * waits durably when nothing is runnable, revalidates resources on wake, and persists after every transition so a
  * restarted process continues from the same decision point.
  */
-import { credentialStorageHome, storedCredentialFor } from "../client.js";
+import { credentialStorageHome, operatorSetting, storedCredentialFor } from "../client.js";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -28,7 +28,7 @@ import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./op
 import { OperationLockedError, type OperationStore } from "./operation_runner_persistence.js";
 import { STALE_PAUSE_PREFIX, clearDriver, liveForeignDriver, stampDriver, staleDriver } from "./driver_identity.js";
 import type { BoundaryRules } from "./boundary_rules.js";
-import { MAX_OPERATION_ACTIVE_MS } from "./operation_schema.js";
+import { MAX_CONCURRENT_UNITS, MAX_OPERATION_ACTIVE_MS } from "./operation_schema.js";
 import { SharedResourceAdmission, type ResourceSlotLease } from "./shared_resource_admission.js";
 
 export { OperationStore, OperationLockedError, migrateLegacyAccountIdentities } from "./operation_runner_persistence.js";
@@ -118,6 +118,18 @@ function planFromState(state: DurableOperationState): OperationGitPlan {
   };
 }
 
+/** Operator-owned cross-operation ceiling; workspace operation specs cannot increase it. */
+function sharedResourceMaximum(): number {
+  const raw = operatorSetting("NEXUS_MAX_SHARED_RESOURCE_UNITS");
+  if (raw === undefined) return 1;
+  if (!/^\d+$/.test(raw)) throw new Error(`Invalid NEXUS_MAX_SHARED_RESOURCE_UNITS='${raw}': expected an integer from 1 to ${MAX_CONCURRENT_UNITS}.`);
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_CONCURRENT_UNITS) {
+    throw new Error(`Invalid NEXUS_MAX_SHARED_RESOURCE_UNITS='${raw}': expected an integer from 1 to ${MAX_CONCURRENT_UNITS}.`);
+  }
+  return value;
+}
+
 /** PA-2: how many verifiers held on the merged tree, for the operator's event line. */
 function mergedChecksNote(checks: readonly MergedCheck[] | undefined): string {
   return checks?.length ? ` (${checks.length} merged-tree ${checks.length === 1 ? "check" : "checks"} passed)` : "";
@@ -143,6 +155,7 @@ export class OperationRunner {
     this.clock = opts.clock ?? realRecoveryClock;
     this.resourceAdmission = opts.resourceAdmission ?? new SharedResourceAdmission(
       path.join(credentialStorageHome(), ".local/state/nexus/resource-admission"),
+      { operatorMaxUnits: sharedResourceMaximum() },
     );
     this.registry = new ResourceRegistry(state.resources, state.conditions, this.clock, (e) => this.onRegistryEvent(e));
     this.revalidator = new OperationRevalidator(opts.executor, this.registry, opts.onDiagnostic);
