@@ -154,3 +154,15 @@ test("close() closes every watch: later changes produce nothing and the budget i
     for (let i = 0; i < 10; i++) assert.equal(budget.take(), true);
   } finally { rm(dir); }
 });
+
+test("close() calls close on every underlying watch (no inotify watch is left open)", () => {
+  const dir = repo();
+  const opened: Array<{ dir: string; closed: boolean }> = [];
+  const w = make(dir, ["src/**"], { watch: (d) => { const rec = { dir: d, closed: false }; opened.push(rec); return { close: () => { rec.closed = true; }, on: () => undefined } as any; } });
+  try {
+    w.reconcile();
+    assert.ok(opened.length >= 1);
+    w.close();
+    assert.deepEqual(opened.filter((o) => !o.closed), []);
+  } finally { rm(dir); }
+});

@@ -30,6 +30,7 @@ test("a correctly signed delivery is accepted once, with its raw body", async ()
   const { l, port, deliveries } = await listener();
   try {
     const body = '{"a":1}';
+    assert.equal((l as any).server.address().address, "127.0.0.1", "bound to loopback, not to every interface");
     same(await post(port, PATH, body, signed(secret, body)), { status: 202, body: '{"status":"accepted"}' });
     assert.equal(deliveries.length, 1);
     assert.equal(deliveries[0]!.body.toString(), body);

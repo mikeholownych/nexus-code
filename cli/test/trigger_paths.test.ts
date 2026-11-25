@@ -69,6 +69,9 @@ test("the event data block is one escaped line between markers, never longer tha
   const data = JSON.parse(lines[2]!);
   assert.ok(data.changedPaths.length <= 40);
   assert.ok(data.morePaths >= 7 + 4_000);
+  const wide = eventDataBlock({ id: "t" }, { id: "fc-2", kind: "file-change", paths: Array.from({ length: 40 }, (_, i) => `${i}-${"\u00e9".repeat(190)}`) });
+  assert.ok(wide.length <= EVENT_BLOCK_MAX, `${wide.length}: paths are dropped until the escaped block fits`);
+  assert.ok(JSON.parse(wide.split("\n")[2]!).morePaths > 0);
   const webhook = eventDataBlock({ id: "t" }, { id: "wh-1", kind: "webhook", body: Buffer.from("ÿ".repeat(5_000), "latin1"), bodyBytes: 5_000 });
   assert.ok(webhook.length <= EVENT_BLOCK_MAX);
   assert.equal(JSON.parse(webhook.split("\n")[2]!).bodyPreviewTruncated, true);

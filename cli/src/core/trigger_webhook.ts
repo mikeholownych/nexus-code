@@ -132,7 +132,7 @@ export class WebhookListener {
     const address = server.address() as AddressInfo;
     this.hostNames = new Set(["127.0.0.1", "localhost", "[::1]", ...(isLoopbackAddress(host) ? [] : [host.toLowerCase()])]);
     this.boundPort = address.port;
-    return { host, port: address.port };
+    return { host: address.address, port: address.port };
   }
 
   private boundPort = 0;

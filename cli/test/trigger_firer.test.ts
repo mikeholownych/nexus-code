@@ -154,6 +154,57 @@ for (const [name, arrange, status, expect] of [
   });
 }
 
+test("a spec re-approved in a new form between the scan and the event is not fired from the old match", () => {
+  const { world, w, firer } = setup([fileSpec("lint", ["src/**/*.ts"])]);
+  (firer as any).options.scanMs = 3_600_000;
+  try {
+    world.tick(firer);
+    world.writeSpecs([fileSpec("lint", ["src/**/*.ts"], { action: { prompt: "a new, approved prompt", policy: "read-only" } })]);
+    world.approve("lint");
+    change(world, firer, w);
+    assert.equal(world.jobs.length, 0);
+    assert.match(rt(firer).lastRefusal?.reason ?? "", /changed after the event was matched/);
+    world.clock.ms += 2_000_000; // the next scan arms the new spec; the next event fires from it
+    (firer as any).options.scanMs = 1_000;
+    world.tick(firer);
+    change(world, firer, w, "b.ts");
+    assert.equal(world.jobs.length, 1);
+    assert.match(world.specs[0]!.units[0].prompt, /^a new, approved prompt/);
+  } finally { world.cleanup(); }
+});
+
+test("closing the firer closes every watcher", () => {
+  const { world, w, firer } = setup([fileSpec("lint", ["src/**/*.ts"])]);
+  try {
+    world.tick(firer);
+    assert.ok(w.created() >= 1);
+    firer.closeNow();
+    assert.equal(w.closed.length, w.created(), "every directory watch was closed");
+  } finally { world.cleanup(); }
+});
+
+test("each failed or timed-out job of a trigger is reported to the limiter once", () => {
+  const { world, w, firer } = setup([fileSpec("lint", ["src/**/*.ts"], { rate: { maxPerMinute: 50, maxPerHour: 500, maxPerDay: 5000 } })]);
+  try {
+    world.tick(firer);
+    const reported: string[] = [];
+    const limiter = (firer as any).ensureLimiter();
+    const original = limiter.recordFailure.bind(limiter);
+    limiter.recordFailure = (...args: unknown[]) => { reported.push(String(args[4])); return original(...args); };
+    for (let i = 0; i < 3; i++) {
+      change(world, firer, w, `f${i}.ts`);
+      const last = world.jobs.length - 1;
+      world.jobs[last] = { ...world.jobs[last]!, state: i === 1 ? "TIMED_OUT" : "FAILED" };
+      world.clock.ms += 2_000;
+      world.tick(firer);
+      world.clock.ms += 2_000;
+      world.tick(firer);
+    }
+    assert.equal(reported.length, 3, "once per job, however many scans see it");
+    assert.match(reported[1]!, /timed_out/);
+  } finally { world.cleanup(); }
+});
+
 test("a revoked trigger stops at the next scan: the watcher is closed", () => {
   const { world, w, firer } = setup([fileSpec("lint", ["src/**/*.ts"])]);
   try {
