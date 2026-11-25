@@ -141,7 +141,7 @@ test("one byte changed anywhere in the tree: not run, the notice names the file,
     assert.equal(receipt.hooks, undefined, file);
     assert.equal(runsOf(log).length, 0, `${file}: its program was not started`);
     assert.deepEqual(state()?.changed, [`.nexus/plugins/guard/${file}`]);
-    assert.ok(notices.some((notice) => notice.includes(`is not approved (.nexus/plugins/guard/${file} changed since approval); review it and run \`nexus plugins trust .nexus/plugins/guard\` in a terminal`)), JSON.stringify(notices));
+    assert.ok(notices.some((notice) => notice === `nexus: WARNING: workspace plugin guard is NO LONGER IN FORCE: .nexus/plugins/guard/${file} changed since it was approved. Its hooks do not run. Review the change, then run \`nexus plugins trust .nexus/plugins/guard\` in a terminal.`), JSON.stringify(notices));
     fs.writeFileSync(target, original);
     assert.equal(state()?.status, "active", `${file}: the approved bytes are in force again`);
   }

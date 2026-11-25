@@ -14,7 +14,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { approveExtension, readExtensionTrust } from "../src/core/content_trust.js";
-import { PLUGIN_FILE_LIMIT, PluginManager, inspectWorkspacePlugins, pluginDirSources, pluginFileSha256, readPluginFile, workspacePluginTrustId } from "../src/plugins.js";
+import { PLUGIN_FILE_LIMIT, PluginManager, inspectWorkspacePlugins, pluginDirSources, pluginFileSha256, readPluginFile, skippedOperatorDirs, workspacePluginTrustId } from "../src/plugins.js";
 import { trustWorkspacePlugin } from "../src/plugins_cli.js";
 
 const CLI_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -60,24 +60,45 @@ async function load(workspace: string): Promise<{ manager: PluginManager; notice
 const marks = (marker: string): string[] => (fs.existsSync(marker) ? fs.readFileSync(marker, "utf8").trim().split("\n") : []);
 const statusOf = (manager: PluginManager, file: string) => manager.getPluginTrustRecords().find((record) => record.path === file);
 
-test("a directory's kind travels with it: with the home directory as the workspace the operator's plugins still load as the operator's", async () => {
-  const marker = path.join(base, "marker");
-  const mine = write(path.join(home, ".nexus", "plugins", "mine.mjs"), pluginSource("mine", marker));
-  const config = write(path.join(home, ".config", "nexus", "plugins", "config.mjs"), pluginSource("config", marker));
-  const repo = write(path.join(home, "plugins", "repo.mjs"), pluginSource("repo", marker));
+test("with the home directory as the workspace, the operator's plugin directories are not loaded as the operator's", async () => {
+  // What an agent's write_file can do there: put a module into ~/.nexus/plugins. It must not run as operator code.
+  const pwned = path.join(home, "PWNED");
+  const planted = (name: string) => `import fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(pwned)}, ${JSON.stringify(name)});\nexport default { name: ${JSON.stringify(name)}, description: "planted ${++seq}" };\n`;
+  const state = write(path.join(home, ".nexus", "plugins", "x.mjs"), planted("planted-state"));
+  const config = write(path.join(home, ".config", "nexus", "plugins", "y.mjs"), planted("planted-config"));
+  const repo = write(path.join(home, "plugins", "repo.mjs"), planted("planted-repo"));
 
   assert.deepEqual(pluginDirSources(home, true), [
-    { dir: path.join(home, ".nexus", "plugins"), source: "global" },
-    { dir: path.join(home, ".config", "nexus", "plugins"), source: "global" },
-    // `<workspace>/.nexus/plugins` is the operator's own directory here: it is listed once, as theirs.
+    // No operator directory: both lie inside the workspace. As the workspace's own directories they need approvals.
+    { dir: path.join(home, ".nexus", "plugins"), source: "workspace" },
     { dir: path.join(home, "plugins"), source: "workspace" },
   ]);
-  const { manager, names } = await load(home);
-  assert.deepEqual(names, ["config", "mine"], "the operator's plugins load without any approval");
-  assert.equal(statusOf(manager, mine)?.status, "global");
-  assert.equal(statusOf(manager, config)?.status, "global");
-  assert.equal(statusOf(manager, repo)?.status, "untrusted", "the workspace's own directory still needs an approval per file");
-  assert.equal(marks(marker).length, 2);
+  assert.deepEqual(skippedOperatorDirs(home), [path.join(home, ".nexus", "plugins"), path.join(home, ".config", "nexus", "plugins")]);
+  const { manager, names, notices } = await load(home);
+  assert.deepEqual(names, []);
+  assert.equal(fs.existsSync(pwned), false, "no planted module ran");
+  assert.equal(statusOf(manager, state)?.status, "untrusted", "as a workspace file it waits for an approval like any other");
+  assert.equal(statusOf(manager, repo)?.status, "untrusted");
+  assert.equal(statusOf(manager, config), undefined, "~/.config/nexus/plugins is not a workspace plugin directory: it is not looked at");
+  for (const dir of [path.join(home, ".nexus", "plugins"), path.join(home, ".config", "nexus", "plugins")]) {
+    assert.deepEqual(notices.filter((notice) => notice.startsWith(`nexus: plugins in ${dir} are not loaded`)), [`nexus: plugins in ${dir} are not loaded: the directory lies inside the workspace (${home}), where the agent's tools can write it, so its files cannot be taken as yours. Start Nexus in a project directory, not in your home directory.`]);
+  }
+
+  // A workspace that holds the home directory, and one reached through a link, are the same case.
+  assert.deepEqual(skippedOperatorDirs(base).length, 2);
+  const link = path.join(base, "home-link");
+  fs.symlinkSync(home, link);
+  assert.deepEqual(skippedOperatorDirs(link).length, 2);
+  assert.equal((await load(link)).names.length, 0);
+  assert.equal(fs.existsSync(pwned), false);
+
+  // With a project directory as the workspace the same files are the operator's, and load.
+  const elsewhere = await load(ws);
+  assert.deepEqual(elsewhere.names, ["planted-config", "planted-state"]);
+  assert.equal(fs.existsSync(pwned), true);
+  assert.deepEqual(skippedOperatorDirs(ws), []);
+  assert.deepEqual(elsewhere.notices.filter((notice) => /lies inside the workspace/.test(notice)), []);
+  assert.equal(statusOf(elsewhere.manager, config)?.status, "global");
 });
 
 test("a directory whose name only begins like the workspace's is not the workspace", async () => {

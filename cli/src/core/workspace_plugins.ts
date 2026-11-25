@@ -17,8 +17,13 @@ import { decodeStrictUtf8 } from "./strict_json.js";
 /** Where workspace manifest plugins live, relative to the workspace. */
 export const WORKSPACE_MANIFEST_PLUGINS_DIR = path.join(".nexus", "plugins");
 const TREE_FILES_LIMIT = 64;
+const TREE_DIRECTORIES_LIMIT = 256;
+const TREE_DEPTH_LIMIT = 8;
 const TREE_FILE_BYTES = 1024 * 1024;
+const TREE_TOTAL_BYTES = 8 * 1024 * 1024;
 const PLUGINS_LIMIT = 32;
+/** How many entries of `.nexus/plugins` are looked at for plugin directories. */
+const ROOT_ENTRIES_LIMIT = 256;
 
 /** `active`: its hooks run. Every other status: nothing of it is used. */
 export type WorkspaceManifestStatus = "active" | "not_approved" | "changed" | "invalid" | "policy_refused" | "untrusted_workspace" | "read_only";
@@ -58,29 +63,94 @@ const inside = (root: string, target: string): boolean => {
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
 };
 
-/** Every file below `dir`, relative to it, sorted. A symbolic link or a special file anywhere refuses the tree. */
-function treeFiles(dir: string): string[] {
-  const found: string[] = [];
-  const walk = (current: string, relative: string) => {
-    for (const name of fs.readdirSync(current).sort()) {
+/** A plugin's tree as a walk found it: its files, and a stamp that changes whenever anything in it does. */
+interface Tree {
+  files: string[];
+  /**
+   * The identity of the tree's content as stats show it: every directory's listing and, for every file and
+   * directory, device, inode, size, modification time and change time (which a writer cannot set back), to the
+   * precision the file system keeps them.
+   */
+  stamp: string;
+}
+
+/**
+ * Every file below `dir`, relative to it, sorted. Only names and stats are read. A symbolic link or a special file
+ * anywhere refuses the tree, and so does a tree past any bound (files, directories, depth, total size): what is too
+ * large to hash on every tool call is not a plugin.
+ */
+function walkTree(dir: string): Tree {
+  const files: string[] = [];
+  const parts: string[] = [];
+  let directories = 0;
+  let bytes = 0;
+  const walk = (current: string, relative: string, depth: number) => {
+    if (depth > TREE_DEPTH_LIMIT) throw new Error(`the directory is nested more than ${TREE_DEPTH_LIMIT} levels deep`);
+    const names = fs.readdirSync(current);
+    // Bounded before anything is sorted or looked at: a directory of tens of thousands of entries costs one listing.
+    if (names.length > TREE_FILES_LIMIT + TREE_DIRECTORIES_LIMIT) throw new Error(`${relative || "the directory"} holds ${names.length} entries; a plugin holds at most ${TREE_FILES_LIMIT} files in ${TREE_DIRECTORIES_LIMIT} directories`);
+    for (const name of names.sort()) {
       const child = relative ? `${relative}/${name}` : name;
-      const stat = fs.lstatSync(path.join(current, name));
-      if (stat.isDirectory()) walk(path.join(current, name), child);
-      else if (stat.isFile()) found.push(child);
-      else throw new Error(`${child} is a symbolic link or a special file; a plugin's directory holds regular files only`);
-      if (found.length > TREE_FILES_LIMIT) throw new Error(`the directory holds more than ${TREE_FILES_LIMIT} files`);
+      const stat = fs.lstatSync(`${current}/${name}`);
+      parts.push(`${child}\0${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}:${stat.mode}`);
+      if (stat.isDirectory()) {
+        if (++directories > TREE_DIRECTORIES_LIMIT) throw new Error(`the directory holds more than ${TREE_DIRECTORIES_LIMIT} directories`);
+        walk(`${current}/${name}`, child, depth + 1);
+      } else if (stat.isFile()) {
+        files.push(child);
+        bytes += stat.size;
+        if (files.length > TREE_FILES_LIMIT) throw new Error(`the directory holds more than ${TREE_FILES_LIMIT} files`);
+        if (stat.size > TREE_FILE_BYTES || bytes > TREE_TOTAL_BYTES) throw new Error(`the directory holds more than ${TREE_TOTAL_BYTES / (1024 * 1024)} MiB, or a file of more than 1 MiB`);
+      } else {
+        throw new Error(`${child} is a symbolic link or a special file; a plugin's directory holds regular files only`);
+      }
     }
   };
-  walk(dir, "");
-  return found;
+  const own = fs.lstatSync(dir);
+  parts.push(`.\0${own.dev}:${own.ino}:${own.mtimeMs}:${own.ctimeMs}`);
+  walk(dir, "", 1);
+  return { files: files.sort(), stamp: parts.join("\n") };
 }
+
+type PluginRead = { manifest: PluginManifest; hooks: HooksFile[]; skills: string[]; files: ExtensionTrustFile[]; digest: string };
+/**
+ * What was read from a plugin's tree, by the tree's stamp: an unchanged tree is not read or hashed again, within a
+ * tool call or across calls. Any change to a file or a directory changes the stamp, so nothing stale is served. The
+ * interpreter lookup is part of the reading, hence PATH in the key.
+ */
+const reads = new Map<string, { key: string; read?: PluginRead; error?: string }>();
 
 /**
  * Reads one plugin directory: its manifest, the hooks files and skill directories the manifest names, and every file
  * of the tree. Throws with the reason when it is not a workspace manifest plugin that could be approved.
  */
-function readPlugin(workspace: string, dir: string): { manifest: PluginManifest; hooks: HooksFile[]; skills: string[]; files: ExtensionTrustFile[]; digest: string } {
+function readPlugin(workspace: string, dir: string): PluginRead {
   if (!fs.lstatSync(dir).isDirectory()) throw new Error("the plugin's directory is a symbolic link or not a directory");
+  const { files: tree, stamp } = walkTree(dir);
+  const key = `${workspace}\n${process.env.PATH ?? ""}\n${stamp}`;
+  const cached = reads.get(dir);
+  if (cached?.key === key) {
+    if (cached.read) return cached.read;
+    throw new Error(cached.error);
+  }
+  try {
+    const read = readPluginTree(workspace, dir, tree);
+    // The tree as it was when the reading ended must be the tree that was walked.
+    if (walkTree(dir).stamp !== stamp) throw new Error("the plugin's directory changed while it was read");
+    if (reads.size >= 64) reads.clear();
+    reads.set(dir, { key, read });
+    return read;
+  } catch (error) {
+    reads.set(dir, { key, error: error instanceof Error ? error.message : String(error) });
+    throw error;
+  }
+}
+
+/** How many plugin trees were actually read and hashed (not served from the cache): for tests of the cache. */
+export const workspacePluginReads = { count: 0 };
+
+function readPluginTree(workspace: string, dir: string, tree: string[]): PluginRead {
+  workspacePluginReads.count++;
   const { manifest } = loadPluginManifest(dir);
   if (manifest.name !== path.basename(dir)) throw new Error(`the manifest's name '${manifest.name}' is not the directory's name '${path.basename(dir)}'`);
   const more = manifest.permissions.filter((permission) => permission !== "hooks" && permission !== "skills");
@@ -91,7 +161,6 @@ function readPlugin(workspace: string, dir: string): { manifest: PluginManifest;
   if (hookFiles.length && !manifest.permissions.includes("hooks")) throw new Error("the manifest contributes hooks without the 'hooks' permission");
   if (skills.length && !manifest.permissions.includes("skills")) throw new Error("the manifest contributes skills without the 'skills' permission");
 
-  const tree = treeFiles(dir);
   const named = new Set<string>([PLUGIN_MANIFEST_NAME]);
   const within = (entry: string, what: string): string => {
     const target = path.resolve(dir, entry);
@@ -137,7 +206,7 @@ export function inspectWorkspaceManifestPlugins(input: WorkspaceManifestInput): 
   const root = path.join(input.workspace, WORKSPACE_MANIFEST_PLUGINS_DIR);
   let names: string[];
   try {
-    names = fs.readdirSync(root).sort();
+    names = fs.readdirSync(root).sort().slice(0, ROOT_ENTRIES_LIMIT);
   } catch {
     return [];
   }

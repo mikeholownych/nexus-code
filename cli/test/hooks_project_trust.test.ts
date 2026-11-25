@@ -94,7 +94,7 @@ test("approved, it runs; one byte changed, it does not run again and the notice 
   assert.equal(changed.status, "COMPLETED", "the changed file is not in force");
   assert.equal(changed.hooks, undefined);
   assert.equal(runsOf(log).length, 1, "the program was not started again");
-  assert.deepEqual(hookNotices(), [`nexus: project hooks in ${file()} are not approved (.nexus/hooks.json changed since approval); review them and run \`nexus hooks approve\` in a terminal`]);
+  assert.deepEqual(hookNotices(), [`nexus: WARNING: project hooks in ${file()} are NO LONGER IN FORCE: .nexus/hooks.json changed since approval. They do not run. Review the change, then run \`nexus hooks approve\` in a terminal.`]);
 
   // Approving the new bytes puts it back in force. (A whole-second modification time, so it can be put back exactly.)
   fs.rmSync(path.join(repo, "out.txt"));

@@ -159,7 +159,7 @@ test("an approval covers the script the hooks run: overwritten by the agent, the
   assert.equal(next.hooks, undefined, "no project hook ran");
   assert.equal(fs.existsSync(replaced), false, "the agent's script was not run");
   assert.equal(runsOf(log).length, 1);
-  assert.deepEqual(notices.filter((notice) => /project hooks/.test(notice)), [`nexus: project hooks in ${path.join(repo, ".nexus", "hooks.json")} are not approved (guard.sh changed since approval); review them and run \`nexus hooks approve\` in a terminal`]);
+  assert.deepEqual(notices.filter((notice) => /project hooks/.test(notice)), [`nexus: WARNING: project hooks in ${path.join(repo, ".nexus", "hooks.json")} are NO LONGER IN FORCE: guard.sh changed since approval. They do not run. Review the change, then run \`nexus hooks approve\` in a terminal.`]);
   const state = inspectHookSources({ workspace: repo, readOnly: false }).project;
   assert.deepEqual([state.status, state.changed], ["changed", ["guard.sh"]]);
 
@@ -291,7 +291,7 @@ test("a file given to the script is covered too: overwritten by the agent, the h
   const next = await dispatch(agent, "read_file", { path: "a.txt" });
   assert.equal(next.hooks, undefined);
   assert.equal(fs.readFileSync(log, "utf8"), "allow\n");
-  assert.ok(notices.some((notice) => /are not approved \(rules\.txt changed since approval\)/.test(notice)), JSON.stringify(notices));
+  assert.ok(notices.some((notice) => /are NO LONGER IN FORCE: rules\.txt changed since approval/.test(notice)), JSON.stringify(notices));
 });
 
 test("the accepted forms run once approved, in the workspace, from copies outside it", async () => {
