@@ -85,9 +85,10 @@
       ]
     },
     "ExtensionTrustKind": {
-      "description": "What an approval covers. `project-hooks`: a workspace's `.nexus/hooks.json`. `workspace-plugin`: a workspace plugin module.",
+      "description": "What an approval covers. `project-hooks`: a workspace's `.nexus/hooks.json`. `workspace-plugin`: a workspace plugin\nmodule. `workspace-manifest`: a workspace manifest plugin's whole directory, by its tree digest.",
       "enum": [
         "project-hooks",
+        "workspace-manifest",
         "workspace-plugin"
       ]
     },

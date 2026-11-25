@@ -80,9 +80,9 @@ test("after the upgrade: plugins of a trusted workspace are not loaded, one noti
 
   const before = diagnoseWorkspacePlugins(ws);
   assert.equal(before.status, "warn");
-  assert.match(before.explanation, /^2 of 2 workspace plugin file\(s\) are not active\. Since v1\.3\.0 each workspace plugin file needs its own approval\./);
+  assert.match(before.explanation, /^2 of 2 workspace plugin\(s\) are not active\. Since v1\.3\.0 each workspace plugin file needs its own approval\./);
   assert.deepEqual(before.evidence, [`${audit}: not approved, so it is not loaded`, `${format}: not approved, so it is not loaded`]);
-  assert.match(before.action ?? "", /approve it by itself in a terminal: `nexus plugins trust \.nexus\/plugins\/audit\.mjs`, `nexus plugins trust plugins\/format\.mjs`\. Each plugin file needs its own approval; trusting the workspace does not load plugins\./);
+  assert.match(before.action ?? "", /approve it by itself in a terminal: `nexus plugins trust \.nexus\/plugins\/audit\.mjs`, `nexus plugins trust plugins\/format\.mjs`\. Each plugin needs its own approval \(a plugin file by itself, a manifest plugin by its directory\); trusting the workspace does not load plugins\./);
   assert.doesNotMatch(before.action ?? "", /`nexus trust/, "the remedy is the per-file approval, not trusting the workspace");
   const report = await runDoctor({ home, timeoutMs: 1500, config: { endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 4, temperature: 0, workspace: ws, shell: "bash" } as any });
   const finding = report.findings.find((entry) => entry.id === "plugins.workspace");
@@ -99,7 +99,7 @@ test("after the upgrade: plugins of a trusted workspace are not loaded, one noti
 
   // A change is named as one.
   approve(format);
-  assert.deepEqual(diagnoseWorkspacePlugins(ws), { status: "pass", explanation: "2 workspace plugin file(s) are approved. Plugin files were read and compared with your approvals; none was imported.", evidence: [`${audit}: approved`, `${format}: approved`] });
+  assert.deepEqual(diagnoseWorkspacePlugins(ws), { status: "pass", explanation: "2 workspace plugin(s) are approved. Plugin files were read and compared with your approvals; none was imported.", evidence: [`${audit}: approved`, `${format}: approved`] });
   fs.appendFileSync(format, "// edited\n");
   const again = manager();
   await again.pm.loadPlugins();
@@ -119,7 +119,7 @@ test("the notice is capped, and the doctor reports a failed load and a workspace
   assert.equal(diagnoseWorkspacePlugins(ws).evidence.length, 13);
 
   fs.rmSync(path.join(ws, "plugins"), { recursive: true });
-  assert.deepEqual(diagnoseWorkspacePlugins(ws), { status: "skip", explanation: "The workspace has no plugin files of its own (optional).", evidence: [] });
+  assert.deepEqual(diagnoseWorkspacePlugins(ws), { status: "skip", explanation: "The workspace has no plugins of its own (optional).", evidence: [] });
   const broken = path.join(ws, "plugins", "broken.mjs");
   fs.mkdirSync(path.dirname(broken));
   fs.writeFileSync(broken, `import "./lib.mjs";\nexport default { name: "broken" };\n`);

@@ -5,6 +5,7 @@
  */
 import * as path from "node:path";
 import { inspectWorkspacePlugins } from "./plugins.js";
+import { workspaceManifestPlugins } from "./plugins_cli.js";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
 
 export interface WorkspacePluginsDiagnosis {
@@ -20,7 +21,15 @@ export function diagnoseWorkspacePlugins(workspace: string): WorkspacePluginsDia
   const root = path.resolve(workspace);
   const records = inspectWorkspacePlugins(root);
   const note = "Plugin files were read and compared with your approvals; none was imported.";
-  if (!records.length) return { status: "skip", explanation: "The workspace has no plugin files of its own (optional).", evidence: [] };
+  const manifest = workspaceManifestPlugins(root).map((plugin) => ({
+    path: plugin.dir,
+    // In the file plugins' terms, so that one finding covers both kinds.
+    status: plugin.status === "active" ? "trusted" : plugin.status === "not_approved" ? "untrusted" : plugin.status === "changed" ? "changed" : plugin.status === "invalid" ? "invalid" : plugin.status,
+    reason: plugin.problem,
+  }));
+  const refused = manifest.filter((plugin) => plugin.status === "policy_refused");
+  records.push(...(manifest.filter((plugin) => plugin.status !== "policy_refused" && plugin.status !== "untrusted_workspace" && plugin.status !== "read_only") as typeof records));
+  if (!records.length && !refused.length) return { status: "skip", explanation: "The workspace has no plugins of its own (optional).", evidence: [] };
   const shown = (file: string) => path.relative(root, file);
   const what: Record<string, string> = {
     untrusted: "not approved, so it is not loaded",
@@ -29,13 +38,16 @@ export function diagnoseWorkspacePlugins(workspace: string): WorkspacePluginsDia
     "load-failed": "approved, but its last load failed, so it is not active",
   };
   const pending = records.filter((record) => record.status in what);
+  if (!pending.length && refused.length) {
+    return { status: "warn", explanation: `${refused.length} workspace plugin(s) are refused by managed policy and are not used. ${note}`, evidence: refused.map((plugin) => `${plugin.path}: ${plugin.reason}`), action: "Ask your administrator, or remove the plugin from the workspace; an approval does not override the policy." };
+  }
   if (!pending.length) {
     const trusted = isWorkspaceTrusted(root);
     return {
       status: trusted ? "pass" : "warn",
       explanation: trusted
-        ? `${records.length} workspace plugin file(s) are approved. ${note}`
-        : `${records.length} workspace plugin file(s) are approved, but the workspace is not trusted, so none is loaded. ${note}`,
+        ? `${records.length} workspace plugin(s) are approved. ${note}`
+        : `${records.length} workspace plugin(s) are approved, but the workspace is not trusted, so none is loaded. ${note}`,
       evidence: records.slice(0, EVIDENCE_LIMIT).map((record) => `${record.path}: approved`),
       ...(trusted ? {} : { action: `Trust the workspace with \`nexus trust ${root}\`; each plugin file keeps its own approval.` }),
     };
@@ -45,12 +57,12 @@ export function diagnoseWorkspacePlugins(workspace: string): WorkspacePluginsDia
   const approvable = pending.filter((record) => record.status === "untrusted" || record.status === "changed");
   const broken = pending.filter((record) => record.status === "load-failed" || record.status === "invalid");
   const steps = [
-    ...(approvable.length ? [`Review each file, then approve it by itself in a terminal: ${approvable.slice(0, 5).map((record) => `\`nexus plugins trust ${shown(record.path)}\``).join(", ")}${approvable.length > 5 ? ", ..." : ""}. Each plugin file needs its own approval; trusting the workspace does not load plugins.`] : []),
+    ...(approvable.length ? [`Review each file, then approve it by itself in a terminal: ${approvable.slice(0, 5).map((record) => `\`nexus plugins trust ${shown(record.path)}\``).join(", ")}${approvable.length > 5 ? ", ..." : ""}. Each plugin needs its own approval (a plugin file by itself, a manifest plugin by its directory); trusting the workspace does not load plugins.`] : []),
     ...(broken.length ? [`Fix ${broken.slice(0, 5).map((record) => shown(record.path)).join(", ")}: a workspace plugin must be one self-contained regular file (no sibling or workspace-package imports), then approve it again with \`nexus plugins trust <file>\`.`] : []),
   ];
   return {
     status: "warn",
-    explanation: `${pending.length} of ${records.length} workspace plugin file(s) are not active. Since v1.3.0 each workspace plugin file needs its own approval. ${note}`,
+    explanation: `${pending.length} of ${records.length} workspace plugin(s) are not active. Since v1.3.0 each workspace plugin file needs its own approval. ${note}`,
     evidence,
     action: steps.join(" "),
   };

@@ -15,9 +15,14 @@ import {
 } from "./core/plugin_install.js";
 import { InvalidPluginManifestError } from "./core/plugin_manifest.js";
 import * as path from "node:path";
-import { approveExtension } from "./core/content_trust.js";
+import * as fs from "node:fs";
+import { approveExtension, readExtensionTrust, revokeExtension } from "./core/content_trust.js";
+import { HOOK_EVENTS } from "./core/hooks.js";
+import { managedPolicy } from "./core/policy_runtime.js";
+import { inspectWorkspaceManifestPlugins, type WorkspaceManifestPlugin } from "./core/workspace_plugins.js";
+import type { EffectivePolicy } from "./core/managed_policy.js";
 import { readPluginFile, workspacePluginTrustId } from "./plugins.js";
-import { isWorkspaceFile } from "./workspace_trust.js";
+import { isWorkspaceFile, isWorkspaceTrusted } from "./workspace_trust.js";
 
 export interface PluginTrustDeps {
   /** Whether a person can be asked: standard input and standard output are both a terminal. */
@@ -26,6 +31,67 @@ export interface PluginTrustDeps {
   confirm: (question: string) => Promise<boolean>;
   log?: (line: string) => void;
   error?: (line: string) => void;
+  /** The managed policy a manifest plugin is held to. Default: the process's. */
+  policy?: () => EffectivePolicy;
+}
+
+function realDir(dir: string): string {
+  try {
+    return fs.realpathSync(dir);
+  } catch {
+    return path.resolve(dir);
+  }
+}
+
+/** The workspace's manifest plugins as `nexus plugins list` and `trust` see them: gates applied, nothing run. */
+export function workspaceManifestPlugins(workspace: string, policy: () => EffectivePolicy = managedPolicy): WorkspaceManifestPlugin[] {
+  const ws = realDir(workspace);
+  return inspectWorkspaceManifestPlugins({ workspace: ws, readOnly: false, trusted: isWorkspaceTrusted(ws), policy, approvals: readExtensionTrust().entries });
+}
+
+/** Withdraws the approval of a workspace plugin file or of a workspace manifest plugin's directory. */
+export function revokeWorkspacePlugin(workspace: string, pluginPath: string): boolean {
+  const ws = path.resolve(workspace);
+  const abs = path.resolve(ws, pluginPath);
+  const key = path.relative(ws, abs).split(path.sep).join("/");
+  const file = revokeExtension(workspacePluginTrustId(ws, abs));
+  const tree = revokeExtension({ kind: "workspace-manifest", scope: realDir(workspace), key });
+  return file || tree;
+}
+
+/**
+ * `nexus plugins trust <dir>`: approves a workspace manifest plugin by the digest of its whole tree. What is shown is
+ * everything the approval covers: the hooks with their commands, the skills, and every file. As for a plugin file,
+ * only a person at a terminal approves, and the tree is read again after the answer.
+ */
+async function trustWorkspaceManifestPlugin(ws: string, abs: string, options: { sha256?: string }, deps: PluginTrustDeps, log: (line: string) => void, fail: (line: string, code: number) => number): Promise<number> {
+  const find = () => workspaceManifestPlugins(ws, deps.policy).find((plugin) => plugin.dir === abs);
+  const shown = find();
+  if (!shown) return fail(`Not a workspace plugin: ${abs} (a manifest plugin is a directory in .nexus/plugins/ with a nexus-plugin.json)`, 1);
+  if (shown.status === "invalid" || !shown.digest) return fail(`${abs} is not a workspace plugin that can be approved: ${shown.problem}`, 1);
+  if (shown.status === "policy_refused") return fail(`Not approved: ${shown.problem}`, 2);
+  log(`${abs}\ntree sha256 ${shown.digest}\nWorkspace plugin '${shown.name}'. Its hooks would run with your authority, outside the sandbox, on the tool calls they name:`);
+  for (const file of shown.hooks) {
+    for (const event of HOOK_EVENTS) {
+      for (const hook of file.hooks[event] ?? []) log(`  ${event}  ${hook.name}  tools: ${hook.tools.join(", ")}\n    ${(hook.command as string[]).map((part) => JSON.stringify(part)).join(" ")}`);
+    }
+  }
+  if (!shown.hooks.length) log("  (no hooks)");
+  if (shown.skills.length) log(`It names these skills (recorded and covered by the approval; not loaded into requests in this version): ${shown.skills.join(", ")}`);
+  log("The approval covers every file of its directory, as it is now (a change to one needs a new approval):");
+  for (const file of shown.files) log(`  ${file.path}  sha256 ${file.sha256}`);
+  if (shown.status === "untrusted_workspace") log("Note: the workspace is not trusted (`nexus trust`), so the plugin stays unused until it is.");
+  if (!deps.interactive()) return fail("Not approved: approving a workspace plugin needs a person at a terminal. Review it, then run `nexus plugins trust` yourself in a terminal.", 2);
+  const pinned = options.sha256?.trim().toLowerCase();
+  if (pinned !== undefined && pinned !== shown.digest) return fail(`Not approved: --sha256 does not match the plugin, whose tree SHA-256 is ${shown.digest}.`, 2);
+  if (!(await deps.confirm("Approve this workspace plugin for this workspace? [y/N] "))) return fail("Not approved.", 1);
+  // Read again after the answer: what is recorded is a tree that is still the tree that was shown.
+  const confirmed = find();
+  if (!confirmed?.digest || confirmed.status === "invalid") return fail(`Not approved: the plugin could not be read again: ${confirmed?.problem ?? "it is gone"}`, 2);
+  if (confirmed.digest !== shown.digest) return fail(`Not approved: the plugin changed while you were asked (was ${shown.digest}, now ${confirmed.digest}). Review it and run \`nexus plugins trust\` again.`, 2);
+  approveExtension({ kind: "workspace-manifest", scope: confirmed.id.scope, key: confirmed.id.key, sha256: confirmed.digest, approvedAt: new Date().toISOString(), summary: `${confirmed.name}: ${confirmed.hooks.reduce((sum, file) => sum + HOOK_EVENTS.reduce((n, event) => n + (file.hooks[event]?.length ?? 0), 0), 0)} hook(s)`, files: confirmed.files });
+  log(`Approved workspace plugin '${confirmed.name}': ${abs}\ntree sha256 ${confirmed.digest}\nUndo with \`nexus plugins revoke ${confirmed.id.key}\`.`);
+  return 0;
 }
 
 /**
@@ -40,8 +106,19 @@ export async function trustWorkspacePlugin(workspace: string, pluginPath: string
     (deps.error ?? ((text: string) => console.error(pc.red(text))))(line);
     return code;
   };
+  // A plugin file is approved for the workspace path as the loader names it; a manifest plugin for its real path, as
+  // the hook registry does.
   const ws = path.resolve(workspace);
   const abs = path.resolve(ws, pluginPath);
+  const real = realDir(workspace);
+  const dir = path.resolve(real, path.relative(ws, abs));
+  let isDirectory = false;
+  try {
+    isDirectory = fs.lstatSync(dir).isDirectory();
+  } catch {
+    // not there: the file reader below says so
+  }
+  if (isDirectory) return trustWorkspaceManifestPlugin(real, dir, options, deps, log, fail);
   if (!isWorkspaceFile(ws, abs)) return fail(`Plugin must be a real file inside the workspace: ${abs}`, 1);
   const shown = readPluginFile(abs);
   if ("problem" in shown) return fail(`Not a plugin file that can be approved: ${abs}: ${shown.problem}`, 1);

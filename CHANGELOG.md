@@ -11,6 +11,7 @@ Detailed per-release documentation is maintained in [`docs/releases/`](docs/rele
 Inventory of work already on `release/v1.3.0` toward v1.3.0 (version strings still 1.2.2). Full unit table and open gaps: [`docs/releases/v1.3.0-READINESS.md`](docs/releases/v1.3.0-READINESS.md). External qualification pending; not a frontier-grade claim.
 
 ### Added
+- Workspace manifest plugins (HK-3): a directory `.nexus/plugins/<name>/` with a `nexus-plugin.json` contributes command hooks that run as subprocesses under the project-hook rules. Approved per plugin by its tree digest with `nexus plugins trust <dir>`; any change to the tree asks again; managed policy and workspace trust stand above the approval. Skills a manifest names are recorded and not loaded. `docs/PLUGINS.md`.
 - Client protocol schemas and docs (PF-1), `nexus run --json` result contract (PF-2).
 - ACP adapter and conformance fixtures against Zed and CodeCompanion (AC-1, AC-2).
 - `nexus verify`, MCP/ACP verify surfaces, sandbox-denial receipt records (VR-1, VR-2, VR-3).

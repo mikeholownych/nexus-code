@@ -57,6 +57,63 @@ What an approved plugin does at run time is its own business, and yours for havi
 `import("/path/to/other.mjs")`, a `child_process` call or a file read by absolute path are not checked. Review the file
 before you approve it.
 
+## Workspace manifest plugins (command hooks, no in-process code)
+
+A repository can also carry a plugin that runs **nothing inside Nexus**: a directory
+`<workspace>/.nexus/plugins/<name>/` with a `nexus-plugin.json`. It contributes command hooks, which run as separate
+processes and can only deny a tool call (see [`HOOKS.md`](HOOKS.md)). This is where a workspace plugin whose job is to
+refuse or log tool calls should move.
+
+```text
+.nexus/plugins/guard/
+  nexus-plugin.json
+  hooks.json
+  check.sh
+```
+
+```json
+{ "version": 1, "name": "guard", "pluginVersion": "1.0.0", "permissions": ["hooks"], "contributions": { "hooks": ["hooks.json"] } }
+```
+
+`hooks.json` is a hooks file in the format of `docs/HOOKS.md`; a script path in it is relative to the plugin's
+directory:
+
+```json
+{ "version": 1, "hooks": { "pre-tool": [ { "name": "check", "tools": ["write_file"], "command": ["./check.sh"] } ] } }
+```
+
+```bash
+nexus plugins list                         # each manifest plugin with its status
+nexus plugins trust .nexus/plugins/guard   # in a terminal: shows hooks, files and the tree digest, then asks
+nexus plugins revoke .nexus/plugins/guard
+```
+
+Rules:
+
+- **Hooks and skills only.** The manifest's `name` is the directory's name; `permissions` may hold `hooks` and
+  `skills`; a contribution of `mcp` or `verifiers`, the `tools` permission, or any other key is refused (workspace MCP
+  servers belong in `.mcp.json`).
+- **The whole tree is approved, by its digest.** Every file in the directory must be accounted for by the manifest:
+  the manifest, a hooks file it names, a script or file a hook's command names, or a file of a skill directory it
+  names. A file that is not, a symbolic link, or more than 64 files makes the plugin invalid. The approval records the
+  tree digest and every file's SHA-256; one changed byte anywhere, or a file added or removed, and the plugin is out of
+  force until you approve it again. The notice names what changed.
+- **Its hooks are project hooks.** The same command rule as for `.nexus/hooks.json` applies (a script of the plugin
+  run directly, or a listed interpreter followed by one; nothing else), the script must lie inside the plugin's own
+  directory, its `#!` line is held to the same rule, and it runs from a verified private copy of the approved bytes. A
+  hook is shown and recorded as `<plugin>/<hook>` with the source `workspace-plugin`.
+- **What stands above your approval:** the workspace must be trusted (`nexus trust`); the session must not be
+  read-only; managed policy must not refuse it (`plugins.disable_workspace` refuses every workspace plugin,
+  `plugins.allow` admits one by `sha256:<tree digest>`). A policy refusal is not overridden by an approval, and
+  `nexus plugins trust` does not record one for a refused plugin.
+- **Order.** For one tool call the operator's hooks run first, then the workspace's manifest plugins (by name), then
+  the project's own `.nexus/hooks.json`. The first denial ends the chain. No plugin and no file can remove or disable
+  another's hooks, and a hook's "allow" has no effect.
+- **Skills.** A skill directory a manifest names (`contributions.skills`, a directory with a `SKILL.md`) is recorded
+  and covered by the approval, and that is all in this version: it is **not** added to the skill catalog or to any
+  request. Loading plugin skills on a trigger is not built yet.
+- Approving needs a person at a terminal, with the same limit as above for commands that run outside the sandbox.
+
 ## Migrating workspace plugins
 
 **What changed.** Before v1.3.0, trusting a workspace (`nexus trust`) loaded every `*.js` and `*.mjs` file in its

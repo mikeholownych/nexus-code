@@ -18,5 +18,10 @@
     "schema_version": 1,
     "schemaSha256": "ce59f5a2bca5a47ce671ee091b0a7b99269b042b1d49b70b08dbee44b0fc1fef",
     "note": "Same version: an approval in extension_trust.json gains the optional member `loadFailed` (ExtensionLoadFailure: at, reason), written by the loader when approved content could not be loaded and removed when it loads, so that `nexus plugins list` and `nexus doctor` can say so without running the content. Additive: a store without it reads as before. The hooks file, the hook input and the hook output are unchanged."
+  },
+  {
+    "schema_version": 1,
+    "schemaSha256": "b548295fd11087c29345028cc3dcf57d39bdee160bd22ac63843a9edea4aecfc",
+    "note": "Same version: the `kind` of an approval in extension_trust.json may also be `workspace-manifest` (a workspace manifest plugin's directory, approved by its tree digest, with every file of the tree in `files`). Additive: a reader that does not know the kind treats the store as it treats any entry it cannot read, and approves nothing from it; stores without such entries read as before."
   }
 ]
