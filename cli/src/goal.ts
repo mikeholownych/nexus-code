@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { acceptDescoping, applyRequirementUpdates, createLedger, recordAttempt, requirementDone, type ObjectiveLedger, type VerificationAttempt } from "./core/objective.js";
 import { OperationRunner, AgentWorkUnitExecutor, OperationLockedError, OperationStore, driveOperation, type WorkUnitExecutor } from "./core/operation_runner.js";
-import { STALE_PAUSE_PREFIX, stampDriver, staleDriver } from "./core/driver_identity.js";
+import { STALE_PAUSE_PREFIX, stampDriver, staleDriver, withDerivedPause } from "./core/driver_identity.js";
 import { TeamOrchestrator } from "./team.js";
 import type { DurableOperationState, OperationEvent, WorkUnit } from "./core/operation.js";
 import type { ResourceDescriptor } from "./core/resources.js";
@@ -257,7 +257,9 @@ export class GoalOrchestrator {
       const state = goalStatus(fresh, ledger);
       const holder = release ? undefined : this.store.activeLock(operation.id);
       const reason = [state.reason, holder ? `Driven by pid ${holder.pid} on ${holder.host ?? "unknown host"}; this is a read-only view.` : undefined].filter(Boolean).join(" ");
-      return { id: fresh.id, status: state.status, operation: fresh, usage: this.usage(fresh), ...(ledger ? { ledger } : {}), ...(reason ? { reason } : {}) };
+      // Nested operation.status must match result.status for API consumers (derived pause; nothing written).
+      const view = withDerivedPause(fresh);
+      return { id: fresh.id, status: state.status, operation: view, usage: this.usage(view), ...(ledger ? { ledger } : {}), ...(reason ? { reason } : {}) };
     } finally {
       release?.();
     }

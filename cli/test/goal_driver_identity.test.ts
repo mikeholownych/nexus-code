@@ -108,6 +108,7 @@ for (const c of CASES) {
 
       const listed = orchestrator.list().find((goal) => goal.id === id)!;
       assert.equal(listed.status, "PAUSED");
+      assert.equal(listed.operation.status, listed.status, "nested operation.status matches GoalResult.status (derived pause)");
       assert.match(listed.reason ?? "", c.reason);
       assert.match(withDerivedPause(f.store.load(id)).pauseReason ?? "", c.reason, "the operation status view shows the same pause");
       assert.equal(withDerivedPause(f.store.load(id)).status, "PAUSED");
