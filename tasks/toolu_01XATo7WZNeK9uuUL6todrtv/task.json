@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01XATo7WZNeK9uuUL6todrtv",
+  "agent_id": "aed26c9c9aeeb1a8e",
+  "subagent_type": "reviewer",
+  "task_description": "Hostile review PR #806 PA-3",
+  "token_usage": {
+    "input_tokens": 126,
+    "cache_creation_tokens": 116254,
+    "cache_read_tokens": 5031272,
+    "output_tokens": 36909,
+    "api_call_count": 63
+  },
+  "started_at": "2026-11-25T00:36:31.026730256Z",
+  "completed_at": "2026-11-25T00:51:44.942713187Z"
+}
