@@ -393,7 +393,7 @@ export class InteractiveRepl {
 
     const facts = surfaceFacts(this.app, this.currentSessionId);
     const trusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
-    const posture = describeSandboxPosture({ sandbox: this.config.sandbox, readOnly: this.config.approvalMode === "read-only", network: sandboxNetworkEnabled(), profile: this.config.sandboxProfile, source: "managed policy" });
+    const posture = describeSandboxPosture({ sandbox: this.config.sandbox, readOnly: this.config.approvalMode === "read-only", network: sandboxNetworkEnabled(), profile: this.config.sandboxProfile });
     const sandboxStatus = this.config.sandboxProfile ? `${posture.profile} (${posture.engine}, network ${posture.network ? "on" : "off"})` : (this.config.sandbox ? (typeof this.config.sandbox === "string" ? this.config.sandbox : "on") : "off");
     const trustStatus = trusted ? "trusted" : "untrusted (nexus trust .)";
     console.log(pc.dim(`mode: ${facts.mode} · sandbox: ${sandboxStatus} · workspace: ${trustStatus}`));

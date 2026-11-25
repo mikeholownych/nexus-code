@@ -435,3 +435,20 @@ describe("the real Docker box", { skip: dockerSkip() }, () => {
     }
   });
 });
+
+test("NEXUS_SANDBOX_NETWORK never opens the network of a verifier whose box says it is off (#778 follow-up)", () => {
+  const engines = fakeEngines({ bwrap: "records" });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-verify-box-env-"));
+  const saved = process.env.NEXUS_SANDBOX_NETWORK;
+  process.env.NEXUS_SANDBOX_NETWORK = "1";
+  try {
+    const directory = path.join(root, "scratch", "head");
+    fs.mkdirSync(directory, { recursive: true });
+    const box: VerifySandboxBox = { engine: "bwrap", network: false, scratch: path.join(root, "scratch"), readOnlyDirs: [] };
+    const built = withPath(engines.PATH, () => sandboxedVerifierCommand("npm test", directory, box, { environment: { PATH: "/usr/bin:/bin" } }));
+    assert.ok("argv" in built && built.argv.includes("--unshare-net"), "the operator environment setting does not reach nexus verify");
+  } finally {
+    if (saved === undefined) delete process.env.NEXUS_SANDBOX_NETWORK; else process.env.NEXUS_SANDBOX_NETWORK = saved;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
