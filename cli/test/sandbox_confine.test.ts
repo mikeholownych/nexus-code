@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync, spawn } from "node:child_process";
 import { buildCommandEnvironment } from "../src/command_env.js";
-import { wrapSandboxedCommand, isBwrapAvailable, sandboxHomeMounts, setSandboxNetworkFlag, sandboxNetworkNotice, sandboxWorkspaceOverlays, hideDirectoryFromSandbox, isPathWithin, wrapSandboxedWorker } from "../src/sandbox.js";
+import { wrapSandboxedCommand, isBwrapAvailable, isDockerAvailable, sandboxHomeMounts, setSandboxNetworkFlag, sandboxNetworkNotice, sandboxWorkspaceOverlays, hideDirectoryFromSandbox, isPathWithin, wrapSandboxedWorker } from "../src/sandbox.js";
+import { defaultTaskStateDir } from "../src/core/state.js";
 
 const SKIP = isBwrapAvailable() ? false : "bwrap is not installed on this host";
 
@@ -365,5 +366,15 @@ describe("the task-state directory is hidden from --sandbox commands and workers
     } finally {
       if (saved === undefined) delete process.env.NEXUS_STATE_DIR; else process.env.NEXUS_STATE_DIR = saved;
     }
+  });
+
+  test("docker argv masks the task-state directory the same way as bwrap (PA-3)", { skip: isDockerAvailable() ? false : "docker is not available" }, () => {
+    const { home } = throwawayHome();
+    taskFile(path.join(home, ".nexus", "tasks"));
+    const wrapped = wrapSandboxedCommand("true", home, { mode: "docker" });
+    assert.equal(wrapped.sandboxed, true, wrapped.warning);
+    const tasks = fs.realpathSync(defaultTaskStateDir());
+    const argv = wrapped.argv ?? [];
+    assert.ok(argv.some((a, i) => a === "--tmpfs" && String(argv[i + 1]).startsWith(`${tasks}:`)), `docker argv must tmpfs-mask ${tasks}; got ${argv.join(" ")}`);
   });
 });
