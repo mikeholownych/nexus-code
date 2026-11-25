@@ -9,6 +9,7 @@ import { MAX_CONCURRENT_UNITS } from "./operation_schema.js";
 
 /** Persistent lock files are never unlinked while other processes may hold their inodes. Bound unique identities. */
 export const MAX_SHARED_RESOURCE_IDENTITIES = 1_024;
+export const MAX_SHARED_RESOURCE_CAPACITY = MAX_CONCURRENT_UNITS;
 
 interface CapacityRecord {
   format: "NEXUS_RESOURCE_ADMISSION";
@@ -19,6 +20,8 @@ interface CapacityRecord {
 export interface ResourceSlotLease {
   /** Idempotently releases this unit's kernel-owned slot. */
   release(): void;
+  /** Descriptor for a trusted child supervisor to inherit so the slot survives parent-process death. */
+  readonly inheritedFd?: number;
 }
 
 export class ResourceAdmissionConflictError extends Error {
@@ -175,9 +178,28 @@ export class SharedResourceAdmission {
   }
 
   acquire(resource: ResourceDescriptor): ResourceSlotLease | null {
-    ensureAdmissionDirectory(this.directory);
     const key = resourceKey(resource);
     const capacity = capacityOf(resource, this.operatorMaxUnits);
+    return this.acquireKey(key, capacity, "shared inference resource", "Shared inference resource slot", false);
+  }
+
+  /** Reserves a bounded named local resource using the same cross-process kernel slot mechanism. */
+  acquireNamed(name: string, capacity: number, label: string): ResourceSlotLease | null {
+    if (!/^[a-z0-9][a-z0-9._:-]{0,127}$/i.test(name)) {
+      throw new ResourceAdmissionConflictError("named shared resource identity is invalid; admission refused");
+    }
+    if (!Number.isSafeInteger(capacity) || capacity < 1 || capacity > MAX_CONCURRENT_UNITS) {
+      throw new ResourceAdmissionConflictError(`named shared resource capacity is invalid; expected 1..${MAX_CONCURRENT_UNITS}`);
+    }
+    if (typeof label !== "string" || !/^[a-z][a-z0-9 -]{0,63}$/i.test(label)) {
+      throw new ResourceAdmissionConflictError("named shared resource label is invalid; admission refused");
+    }
+    const key = createHash("sha256").update(JSON.stringify({ kind: "named", name })).digest("hex");
+    return this.acquireKey(key, capacity, `shared ${label}`, `Shared ${label} slot`, true);
+  }
+
+  private acquireKey(key: string, capacity: number, scope: string, slotLabel: string, inheritSlot: boolean): ResourceSlotLease | null {
+    ensureAdmissionDirectory(this.directory);
     const prefix = path.join(this.directory, key);
     const mutex = this.acquireIdentityGuard(prefix);
     if (!mutex) return null;
@@ -186,23 +208,23 @@ export class SharedResourceAdmission {
     try {
       const capacityFile = `${prefix}.json`;
       const existing = readCapacity(capacityFile);
-      if (!existing && this.probeActiveSlots(prefix, MAX_CONCURRENT_UNITS) > 0) {
-        throw new ResourceAdmissionConflictError("shared resource admission metadata is missing while a slot is active; admission refused");
+      if (!existing && this.probeActiveSlots(prefix, MAX_CONCURRENT_UNITS, scope, slotLabel) > 0) {
+        throw new ResourceAdmissionConflictError(`${scope} admission metadata is missing while a slot is active; admission refused`);
       }
       if (existing && existing.capacity !== capacity) {
-        const active = this.probeActiveSlots(prefix, existing.capacity);
+        const active = this.probeActiveSlots(prefix, existing.capacity, scope, slotLabel);
         if (active > 0) {
           throw new ResourceAdmissionConflictError(
-            `active operations declare different capacities (${existing.capacity} and ${capacity}) for the same inference resource`,
+            `active operations declare different capacities (${existing.capacity} and ${capacity}) for the same ${scope}`,
           );
         }
       }
       const effectiveCapacity = existing?.capacity === capacity ? existing.capacity : capacity;
       for (let index = 0; index < effectiveCapacity; index++) {
         try {
-          slot = acquireFileGuard(`${prefix}.slot-${index}`, { label: "Shared inference resource slot" });
+          slot = acquireFileGuard(`${prefix}.slot-${index}`, { label: slotLabel });
         } catch (error) {
-          throw new ResourceAdmissionConflictError(`cannot reserve shared inference resource slot: ${(error as Error).message}`);
+          throw new ResourceAdmissionConflictError(`cannot reserve ${scope} slot: ${(error as Error).message}`);
         }
         if (slot) break;
       }
@@ -219,6 +241,7 @@ export class SharedResourceAdmission {
       const held = slot;
       slot = null;
       return {
+        ...(inheritSlot ? { inheritedFd: held.fd } : {}),
         release: () => releaseFileGuard(held),
       };
     } finally {
@@ -227,15 +250,15 @@ export class SharedResourceAdmission {
     }
   }
 
-  private probeActiveSlots(prefix: string, capacity: number): number {
+  private probeActiveSlots(prefix: string, capacity: number, scope: string, slotLabel: string): number {
     let active = 0;
     for (let index = 0; index < capacity; index++) {
       if (!fs.existsSync(`${prefix}.slot-${index}`)) continue;
       let probe: FileGuard | null;
       try {
-        probe = acquireFileGuard(`${prefix}.slot-${index}`, { label: "Shared inference resource slot" });
+        probe = acquireFileGuard(`${prefix}.slot-${index}`, { label: slotLabel });
       } catch (error) {
-        throw new ResourceAdmissionConflictError(`cannot inspect shared inference resource slots: ${(error as Error).message}`);
+        throw new ResourceAdmissionConflictError(`cannot inspect ${scope} slots: ${(error as Error).message}`);
       }
       if (probe) releaseFileGuard(probe);
       else active++;
