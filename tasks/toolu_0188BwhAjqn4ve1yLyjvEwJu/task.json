@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_0188BwhAjqn4ve1yLyjvEwJu",
+  "agent_id": "ad1aebedc3417d5b0",
+  "subagent_type": "reviewer",
+  "task_description": "Review PR open-findings close-out",
+  "token_usage": {
+    "input_tokens": 84,
+    "cache_creation_tokens": 83934,
+    "cache_read_tokens": 2347415,
+    "output_tokens": 19160,
+    "api_call_count": 42
+  },
+  "started_at": "2026-11-25T04:08:42.569465983Z",
+  "completed_at": "2026-11-25T04:21:34.945425515Z"
+}

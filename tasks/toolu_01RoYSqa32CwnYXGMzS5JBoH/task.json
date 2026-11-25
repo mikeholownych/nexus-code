@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01RoYSqa32CwnYXGMzS5JBoH",
+  "agent_id": "a9a0725594c37f49b",
+  "subagent_type": "general-purpose",
+  "task_description": "Close out open review findings before RC",
+  "token_usage": {
+    "input_tokens": 170,
+    "cache_creation_tokens": 359356,
+    "cache_read_tokens": 11810618,
+    "output_tokens": 39067,
+    "api_call_count": 84
+  },
+  "started_at": "2026-11-25T03:50:52.699371566Z",
+  "completed_at": "2026-11-25T04:08:15.017582301Z"
+}
