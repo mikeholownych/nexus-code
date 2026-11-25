@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import { ToolDefinition, ExecutionResult } from "./types.js";
 import { isWorkspaceFile, isWorkspaceTrusted, WORKSPACE_PLUGIN_DIRS } from "./workspace_trust.js";
+import { approveExtension, extensionTrustEntry, extensionTrustStorePath, readExtensionTrust, revokeExtension, type ExtensionTrustEntry, type ExtensionTrustId } from "./core/content_trust.js";
 import { permitsPlugin, type EffectivePolicy } from "./core/managed_policy.js";
 import { ManagedPolicyError } from "./core/managed_policy_load.js";
 import { emitPolicyNotice, managedPolicy, printableRefusal } from "./core/policy_runtime.js";
@@ -53,6 +54,47 @@ export function pluginDirs(workspace: string, isWorkspaceTrusted = false): strin
   return dirs;
 }
 
+export type PluginTrustStatus = "trusted" | "global" | "untrusted" | "changed" | "invalid" | "policy-refused";
+
+export interface PluginTrustRecord {
+  path: string;
+  name?: string;
+  sha256?: string;
+  status: PluginTrustStatus;
+  reason?: string;
+}
+
+export function workspacePluginTrustId(workspace: string, pluginPath: string): ExtensionTrustId {
+  const root = path.resolve(workspace);
+  const abs = path.resolve(pluginPath);
+  const rel = path.relative(root, abs);
+  return { kind: "workspace-plugin", scope: root, key: rel.split(path.sep).join("/") };
+}
+
+export function pluginFileSha256(filePath: string): string {
+  return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+export function pluginBytesSha256(bytes: Buffer | string): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+/**
+ * Import the exact bytes that were hashed (HK-3 TOCTOU). A private copy under a fresh 0700 temp directory means
+ * relative imports/`require` cannot reach siblings in the plugins tree: only this single file is executable.
+ */
+export async function importPluginBytes(filePath: string, bytes: Buffer): Promise<unknown> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-plugin-"));
+  try {
+    fs.chmodSync(dir, 0o700);
+    const dest = path.join(dir, path.basename(filePath));
+    fs.writeFileSync(dest, bytes, { mode: 0o600 });
+    return await import(pathToFileURL(dest).href);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 export class PluginManager {
   private workspace: string;
   private readOnly: boolean;
@@ -64,6 +106,7 @@ export class PluginManager {
   private readonly policy: () => EffectivePolicy;
   private readonly notify: (notice: string) => void;
   private policyRefusals: string[] = [];
+  private pluginTrustRecords: PluginTrustRecord[] = [];
 
   constructor(workspace: string, options?: { readOnly?: boolean; trusted?: boolean; flightRecorder?: FlightRecorder; policy?: () => EffectivePolicy; notify?: (notice: string) => void }) {
     this.workspace = path.resolve(workspace);
@@ -72,6 +115,10 @@ export class PluginManager {
     this.flightRecorder = options?.flightRecorder;
     this.policy = options?.policy ?? managedPolicy;
     this.notify = options?.notify ?? emitPolicyNotice;
+  }
+
+  public getPluginTrustRecords(): PluginTrustRecord[] {
+    return [...this.pluginTrustRecords];
   }
 
   /**
@@ -107,22 +154,46 @@ export class PluginManager {
     this.flightRecorder = flightRecorder;
   }
 
+  private workspacePluginTrusted(filePath: string, bytes: Buffer): { trusted: boolean; sha256?: string; status: PluginTrustStatus; reason?: string } {
+    const digest = pluginBytesSha256(bytes);
+    const id = workspacePluginTrustId(this.workspace, filePath);
+    const trust = readExtensionTrust(extensionTrustStorePath());
+    if (trust.problem) {
+      return { trusted: false, sha256: digest, status: "invalid", reason: `trust store unreadable: ${trust.problem}` };
+    }
+    const entry = extensionTrustEntry(trust.entries, id);
+    if (!entry) {
+      return {
+        trusted: false, sha256: digest, status: "untrusted",
+        reason: "workspace plugin not approved; review it and run `nexus plugins trust <path>` (HK-3 per-plugin trust; in-process workspace plugins are deprecated)",
+      };
+    }
+    if (entry.sha256 !== digest) {
+      return {
+        trusted: false, sha256: digest, status: "changed",
+        reason: "workspace plugin changed since approval; review it and run `nexus plugins trust <path>` again",
+      };
+    }
+    return { trusted: true, sha256: digest, status: "trusted" };
+  }
+
   public async loadPlugins(): Promise<void> {
     this.plugins.clear();
     this.customToolsMap.clear();
     this.customToolDefs = [];
     this.policyRefusals = [];
+    this.pluginTrustRecords = [];
 
     const allowWorkspace = this.trusted && !this.readOnly;
     for (const dir of pluginDirs(this.workspace, allowWorkspace)) {
       if (!fs.existsSync(dir)) continue;
-
+      const source: "global" | "workspace" = path.resolve(dir).startsWith(path.resolve(this.workspace)) ? "workspace" : "global";
       try {
         const files = fs.readdirSync(dir);
         for (const file of files) {
           if (file.endsWith(".js") || file.endsWith(".mjs")) {
             const pluginPath = path.join(dir, file);
-            await this.loadPluginFile(pluginPath);
+            await this.loadPluginFile(pluginPath, source);
           }
         }
       } catch {
@@ -131,15 +202,41 @@ export class PluginManager {
     }
   }
 
-  private async loadPluginFile(filePath: string): Promise<void> {
+  private async loadPluginFile(filePath: string, source: "global" | "workspace" = "global"): Promise<void> {
     try {
-      if (this.refusedByPolicy(filePath)) return;
-      const fileUrl = pathToFileURL(filePath).href;
-      const mod = await import(fileUrl);
+      const policyRefusal = this.refusedByPolicy(filePath);
+      if (policyRefusal) {
+        this.pluginTrustRecords.push({ path: filePath, status: "policy-refused", reason: policyRefusal });
+        return;
+      }
+      let mod: any;
+      if (source === "workspace") {
+        // Read once: hash and import the same bytes so a flip after the check cannot run (HK-3 TOCTOU).
+        let bytes: Buffer;
+        try {
+          bytes = fs.readFileSync(filePath);
+        } catch (error) {
+          this.pluginTrustRecords.push({ path: filePath, status: "invalid", reason: error instanceof Error ? error.message : String(error) });
+          return;
+        }
+        const trust = this.workspacePluginTrusted(filePath, bytes);
+        this.pluginTrustRecords.push({ path: filePath, sha256: trust.sha256, status: trust.status, reason: trust.reason });
+        if (!trust.trusted) {
+          console.error(pc.yellow(`[plugin] skipped (${trust.status}): ${filePath}`));
+          if (trust.reason) console.error(pc.yellow(`  ${trust.reason}`));
+          return;
+        }
+        mod = await importPluginBytes(filePath, bytes);
+      } else {
+        this.pluginTrustRecords.push({ path: filePath, status: "global" });
+        mod = await import(pathToFileURL(filePath).href);
+      }
       const plugin: PluginHooks = mod.default || mod;
 
       if (plugin && typeof plugin === "object" && plugin.name) {
         this.plugins.set(plugin.name, plugin);
+        const rec = this.pluginTrustRecords.find((r) => r.path === filePath);
+        if (rec) rec.name = plugin.name;
 
         if (Array.isArray(plugin.customTools)) {
           for (const ct of plugin.customTools) {
