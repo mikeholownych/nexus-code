@@ -26,6 +26,8 @@
 import { unresolvedAssumptionsProblem, type DurableOperationState, type OperationPolicy, type WorkUnit } from "./operation.js";
 import { specialistInputsProblem } from "./specialist_profiles.js";
 import { parseBoundaryRules } from "./boundary_rules.js";
+import { MAX_OPERATION_ACTIVE_MS } from "./operation_budget_constants.js";
+export { MAX_OPERATION_ACTIVE_MS } from "./operation_budget_constants.js";
 
 /** The operation document version this build writes. Independent of the task-store envelope version. */
 export const CURRENT_OPERATION_SCHEMA_VERSION = 8;
@@ -51,9 +53,6 @@ const DECISION_ACTION_KINDS = new Set([
 
 /** The largest concurrency an operation may request. A cost bound, not a capacity claim. */
 export const MAX_CONCURRENT_UNITS = 64;
-/** Maximum active wall time allowed for one durable operation (72 hours). */
-export const MAX_OPERATION_ACTIVE_MS = 4_320 * 60_000;
-
 /** A record written by a build newer than this one. Never quarantined; never interpreted. */
 export class UnsupportedOperationSchemaError extends Error {
   constructor(readonly recordVersion: unknown, readonly supportedVersion = CURRENT_OPERATION_SCHEMA_VERSION) {

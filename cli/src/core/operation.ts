@@ -49,7 +49,8 @@ import { redactForPersistence } from "./persistence_protection.js";
 import type { ResourceConditionRecord, ResourceDescriptor, ResourceRegistry, WorkRequirements } from "./resources.js";
 import type { InferenceFailure } from "./turn.js";
 import { REVISION_MARKER } from "./scheduler.js";
-import { CURRENT_OPERATION_SCHEMA_VERSION, MAX_OPERATION_ACTIVE_MS, validateOperationPolicy, validateResourceSlots } from "./operation_schema.js";
+import { CURRENT_OPERATION_SCHEMA_VERSION, validateOperationPolicy, validateResourceSlots } from "./operation_schema.js";
+import { MAX_OPERATION_ACTIVE_MS } from "./operation_budget_constants.js";
 import type { BoundaryRules } from "./boundary_rules.js";
 export { ConvergenceScheduler, DecisionRejected, isRequired } from "./scheduler.js";
 export {
