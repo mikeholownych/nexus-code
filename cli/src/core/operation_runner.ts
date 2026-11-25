@@ -27,6 +27,7 @@ import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./op
 import { OperationLockedError, type OperationStore } from "./operation_runner_persistence.js";
 import { STALE_PAUSE_PREFIX, clearDriver, liveForeignDriver, stampDriver, staleDriver } from "./driver_identity.js";
 import type { BoundaryRules } from "./boundary_rules.js";
+import { MAX_OPERATION_ACTIVE_MS } from "./operation_schema.js";
 
 export { OperationStore, OperationLockedError, migrateLegacyAccountIdentities } from "./operation_runner_persistence.js";
 export { AgentWorkUnitExecutor } from "./operation_runner_execution.js";
@@ -126,6 +127,9 @@ export class OperationRunner {
   private readonly git: OperationGit | undefined;
   /** One merge at a time: all units share the operation's integration worktree. */
   private integrationChain: Promise<void> = Promise.resolve();
+  private activeElapsedSinceMs?: number;
+  private activeBudgetController?: AbortController;
+  private activeBudgetExpired = false;
 
   constructor(
     readonly state: DurableOperationState,
@@ -144,17 +148,137 @@ export class OperationRunner {
   }
 
   async run(signal?: AbortSignal): Promise<DurableOperationState> {
+    if (this.state.status === "PAUSED" || this.state.status === "COMPLETE" || this.state.status === "CANCELLED") {
+      return this.runOperation(signal);
+    }
+    const budgetController = new AbortController();
+    this.activeBudgetController = budgetController;
+    this.activeBudgetExpired = false;
+    const remainingMs = this.beginActiveElapsedBudget();
+    if (remainingMs === undefined) {
+      this.activeBudgetController = undefined;
+      return this.state;
+    }
+    const combinedSignal = signal ? AbortSignal.any([signal, budgetController.signal]) : budgetController.signal;
+    const timer = setTimeout(() => {
+      this.activeBudgetExpired = true;
+      budgetController.abort(new Error("operation active-time budget exhausted"));
+    }, remainingMs);
+    // The budget timer must not keep a process alive after an operation runner is abandoned.
+    // Active work (inference, subprocesses, waits) owns its own handles; the timer only bounds it.
+    timer.unref();
     const onAbort = () => {
+      if (this.activeBudgetExpired) return;
+      clearTimeout(timer);
       this.scheduler.cancel();
       this.save();
     };
-    if (signal?.aborted) onAbort();
-    else signal?.addEventListener("abort", onAbort, { once: true });
+    if (combinedSignal.aborted) onAbort();
+    else combinedSignal.addEventListener("abort", onAbort, { once: true });
     try {
-      return await this.runOperation(signal);
+      return await this.runOperation(combinedSignal);
     } finally {
-      signal?.removeEventListener("abort", onAbort);
+      clearTimeout(timer);
+      combinedSignal.removeEventListener("abort", onAbort);
+      this.finishActiveElapsedBudget();
+      const finalStatus: string = this.state.status;
+      if (this.activeBudgetExpired && !["COMPLETE", "CANCELLED", "PAUSED"].includes(finalStatus)) {
+        this.pauseForActiveBudget(this.state.policy.maxTotalActiveMs);
+      }
+      this.activeBudgetController = undefined;
     }
+  }
+
+  /** Starts or conservatively recovers the operation's active wall-time interval. */
+  private beginActiveElapsedBudget(): number | undefined {
+    const cap = this.state.policy.maxTotalActiveMs;
+    const now = this.clock.now();
+    if (!Number.isSafeInteger(now) || now < 0 || !Number.isSafeInteger(cap) || cap < 1) {
+      this.pauseForUnmeasuredActiveBudget();
+      return undefined;
+    }
+    let elapsed = this.state.activeElapsedMs;
+    if (!Number.isSafeInteger(elapsed) || elapsed < 0) {
+      this.pauseForUnmeasuredActiveBudget();
+      return undefined;
+    }
+    if (!this.state.activeElapsedHistoryComplete) {
+      const createdAt = Date.parse(this.state.createdAt);
+      // Legacy records lack interval checkpoints. Charge their full age rather than silently starting at zero.
+      elapsed = Math.max(elapsed, Number.isFinite(createdAt) && createdAt <= now ? now - createdAt : cap);
+    } else if (this.state.activeSinceMs !== undefined) {
+      if (!Number.isSafeInteger(this.state.activeSinceMs) || now < this.state.activeSinceMs) elapsed = cap;
+      else elapsed += now - this.state.activeSinceMs;
+    }
+    if (!Number.isSafeInteger(elapsed) || elapsed < 0) elapsed = cap;
+    this.state.activeElapsedMs = Math.min(MAX_OPERATION_ACTIVE_MS, elapsed);
+    delete this.state.activeSinceMs;
+    if (elapsed >= cap) {
+      this.pauseForActiveBudget(cap, this.state.activeElapsedHistoryComplete ? undefined : "conservative elapsed-time history estimate");
+      return undefined;
+    }
+    this.activeElapsedSinceMs = now;
+    this.state.activeSinceMs = now;
+    this.save();
+    return cap - elapsed;
+  }
+
+  /** Checkpoints the live interval and conservatively exhausts the cap after a clock rollback. */
+  private checkpointActiveElapsed(now: number): void {
+    if (this.activeElapsedSinceMs === undefined) return;
+    const cap = this.state.policy.maxTotalActiveMs;
+    let elapsed = this.state.activeElapsedMs;
+    if (!Number.isSafeInteger(now) || now < this.activeElapsedSinceMs) elapsed = cap;
+    else elapsed += now - this.activeElapsedSinceMs;
+    if (!Number.isSafeInteger(elapsed) || elapsed < 0) elapsed = cap;
+    this.state.activeElapsedMs = Math.min(MAX_OPERATION_ACTIVE_MS, elapsed);
+    this.activeElapsedSinceMs = now;
+    this.state.activeSinceMs = now;
+    if (elapsed >= cap) {
+      this.activeBudgetExpired = true;
+      this.activeBudgetController?.abort(new Error("operation active-time budget exhausted"));
+    }
+  }
+
+  /** Closes the active interval on every normal return; a persisted open interval is charged on crash recovery. */
+  private finishActiveElapsedBudget(): void {
+    if (this.activeElapsedSinceMs === undefined) return;
+    this.checkpointActiveElapsed(this.clock.now());
+    delete this.state.activeSinceMs;
+    this.activeElapsedSinceMs = undefined;
+    this.state.updatedAt = new Date(this.clock.now()).toISOString();
+    this.opts.persist(this.state);
+  }
+
+  private stopForAbort(): DurableOperationState {
+    if (this.activeBudgetExpired) {
+      this.pauseForActiveBudget(this.state.policy.maxTotalActiveMs);
+      return this.state;
+    }
+    return this.cancelled();
+  }
+
+  private pauseForUnmeasuredActiveBudget(): void {
+    const cap = this.state.policy.maxTotalActiveMs;
+    this.state.activeElapsedMs = cap;
+    this.pauseForActiveBudget(cap, "cannot establish a trustworthy elapsed-time history");
+  }
+
+  private pauseForActiveBudget(cap: number, detail?: string): boolean {
+    if (this.state.status === "COMPLETE" || this.state.status === "CANCELLED" || this.state.status === "PAUSED") return false;
+    const elapsed = Math.min(cap, this.state.activeElapsedMs);
+    const reason = `Paused: operation active-time budget exhausted (${elapsed} of ${cap} ms${detail ? `; ${detail}` : ""}). Raise the cap with 'nexus operation budget ${this.state.id} --max-total-active-minutes <n>', then resume, or cancel the operation.`;
+    this.state.status = "PAUSED";
+    this.state.pauseReason = reason;
+    delete this.state.wait;
+    delete this.state.blocked;
+    this.scheduler.emit("OPERATION_PAUSED", reason, { detail: { reason: "active_time_budget", activeElapsedMs: elapsed, maxTotalActiveMs: cap, ...(detail ? { measurement: detail } : {}) } });
+    this.save();
+    return true;
+  }
+
+  private checkpointActiveBudgetOnSave(): void {
+    if (this.activeElapsedSinceMs !== undefined) this.checkpointActiveElapsed(this.clock.now());
   }
 
   private async runOperation(signal?: AbortSignal): Promise<DurableOperationState> {
@@ -193,7 +317,7 @@ export class OperationRunner {
     this.save();
     const maxIterations = this.opts.maxIterations ?? 10_000;
     for (let i = 0; i < maxIterations; i++) {
-      if (signal?.aborted) return this.cancelled();
+      if (signal?.aborted) return this.stopForAbort();
       let d: Decision;
       try {
         d = this.scheduler.decide();
@@ -261,7 +385,7 @@ export class OperationRunner {
         for (const assignment of ready) this.scheduler.start(assignment);
         this.save();
         await this.executeBatch(ready, owed, signal);
-        if (signal?.aborted) return this.cancelled();
+        if (signal?.aborted) return this.stopForAbort();
         continue;
       }
       if (d.kind === "wait") {
@@ -271,7 +395,7 @@ export class OperationRunner {
         try {
           await this.clock.sleep(Math.max(0, d.wakeAt - this.clock.now()), signal);
         } catch {
-          return this.cancelled();
+          return this.stopForAbort();
         }
         await this.revalidator.revalidate(signal);
         continue;
@@ -325,7 +449,15 @@ export class OperationRunner {
           options: [{ label: "retry", action: { kind: "retry" } }],
         };
       }
-      if (signal?.aborted || this.state.status === "CANCELLED") return;
+      if (signal?.aborted || this.state.status === "CANCELLED") {
+        if (this.activeBudgetExpired && this.state.status !== "CANCELLED") {
+          // A budget expiry is a durable pause, not an operator cancellation. Preserve the unknown side-effect
+          // boundary before pausing so resume cannot silently replay this unit.
+          this.scheduler.apply(assignment.unit.id, { kind: "cancelled" });
+          this.save();
+        }
+        return;
+      }
       this.scheduler.apply(assignment.unit.id, result);
       if (result.kind === "completed") this.publishCompletion(assignment.unit);
       this.save();
@@ -814,6 +946,7 @@ export class OperationRunner {
   }
 
   private save(): void {
+    this.checkpointActiveBudgetOnSave();
     this.state.conditions = this.registry.snapshot();
     this.state.updatedAt = new Date(this.clock.now()).toISOString();
     this.opts.persist(this.state);

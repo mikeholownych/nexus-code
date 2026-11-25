@@ -13,7 +13,8 @@
  *      v5 adds `origin` (a detached job drives the operation). v6 adds verified merge arbitration (PA-2:
  *      `git.integrationVerifiers`, `mergedChecks` on a receipt, `INTEGRATION_REJECTED`). The version is bumped so a
  *      version-5 build refuses a record that may depend on cumulative merged-tree verification. v7 adds the
- *      persisted fingerprint-stall policy/state; older builds must refuse records that depend on that limit.
+ *      persisted fingerprint-stall policy/state; older builds must refuse records that depend on that limit. v8
+ *      adds a bounded active-wall-time budget and its durable accounting; older builds must refuse records that rely on it.
  *      The optional `activeStartTicks` (driver start time) was added to v7 additively: no version bump, because a build
  *      that ignores it only loses the recycled-pid check. A record without it loads and reads as unknown driver identity (paused).
  *   3. A record from a newer build is refused. It is not corrupt: a build that wrote it can still read it, and
@@ -25,9 +26,11 @@
 import { unresolvedAssumptionsProblem, type DurableOperationState, type OperationPolicy, type WorkUnit } from "./operation.js";
 import { specialistInputsProblem } from "./specialist_profiles.js";
 import { parseBoundaryRules } from "./boundary_rules.js";
+import { MAX_OPERATION_ACTIVE_MS } from "./operation_budget_constants.js";
+export { MAX_OPERATION_ACTIVE_MS } from "./operation_budget_constants.js";
 
 /** The operation document version this build writes. Independent of the task-store envelope version. */
-export const CURRENT_OPERATION_SCHEMA_VERSION = 7;
+export const CURRENT_OPERATION_SCHEMA_VERSION = 8;
 
 /** The operation document version every released 1.0.0 build wrote. */
 export const LEGACY_OPERATION_SCHEMA_VERSION = 1;
@@ -50,7 +53,6 @@ const DECISION_ACTION_KINDS = new Set([
 
 /** The largest concurrency an operation may request. A cost bound, not a capacity claim. */
 export const MAX_CONCURRENT_UNITS = 64;
-
 /** A record written by a build newer than this one. Never quarantined; never interpreted. */
 export class UnsupportedOperationSchemaError extends Error {
   constructor(readonly recordVersion: unknown, readonly supportedVersion = CURRENT_OPERATION_SCHEMA_VERSION) {
@@ -94,7 +96,17 @@ export function migrateOperationState(raw: unknown): DurableOperationState {
   if (version < LEGACY_OPERATION_SCHEMA_VERSION) {
     throw new InvalidOperationStateError(`operation record schema ${version} is not a version this build ever wrote`);
   }
-  const migrated = version === CURRENT_OPERATION_SCHEMA_VERSION ? (record as DurableOperationState) : ({ ...record, schemaVersion: CURRENT_OPERATION_SCHEMA_VERSION } as DurableOperationState);
+  const migrated = version === CURRENT_OPERATION_SCHEMA_VERSION
+    ? (record as DurableOperationState)
+    : ({ ...record, schemaVersion: CURRENT_OPERATION_SCHEMA_VERSION } as DurableOperationState);
+  if (version < CURRENT_OPERATION_SCHEMA_VERSION) {
+    const policy = (record as DurableOperationState).policy ?? ({} as OperationPolicy);
+    migrated.policy = { ...policy, maxTotalActiveMs: policy.maxTotalActiveMs ?? MAX_OPERATION_ACTIVE_MS };
+    migrated.activeElapsedMs ??= 0;
+    // Older operation records do not say how much active time preceded this schema. Their age is used as a
+    // conservative lower bound at resume; it may include time parked while the owner was away.
+    migrated.activeElapsedHistoryComplete ??= false;
+  }
   validateOperationState(migrated);
   return migrated;
 }
@@ -283,8 +295,20 @@ export function validateOperationState(state: DurableOperationState): void {
   if (state.pauseReason !== undefined && typeof state.pauseReason !== "string") {
     throw new InvalidOperationStateError(`operation ${state.id}: pauseReason must be a string`);
   }
+  if (!Number.isSafeInteger(state.activeElapsedMs) || state.activeElapsedMs < 0 || state.activeElapsedMs > MAX_OPERATION_ACTIVE_MS) {
+    throw new InvalidOperationStateError(`operation ${state.id}: activeElapsedMs must be a safe integer from 0 to ${MAX_OPERATION_ACTIVE_MS}`);
+  }
+  if (typeof state.activeElapsedHistoryComplete !== "boolean") {
+    throw new InvalidOperationStateError(`operation ${state.id}: activeElapsedHistoryComplete must be a boolean`);
+  }
+  if (state.activeSinceMs !== undefined && (!Number.isSafeInteger(state.activeSinceMs) || state.activeSinceMs < 0)) {
+    throw new InvalidOperationStateError(`operation ${state.id}: activeSinceMs must be a non-negative safe integer`);
+  }
   if (state.policy.maxTotalTokens !== undefined && (!Number.isSafeInteger(state.policy.maxTotalTokens) || state.policy.maxTotalTokens < 1 || state.policy.maxTotalTokens > MAX_TOTAL_TOKENS)) {
     throw new InvalidOperationStateError(`operation ${state.id}: policy.maxTotalTokens must be a safe integer from 1 to ${MAX_TOTAL_TOKENS} (got ${String(state.policy.maxTotalTokens)})`);
+  }
+  if (!Number.isSafeInteger(state.policy.maxTotalActiveMs) || state.policy.maxTotalActiveMs < 1 || state.policy.maxTotalActiveMs > MAX_OPERATION_ACTIVE_MS) {
+    throw new InvalidOperationStateError(`operation ${state.id}: policy.maxTotalActiveMs must be a safe integer from 1 to ${MAX_OPERATION_ACTIVE_MS} (got ${String(state.policy.maxTotalActiveMs)})`);
   }
   if (state.integrations !== undefined) {
     if (!Array.isArray(state.integrations)) throw new InvalidOperationStateError(`operation ${state.id}: integrations is not an array`);
@@ -354,6 +378,9 @@ export function validateOperationPolicy(policy: Partial<OperationPolicy>): void 
   }
   if (policy.maxTotalTokens !== undefined && (!Number.isSafeInteger(policy.maxTotalTokens) || policy.maxTotalTokens < 1 || policy.maxTotalTokens > MAX_TOTAL_TOKENS)) {
     throw new InvalidOperationStateError(`(new): policy.maxTotalTokens must be a safe integer from 1 to ${MAX_TOTAL_TOKENS} (got ${String(policy.maxTotalTokens)})`);
+  }
+  if (policy.maxTotalActiveMs !== undefined && (!Number.isSafeInteger(policy.maxTotalActiveMs) || policy.maxTotalActiveMs < 1 || policy.maxTotalActiveMs > MAX_OPERATION_ACTIVE_MS)) {
+    throw new InvalidOperationStateError(`(new): policy.maxTotalActiveMs must be a safe integer from 1 to ${MAX_OPERATION_ACTIVE_MS} (got ${String(policy.maxTotalActiveMs)})`);
   }
 }
 

@@ -1,7 +1,7 @@
 /**
  * BG-1 / G-4 (the unattended flag): an operation driven by a detached job carries `origin`, and the operation
- * document version is 5 so that a build which does not know the field refuses the record instead of rewriting it
- * without the stamp. An older record is upgraded as before, and a damaged stamp is refused.
+ * document version is 8. Older records are upgraded as before without inventing an origin, and a damaged stamp is
+ * refused.
  */
 import "./helpers/leak_guard.js";
 import { test } from "node:test";
@@ -15,10 +15,10 @@ import { CURRENT_OPERATION_SCHEMA_VERSION, InvalidOperationStateError, migrateOp
 
 const state = (): DurableOperationState => newOperation("op-origin", "objective", [{ id: "u", title: "u", prompt: "p" }], [], Date.parse("2026-11-24T10:00:00.000Z"));
 
-test("the operation document is version 7 and an attended operation has no origin", () => {
-  assert.equal(CURRENT_OPERATION_SCHEMA_VERSION, 7);
+test("the operation document is version 8 and an attended operation has no origin", () => {
+  assert.equal(CURRENT_OPERATION_SCHEMA_VERSION, 8);
   const attended = state();
-  assert.equal(attended.schemaVersion, 7);
+  assert.equal(attended.schemaVersion, 8);
   assert.equal("origin" in attended, false);
   assert.doesNotThrow(() => validateOperationState(attended));
 });
@@ -54,7 +54,7 @@ test("a job origin survives a save and load, and a damaged one is refused", (t) 
 test("a version 4 record is upgraded by its version alone, and a record from a newer build is refused, not read", () => {
   const v4 = { ...state(), schemaVersion: 4 };
   const migrated = migrateOperationState(JSON.parse(JSON.stringify(v4)));
-  assert.equal(migrated.schemaVersion, 7);
+  assert.equal(migrated.schemaVersion, 8);
   assert.deepEqual({ ...migrated, schemaVersion: 4 }, JSON.parse(JSON.stringify(v4)), "nothing but the version changed");
   assert.equal(migrated.origin, undefined, "an older record is never stamped after the fact");
   // A build at the previous supported version refuses this record instead of rewriting it.
