@@ -36,7 +36,7 @@ test("complexity gate rejects growth in either decision count or control nesting
 
 test("release baseline is an ancestor and tracked hot-path functions do not exceed it", () => {
   const result = checkCriticalComplexity(root);
-  assert.equal(result.baselineRevision, "4d9996d485c2db866918c110d35e1c1a1d3b2911");
-  assert.equal(result.rows.length, 5);
+  assert.equal(result.baselineRevision, "bd7f253ed5c4925c3632bb6421970a11f8ddc923");
+  assert.equal(result.rows.length, 10);
   for (const row of result.rows) assert.deepEqual(row.comparison.violations, [], `${row.target.file}::${row.target.name}`);
 });
