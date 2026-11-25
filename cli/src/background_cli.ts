@@ -318,9 +318,20 @@ export function registerBackgroundCommands(program: Command): void {
   runner.command("serve")
     .description("Run the job runner in the foreground (what the systemd user unit runs)")
     .option("--max-jobs <n>", "Jobs that may run at once (1 to 4)", "1")
+    .option("--no-triggers", "Do not fire approved event triggers (docs/TRIGGERS.md)")
+    .option("--webhook-port <port>", "Listen for approved webhook triggers on this port (default: no listener)")
+    .option("--webhook-host <address>", "Address the webhook listener binds", "127.0.0.1")
+    .option("--webhook-allow-remote", "Allow a non-loopback --webhook-host (refused unless an approved webhook trigger has a secret)")
     .action(action(async (options: any) => {
       if (process.platform !== "linux") throw new BackgroundUsageError("nexus runner serve needs Linux.");
       const maxJobs = Number(options.maxJobs);
+      let webhook: { port: number; host: string; allowNonLoopback: boolean } | undefined;
+      if (options.webhookPort !== undefined) {
+        const port = Number(options.webhookPort);
+        if (!Number.isInteger(port) || port < 0 || port > 65535) throw new BackgroundUsageError("--webhook-port must be an integer from 0 to 65535.");
+        if (options.triggers === false) throw new BackgroundUsageError("--webhook-port needs triggers: remove --no-triggers.");
+        webhook = { port, host: String(options.webhookHost), allowNonLoopback: options.webhookAllowRemote === true };
+      }
       let jobRunner: JobRunner;
       try {
         jobRunner = new JobRunner({
@@ -329,6 +340,7 @@ export function registerBackgroundCommands(program: Command): void {
           workerCommand: [process.execPath, ...process.execArgv, process.argv[1]],
           nexusVersion: getBuildIdentity().version,
           log: (line) => console.error(`${new Date().toISOString()} ${safeTerminal(line)}`),
+          ...(options.triggers === false ? {} : { triggers: webhook ? { webhook } : {} }),
         });
       } catch (error: any) {
         throw new BackgroundUsageError(String(error?.message ?? error));

@@ -29,6 +29,7 @@ import {
 } from "./runner_store.js";
 import { verifierProblem } from "./verifier_check.js";
 import { ScheduleEngine, type ScheduleEngineOptions } from "./schedule_engine.js";
+import { TriggerFirer, type TriggerFirerOptions } from "./trigger_firer.js";
 import { UNATTENDED_ENV_SCRUB } from "./unattended.js";
 import { isWorkspaceListed } from "../workspace_trust.js";
 
@@ -190,6 +191,11 @@ export interface JobRunnerOptions {
   loadOperation?: (job: JobRecord) => DurableOperationState | undefined;
   /** BG-2: the schedule engine. On by default; `false` serves jobs only; options override its clock-independent settings. */
   schedules?: false | Partial<Pick<ScheduleEngineOptions, "scanMs" | "graceMs" | "workspaceListed" | "owner">>;
+  /**
+   * BG-3: the trigger firer (docs/TRIGGERS.md). Off unless given, so a runner built without it never reads the
+   * approvals; `nexus runner serve` gives it. It fires through the same acceptance as a client's `start` request.
+   */
+  triggers?: Partial<Omit<TriggerFirerOptions, "paths" | "now" | "log" | "submit">>;
 }
 
 /** Another runner holds this state directory. */
@@ -214,6 +220,7 @@ export class JobRunner {
   private readonly settled = new Set<string>();
   private wake: (() => void) | undefined;
   private readonly scheduler: ScheduleEngine | undefined;
+  private readonly firer: TriggerFirer | undefined;
 
   constructor(private readonly options: JobRunnerOptions) {
     this.paths = runnerPaths(options.root);
@@ -232,6 +239,7 @@ export class JobRunner {
       submit: (job, spec) => this.acceptStart(job, spec, this.now().toISOString()),
       ...options.schedules,
     });
+    this.firer = options.triggers ? new TriggerFirer({ ...options.triggers, paths: this.paths, now: this.now, log: this.log, submit: (job, spec) => this.acceptStart(job, spec, this.now().toISOString()) }) : undefined;
   }
 
   /** Takes the runner lock, records this runner and settles every job an earlier runner left. Throws `RunnerBusyError`. */
@@ -260,6 +268,7 @@ export class JobRunner {
   tick(): void {
     this.readInbox();
     if (!this.stopping) this.scheduler?.tick();
+    if (!this.stopping) this.firer?.tick();
     let running = 0;
     const queued: JobRecord[] = [];
     for (const job of this.activeJobs()) {
@@ -295,6 +304,7 @@ export class JobRunner {
   async shutdown(): Promise<void> {
     if (!this.guard) return;
     this.stopping = true;
+    await this.firer?.close();
     for (const [id, live] of this.live) {
       const job = this.job(id);
       // A job already being stopped for its own reason keeps that reason.
@@ -319,6 +329,7 @@ export class JobRunner {
 
   /** Drops the lock without touching any job: what a killed runner leaves. For tests of the restart path. */
   abandon(): void {
+    this.firer?.closeNow();
     this.live.clear();
     this.release();
   }
@@ -639,6 +650,8 @@ export class JobRunner {
       const env = { ...process.env };
       // Before the worker reads any configuration: its own startup would otherwise see them.
       for (const name of UNATTENDED_ENV_SCRUB) delete env[name];
+      // A webhook secret is the listener's, not the job's: no worker inherits it.
+      for (const name of this.firer?.secretEnvNames() ?? []) delete env[name];
       // Its own session and process group: the death of the runner or of a client's terminal does not reach it.
       child = spawn(command, [...args, "job", "__worker", job.id], { detached: true, stdio: ["ignore", "ignore", stderr], env });
     } finally {

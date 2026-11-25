@@ -45,13 +45,18 @@ export function eventDataBlock(spec: Pick<TriggerSpec, "id">, event: TriggerEven
     let more = (event.morePaths ?? 0) + Math.max(0, (event.paths ?? []).length - paths.length);
     for (;;) {
       const text = frame(escapedJson({ changedPaths: paths, morePaths: more }));
-      if (text.length <= EVENT_BLOCK_MAX || paths.length === 0) return text.slice(0, EVENT_BLOCK_MAX);
+      if (text.length <= EVENT_BLOCK_MAX || paths.length === 0) return text;
       paths.pop();
       more++;
     }
   }
-  const preview = (event.body ?? Buffer.alloc(0)).subarray(0, EVENT_BODY_PREVIEW_BYTES).toString("latin1");
-  return frame(escapedJson({ bodyBytes: event.bodyBytes ?? 0, bodyPreview: preview, bodyPreviewTruncated: (event.bodyBytes ?? 0) > EVENT_BODY_PREVIEW_BYTES })).slice(0, EVENT_BLOCK_MAX);
+  // Escaping can multiply the preview by six: shrink it until the whole block fits, never cut an escape in half.
+  const body = event.body ?? Buffer.alloc(0);
+  const total = event.bodyBytes ?? body.length;
+  for (let bytes = Math.min(EVENT_BODY_PREVIEW_BYTES, body.length); ; bytes = Math.floor(bytes * 0.75)) {
+    const text = frame(escapedJson({ bodyBytes: total, bodyPreview: body.subarray(0, bytes).toString("latin1"), bodyPreviewTruncated: total > bytes }));
+    if (text.length <= EVENT_BLOCK_MAX || bytes === 0) return text;
+  }
 }
 
 /** The prompt of the job: the approved prompt, then the event data. */
