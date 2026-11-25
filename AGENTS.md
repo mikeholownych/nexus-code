@@ -9,7 +9,6 @@ TypeScript CLI (`cli/`), Rust core (`core/`), eval harness (`eval/`). Current pl
 - Test-runner or process-handling changes run on Node 22 and 24: the two emit different `node:test` events.
 - Rust builds use an isolated `CARGO_TARGET_DIR` per worktree.
 - Preserve existing comments and unrelated changes.
-- Entire CLI: export `ENTIRE_TOKEN_STORE=file` before any `entire` command. The Entire gate no longer counts toward merging.
 
 ## Reference coding with XERJ (required)
 - Before writing non-trivial code that has a peer-project analogue (feature, protocol, parser, worktree or provider handling, tool, test harness), read what mature projects do: query the local XERJ node, then record what you took, borrowed or rejected in the PR's "Reference coding" section. Exempt: trivial edits, doc-only changes, fixes fully specified by a failing test.
