@@ -318,19 +318,17 @@ test("eight writers over stale locks: one taker at a time, nothing lost", { time
   const store = path.join(home, ".config", "nexus", "extension_trust.json");
   fs.mkdirSync(path.dirname(store), { recursive: true, mode: 0o700 });
   const worker = path.join(base, "writer.mts");
-  // Each round a writer may first leave a dead holder's lock behind (when none is held), then makes its change.
+  // Each round a writer first leaves a dead holder's lock behind (when none is held), then makes its change.
   fs.writeFileSync(worker, `
 import fs from "node:fs";
 import { approveExtension } from ${JSON.stringify(path.join(CLI_DIR, "src", "core", "content_trust.ts"))};
 const who = process.argv[2];
 const lock = ${JSON.stringify(`${store}.lock`)};
 for (let round = 0; round < 50; round++) {
-  if (round % 2 === Number(who) % 2) {
-    try { fs.writeFileSync(lock, JSON.stringify({ pid: 4194301, started: "1" }), { flag: "wx" }); } catch {}
-  }
+  try { fs.writeFileSync(lock, JSON.stringify({ pid: 4194301, started: "1" }), { flag: "wx" }); } catch {}
   approveExtension({ kind: "workspace-plugin", scope: "/ws/" + who, key: "p" + round + ".mjs", sha256: "0".repeat(64), approvedAt: new Date().toISOString(), summary: who });
   // Between two changes a writer lets the others in: one that took the lock again at once would starve them.
-  await new Promise((resolve) => setTimeout(resolve, 5));
+  await new Promise((resolve) => setTimeout(resolve, 1));
 }
 `);
   const children = Array.from({ length: 8 }, (_, who) => spawn(TSX, [worker, String(who)], { env: { ...process.env, HOME: home }, stdio: ["ignore", "ignore", "pipe"] }));
