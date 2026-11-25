@@ -3,6 +3,7 @@
  * hook and doctor code prints; the operator's plugin directories protected by their real spelling; a changed plugin
  * file announced as out of force; skipped operator directories shown; and a store lock two takers cannot both win.
  */
+import "./helpers/no_color.js";
 import "./helpers/leak_guard.js";
 import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
