@@ -31,7 +31,7 @@ import {
 } from "./trigger_spec.js";
 import { writePrivateFile } from "./durable_file.js";
 import { decodeStrictUtf8, parseStrictJson, readHardenedFile } from "./strict_json.js";
-import { isWorkspaceTrusted } from "../workspace_trust.js";
+import { envTrustRequested, isWorkspaceListed } from "../workspace_trust.js";
 
 export const TRIGGER_TRUST_VERSION = 1;
 const STORE_LIMIT = 256 * 1024;
@@ -143,9 +143,14 @@ export function entryForSpec(
   };
 }
 
-/** Whether the workspace at `workspace` may have triggers approved for it (the operator's trust decision). */
+/**
+ * Whether the workspace at `workspace` may have triggers (the operator's trust decision). Only the operator's
+ * trusted-workspaces store counts (`isWorkspaceListed`, the function security.ts uses to resolve a workspace's policy
+ * tier). `NEXUS_TRUST_WORKSPACE=1` does not: it is a per-process grant for an interactive session, and a trigger is a
+ * standing authority that runs unattended in other processes.
+ */
 export function workspaceMayHaveTriggers(workspace: string): boolean {
-  return isWorkspaceTrusted(workspace, false);
+  return isWorkspaceListed(workspace);
 }
 
 /** The trust decision shown beside a trigger: the workspace is trusted or it is not. */
@@ -173,7 +178,10 @@ export function decideTriggerTrust(
   const entry = triggerTrustEntry(entries, id);
 
   let reason: string;
-  if (!workspaceTrusted) reason = "the workspace is not trusted; triggers cannot run there";
+  if (!workspaceTrusted)
+    reason = envTrustRequested()
+      ? "the workspace is not in your trusted-workspaces store; NEXUS_TRUST_WORKSPACE=1 does not count for triggers (run `nexus trust <workspace>`)"
+      : "the workspace is not trusted; triggers cannot run there";
   else if (status === "NEW") reason = "the trigger spec is not approved; run `nexus triggers approve` in a terminal";
   else if (status === "MISMATCH")
     reason = "the trigger spec changed since it was approved; it needs a new approval";

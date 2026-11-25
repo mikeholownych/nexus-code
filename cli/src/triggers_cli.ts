@@ -15,7 +15,6 @@ import type { Command } from "commander";
 import pc from "picocolors";
 import { createHash } from "node:crypto";
 import { parseStrictJson, readHardenedFile, decodeStrictUtf8 } from "./core/strict_json.js";
-import { writePrivateFile } from "./core/durable_file.js";
 import {
   triggerTrustStorePath,
   readTriggerTrustStore,
@@ -48,7 +47,7 @@ async function confirmOnTerminal(question: string): Promise<boolean> {
   const readline = await import("node:readline/promises");
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   try {
-    return /^y(es)?$/i.test((await rl.question(question)).trim());
+    return /^yes$/i.test((await rl.question(question)).trim());
   } finally {
     rl.close();
   }
@@ -67,29 +66,76 @@ interface ListedTrigger {
   bounds: string;
 }
 
+/** The most of one field `approve` prints; a longer one is not shown in full and so is not approved. */
+export const APPROVE_FIELD_CAP = 4000;
+
+/**
+ * Reads `.nexus/triggers.json`. All or nothing: a file that does not parse in full (one bad spec, a duplicate id)
+ * yields no specs and says why, so nothing in it can be approved. The file must be a regular file owned by you and not
+ * writable by group or others (0644 from a git checkout is accepted; 0664 is not).
+ */
 function parseTriggerFile(file: string): { specs: TriggerSpec[]; problem?: string; rawSha256?: string } {
   try {
-    if (!fs.existsSync(file)) return { specs: [], problem: undefined };
-    const stat = fs.statSync(file);
-    if (!stat.isFile() || (stat.mode & 0o077) !== 0)
-      return { specs: [], problem: "the trigger spec file is not a private regular file" };
-    const fileData = readHardenedFile(file, { maxBytes: 256 * 1024, forbiddenMode: 0o077 });
-    if (!fileData) return { specs: [], problem: undefined };
+    if (!fs.existsSync(file)) return { specs: [] };
+    const fileData = readHardenedFile(file, { maxBytes: 256 * 1024, forbiddenMode: 0o022 });
+    if (!fileData) return { specs: [] };
     const parsed = parseStrictJson(decodeStrictUtf8(fileData.bytes));
     if (!isRecord(parsed) || parsed.version !== 1 || !Array.isArray(parsed.triggers))
       return { specs: [], problem: "it is not a version 1 trigger spec file" };
     const specs: TriggerSpec[] = [];
-    for (const raw of parsed.triggers) {
+    const seen = new Set<string>();
+    for (const [index, raw] of parsed.triggers.entries()) {
+      let spec: TriggerSpec;
       try {
-        specs.push(parseTriggerSpec(JSON.stringify(raw)));
+        spec = parseTriggerSpec(JSON.stringify(raw));
       } catch (error) {
-        return { specs, problem: error instanceof Error ? error.message : String(error) };
+        return { specs: [], problem: `trigger #${index + 1} is invalid, so nothing in the file can be approved: ${error instanceof Error ? error.message : String(error)}` };
       }
+      if (seen.has(spec.id)) return { specs: [], problem: `trigger id ${JSON.stringify(spec.id)} appears twice, so nothing in the file can be approved` };
+      seen.add(spec.id);
+      specs.push(spec);
     }
     return { specs, rawSha256: createHash("sha256").update(fileData.bytes).digest("hex") };
   } catch (error) {
-    return { specs: [], problem: error instanceof Error ? error.message : String(error) };
+    const message = error instanceof Error ? error.message : String(error);
+    const fix = /permissions are too open/.test(message) ? `; fix: chmod go-w ${file}` : "";
+    return { specs: [], problem: `the trigger spec file cannot be used: ${message}${fix}` };
   }
+}
+
+const specSha256 = (spec: TriggerSpec): string => triggerSpecSha256(Buffer.from(canonicalizeTriggerSpec(spec), "utf8"));
+
+/** A value as JSON with every control and non-ASCII character escaped, so what is printed is what is hashed. */
+const shown = (value: unknown): string =>
+  JSON.stringify(value).replace(/[\u007f-\uffff]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+
+/**
+ * Everything approving `spec` authorises, as lines to print: each field of the canonical spec, in full. Any field
+ * longer than `APPROVE_FIELD_CAP` is cut with a count and sets `complete: false` (approval is refused).
+ */
+export function describeTriggerSpec(spec: TriggerSpec): { lines: string[]; sha256: string; complete: boolean } {
+  const sha256 = specSha256(spec);
+  let complete = true;
+  const field = (label: string, value: string): string => {
+    const text = shown(value);
+    if (text.length <= APPROVE_FIELD_CAP) return `  ${label}: ${text}`;
+    complete = false;
+    return `  ${label}: ${text.slice(0, APPROVE_FIELD_CAP)}\n    [${text.length - APPROVE_FIELD_CAP} more characters, not shown: refuse to approve a spec you cannot read in full]`;
+  };
+  const lines = [`${spec.event.kind} trigger ${shown(spec.id)}  canonical sha256 ${sha256}`];
+  lines.push(`  kind: ${spec.event.kind}`);
+  for (const p of [...(spec.event.paths ?? [])].sort()) lines.push(field("event.path", p));
+  for (const o of [...(spec.event.allowedOrigins ?? [])].sort()) lines.push(field("event.allowedOrigin", o));
+  if (spec.event.kind === "webhook" && spec.event.allowedOrigins === undefined) lines.push("  event.allowedOrigins: none (any origin)");
+  if (spec.event.secret !== undefined) lines.push("  secret: an inline secret is configured (not shown; it sits in the repository file)");
+  else if (spec.event.secretEnv !== undefined) lines.push(field("secret: read from environment variable", spec.event.secretEnv));
+  else lines.push("  secret: none");
+  lines.push(field("action.prompt", spec.action.prompt));
+  lines.push(`  action.policy: ${spec.action.policy}`);
+  lines.push(spec.action.verifier != null ? field("action.verifier", spec.action.verifier) : "  action.verifier: none");
+  lines.push(`  rate: ${spec.rate.maxPerMinute}/minute, ${spec.rate.maxPerHour}/hour, ${spec.rate.maxPerDay}/day`);
+  lines.push(`  bounds: ${boundsText(spec)}`);
+  return { lines, sha256, complete };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -108,13 +154,8 @@ function listTriggers(workspace: string, entries: TriggerTrustEntry[]): ListedTr
   for (const spec of parsed.specs) {
     const id: { scope: string; key: string } = { scope: realWorkspace(workspace), key: spec.id };
     const entry = triggerTrustEntry(entries, id);
-    const currentSha256 = parsed.rawSha256;
-    // status is per spec: compare each spec's own hash
-    const specSha = triggerSpecSha256(Buffer.from(canonicalizeTriggerSpec(spec), "utf8"));
-    let status: ListedTrigger["status"] = "not_approved";
-    if (!entry) status = "not_approved";
-    else if (entry.sha256 === specSha) status = "approved";
-    else status = "changed";
+    // status is per spec: compare each spec's own canonical hash
+    const status: ListedTrigger["status"] = !entry ? "not_approved" : entry.sha256 === specSha256(spec) ? "approved" : "changed";
     listed.push({
       id: spec.id,
       kind: spec.event.kind,
@@ -184,31 +225,34 @@ export function registerTriggerCommands(program: Command, deps: TriggersCliDeps 
         return refuse(`Not approved: ${workspace} is not trusted for triggers. Run \`nexus trust ${workspace}\` first.`, 2);
 
       const rawSha256 = parsed.rawSha256 ?? "";
-      console.log(`${triggerFile}\nsha256 ${rawSha256}\nThese triggers would run when their events fire:`);
-      for (const spec of parsed.specs) {
-        console.log(`  ${spec.event.kind}  ${pc.bold(spec.id)}  policy: ${spec.action.policy}  ${boundsText(spec)}`);
-        console.log(`    ${hookLine(spec.action.prompt, 100)}`);
-      }
+      console.log(`${triggerFile}\nfile sha256 ${rawSha256}\nApproving authorises each of these to run unattended when its event fires, exactly as printed:`);
+      const described = parsed.specs.map((spec) => ({ spec, ...describeTriggerSpec(spec) }));
+      for (const d of described) for (const line of d.lines) console.log(line);
 
       // Approving is the act of a person: a tool call of the agent has no terminal.
       if (!interactive()) {
         return refuse("Not approved: approving triggers needs a person at a terminal (standard input and output are not both a terminal). Review the file, then run `nexus triggers approve` yourself in a terminal.", 2);
       }
+      const unreadable = described.filter((d) => !d.complete).map((d) => d.spec.id);
+      if (unreadable.length) return refuse(`Not approved: ${unreadable.join(", ")} cannot be shown in full (a field is over ${APPROVE_FIELD_CAP} characters). Refuse to approve a spec you cannot read in full; shorten it.`, 2);
       const pinned = options.sha256?.trim().toLowerCase();
       if (pinned !== undefined && pinned !== rawSha256)
         return refuse(`Not approved: --sha256 does not match the file, whose SHA-256 is ${rawSha256}.`, 2);
-      if (!(await confirm("Approve these triggers for this workspace? [y/N] "))) return refuse("Not approved.", 0);
 
       const now = new Date().toISOString();
-      const storePath = triggerTrustStorePath();
-      const kept = readTriggerTrustStore(storePath).entries;
-      for (const spec of parsed.specs) {
-        const entry = entryForSpec(realWorkspace(workspace), spec, now);
-        const index = kept.findIndex((e) => e.scope === entry.scope && e.key === entry.key);
-        if (index !== -1) kept[index] = entry; else kept.push(entry);
+      const scope = realWorkspace(workspace);
+      let approved = 0;
+      for (const d of described) {
+        // The answer is about THIS hash: the first 12 hex digits of what was just printed in full.
+        if (!(await confirm(`Type "yes" to approve trigger ${d.spec.id} with canonical sha256 ${d.sha256.slice(0, 12)}…: `))) {
+          console.log(`Not approved: ${d.spec.id}.`);
+          continue;
+        }
+        approveTrigger(entryForSpec(scope, d.spec, now), { workspaceTrusted: true });
+        approved++;
       }
-      writePrivateFile(storePath, `${JSON.stringify({ version: 1, entries: kept }, null, 2)}\n`, { durable: true });
-      console.log(`Approved ${parsed.specs.length} trigger${parsed.specs.length === 1 ? "" : "s"} for ${realWorkspace(workspace)}. Undo with \`nexus triggers revoke\`.`);
+      if (approved === 0) return refuse("Not approved.", 0);
+      console.log(`Approved ${approved} trigger${approved === 1 ? "" : "s"} for ${scope}. Undo with \`nexus triggers revoke\`.`);
     });
 
   triggers
@@ -232,11 +276,12 @@ export function registerTriggerCommands(program: Command, deps: TriggersCliDeps 
       const triggerFile = path.join(workspace, ".nexus", "triggers.json");
       const parsed = parseTriggerFile(triggerFile);
       const spec = parsed.specs.find((s) => s.id === id);
-      const currentSha256 = spec ? triggerSpecSha256(Buffer.from(canonicalizeTriggerSpec(spec), "utf8")) : undefined;
+      const currentSha256 = spec ? specSha256(spec) : undefined;
       const entries = readTriggerTrustStore().entries;
       const decision = decideTriggerTrust(entries, realWorkspace(workspace), spec, currentSha256);
       console.log(`trigger ${id} in ${workspace}`);
-      console.log(`  trusted: ${decision.workspaceTrusted ? "yes" : "no"}`);
+      console.log(`  trusted: ${decision.workspaceTrusted ? "yes" : "no"} (the trusted-workspaces store; NEXUS_TRUST_WORKSPACE=1 does not count for triggers)`);
+      if (parsed.problem) console.log(`  spec file: ${hookLine(parsed.problem, 400)}`);
       console.log(`  status: ${decision.status}`);
       console.log(`  may run: ${triggerMayRun(decision) ? "yes" : "no"}`);
       console.log(`  ${decision.reason}`);

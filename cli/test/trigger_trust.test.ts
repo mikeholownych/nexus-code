@@ -193,3 +193,39 @@ test("decideTriggerTrust: trusted + MISMATCH => may not run", () => {
 test("TRIGGER_TRUST_VERSION is 1", () => {
   assert.equal(TRIGGER_TRUST_VERSION, 1);
 });
+
+test("one corrupt entry voids the whole store: valid approvals beside it are not in force", () => {
+  const good = entry("t", "/ws");
+  fs.mkdirSync(path.dirname(storePath), { recursive: true });
+  for (const bad of [{ kind: "trigger", scope: "/ws", key: "BAD ID", sha256: "0".repeat(64), approvedAt: "x", summary: "s" }, "garbage", null, { ...good, sha256: "zz" }]) {
+    fs.writeFileSync(storePath, JSON.stringify({ version: 1, entries: [good, bad] }), { mode: 0o600 });
+    const result = readTriggerTrustStore(storePath);
+    assert.deepEqual(result.entries, [], JSON.stringify(bad));
+    assert.match(result.problem ?? "", /malformed entry/);
+  }
+});
+
+test("the store must be private: a group- or world-readable store holds no approvals", () => {
+  fs.mkdirSync(path.dirname(storePath), { recursive: true });
+  fs.writeFileSync(storePath, JSON.stringify({ version: 1, entries: [entry("t", "/ws")] }), { mode: 0o644 });
+  fs.chmodSync(storePath, 0o644);
+  const result = readTriggerTrustStore(storePath);
+  assert.deepEqual(result.entries, []);
+  assert.match(result.problem ?? "", /permissions are too open/);
+});
+
+test("NEXUS_TRUST_WORKSPACE=1 does not make a workspace trusted for triggers; the store does", () => {
+  const previous = process.env.NEXUS_TRUST_WORKSPACE;
+  process.env.NEXUS_TRUST_WORKSPACE = "1";
+  try {
+    assert.equal(workspaceMayHaveTriggers("/ws-env-only"), false);
+    const s = spec("t");
+    const sha = triggerSpecSha256(Buffer.from(canonicalizeTriggerSpec(s), "utf8"));
+    const decision = decideTriggerTrust([entryForSpec("/ws-env-only", s, "2026-01-01T00:00:00.000Z")], "/ws-env-only", s, sha);
+    assert.equal(decision.status, "MATCH");
+    assert.equal(triggerMayRun(decision), false);
+    assert.match(decision.reason, /NEXUS_TRUST_WORKSPACE=1 does not count for triggers/);
+  } finally {
+    if (previous === undefined) delete process.env.NEXUS_TRUST_WORKSPACE; else process.env.NEXUS_TRUST_WORKSPACE = previous;
+  }
+});

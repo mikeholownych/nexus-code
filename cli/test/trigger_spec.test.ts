@@ -15,6 +15,7 @@ import {
   defaultTriggerBounds,
   defaultTriggerRate,
   triggerTrustStatus,
+  validTriggerRate,
   type TriggerSpec,
 } from "../src/core/trigger_spec.js";
 
@@ -49,9 +50,9 @@ test("parses a valid file-change trigger", () => {
 });
 
 test("parses a valid webhook trigger", () => {
-  const spec = parseTriggerSpec(serialize({ ...baseSpec, id: "web-deploy", event: { kind: "webhook", secret: "abc123" } }));
+  const spec = parseTriggerSpec(serialize({ ...baseSpec, id: "web-deploy", event: { kind: "webhook", secret: "abcdef0123456789abcd" } }));
   assert.equal(spec.event.kind, "webhook");
-  assert.equal(spec.event.secret, "abc123");
+  assert.equal(spec.event.secret, "abcdef0123456789abcd");
   assert.equal(spec.event.paths, undefined);
 });
 
@@ -106,8 +107,8 @@ test("file-change requires paths; webhook requires secret", () => {
 });
 
 test("file-change may not set secret; webhook may not set paths", () => {
-  assert.throws(() => parseTriggerSpec(serialize({ ...baseSpec, event: { kind: "file-change", paths: ["x"], secret: "s" } })), /may not set/);
-  assert.throws(() => parseTriggerSpec(serialize({ ...baseSpec, id: "w", event: { kind: "webhook", secret: "s", paths: ["x"] } })), /may not set/);
+  assert.throws(() => parseTriggerSpec(serialize({ ...baseSpec, event: { kind: "file-change", paths: ["x"], secret: "abcdef0123456789abcd" } })), /may not set/);
+  assert.throws(() => parseTriggerSpec(serialize({ ...baseSpec, id: "w", event: { kind: "webhook", secret: "abcdef0123456789abcd", paths: ["x"] } })), /may not set/);
 });
 
 test("rejects path with .. or absolute", () => {
@@ -157,4 +158,29 @@ test("triggerTrustStatus NEW/MATCH/MISMATCH/REMOVED/ABSENT", () => {
   assert.equal(triggerTrustStatus(entries, "t", "/ws", "bbb"), "MISMATCH");
   assert.equal(triggerTrustStatus(entries, "missing", "/ws", "x"), "NEW");
   assert.equal(triggerTrustStatus([], "t", "/ws", undefined), "ABSENT");
+});
+
+const webhook = (event: Record<string, unknown>) => serialize({ ...baseSpec, id: "w", event: { kind: "webhook", ...event } });
+
+test("a short inline secret is refused and the message points at the environment", () => {
+  assert.throws(() => parseTriggerSpec(webhook({ secret: "a" })), /16\.\.128[^]*not live in the repository file[^]*secretEnv/);
+  assert.throws(() => parseTriggerSpec(webhook({ secret: "abcdef012345678" })), /16\.\.128/);
+  assert.doesNotThrow(() => parseTriggerSpec(webhook({ secret: "abcdef0123456789" })));
+});
+
+test("secretEnv names an environment variable and is an alternative to secret", () => {
+  const spec = parseTriggerSpec(webhook({ secretEnv: "DEPLOY_HOOK_SECRET" }));
+  assert.equal(spec.event.secretEnv, "DEPLOY_HOOK_SECRET");
+  assert.equal(spec.event.secret, undefined);
+  assert.ok(canonicalizeTriggerSpec(spec).includes('"secretEnv":"DEPLOY_HOOK_SECRET"'), "the variable's name is part of what is hashed");
+  assert.throws(() => parseTriggerSpec(webhook({ secretEnv: "lower" })), /secretEnv/);
+  assert.throws(() => parseTriggerSpec(webhook({ secretEnv: "A B" })), /secretEnv/);
+  assert.throws(() => parseTriggerSpec(webhook({ secretEnv: "X", secret: "abcdef0123456789abcd" })), /not both/);
+  assert.throws(() => parseTriggerSpec(serialize({ ...baseSpec, event: { kind: "file-change", paths: ["x"], secretEnv: "X" } })), /may not set/);
+});
+
+test("validTriggerRate is the one rule for specs and restored limiter state", () => {
+  assert.ok(validTriggerRate({ maxPerMinute: 1, maxPerHour: 1, maxPerDay: 1 }));
+  for (const bad of [null, [], {}, { maxPerMinute: 1, maxPerHour: 1 }, { maxPerMinute: 2, maxPerHour: 1, maxPerDay: 1 }, { maxPerMinute: 1.5, maxPerHour: 2, maxPerDay: 2 }, { maxPerMinute: Infinity, maxPerHour: Infinity, maxPerDay: Infinity }, { maxPerMinute: 1001, maxPerHour: 2000, maxPerDay: 3000 }, { maxPerMinute: 1, maxPerHour: 1, maxPerDay: 1, x: 1 }])
+    assert.equal(validTriggerRate(bad), undefined, JSON.stringify(bad));
 });

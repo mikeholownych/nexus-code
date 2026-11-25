@@ -21,8 +21,6 @@
  *     action, raise a verdict, widen a policy tier or remove a verification-file protection
  */
 
-import * as fs from "node:fs";
-import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { parseStrictJson, type StrictJsonOptions } from "./strict_json.js";
 
@@ -42,11 +40,16 @@ export const TRIGGER_MAX_PATHS = 64;
 export const TRIGGER_MAX_PATH_GLOB = 256;
 export const TRIGGER_MAX_PROMPT = 4096;
 export const TRIGGER_MAX_SECRET = 128;
+/** An inline webhook secret shorter than this is refused (it would be guessable and it sits in the repository). */
+export const TRIGGER_MIN_SECRET = 16;
 export const TRIGGER_MAX_ORIGINS = 16;
 export const TRIGGER_MAX_ORIGIN = 256;
 export const TRIGGER_MAX_ID = 64;
 export const TRIGGER_MAX_RULES = 32;
 export const TRIGGER_MAX_RULE = 256;
+
+/** Hard ceilings on the per-trigger rate (the spec parser and the rate limiter's restore both enforce them). */
+export const TRIGGER_RATE_CEILING = { maxPerMinute: 1000, maxPerHour: 10000, maxPerDay: 100000 } as const;
 
 export const TRIGGER_DEFAULT_MAX_PER_MINUTE = 5;
 export const TRIGGER_DEFAULT_MAX_PER_HOUR = 60;
@@ -75,8 +78,11 @@ export interface TriggerEvent {
   kind: TriggerEventKind;
   /** file-change: glob patterns relative to the workspace (no `..`, no absolute). At least one. */
   paths?: string[];
-  /** webhook: shared secret, base64url, used to validate the caller (constant-time compare). */
+  /** webhook: shared secret, base64url, at least 16 characters, used to validate the caller (constant-time compare).
+   * It sits in the repository file: prefer `secretEnv`. */
   secret?: string;
+  /** webhook: name of an environment variable that holds the shared secret (the secret stays out of the repository). */
+  secretEnv?: string;
   /** webhook: only these Origin/Host values may call (constant-time prefix match). Empty = any origin. */
   allowedOrigins?: string[];
 }
@@ -140,6 +146,7 @@ const ID_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const GLOB_RE = /^[^\0]*$/;
 const PATH_SEGMENT_BAD = /(\.\.|^\/|\/\.\.)/;
 const SECRET_RE = /^[A-Za-z0-9_-]+$/;
+const SECRET_ENV_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
 const ORIGIN_RE = /^(https?:\/\/)?[^\s/]+$/;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -166,6 +173,7 @@ export function canonicalizeTriggerSpec(spec: TriggerSpec): string {
       kind: spec.event.kind,
       ...(spec.event.paths !== undefined ? { paths: [...spec.event.paths].sort() } : {}),
       ...(spec.event.secret !== undefined ? { secret: spec.event.secret } : {}),
+      ...(spec.event.secretEnv !== undefined ? { secretEnv: spec.event.secretEnv } : {}),
       ...(spec.event.allowedOrigins !== undefined
         ? { allowedOrigins: [...spec.event.allowedOrigins].sort() }
         : {}),
@@ -249,10 +257,16 @@ export function parseTriggerSpec(text: string, options?: { allowWorktreeWrite?: 
 
   let secret: string | undefined;
   if (event.secret !== undefined) {
-    if (!isString(event.secret) || event.secret.length === 0 || event.secret.length > TRIGGER_MAX_SECRET)
-      fail(`event.secret must be 1..${TRIGGER_MAX_SECRET} base64url chars`);
+    if (!isString(event.secret) || event.secret.length < TRIGGER_MIN_SECRET || event.secret.length > TRIGGER_MAX_SECRET)
+      fail(`event.secret must be ${TRIGGER_MIN_SECRET}..${TRIGGER_MAX_SECRET} base64url chars; the secret should not live in the repository file, so name an environment variable with event.secretEnv instead`);
     if (!SECRET_RE.test(event.secret)) fail("event.secret must be base64url ([A-Za-z0-9_-])");
     secret = event.secret;
+  }
+  let secretEnv: string | undefined;
+  if (event.secretEnv !== undefined) {
+    if (!isString(event.secretEnv) || !SECRET_ENV_RE.test(event.secretEnv))
+      fail("event.secretEnv must name an environment variable matching /^[A-Z][A-Z0-9_]{0,63}$/");
+    secretEnv = event.secretEnv;
   }
 
   let allowedOrigins: string[] | undefined;
@@ -267,9 +281,11 @@ export function parseTriggerSpec(text: string, options?: { allowWorktreeWrite?: 
     }
   }
 
-  if (kind === "webhook" && secret === undefined) fail("webhook triggers require event.secret");
+  if (secret !== undefined && secretEnv !== undefined) fail("set event.secret or event.secretEnv, not both");
+  if (kind === "webhook" && secret === undefined && secretEnv === undefined)
+    fail("webhook triggers require event.secretEnv (or an inline event.secret of at least 16 characters)");
   if (kind === "file-change" && paths === undefined) fail("file-change triggers require event.paths");
-  if (kind === "file-change" && secret !== undefined) fail("file-change triggers may not set event.secret");
+  if (kind === "file-change" && (secret !== undefined || secretEnv !== undefined)) fail("file-change triggers may not set event.secret");
   if (kind === "webhook" && paths !== undefined) fail("webhook triggers may not set event.paths");
 
   const action = parsed.action;
@@ -292,9 +308,9 @@ export function parseTriggerSpec(text: string, options?: { allowWorktreeWrite?: 
 
   const rate = parsed.rate;
   if (!isRecord(rate)) fail("rate must be an object");
-  const maxPerMinute = asBoundedInt(rate.maxPerMinute, 1, 1000, "rate.maxPerMinute");
-  const maxPerHour = asBoundedInt(rate.maxPerHour, 1, 10000, "rate.maxPerHour");
-  const maxPerDay = asBoundedInt(rate.maxPerDay, 1, 100000, "rate.maxPerDay");
+  const maxPerMinute = asBoundedInt(rate.maxPerMinute, 1, TRIGGER_RATE_CEILING.maxPerMinute, "rate.maxPerMinute");
+  const maxPerHour = asBoundedInt(rate.maxPerHour, 1, TRIGGER_RATE_CEILING.maxPerHour, "rate.maxPerHour");
+  const maxPerDay = asBoundedInt(rate.maxPerDay, 1, TRIGGER_RATE_CEILING.maxPerDay, "rate.maxPerDay");
   if (maxPerMinute > maxPerHour) fail("rate.maxPerMinute may not exceed rate.maxPerHour");
   if (maxPerHour > maxPerDay) fail("rate.maxPerHour may not exceed rate.maxPerDay");
 
@@ -307,12 +323,12 @@ export function parseTriggerSpec(text: string, options?: { allowWorktreeWrite?: 
   // Unknown keys are refused: a future key cannot silently broaden what a trigger does.
   const known = new Set([
     "format", "version", "id", "event", "action", "rate", "bounds",
-    "kind", "paths", "secret", "allowedOrigins", "prompt", "policy", "verifier",
+    "kind", "paths", "secret", "secretEnv", "allowedOrigins", "prompt", "policy", "verifier",
     "maxPerMinute", "maxPerHour", "maxPerDay", "maxToolInvocations", "maxRounds", "maxTurnMinutes",
   ]);
   const unknownKeys = unknownKeysOf(parsed, known);
   if (unknownKeys.length) fail(`unknown keys: ${unknownKeys.join(", ")}`);
-  const unknownEventKeys = unknownKeysOf(event, new Set(["kind", "paths", "secret", "allowedOrigins"]));
+  const unknownEventKeys = unknownKeysOf(event, new Set(["kind", "paths", "secret", "secretEnv", "allowedOrigins"]));
   if (unknownEventKeys.length) fail(`unknown event keys: ${unknownEventKeys.join(", ")}`);
   const unknownActionKeys = unknownKeysOf(action, new Set(["prompt", "policy", "verifier"]));
   if (unknownActionKeys.length) fail(`unknown action keys: ${unknownActionKeys.join(", ")}`);
@@ -325,11 +341,23 @@ export function parseTriggerSpec(text: string, options?: { allowWorktreeWrite?: 
     format: "nexus-trigger",
     version: TRIGGER_SPEC_FORMAT_VERSION,
     id,
-    event: { kind: kind as TriggerEventKind, ...(paths !== undefined ? { paths } : {}), ...(secret !== undefined ? { secret } : {}), ...(allowedOrigins !== undefined ? { allowedOrigins } : {}) },
+    event: { kind: kind as TriggerEventKind, ...(paths !== undefined ? { paths } : {}), ...(secret !== undefined ? { secret } : {}), ...(secretEnv !== undefined ? { secretEnv } : {}), ...(allowedOrigins !== undefined ? { allowedOrigins } : {}) },
     action: { prompt, policy: policy as TriggerPolicy, ...(verifier !== undefined ? { verifier } : {}) },
     rate: { maxPerMinute, maxPerHour, maxPerDay },
     bounds: { maxToolInvocations, maxRounds, maxTurnMinutes },
   };
+}
+
+/** `value` as a rate the spec parser would accept (integers within the ceilings, minute <= hour <= day), else undefined. */
+export function validTriggerRate(value: unknown): TriggerRate | undefined {
+  if (!isRecord(value)) return undefined;
+  const keys = Object.keys(value);
+  if (keys.length !== 3 || !["maxPerMinute", "maxPerHour", "maxPerDay"].every((k) => keys.includes(k))) return undefined;
+  const { maxPerMinute, maxPerHour, maxPerDay } = value;
+  const ok = (v: unknown, max: number): v is number => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= max;
+  if (!ok(maxPerMinute, TRIGGER_RATE_CEILING.maxPerMinute) || !ok(maxPerHour, TRIGGER_RATE_CEILING.maxPerHour) || !ok(maxPerDay, TRIGGER_RATE_CEILING.maxPerDay)) return undefined;
+  if (maxPerMinute > maxPerHour || maxPerHour > maxPerDay) return undefined;
+  return { maxPerMinute, maxPerHour, maxPerDay };
 }
 
 function asBoundedInt(value: unknown, min: number, max: number, what: string): number {
@@ -357,29 +385,6 @@ export function triggerTrustStatus(
   if (currentSha256 === undefined) return stored ? "REMOVED" : "ABSENT";
   if (!stored) return "NEW";
   return stored.sha256 === currentSha256 ? "MATCH" : "MISMATCH";
-}
-
-/** Reads the trigger trust store. A missing or malformed store holds no approvals and never fails open. */
-export function readTriggerTrustStore(storePath: string): { entries: TriggerTrustEntry[]; problem?: string } {
-  try {
-    if (!fs.existsSync(storePath)) return { entries: [] };
-    const stat = fs.statSync(storePath);
-    if (!stat.isFile() || (stat.mode & 0o077) !== 0) return { entries: [], problem: "the trigger trust store is not a private regular file" };
-    const bytes = fs.readFileSync(storePath);
-    if (bytes.length > 256 * 1024) return { entries: [], problem: "the trigger trust store is too large" };
-    const parsed = parseStrictJson(bytes.toString("utf8"), { maxDepth: 16 });
-    if (!isRecord(parsed) || parsed.version !== 1 || !Array.isArray(parsed.entries))
-      return { entries: [], problem: "it is not a version 1 trigger trust store" };
-    const entries: TriggerTrustEntry[] = [];
-    for (const raw of parsed.entries) {
-      const entry = triggerTrustEntryOf(raw);
-      if (!entry) return { entries: [], problem: "it has a malformed entry" };
-      entries.push(entry);
-    }
-    return { entries };
-  } catch (error) {
-    return { entries: [], problem: error instanceof Error ? error.message : String(error) };
-  }
 }
 
 export function triggerTrustEntryOf(raw: unknown): TriggerTrustEntry | undefined {
