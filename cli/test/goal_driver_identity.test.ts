@@ -272,9 +272,10 @@ test("a zombie driver (exited, not reaped) is gone: no start time, not running, 
     const parent = spawn("sh", ["-c", "sh -c 'exit 0' & echo $!; exec sleep 60"], { stdio: ["ignore", "pipe", "ignore"] });
     f.children.push(parent);
     const zombie = await new Promise<number>((resolve) => parent.stdout!.once("data", (chunk) => resolve(Number(String(chunk).trim()))));
-    const deadline = Date.now() + 5_000;
-    while (!fs.readFileSync(`/proc/${zombie}/stat`, "utf8").includes(") Z") && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
-    assert.match(fs.readFileSync(`/proc/${zombie}/stat`, "utf8"), /\) Z/, "setup: a real zombie");
+    const stat = (): string => { try { return fs.readFileSync(`/proc/${zombie}/stat`, "utf8"); } catch { return ""; } };
+    const deadline = Date.now() + 10_000;
+    while (!stat().includes(") Z") && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+    assert.match(stat(), /\) Z/, "setup: a real zombie");
     assert.equal(processStartTicks(zombie), undefined);
     assert.equal(processRunning(zombie), false);
     assert.equal(processRunning(parent.pid!), true, "control: the live parent is running");

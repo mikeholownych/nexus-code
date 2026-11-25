@@ -225,3 +225,32 @@ test("a symlinked state directory is protected under its real spelling, and a ha
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("a hard link to a file in a state subdirectory is refused, and the check stays cheap with 5,000 state files", async () => {
+  // Guard: the recursive, cached inode scan in security.ts. Without recursion the subdirectory link is allowed.
+  const { SecurityManager } = await import("../src/security.js");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pa3c-scan-"));
+  const workspace = path.join(root, "ws");
+  fs.mkdirSync(workspace);
+  const saved = process.env.NEXUS_STATE_DIR;
+  process.env.NEXUS_STATE_DIR = path.join(root, "state");
+  try {
+    const tasks = path.join(root, "state", "tasks");
+    for (let i = 0; i < 7; i++) fs.mkdirSync(path.join(tasks, `deep-${i}`), { recursive: true });
+    fs.mkdirSync(path.join(tasks, "archive", "deep"), { recursive: true });
+    for (let i = 0; i < 5000; i++) fs.writeFileSync(path.join(tasks, i % 2 ? "archive" : `deep-${i % 7}`, `t-${i}.json`), "{}");
+    const target = path.join(tasks, "archive", "deep", "goal-9.json");
+    fs.writeFileSync(target, "{}");
+    fs.linkSync(target, path.join(workspace, "innocent.txt"));
+    const sm = new SecurityManager(workspace);
+    assert.equal(sm.isPathProtected("innocent.txt").protected, true, "a link to a file in a subdirectory");
+    const started = performance.now();
+    const checks = 2000;
+    for (let i = 0; i < checks; i++) sm.isPathProtected(i % 2 ? "innocent.txt" : "other.txt");
+    const perCheck = (performance.now() - started) / checks;
+    assert.ok(perCheck < 10, `amortised ${perCheck.toFixed(2)} ms per check`);
+  } finally {
+    if (saved === undefined) delete process.env.NEXUS_STATE_DIR; else process.env.NEXUS_STATE_DIR = saved;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

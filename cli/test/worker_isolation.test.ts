@@ -369,7 +369,8 @@ describe("CS-10: the worker inside a Docker container", { skip: DOCKER_SKIP }, (
     const boxed = await sh(b, `cat ${home}/.ssh/id_canary 2>&1; cat ${home}/.config/nexus/config.env 2>&1`, { shell: "sh" });
     assert.notEqual(boxed.exit, undefined, JSON.stringify({ boxed, worker: workerOutput() }).slice(0, 1_600));
     assert.doesNotMatch(boxed.stdout + boxed.stderr, /PRIVATE-KEY-CANARY|canary-secret/, "their contents are not readable");
-    assert.equal((await sh(b, `ls -A ${home}`, { shell: "sh" })).stdout.trim(), "ws", "of the home directory only the workspace exists in the container");
+    assert.deepEqual((await sh(b, `ls -A ${home}`, { shell: "sh" })).stdout.trim().split("\n").filter(Boolean).sort(), [".nexus", "ws"], "the state root is an empty mask and the workspace is the only host directory");
+    assert.equal((await sh(b, `ls -A ${home}/.nexus`, { shell: "sh" })).stdout.trim(), "", "the state root's contents are absent from the worker container");
   });
 
   test("writes outside the workspace fail; a write inside reaches the host", async () => {

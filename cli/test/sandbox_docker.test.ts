@@ -186,3 +186,138 @@ describe("docker workspace bind does not re-expose credentials under HOME (harde
     assert.equal(run(home, `cat ${home}/.netrc 2>&1; echo done`).stdout.includes("SENTINEL"), false);
   });
 });
+
+describe("docker masks the whole state root (PA-3)", { skip: HAVE_DOCKER ? false : "docker CLI is not installed" }, () => {
+  test("the argv puts a tmpfs on the state root, creating it 0700 first", () => {
+    const home = throwaway();
+    assert.equal(fs.existsSync(path.join(home, ".nexus")), false);
+    const argv = wrapSandboxedCommand("true", home, { mode: "docker" }).argv!;
+    assert.ok(argv.some((a, i) => argv[i - 1] === "--tmpfs" && a.startsWith(`${fs.realpathSync(path.join(home, ".nexus"))}:`)), argv.join(" "));
+    assert.equal(fs.statSync(path.join(home, ".nexus")).mode & 0o777, 0o700);
+  });
+
+  test("in a real container the root cannot be read, renamed or planted", { skip: spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0 ? false : "docker daemon is not usable" }, () => {
+    const home = fs.mkdtempSync(path.join(fs.existsSync("/var/tmp") ? "/var/tmp" : os.tmpdir(), "nexus-s5-state-"));
+    cleanup.push(home);
+    fs.chmodSync(home, 0o755);
+    process.env.HOME = home;
+    delete process.env.NEXUS_SANDBOX_NETWORK;
+    fs.mkdirSync(path.join(home, ".nexus", "tasks"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".nexus", "tasks", "g.json"), "SENTINEL-GOAL-STATE");
+    const w = wrapSandboxedCommand(`cat ${home}/.nexus/tasks/g.json 2>&1; mv ${home}/.nexus ${home}/.nexus.old 2>&1; echo forged > ${home}/.nexus/tasks/goal-forged.json 2>&1; echo done`, home, { mode: "docker" });
+    assert.equal(w.sandboxed, true, w.warning);
+    const r = spawnSync(w.argv![0], w.argv!.slice(1), { encoding: "utf8", timeout: 120_000, env: buildCommandEnvironment() });
+    assert.ok(!r.stdout.includes("SENTINEL"), r.stdout + r.stderr);
+    assert.equal(fs.readFileSync(path.join(home, ".nexus", "tasks", "g.json"), "utf8"), "SENTINEL-GOAL-STATE");
+    assert.equal(fs.existsSync(path.join(home, ".nexus.old")), false);
+    assert.equal(fs.existsSync(path.join(home, ".nexus", "tasks", "goal-forged.json")), false);
+  });
+});
+
+
+describe("docker pins the state root's ancestors and refuses a symlinked root (PA-3)", { skip: HAVE_DOCKER && spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0 ? false : "docker daemon is not usable" }, () => {
+  const scratch = () => {
+    const parent = fs.mkdtempSync(path.join(fs.existsSync("/var/tmp") ? "/var/tmp" : os.tmpdir(), "nexus-s5-anc-"));
+    fs.chmodSync(parent, 0o755);
+    cleanup.push(parent);
+    delete process.env.NEXUS_SANDBOX_NETWORK;
+    return parent;
+  };
+  const dockerRun = (command: string, workspace: string) => {
+    const w = wrapSandboxedCommand(command, workspace, { mode: "docker" });
+    assert.equal(w.sandboxed, true, w.warning);
+    return spawnSync(w.argv![0], w.argv!.slice(1), { encoding: "utf8", timeout: 120_000, env: buildCommandEnvironment() });
+  };
+  const withState = <T>(dir: string | undefined, run: () => T): T => {
+    const saved = process.env.NEXUS_STATE_DIR;
+    if (dir === undefined) delete process.env.NEXUS_STATE_DIR; else process.env.NEXUS_STATE_DIR = dir;
+    try { return run(); } finally { if (saved === undefined) delete process.env.NEXUS_STATE_DIR; else process.env.NEXUS_STATE_DIR = saved; }
+  };
+  const forge = (root: string) => `mkdir -p ${root}/tasks 2>&1; echo FORGED > ${root}/tasks/goal-forged.json 2>&1`;
+
+  test("workspace = parent of HOME: HOME cannot be renamed, nothing is forged", () => {
+    const parent = scratch();
+    const home = path.join(parent, "home");
+    fs.mkdirSync(path.join(home, ".nexus", "tasks"), { recursive: true });
+    process.env.HOME = home;
+    const r = dockerRun(`mv ${home} ${home}-x 2>&1; ${forge(path.join(home, ".nexus"))}; echo done`, parent);
+    assert.match(r.stdout, /busy|cannot move|denied/i, r.stdout + r.stderr);
+    assert.equal(fs.existsSync(`${home}-x`), false);
+    assert.equal(fs.existsSync(path.join(home, ".nexus", "tasks", "goal-forged.json")), false);
+  });
+
+  test("workspace = HOME, root = $HOME/a/b/st: every ancestor is un-renamable", () => {
+    const parent = scratch();
+    const home = path.join(parent, "home");
+    const root = path.join(home, "a", "b", "st");
+    fs.mkdirSync(path.join(root, "tasks"), { recursive: true });
+    process.env.HOME = home;
+    withState(root, () => {
+      const r = dockerRun(`mv ${home}/a/b ${home}/a/b.old 2>&1; mv ${home}/a ${home}/a.old 2>&1; mv ${root} ${root}.old 2>&1; ${forge(root)}; touch ${home}/plain && echo WORKS`, home);
+      assert.equal((r.stdout.match(/busy/gi) ?? []).length, 3, r.stdout + r.stderr);
+      assert.match(r.stdout, /WORKS/);
+      for (const moved of ["a.old", "a/b.old", "a/b/st.old"]) assert.equal(fs.existsSync(path.join(home, moved)), false, moved);
+      assert.equal(fs.existsSync(path.join(root, "tasks", "goal-forged.json")), false);
+    });
+  });
+
+  test("a symlinked state directory inside the workspace is refused", () => {
+    const parent = scratch();
+    const home = path.join(parent, "home");
+    fs.mkdirSync(path.join(home, "real"), { recursive: true });
+    fs.symlinkSync(path.join(home, "real"), path.join(home, "lnk"));
+    process.env.HOME = home;
+    withState(path.join(home, "lnk"), () => {
+      const w = wrapSandboxedCommand("true", home, { mode: "docker" });
+      assert.equal(w.sandboxed, false);
+      assert.match(w.warning ?? "", /through a symlink inside the workspace/);
+    });
+  });
+});
+
+describe("docker with a workspace inside the state root (PA-3)", { skip: HAVE_DOCKER && spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0 ? false : "docker daemon is not usable" }, () => {
+  const scratch = () => {
+    const dir = fs.mkdtempSync(path.join(fs.existsSync("/var/tmp") ? "/var/tmp" : os.tmpdir(), "nexus-s5-in-"));
+    fs.chmodSync(dir, 0o755);
+    cleanup.push(dir);
+    delete process.env.NEXUS_SANDBOX_NETWORK;
+    process.env.HOME = dir;
+    return dir;
+  };
+  const withState = <T>(dir: string, run: () => T): T => {
+    const saved = process.env.NEXUS_STATE_DIR;
+    process.env.NEXUS_STATE_DIR = dir;
+    try { return run(); } finally { if (saved === undefined) delete process.env.NEXUS_STATE_DIR; else process.env.NEXUS_STATE_DIR = saved; }
+  };
+
+  test("a workspace that is the state root, or inside its tasks/, is refused", () => {
+    const dir = scratch();
+    const root = path.join(dir, "st");
+    fs.mkdirSync(path.join(root, "tasks"), { recursive: true });
+    withState(root, () => {
+      for (const workspace of [root, path.join(root, "tasks")]) {
+        const w = wrapSandboxedCommand("true", workspace, { mode: "docker" });
+        assert.equal(w.sandboxed, false, workspace);
+        assert.match(w.warning ?? "", /Start Nexus outside the state directory/);
+      }
+    });
+  });
+
+  test("a workspace below the root: tasks/ is unreadable, unwritable and cannot be renamed; the workspace works", () => {
+    const dir = scratch();
+    const root = path.join(dir, "st");
+    const workspace = path.join(root, "worktrees", "j");
+    fs.mkdirSync(workspace, { recursive: true });
+    fs.mkdirSync(path.join(root, "tasks"));
+    fs.writeFileSync(path.join(root, "tasks", "g.json"), "SENTINEL-GOAL-STATE");
+    withState(root, () => {
+      const w = wrapSandboxedCommand(`cat ${root}/tasks/g.json 2>&1; echo pwned > ${root}/tasks/g.json 2>&1; mv ${root}/tasks ${root}/tasks.old 2>&1; echo built > out.txt && cat out.txt`, workspace, { mode: "docker" });
+      assert.equal(w.sandboxed, true, w.warning);
+      const r = spawnSync(w.argv![0], w.argv!.slice(1), { encoding: "utf8", timeout: 120_000, env: buildCommandEnvironment() });
+      assert.doesNotMatch(r.stdout, /SENTINEL/, r.stdout + r.stderr);
+      assert.match(r.stdout, /built/);
+      assert.equal(fs.readFileSync(path.join(root, "tasks", "g.json"), "utf8"), "SENTINEL-GOAL-STATE");
+      assert.equal(fs.existsSync(path.join(root, "tasks.old")), false);
+    });
+  });
+});
