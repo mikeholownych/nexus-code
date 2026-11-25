@@ -333,6 +333,7 @@ test("late recovery reconciles an already-submitted report-mode slot instead of 
     const recovered = w.schedule();
     assert.equal(recovered.state.lastFire?.jobId, w.jobs()[0].id);
     assert.equal(recovered.state.lastFire?.dueAt, iso(T0 + HOUR));
+    assert.equal(recovered.state.lastFire?.firedAt, w.jobs()[0].createdAt, "recovery preserves the original fire time");
     assert.equal(recovered.remainingRuns, 0, "the already-submitted run consumes max-runs once");
     assert.equal(recovered.enabled, false);
     assert.equal(recovered.state.missedCount, 0, "an existing run is not reported as a missed slot");

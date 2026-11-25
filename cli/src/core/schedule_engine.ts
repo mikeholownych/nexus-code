@@ -225,7 +225,7 @@ export class ScheduleEngine {
       const before = summarize(scanSlots(original.trigger, anchor, due - 1, existingDueAt - 1));
       const after = summarize(scanSlots(original.trigger, anchor, existingDueAt, now));
       this.options.log(`schedule ${original.id}: recovered submitted job ${existing.id} for ${iso(existingDueAt)}`);
-      const recovered = this.afterFire(original, existing.id, iso(existingDueAt), recoveredKind, before, now, all.last);
+      const recovered = this.afterFire(original, existing.id, iso(existingDueAt), recoveredKind, before, now, all.last, existing.createdAt);
       if (!after) return recovered;
       const reason = isTerminal(existing.state) ? "runner_not_running" : "overlap";
       const reported = this.report(recovered, after, reason, { jobId: existing.id, action: "none" });
@@ -261,12 +261,13 @@ export class ScheduleEngine {
     late: ScheduleMissedSummary | null,
     now: number,
     last: number,
+    firedAt?: string,
   ): ScheduleRecord {
     const fired = this.advance({
       ...original,
       state: {
         ...original.state,
-        lastFire: { jobId, dueAt, kind, firedAt: this.options.now().toISOString(), missed: late },
+        lastFire: { jobId, dueAt, kind, firedAt: firedAt ?? this.options.now().toISOString(), missed: late },
       },
     }, now, last);
     const remaining = fired.remainingRuns === null ? null : fired.remainingRuns - 1;
