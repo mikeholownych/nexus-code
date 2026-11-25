@@ -103,7 +103,14 @@ test("after the upgrade: plugins of a trusted workspace are not loaded, one noti
   fs.appendFileSync(format, "// edited\n");
   const again = manager();
   await again.pm.loadPlugins();
-  assert.match(again.notices.join("\n"), /nexus plugins trust plugins\/format\.mjs   \(changed since it was approved\)/);
+  // A plugin that was in force and no longer is gets a notice of its own, once, however often plugins are reloaded.
+  await again.pm.loadPlugins();
+  await again.pm.loadPlugins();
+  assert.deepEqual(again.notices, ["nexus: WARNING: workspace plugin plugins/format.mjs is NO LONGER IN FORCE: plugins/format.mjs changed since it was approved. It is not loaded. Review the change, then run `nexus plugins trust plugins/format.mjs` in a terminal."]);
+  // Changed again: said again.
+  fs.appendFileSync(format, "// edited twice\n");
+  await again.pm.loadPlugins();
+  assert.equal(again.notices.length, 2);
   assert.match(diagnoseWorkspacePlugins(ws).evidence.join("\n"), /format\.mjs: changed since it was approved, so it is not loaded/);
 });
 

@@ -150,19 +150,19 @@ export function registerPluginPackageCommands(plugins: Command): void {
     .action((source: string) => {
       try {
         const { receipt, installDir, manifest } = installPluginFromLocal(source);
-        console.log(pc.green(`Installed ${manifest.name}@${manifest.pluginVersion}`));
-        console.log(`  path: ${installDir}`);
-        console.log(`  permissions: ${receipt.permissions.join(", ")}`);
+        console.log(pc.green(`Installed ${printable(manifest.name, 80)}@${printable(manifest.pluginVersion, 80)}`));
+        console.log(`  path: ${printable(installDir)}`);
+        console.log(`  permissions: ${printable(receipt.permissions.join(", "))}`);
         if (manifest.contributions) {
           const parts = Object.entries(manifest.contributions)
             .filter(([, v]) => Array.isArray(v) && v.length)
             .map(([k, v]) => `${k}=${(v as string[]).length}`);
-          if (parts.length) console.log(`  contributions: ${parts.join(", ")}`);
+          if (parts.length) console.log(`  contributions: ${printable(parts.join(", "))}`);
         }
-        console.log(`  tree: ${receipt.treeDigest}`);
+        console.log(`  tree: ${printable(receipt.treeDigest, 80)}`);
       } catch (error) {
         const msg = error instanceof PluginInstallError || error instanceof InvalidPluginManifestError ? error.message : String(error);
-        console.error(pc.red(`install failed: ${msg}`));
+        console.error(pc.red(`install failed: ${printable(msg, 1000)}`));
         process.exitCode = 1;
       }
     });
@@ -182,8 +182,9 @@ export function registerPluginPackageCommands(plugins: Command): void {
         return;
       }
       for (const { receipt, installDir } of installed) {
-        console.log(`${pc.bold(receipt.name)}@${receipt.pluginVersion}  ${pc.dim(installDir)}`);
-        console.log(`  permissions: ${receipt.permissions.join(", ")}  tree: ${receipt.treeDigest.slice(0, 12)}…`);
+        // A receipt is a file on disk: what it says is shown, never sent raw.
+        console.log(`${pc.bold(printable(receipt.name, 80))}@${printable(receipt.pluginVersion, 80)}  ${pc.dim(printable(installDir))}`);
+        console.log(`  permissions: ${printable(receipt.permissions.join(", "))}  tree: ${printable(receipt.treeDigest.slice(0, 12), 20)}…`);
       }
     });
 
@@ -194,9 +195,9 @@ export function registerPluginPackageCommands(plugins: Command): void {
     .action((name: string) => {
       try {
         const dir = removeInstalledPlugin(name);
-        console.log(pc.green(`Removed ${name} (${dir})`));
+        console.log(pc.green(`Removed ${printable(name, 80)} (${printable(dir)})`));
       } catch (error) {
-        console.error(pc.red(error instanceof PluginInstallError ? error.message : String(error)));
+        console.error(pc.red(printable(error instanceof PluginInstallError ? error.message : String(error), 1000)));
         process.exitCode = 1;
       }
     });
@@ -214,10 +215,10 @@ export function registerPluginPackageCommands(plugins: Command): void {
       let failed = 0;
       for (const n of names) {
         const result = verifyInstalledPlugin(n);
-        if (result.ok) console.log(pc.green(`ok  ${result.name}  tree ${result.treeDigest.slice(0, 12)}…`));
+        if (result.ok) console.log(pc.green(`ok  ${printable(result.name, 80)}  tree ${printable(result.treeDigest.slice(0, 12), 20)}…`));
         else {
           failed += 1;
-          console.log(pc.red(`fail  ${result.name}  ${result.reason}`));
+          console.log(pc.red(`fail  ${printable(result.name, 80)}  ${printable(result.reason, 1000)}`));
         }
       }
       if (failed) process.exitCode = 1;

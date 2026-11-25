@@ -114,7 +114,7 @@ describe("mcp.allow: only a listed server is started", () => {
     assert.equal(manager.getPolicyRefusals().length, hostile.length);
     hostile.forEach((_, i) => assert.equal(fs.existsSync(marker(`hostile-${i}`)), false));
     for (const notice of notices) assert.doesNotMatch(notice, /[\u0000-\u001f\u007f-\u009f]/, "a control character in a server name is not printed");
-    assert.ok(notices.some((notice) => notice.includes("'github?'")), "the newline in a name is shown as ?");
+    assert.ok(notices.some((notice) => notice.includes("'github\\u000a'")), "the newline in a name is written out, not sent");
   });
 
   test("command: pins the program by its exact absolute path", async () => {

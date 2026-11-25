@@ -29,7 +29,7 @@ import { effortLevels } from "./core/models_snapshot.js";
 import { mcpConfigFiles } from "./mcp.js";
 import { isBwrapAvailable, sandboxHomeMounts, sandboxNetworkEnabled, sandboxWorkspaceOverlays } from "./sandbox.js";
 import { describeSandboxPosture } from "./sandbox_profile.js";
-import { pluginDirs } from "./plugins.js";
+import { pluginDirs, skippedOperatorDirs } from "./plugins.js";
 import { policyFindings, processPolicyReport } from "./policy_cli.js";
 import { USER_POLICY_FILE_NAME } from "./core/managed_policy_load.js";
 import { untrustedWorkspaceExtensions, WORKSPACE_MCP_FILES, isWorkspaceTrusted } from "./workspace_trust.js";
@@ -44,6 +44,7 @@ import { redactSecrets } from "./ui.js";
 import { SafePathError, ancestryProblem, chmodVerified, identityOf, mkdirVerified, readVerified, unlinkVerified, writeExclusiveVerified, type Identity } from "./safe_fs.js";
 import { isNexusDirPermissive } from "./core/durable_file.js";
 import { diagnoseHooks } from "./doctor_hooks.js";
+import { printable } from "./core/printable.js";
 import { diagnoseWorkspacePlugins } from "./doctor_plugins.js";
 export { isNexusDirPermissive };
 import { DEFAULT_REPEATED_CALL_HARD, DEFAULT_REPEATED_CALL_SOFT } from "./core/repeated_calls.js";
@@ -1240,7 +1241,11 @@ const pluginCheck: Check = async (ctx) => {
   const found: string[] = [];
   const risky: string[] = [];
   for (const file of untrustedWorkspaceExtensions(workspace).filter((f) => !WORKSPACE_MCP_FILES.includes(path.basename(f)))) {
-    risky.push(`${file}: not loaded — this workspace is not trusted. Trust it with \`nexus trust ${workspace}\`, then approve the file itself with \`nexus plugins trust\`.`);
+    risky.push(`${printable(file)}: not loaded — this workspace is not trusted. Trust it with \`nexus trust ${printable(workspace)}\`, then approve the file itself with \`nexus plugins trust\`.`);
+  }
+  // The operator's own directories that are not used because the workspace contains them.
+  for (const dir of skippedOperatorDirs(workspace)) {
+    risky.push(`${printable(dir)}: your plugins here are not loaded — the directory lies inside the workspace (${printable(workspace)}), where the agent's tools can write it. Start Nexus in a project directory, not in your home directory.`);
   }
   for (const dir of pluginDirs(workspace, true)) {
     let names: string[];
@@ -1251,9 +1256,10 @@ const pluginCheck: Check = async (ctx) => {
     }
     for (const name of names.filter((n) => n.endsWith(".js") || n.endsWith(".mjs"))) {
       const file = path.join(dir, name);
-      found.push(file);
+      // A file name is the repository's (or anyone's who can write the directory): it is shown, never sent raw.
+      found.push(printable(file));
       const mode = modeOf(file) ?? 0;
-      if (mode & 0o002) risky.push(`${file} is world-writable (mode ${mode.toString(8)}); anyone could change code Nexus runs`);
+      if (mode & 0o002) risky.push(`${printable(file)} is world-writable (mode ${mode.toString(8)}); anyone could change code Nexus runs`);
     }
   }
   const note = "Plugin modules were listed, not loaded (loading runs their code).";
