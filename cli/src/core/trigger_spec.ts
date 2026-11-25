@@ -297,7 +297,7 @@ export function parseTriggerSpec(text: string, options?: { allowWorktreeWrite?: 
   if (!isString(policy) || !TRIGGER_POLICIES.includes(policy as TriggerPolicy))
     fail(`action.policy must be one of ${TRIGGER_POLICIES.join(", ")}`);
   if (policy === "worktree-write" && !allowWorktreeWrite)
-    fail("action.policy worktree-write is refused unless the operator passed --allow-worktree-write");
+    fail("action.policy worktree-write is refused: v1.3.0 triggers are read-only (the allowWorktreeWrite parser option exists for tests; no command sets it)");
 
   let verifier: string | undefined;
   if (action.verifier !== undefined) {

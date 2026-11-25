@@ -9,12 +9,9 @@
  * withdraws approval. A firer reads `triggerMayRun` from trigger_trust.ts before starting any run.
  */
 
-import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Command } from "commander";
 import pc from "picocolors";
-import { createHash } from "node:crypto";
-import { parseStrictJson, readHardenedFile, decodeStrictUtf8 } from "./core/strict_json.js";
 import {
   triggerTrustStorePath,
   readTriggerTrustStore,
@@ -27,12 +24,10 @@ import {
   decideTriggerTrust,
 } from "./core/trigger_trust.js";
 import {
-  parseTriggerSpec,
-  canonicalizeTriggerSpec,
-  triggerSpecSha256,
   type TriggerSpec,
   type TriggerTrustEntry,
 } from "./core/trigger_spec.js";
+import { parseTriggerFile, specSha256 } from "./core/trigger_load.js";
 import { realWorkspace } from "./workspace_trust.js";
 import { hookLine } from "./core/hook_runner.js";
 
@@ -43,11 +38,24 @@ export interface TriggersCliDeps {
   interactive?: () => boolean;
 }
 
-async function confirmOnTerminal(question: string): Promise<boolean> {
+/** The terminal ended or was closed before an answer: nothing was approved. */
+export class NoAnswerError extends Error {
+  constructor() {
+    super("no answer was given (the input ended or was closed)");
+    this.name = "NoAnswerError";
+  }
+}
+
+/** Asks on the terminal. Only the exact text `yes` approves: no case folding, no trimming. Throws `NoAnswerError` at end of input. */
+export async function confirmOnTerminal(question: string, io: { input?: NodeJS.ReadableStream; output?: NodeJS.WritableStream } = {}): Promise<boolean> {
   const readline = await import("node:readline/promises");
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const rl = readline.createInterface({ input: io.input ?? process.stdin, output: io.output ?? process.stdout });
   try {
-    return /^yes$/i.test((await rl.question(question)).trim());
+    const answer = await new Promise<string>((resolve, reject) => {
+      rl.once("close", () => reject(new NoAnswerError()));
+      rl.question(question).then(resolve, () => reject(new NoAnswerError()));
+    });
+    return answer === "yes";
   } finally {
     rl.close();
   }
@@ -69,41 +77,6 @@ interface ListedTrigger {
 /** The most of one field `approve` prints; a longer one is not shown in full and so is not approved. */
 export const APPROVE_FIELD_CAP = 4000;
 
-/**
- * Reads `.nexus/triggers.json`. All or nothing: a file that does not parse in full (one bad spec, a duplicate id)
- * yields no specs and says why, so nothing in it can be approved. The file must be a regular file owned by you and not
- * writable by group or others (0644 from a git checkout is accepted; 0664 is not).
- */
-function parseTriggerFile(file: string): { specs: TriggerSpec[]; problem?: string; rawSha256?: string } {
-  try {
-    if (!fs.existsSync(file)) return { specs: [] };
-    const fileData = readHardenedFile(file, { maxBytes: 256 * 1024, forbiddenMode: 0o022 });
-    if (!fileData) return { specs: [] };
-    const parsed = parseStrictJson(decodeStrictUtf8(fileData.bytes));
-    if (!isRecord(parsed) || parsed.version !== 1 || !Array.isArray(parsed.triggers))
-      return { specs: [], problem: "it is not a version 1 trigger spec file" };
-    const specs: TriggerSpec[] = [];
-    const seen = new Set<string>();
-    for (const [index, raw] of parsed.triggers.entries()) {
-      let spec: TriggerSpec;
-      try {
-        spec = parseTriggerSpec(JSON.stringify(raw));
-      } catch (error) {
-        return { specs: [], problem: `trigger #${index + 1} is invalid, so nothing in the file can be approved: ${error instanceof Error ? error.message : String(error)}` };
-      }
-      if (seen.has(spec.id)) return { specs: [], problem: `trigger id ${JSON.stringify(spec.id)} appears twice, so nothing in the file can be approved` };
-      seen.add(spec.id);
-      specs.push(spec);
-    }
-    return { specs, rawSha256: createHash("sha256").update(fileData.bytes).digest("hex") };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const fix = /permissions are too open/.test(message) ? `; fix: chmod go-w ${file}` : "";
-    return { specs: [], problem: `the trigger spec file cannot be used: ${message}${fix}` };
-  }
-}
-
-const specSha256 = (spec: TriggerSpec): string => triggerSpecSha256(Buffer.from(canonicalizeTriggerSpec(spec), "utf8"));
 
 /** A value as JSON with every control and non-ASCII character escaped, so what is printed is what is hashed. */
 const shown = (value: unknown): string =>
@@ -136,10 +109,6 @@ export function describeTriggerSpec(spec: TriggerSpec): { lines: string[]; sha25
   lines.push(`  rate: ${spec.rate.maxPerMinute}/minute, ${spec.rate.maxPerHour}/hour, ${spec.rate.maxPerDay}/day`);
   lines.push(`  bounds: ${boundsText(spec)}`);
   return { lines, sha256, complete };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function boundsText(spec: TriggerSpec): string {
@@ -225,7 +194,7 @@ export function registerTriggerCommands(program: Command, deps: TriggersCliDeps 
         return refuse(`Not approved: ${workspace} is not trusted for triggers. Run \`nexus trust ${workspace}\` first.`, 2);
 
       const rawSha256 = parsed.rawSha256 ?? "";
-      console.log(`${triggerFile}\nfile sha256 ${rawSha256}\nApproving authorises each of these to run unattended when its event fires, exactly as printed:`);
+      console.log(`${shown(triggerFile)}\nfile sha256 ${rawSha256}\nApproving authorises each of these to run unattended when its event fires, exactly as printed:`);
       const described = parsed.specs.map((spec) => ({ spec, ...describeTriggerSpec(spec) }));
       for (const d of described) for (const line of d.lines) console.log(line);
 
@@ -244,7 +213,14 @@ export function registerTriggerCommands(program: Command, deps: TriggersCliDeps 
       let approved = 0;
       for (const d of described) {
         // The answer is about THIS hash: the first 12 hex digits of what was just printed in full.
-        if (!(await confirm(`Type "yes" to approve trigger ${d.spec.id} with canonical sha256 ${d.sha256.slice(0, 12)}…: `))) {
+        let yes: boolean;
+        try {
+          yes = await confirm(`Type "yes" (exactly, lowercase) to approve trigger ${d.spec.id} with canonical sha256 ${d.sha256.slice(0, 12)}…: `);
+        } catch (error) {
+          if (approved > 0) console.log(`Approved ${approved} trigger${approved === 1 ? "" : "s"} before the input ended.`);
+          return refuse(`Not approved: ${d.spec.id}: ${error instanceof Error ? error.message : String(error)}.`, 2);
+        }
+        if (!yes) {
           console.log(`Not approved: ${d.spec.id}.`);
           continue;
         }
