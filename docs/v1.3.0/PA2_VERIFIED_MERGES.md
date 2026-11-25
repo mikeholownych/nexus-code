@@ -1,6 +1,6 @@
 # PA-2 verified merge arbitration
 
-Status: **implemented on branch `v1/pa2-verified-merges`; tested locally, not yet through CI or external qualification.**
+Status: **landed on `release/v1.3.0` (#785, #788, #790); the deterministic qualification record is [`PA2_MERGE_ARBITRATION.md`](PA2_MERGE_ARBITRATION.md). Internal qualification only; not externally qualified.**
 
 ## Contract
 
