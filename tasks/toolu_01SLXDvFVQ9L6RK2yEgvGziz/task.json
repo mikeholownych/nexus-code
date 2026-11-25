@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01SLXDvFVQ9L6RK2yEgvGziz",
+  "agent_id": "aa38d8a5c723915de",
+  "subagent_type": "general-purpose",
+  "task_description": "Fix BG-3 trust model review blockers",
+  "token_usage": {
+    "input_tokens": 80,
+    "cache_creation_tokens": 181103,
+    "cache_read_tokens": 5299048,
+    "output_tokens": 61399,
+    "api_call_count": 40
+  },
+  "started_at": "2026-11-24T23:55:46.36556334Z",
+  "completed_at": "2026-11-25T00:06:16.114108383Z"
+}

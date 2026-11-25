@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01WwUwewVqCV1YMBBFUcN5Mq",
+  "agent_id": "a806cb8075ea3a909",
+  "subagent_type": "reviewer",
+  "task_description": "Re-review PR #803 trust fixes",
+  "token_usage": {
+    "input_tokens": 62,
+    "cache_creation_tokens": 87761,
+    "cache_read_tokens": 1893460,
+    "output_tokens": 29235,
+    "api_call_count": 31
+  },
+  "started_at": "2026-11-25T00:06:41.680562198Z",
+  "completed_at": "2026-11-25T00:15:37.817589588Z"
+}
