@@ -148,6 +148,33 @@
         "summary": {
           "type": "string"
         },
+        "trigger_event": {
+          "description": "BG-3: the one event the job stands for, and the SHA-256 of the approved spec it was fired from.",
+          "type": "object",
+          "properties": {
+            "approved_sha256": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "file-change",
+                "webhook"
+              ]
+            }
+          },
+          "required": [
+            "approved_sha256",
+            "id",
+            "kind"
+          ]
+        },
+        "trigger_id": {
+          "description": "BG-3: the trigger that started this job; absent for a job started by hand or by a schedule.",
+          "type": "string"
+        },
         "unattended": {
           "description": "No operator was present: no call was approved by a person, and none was approved \"always\".",
           "const": true

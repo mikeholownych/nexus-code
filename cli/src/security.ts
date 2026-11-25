@@ -175,6 +175,8 @@ const DEFAULT_PROTECTED_PATHS = [
   "trigger_trust.json",
   // BG-2: the operator's schedules (runner/nexus-schedules/ and its lock): the agent a schedule starts must not create or edit a schedule.
   "nexus-schedules*",
+  // BG-3: the trigger firer's state and rate-limiter snapshot (runner/nexus-triggers/): an agent that can rewrite them can reset the limits and quarantines.
+  "nexus-triggers*",
   ".env*",
   "id_rsa*",
   "id_ed25519*",

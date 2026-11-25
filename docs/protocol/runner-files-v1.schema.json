@@ -35,7 +35,38 @@
       ]
     },
     "JobOrigin": {
+      "description": "Who asked for the job. A trigger job (BG-3) names the trigger, the one event it stands for (`eventId` is unique per\ntrigger: a second job for the same event is never made) and the SHA-256 of the approved spec it was fired from.",
       "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "approvedSha256": {
+              "type": "string"
+            },
+            "eventId": {
+              "type": "string"
+            },
+            "eventKind": {
+              "enum": [
+                "file-change",
+                "webhook"
+              ]
+            },
+            "kind": {
+              "const": "trigger"
+            },
+            "triggerId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "approvedSha256",
+            "eventId",
+            "eventKind",
+            "kind",
+            "triggerId"
+          ]
+        },
         {
           "type": "object",
           "properties": {
