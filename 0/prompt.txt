@@ -1,0 +1,74 @@
+#732 requested changes have landed
+
+---
+
+proceed and continue iteratively until v1.3.0 release
+
+---
+
+claude agent is back from rate limit.. taki back merge and ci work
+
+---
+
+proceed
+
+---
+
+take over what claude code has been running in this repo. Claude is rate-limited.
+
+---
+
+claude was also working on the updates for #782
+
+---
+
+close #785 as superseded by #788/#790, with a note that PA-2 acceptance criterion is satisfied by landed+qualified regressions.
+
+---
+
+what about #787 I don't see any review notes?
+
+---
+
+same for 789/790/791
+
+---
+
+/goal continue reviewing v1.3.0 PRs until all roadmap items are complete. Then, take required action to release.
+
+---
+
+proceed
+
+---
+
+#799 was not ready for merging.
+
+---
+
+there were follow-ups being requested in the comments. be sure all follow-ups are addressed before any merge going forward.
+
+---
+
+continue
+
+---
+
+proceed with SB-1 slices 2–3
+
+---
+
+Not complete / blocked
+
+     - No push/PR/merge/tag/publish performed. Pushing v1/sb1-d22-acceptance and opening a PR to release/v1.3.0 requires explicit owner instruction.
+     - SB-1 D22 not fully closed. Targeted tests pass and profile-aware denial/receipt gap is fixed; remaining: full G-3/profile-hostile acceptance campaign scope as owner defines, broader
+       CI/required-check evidence on PR, and owner acceptance of D22 closure.
+     - HK-3 D18 scope unresolved (owner decision): #798 merged as partial per-plugin workspace trust; subprocess workspace hook/plugin execution in/out for v1.3.0 still undecided.
+     - PA-4 gated lifecycle incomplete: spec validation merged (#793), but lifecycle/shared-contract/authority/bounded delegation//goal /loop /batch remain gated by PA-1/PA-2 evidence, WP-
+       P10-02, and PA-3 alignment.
+     - PA-1/PA-2/PA-3 release-head acceptance not closed on release head; /team remains experimental until PA-1/PA-2 complete.
+     - Release objective unmet: all v1.3.0 roadmap items are not yet completed/validated; remaining work is gated by the decisions/authority above.
+
+---
+
+you are authorized to get the release to completion.
