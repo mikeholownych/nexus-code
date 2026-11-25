@@ -49,7 +49,7 @@ import { redactForPersistence } from "./persistence_protection.js";
 import type { ResourceConditionRecord, ResourceDescriptor, ResourceRegistry, WorkRequirements } from "./resources.js";
 import type { InferenceFailure } from "./turn.js";
 import { REVISION_MARKER } from "./scheduler.js";
-import { CURRENT_OPERATION_SCHEMA_VERSION, validateOperationPolicy, validateResourceSlots } from "./operation_schema.js";
+import { CURRENT_OPERATION_SCHEMA_VERSION, MAX_OPERATION_ACTIVE_MS, validateOperationPolicy, validateResourceSlots } from "./operation_schema.js";
 import type { BoundaryRules } from "./boundary_rules.js";
 export { ConvergenceScheduler, DecisionRejected, isRequired } from "./scheduler.js";
 export {
@@ -270,6 +270,8 @@ export interface OperationPolicy {
    * operation pauses before starting new work so the operator can inspect, raise the cap, or cancel.
    */
   maxTotalTokens?: number;
+  /** Maximum active wall time across this operation's durable runs, including all concurrently executing units. */
+  maxTotalActiveMs: number;
 }
 
 /** Explicit execution reservation. Missing values are unknown, never inferred from provider or model identity. */
@@ -286,6 +288,7 @@ export const DEFAULT_OPERATION_POLICY: OperationPolicy = {
   maxRunsPerUnit: 25,
   maxStallsPerFingerprint: 3,
   minWaitMs: 1_000,
+  maxTotalActiveMs: MAX_OPERATION_ACTIVE_MS,
 };
 
 /** One unit's worktree/branch in an isolated operation. */
@@ -443,6 +446,12 @@ export interface DurableOperationState {
   activeHost?: string;
   /** Kernel start time (`/proc/<pid>/stat` field 22) of that process: tells it from a later process given the same pid. Absent in records from builds before PA-3 identity; those read as unknown identity. */
   activeStartTicks?: string;
+  /** Active wall time already charged to this operation, checkpointed during each durable save. */
+  activeElapsedMs: number;
+  /** False for migrated records whose prior active intervals cannot be reconstructed exactly. */
+  activeElapsedHistoryComplete: boolean;
+  /** Timestamp of the current driver interval; retained so a crash is conservatively charged on resume. */
+  activeSinceMs?: number;
   /** Operator-visible reason the operation was paused (stale recovery, explicit pause, etc.). */
   pauseReason?: string;
   /**
@@ -621,6 +630,8 @@ export function newOperation(
     createdAt: at,
     updatedAt: at,
     ...(bootId ? { activeBootId: bootId } : {}),
+    activeElapsedMs: 0,
+    activeElapsedHistoryComplete: true,
     units: units.map((u) => ({
       id: u.id,
       title: u.title ?? u.id,

@@ -105,6 +105,38 @@ test("projects units, depth, durable state and the open decision", () => {
   assert.equal(view.decisions[0].command, "nexus operation decide op-view d1 <option> [--note <text>]");
 });
 
+test("projects active-time consumption, open intervals and conservative legacy estimates", () => {
+  const op = state();
+  op.policy.maxTotalActiveMs = 5 * 60_000;
+  op.activeElapsedMs = 60_000;
+  op.activeElapsedHistoryComplete = true;
+  op.activeSinceMs = NOW - 2 * 60_000;
+  op.pauseReason = "Paused at the operation time limit.";
+  const view = buildOperationView(op, { now: NOW });
+
+  assert.deepEqual(view.activeBudget, {
+    elapsedMs: 3 * 60_000,
+    limitMs: 5 * 60_000,
+    remainingMs: 2 * 60_000,
+    historyComplete: true,
+    intervalOpen: true,
+  });
+  assert.equal(view.pauseReason, op.pauseReason);
+  const rendered = renderOperationView(view);
+  assert.match(rendered, /active time 3m 0s \/ 5m 0s/);
+  assert.match(rendered, /pause reason: Paused at the operation time limit\./);
+
+  const legacy = state();
+  legacy.policy.maxTotalActiveMs = 5 * 60_000;
+  legacy.createdAt = new Date(NOW - 4 * 60_000).toISOString();
+  legacy.activeElapsedMs = 0;
+  legacy.activeElapsedHistoryComplete = false;
+  const legacyView = buildOperationView(legacy, { now: NOW });
+  assert.equal(legacyView.activeBudget.elapsedMs, 4 * 60_000);
+  assert.equal(legacyView.activeBudget.historyComplete, false);
+  assert.match(renderOperationView(legacyView), /conservative history estimate/);
+});
+
 test("reports resource eligibility with the scheduler's own rules", () => {
   const op = state();
   const key = scopeKey(op.resources[0], "model");
@@ -889,7 +921,7 @@ test("ACC-V11-OBS-02/03: --replay --json carries the timeline and leaves the rec
   const json = runCli(["operation", "status", "--replay", "--json", "op-cli-replay"], fixture);
   assert.equal(json.status, 0, json.stderr);
   const views = JSON.parse(json.stdout);
-  assert.equal(views[0].schemaVersion, 2);
+  assert.equal(views[0].schemaVersion, OPERATION_VIEW_SCHEMA_VERSION);
   assert.equal(views[0].replay.schemaVersion, 1);
   assert.equal(views[0].replay.entries.length, 3);
   assert.deepEqual(views[0].replay.entries.map((e: any) => e.index), [1, 2, 3]);

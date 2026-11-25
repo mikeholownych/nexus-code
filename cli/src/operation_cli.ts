@@ -21,7 +21,7 @@ import { UnsupportedOperationSchemaError, clampUnisolatedConcurrency, concurrenc
 import { MessageRejected, publishMessage } from "./core/operation_messages.js";
 import { ROLE_PROFILES, specialistInputsProblem } from "./core/roles.js";
 import { AgentWorkUnitExecutor, applyOperatorDecision, driveOperation, OperationExistsError, type DriveOptions, OperationLockedError, OperationStore, resourcesFromConfig } from "./core/operation_runner.js";
-import { parseTokenCap, setOperationTokenCap } from "./core/operation_budget.js";
+import { parseActiveMinutesCap, parseTokenCap, setOperationBudget } from "./core/operation_budget.js";
 import { withDerivedPause } from "./core/driver_identity.js";
 import { buildOperationView, renderOperationView, renderReplay, watchOperation } from "./operation_view.js";
 import { ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "./core/operation_git.js";
@@ -463,13 +463,19 @@ export function registerOperationCommands(program: Command): void {
 
   op.command("budget")
     .argument("<id>", "Operation id")
-    .requiredOption("--max-total-tokens <n|none>", "New token cap for the operation's agent runs, or 'none' to remove it")
+    .option("--max-total-tokens <n|none>", "New token cap for the operation's agent runs, or 'none' to remove it")
+    .option("--max-total-active-minutes <n>", "New finite active-time cap for the operation (1–4320 minutes)")
     .option("-w, --workspace <path>", "Workspace directory (default: current directory)")
-    .description("Operator command: change an operation's token cap (audited in its journal; applies from the next dispatch)")
+    .description("Operator command: change operation budgets (audited in its journal; applies to the next active interval)")
     .action(operationAction((id: string, options: any) => {
-      const cap = parseTokenCap(String(options.maxTotalTokens));
-      const state = setOperationTokenCap(new OperationStore(path.resolve(options.workspace ?? process.cwd())), id, cap);
-      console.log(`Operation ${safeTerminal(id)}: token cap is now ${cap ?? "none"} (recorded in its journal). ${state.status === "PAUSED" ? "It stays paused; run 'nexus operation resume' to continue." : ""}`.trim());
+      const changes: { maxTotalTokens?: number | undefined; maxTotalActiveMs?: number } = {};
+      if (options.maxTotalTokens !== undefined) changes.maxTotalTokens = parseTokenCap(String(options.maxTotalTokens));
+      if (options.maxTotalActiveMinutes !== undefined) changes.maxTotalActiveMs = parseActiveMinutesCap(String(options.maxTotalActiveMinutes));
+      if (!Object.keys(changes).length) throw new Error("Supply --max-total-tokens and/or --max-total-active-minutes.");
+      const state = setOperationBudget(new OperationStore(path.resolve(options.workspace ?? process.cwd())), id, changes);
+      console.log(
+        `Operation ${safeTerminal(id)}: token cap ${state.policy.maxTotalTokens ?? "none"}; active-time cap ${Math.floor(state.policy.maxTotalActiveMs / 60_000)} minutes (recorded in its journal). ${state.status === "PAUSED" ? "It stays paused; run 'nexus operation resume' to continue." : ""}`.trim(),
+      );
     }));
 
   op.command("message")
