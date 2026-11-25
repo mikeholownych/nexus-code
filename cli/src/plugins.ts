@@ -242,6 +242,7 @@ export class PluginManager {
   private policyRefusals: string[] = [];
   private pluginTrustRecords: PluginTrustRecord[] = [];
   private announced: string | undefined;
+  private readonly toldChanged = new Set<string>();
 
   constructor(workspace: string, options?: { readOnly?: boolean; trusted?: boolean; flightRecorder?: FlightRecorder; policy?: () => EffectivePolicy; notify?: (notice: string) => void }) {
     this.workspace = path.resolve(workspace);
@@ -331,10 +332,18 @@ export class PluginManager {
    */
   private announcePending(): void {
     const root = this.workspace;
-    const pending = this.pluginTrustRecords.filter((record) => record.status === "untrusted" || record.status === "changed");
-    if (!pending.length) return;
     const shown = (record: PluginTrustRecord) => printable(path.relative(root, record.path));
-    const lines = pending.slice(0, PENDING_NOTICE_LIMIT).map((record) => `  ${TRUST_COMMAND} ${shown(record)}${record.status === "changed" ? "   (changed since it was approved)" : ""}`);
+    // A plugin that was approved and loaded, and now is not: said by itself so that it cannot be missed among the
+    // files that never were approved. Once per changed content for this manager (a session).
+    for (const record of this.pluginTrustRecords.filter((entry) => entry.status === "changed")) {
+      const key = `${record.path}|${record.sha256 ?? ""}`;
+      if (this.toldChanged.has(key)) continue;
+      this.toldChanged.add(key);
+      this.notify(`nexus: WARNING: workspace plugin ${shown(record)} is NO LONGER IN FORCE: ${shown(record)} changed since it was approved. It is not loaded. Review the change, then run \`${TRUST_COMMAND} ${shown(record)}\` in a terminal.`);
+    }
+    const pending = this.pluginTrustRecords.filter((record) => record.status === "untrusted");
+    if (!pending.length) return;
+    const lines = pending.slice(0, PENDING_NOTICE_LIMIT).map((record) => `  ${TRUST_COMMAND} ${shown(record)}`);
     if (pending.length > PENDING_NOTICE_LIMIT) lines.push(`  ... and ${pending.length - PENDING_NOTICE_LIMIT} more: see \`nexus plugins list\``);
     const notice = `nexus: ${pending.length} workspace plugin${pending.length === 1 ? " is" : "s are"} not loaded. Since v1.3.0 each workspace plugin file needs its own approval; trusting the workspace no longer loads them. Review each file, then run in a terminal:\n${lines.join("\n")}`;
     if (this.announced === notice) return;

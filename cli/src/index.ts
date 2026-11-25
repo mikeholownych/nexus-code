@@ -1112,7 +1112,11 @@ program
       const records = pm.getPluginTrustRecords();
       const { workspaceManifestPlugins } = await import("./plugins_cli.js");
       const manifestPlugins = workspaceManifestPlugins(ws).map((p) => ({ name: p.name, dir: p.dir, status: p.status, ...(p.problem ? { problem: p.problem } : {}), ...(p.changed ? { changed: p.changed } : {}), ...(p.digest ? { treeSha256: p.digest } : {}), hooks: p.hooks.flatMap((file) => [...(file.hooks["pre-tool"] ?? []), ...(file.hooks["post-tool"] ?? [])].map((hook) => hook.name)), skills: p.skills, files: p.files.map((file) => file.path) }));
-      if (options.json) { console.log(JSON.stringify({ plugins, records, manifestPlugins }, null, 2)); return; }
+      // The operator's own directories that are not used here, with why: otherwise their plugins are just absent.
+      const { skippedOperatorDirs } = await import("./plugins.js");
+      const skipped = skippedOperatorDirs(ws);
+      if (options.json) { console.log(JSON.stringify({ plugins, records, manifestPlugins, skippedOperatorDirs: skipped }, null, 2)); return; }
+      for (const dir of skipped) console.log(pc.yellow(`Not loaded: your plugins in ${printable(dir)}. The directory lies inside the workspace (${printable(ws)}), where the agent's tools can write it. Start Nexus in a project directory, not in your home directory.\n`));
       if (plugins.length === 0) console.log(pc.yellow("\nNo active plugins loaded.\n"));
       else {
         console.log(pc.bold(pc.cyan("\n=== Loaded Custom Plugins ===\n")));
@@ -1165,7 +1169,7 @@ program
       const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
       const { revokeWorkspacePlugin } = await import("./plugins_cli.js");
       const abs = path.resolve(ws, pluginPath);
-      console.log(revokeWorkspacePlugin(ws, pluginPath) ? `No longer approved: ${abs}` : `There was no approval for ${abs}.`);
+      console.log(revokeWorkspacePlugin(ws, pluginPath) ? `No longer approved: ${printable(abs)}` : `There was no approval for ${printable(abs)}.`);
     });
   registerPluginPackageCommands(pluginsCmd);
   // default: list

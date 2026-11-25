@@ -786,7 +786,8 @@ export class HookRegistry {
   private notice(text: string): void {
     if (this.told.has(text)) return;
     this.told.add(text);
-    this.options.notify?.(`nexus: ${text}`);
+    // What is quoted here (a file's problem, a path) comes from files anyone may have written.
+    this.options.notify?.(`nexus: ${printable(text, 2000)}`);
   }
 
   /** The file as last read, read again only when its identity on disk (device, inode, size, mtime, mode, owner) changed. */
@@ -857,7 +858,7 @@ export class HookRegistry {
     const operatorPath = this.options.operatorFile ?? operatorHooksPath();
     const operator = loadOperatorHooks(operatorPath, this.options.workspace(), this.load(operatorPath, true));
     if (operator.state === "invalid") {
-      const invalid = `${showPath(operatorPath)}: ${operator.problem}; fix it or move it aside`;
+      const invalid = `${printable(showPath(operatorPath))}: ${printable(operator.problem, 1000)}; fix it or move it aside`;
       this.notice(`every tool call is denied while the hooks file is invalid. ${invalid}`);
       return { invalid, sources: [] };
     }

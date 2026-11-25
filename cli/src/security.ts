@@ -249,17 +249,28 @@ function hookTrustFiles(): string[] {
  * HK-3: the operator's own plugin directories, by absolute path (and real path): a module there is imported into
  * Nexus with no approval, so the agent's file tools must not be able to put one there, in any workspace.
  */
+/** `target` with its deepest existing ancestor replaced by that ancestor's real path. */
+function realSpelling(target: string): string {
+  const missing: string[] = [];
+  for (let current = path.resolve(target); ; current = path.dirname(current)) {
+    try {
+      return path.join(fs.realpathSync(current), ...missing);
+    } catch {
+      if (path.dirname(current) === current) return path.resolve(target);
+      missing.unshift(path.basename(current));
+    }
+  }
+}
+
 function operatorPluginPaths(): string[] {
   const config = path.dirname(extensionTrustStorePath());
   // The home directory as the store's own path gives it (`~/.config/nexus`).
   const dirs = [path.join(path.resolve(config, "..", ".."), ".nexus", "plugins"), path.join(config, "plugins")];
+  // The same directories as the file system really spells them, also when they do not exist yet (a home directory
+  // reached through a link): the real path of the deepest part that exists, with the rest appended.
   const real = dirs.flatMap((dir) => {
-    try {
-      const resolved = fs.realpathSync(dir);
-      return resolved === dir ? [] : [resolved];
-    } catch {
-      return [];
-    }
+    const spelled = realSpelling(dir);
+    return spelled === dir ? [] : [spelled];
   });
   return [...dirs, ...real];
 }
