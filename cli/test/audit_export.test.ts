@@ -70,7 +70,7 @@ test("a saved task exports every artefact with its role, and the bundle verifies
     schemaVersion: 1,
     sourceRevision: "a".repeat(40),
     candidateDigest: "b".repeat(64),
-    candidateId: "c".repeat(64),
+    candidateId: "c1",
     verifierCommand: "npm test",
     verifierExitCode: 0,
     verifierDefinitionSha256: "d".repeat(64),
@@ -78,10 +78,21 @@ test("a saved task exports every artefact with its role, and the bundle verifies
     acceptancePolicySha256: "f".repeat(64),
     independentApproval: "unavailable_single_maintainer",
   };
-  const subjectFile = path.join(subject.storeDir, `${subject.id}.json`);
-  const subjectState = JSON.parse(fs.readFileSync(subjectFile, "utf8"));
-  subjectState.validationReceipts[0].evidence = { acceptanceIdentity };
-  fs.writeFileSync(subjectFile, `${JSON.stringify(subjectState, null, 2)}\n`);
+  const validationReceiptToPersist = {
+    receiptId: "r1",
+    candidateId: acceptanceIdentity.candidateId,
+    verifierCommand: acceptanceIdentity.verifierCommand,
+    exitCode: acceptanceIdentity.verifierExitCode,
+    stdoutHash: "0".repeat(64),
+    timestamp: new Date().toISOString(),
+    status: "PASSED" as const,
+    materialDependencies: [],
+    evidence: { acceptanceIdentity },
+  };
+  const stateManager = new DurableStateManager({ baseDir: subject.storeDir, workspacePaths: [WorkspacePath.fromSelectedWorkspace(subject.workspace)] });
+  stateManager.recordCandidateAndReceipt(subject.id, { candidateId: validationReceiptToPersist.candidateId, receipt: validationReceiptToPersist });
+  assert.deepEqual(stateManager.loadTaskState(subject.id).validationReceipts[0]?.evidence?.acceptanceIdentity, acceptanceIdentity,
+    "the state manager durably stores the receipt identity before export");
   const receipt = path.join(subject.root, "verify-receipt.json");
   // VR-3: a named verify receipt carries typed sandbox denials. GV-2 copies it byte for byte, so they reach the bundle.
   const sandboxEvents = [{ kind: "unavailable", engine: "bwrap", profile: "default", operation: "verify", category: "engine", reason: "Bubblewrap could not confine the run", at: FIXED_NOW().toISOString() }];
