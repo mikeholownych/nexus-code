@@ -14,9 +14,20 @@ import { pinBase, VerifyService, type PinnedBase, type VerifyServiceConfig, type
 import { makeHome, processGone, waitUntil } from "./helpers/fixtures.js";
 import { GOOD, BASE_FILES, withRepos, writeFiles } from "./helpers/verify_fixture.js";
 
+function processStartTime(pid: number): string | undefined {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
+    return fields[19]; // field 22 (starttime), relative to field 3 after the command name
+  } catch {
+    return undefined;
+  }
+}
+
 const processes = () => spawnSync("ps", ["-A", "-o", "pid=,ppid=,args="], { encoding: "utf8" }).stdout.split("\n").map((line) => {
   const [, pid, ppid, args] = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line) ?? [];
-  return { pid: Number(pid), ppid: Number(ppid), args: args ?? "" };
+  const parsedPid = Number(pid);
+  return { pid: parsedPid, ppid: Number(ppid), args: args ?? "", startTime: parsedPid > 0 ? processStartTime(parsedPid) : undefined };
 }).filter((entry) => entry.pid > 0);
 
 async function isolated<T>(check: () => Promise<T>): Promise<T> {
@@ -43,16 +54,28 @@ async function cancelledLeavesNothing(command: string, marker: string, wanted: n
     const svc = service(repo, command, { killGraceMs: 2_000 });
     const controller = new AbortController();
     const running = svc.verify({ base }, controller.signal);
+    void running.catch(() => undefined);
     const live = () => processes().filter((entry) => entry.args.includes(marker));
-    await waitUntil(() => live().length >= wanted, 60_000);
-    controller.abort();
-    const outcome: any = await running;
-    assert.equal(outcome.error.kind, "interrupted");
-    const left = live().map((entry) => entry.pid);
-    try { await waitUntil(() => live().length === 0, 8_000); } finally {
-      for (const pid of left) try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
+    try {
+      await waitUntil(() => live().length >= wanted, 60_000);
+      controller.abort();
+      const outcome: any = await running;
+      assert.equal(outcome.error.kind, "interrupted");
+      await waitUntil(() => live().length === 0, 8_000);
+    } finally {
+      controller.abort();
+      // On assertion/timeout paths, give VerifyService its normal cleanup window before cleaning any leak.
+      await waitUntil(() => live().length === 0, 8_000).catch(() => undefined);
+      for (const leakedProcess of live()) {
+        // Never signal a PID saved before a wait: it may have exited and been reused. On Linux, also bind cleanup
+        // to /proc starttime and the exact argv observed immediately before the signal.
+        if (!leakedProcess.startTime) continue;
+        const current = processes().find((entry) =>
+          entry.pid === leakedProcess.pid && entry.startTime === leakedProcess.startTime && entry.args === leakedProcess.args && entry.args.includes(marker));
+        if (current) try { process.kill(current.pid, "SIGKILL"); } catch { /* gone */ }
+      }
     }
-    assert.deepEqual(left.filter((pid) => !processGone(pid)), [], "no process of the tree outlives the cancellation");
+    assert.deepEqual(live().map((entry) => entry.pid).filter((pid) => !processGone(pid)), [], "no process of the tree outlives the cancellation");
   }));
 }
 
