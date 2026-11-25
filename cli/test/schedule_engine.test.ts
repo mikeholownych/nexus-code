@@ -315,6 +315,57 @@ test("a job already made for a slot (the runner died after submitting it) is not
   } finally { await w.cleanup(); }
 });
 
+test("late recovery reconciles an already-submitted report-mode slot instead of counting it as missed", async () => {
+  const w = world();
+  try {
+    w.stand.current = STAYS;
+    const beforeFire = w.put({ remainingRuns: 1, onMissed: "report" });
+    w.clock.ms = T0 + HOUR + 1_000;
+    w.runner.tick();
+    assert.equal(w.jobs().length, 1);
+
+    // Simulate a crash after durable job submission; restart after the slot's on-time grace has expired.
+    w.put({ ...beforeFire, state: newScheduleState(iso(T0 + HOUR)) });
+    w.clock.ms = T0 + HOUR + 5 * 60_000;
+    w.runner.tick();
+
+    assert.equal(w.jobs().length, 1, "recovery must not submit the slot twice");
+    const recovered = w.schedule();
+    assert.equal(recovered.state.lastFire?.jobId, w.jobs()[0].id);
+    assert.equal(recovered.state.lastFire?.dueAt, iso(T0 + HOUR));
+    assert.equal(recovered.state.lastFire?.firedAt, w.jobs()[0].createdAt, "recovery preserves the original fire time");
+    assert.equal(recovered.remainingRuns, 0, "the already-submitted run consumes max-runs once");
+    assert.equal(recovered.enabled, false);
+    assert.equal(recovered.state.missedCount, 0, "an existing run is not reported as a missed slot");
+  } finally { await w.cleanup(); }
+});
+
+test("recovery reconciles an older submission before reporting a later overlapping slot", async () => {
+  const w = world();
+  try {
+    w.stand.current = STAYS;
+    const beforeFire = w.put({ remainingRuns: 2, onMissed: "report" });
+    w.clock.ms = T0 + HOUR + 1_000;
+    w.runner.tick();
+    const submitted = w.jobs()[0];
+    assert.ok(submitted);
+
+    w.put({ ...beforeFire, state: newScheduleState(iso(T0 + HOUR)) });
+    w.clock.ms = T0 + 2 * HOUR + 5 * 60_000;
+    w.runner.tick();
+
+    assert.equal(w.jobs().length, 1, "recovery must not submit the newer slot while the durable job is active");
+    const recovered = w.schedule();
+    assert.equal(recovered.state.lastFire?.jobId, submitted.id);
+    assert.equal(recovered.state.lastFire?.dueAt, iso(T0 + HOUR));
+    assert.equal(recovered.remainingRuns, 1, "only the already-submitted job consumes a run");
+    assert.equal(recovered.state.missedCount, 1);
+    assert.equal(recovered.state.missed[0].reason, "overlap");
+    assert.equal(recovered.state.missed[0].first, iso(T0 + 2 * HOUR));
+    assert.equal(recovered.state.nextDueAt, iso(T0 + 3 * HOUR));
+  } finally { await w.cleanup(); }
+});
+
 test("refusals are reported, not silent: an untrusted workspace, a workspace that now resolves elsewhere, and a missing one", async () => {
   const w = world({ listed: () => false });
   try {

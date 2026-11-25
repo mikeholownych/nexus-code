@@ -187,30 +187,52 @@ export class ScheduleEngine {
     const grace = this.options.graceMs ?? DEFAULT_GRACE_MS;
     const all = scanSlots(original.trigger, anchor, due - 1, now);
     if (all.count === 0 || all.first === undefined || all.last === undefined) return this.advance(original, now, undefined);
-    const total: ScheduleMissedSummary = { count: all.count, first: iso(all.first), last: iso(all.last), ...(all.truncated ? { truncated: true as const } : {}) };
+    const summarize = (slots: typeof all): ScheduleMissedSummary | null => slots.count > 0 && slots.first !== undefined && slots.last !== undefined
+      ? { count: slots.count, first: iso(slots.first), last: iso(slots.last), ...(slots.truncated ? { truncated: true as const } : {}) }
+      : null;
+    const total = summarize(all)!;
 
     // The newest slot is on time when it is within the grace; every slot before it (or every slot) is late.
     const current = !all.truncated && now - all.last <= grace ? all.last : undefined;
     let late: ScheduleMissedSummary | null = total;
     if (current !== undefined) {
-      const before = all.count > 1 ? scanSlots(original.trigger, anchor, due - 1, current - 1) : undefined;
-      late = before && before.first !== undefined && before.last !== undefined ? { count: before.count, first: iso(before.first), last: iso(before.last) } : null;
+      late = summarize(scanSlots(original.trigger, anchor, due - 1, current - 1));
     }
 
     // Which slot the job stands for: the newest on-time slot, or (a catch-up) the last late one.
     const kind = current !== undefined ? "scheduled" : original.onMissed === "run-once" ? "catch_up" : undefined;
     const dueAt = current ?? (kind === "catch_up" ? Date.parse(total.last) : undefined);
-    if (kind === undefined || dueAt === undefined) return this.record(original, now, all.last, total, "runner_not_running", undefined, "MISSED");
-
-    // A job already made for this slot (a runner that died after submitting, or a clock stepped back over it) is not made twice.
-    // Reconcile lastFire / remainingRuns the same way as a fresh fire: the job was persisted before the schedule update, so a
-    // crash in that window must not leave `--max-runs 1` still enabled for a later slot. This check is before overlap: the
-    // in-flight job for *this* slot is recovery, not an overlapping previous run.
-    const existing = own.find((job) => job.origin.kind === "schedule" && job.origin.dueAt === iso(dueAt));
+    const lastRecordedFire = [original.state.lastFire?.dueAt, original.state.lastDueAt]
+      .map((value) => value ? Date.parse(value) : Number.NaN)
+      .filter(Number.isFinite)
+      .reduce((latest, value) => Math.max(latest, value), Number.NEGATIVE_INFINITY);
+    // Submission writes the job before the schedule record. After a crash, that durable job can stand for an earlier
+    // slot in this gap than the slot we'd submit now, so reconcile it before missed-slot and overlap handling.
+    const pending = own.find((job) => {
+      if (job.origin.kind !== "schedule") return false;
+      const jobDueAt = Date.parse(job.origin.dueAt);
+      if (!Number.isFinite(jobDueAt) || jobDueAt < due || jobDueAt > now || jobDueAt <= lastRecordedFire) return false;
+      const slot = scanSlots(original.trigger, anchor, jobDueAt - 1, jobDueAt);
+      return slot.count === 1 && slot.last === jobDueAt;
+    });
+    const existing = pending ?? (dueAt === undefined ? undefined : own.find((job) => job.origin.kind === "schedule" && job.origin.dueAt === iso(dueAt)));
     if (existing) {
-      if (original.state.lastFire?.jobId === existing.id) return this.advance(original, now, all.last);
-      return this.afterFire(original, existing.id, iso(dueAt), kind, late, now, all.last);
+      const existingDueAt = Date.parse(existing.origin.kind === "schedule" ? existing.origin.dueAt : "");
+      if (original.state.lastFire?.jobId === existing.id || existingDueAt <= lastRecordedFire) return this.advance(original, now, all.last);
+      const recoveredKind = dueAt === existingDueAt && kind
+        ? kind
+        : Math.abs(Date.parse(existing.createdAt) - existingDueAt) <= grace ? "scheduled" : "catch_up";
+      const before = summarize(scanSlots(original.trigger, anchor, due - 1, existingDueAt - 1));
+      const after = summarize(scanSlots(original.trigger, anchor, existingDueAt, now));
+      this.options.log(`schedule ${original.id}: recovered submitted job ${existing.id} for ${iso(existingDueAt)}`);
+      const recovered = this.afterFire(original, existing.id, iso(existingDueAt), recoveredKind, before, now, all.last, existing.createdAt);
+      if (!after) return recovered;
+      const reason = isTerminal(existing.state) ? "runner_not_running" : "overlap";
+      const reported = this.report(recovered, after, reason, { jobId: existing.id, action: "none" });
+      return { ...reported, state: { ...reported.state, lastOutcome: reason === "overlap" ? "SKIPPED_OVERLAP" : "MISSED" } };
     }
+
+    if (kind === undefined || dueAt === undefined) return this.record(original, now, all.last, total, "runner_not_running", undefined, "MISSED");
 
     // Overlap: a previous job of this schedule is still running. Nothing starts; every slot due now is reported.
     if (own.some((job) => !isTerminal(job.state))) return this.record(original, now, all.last, total, "overlap", undefined, "SKIPPED_OVERLAP");
@@ -239,12 +261,13 @@ export class ScheduleEngine {
     late: ScheduleMissedSummary | null,
     now: number,
     last: number,
+    firedAt?: string,
   ): ScheduleRecord {
     const fired = this.advance({
       ...original,
       state: {
         ...original.state,
-        lastFire: { jobId, dueAt, kind, firedAt: this.options.now().toISOString(), missed: late },
+        lastFire: { jobId, dueAt, kind, firedAt: firedAt ?? this.options.now().toISOString(), missed: late },
       },
     }, now, last);
     const remaining = fired.remainingRuns === null ? null : fired.remainingRuns - 1;

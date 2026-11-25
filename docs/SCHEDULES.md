@@ -48,7 +48,7 @@ A slot is **missed** when the runner could not serve it: it was not running, the
 - **Overlap.** A slot that falls due while the schedule's previous job is still running starts nothing: it is recorded as an `overlap` gap (`last outcome SKIPPED_OVERLAP`). Two jobs of one schedule never run at once; `run-now` refuses while one runs.
 - **A refusal is a miss too.** A run that cannot be submitted (untrusted workspace, queue full at 32 jobs, a repository that is not a repository, managed policy) is recorded as a `refused` gap with the reason and the schedule moves on.
 - **Clock stepped backwards.** If the runner finds the clock more than two minutes behind where it was, it counts the step (`status` shows it) and recomputes the next slot from the clock as it is, so the schedule does not sleep until the old time returns. A slot that already has a job (same schedule, same `dueAt`) is never started again, so going back and forward over a slot runs it once. A forward step is a gap of missed slots.
-- **A runner that dies after submitting** does not run the slot twice either: the job found for the slot is the run.
+- **A runner that dies after submitting** does not run the slot twice: recovery reconnects the durable job to its slot before missed-slot or overlap handling. The recovered job consumes one `--max-runs` entry even when recovery happens after the slot's on-time grace period.
 - **Pause and resume.** Time spent paused is not missed time; `resume` continues from the next slot after now. A `once` whose time has passed cannot be resumed.
 - `--max-runs N` ends the schedule after N started runs. At most 64 schedules; the 65th `add` is refused, and files beyond 64 are reported and never run.
 
