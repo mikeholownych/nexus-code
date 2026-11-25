@@ -19,7 +19,7 @@ export PATH="$HOME/.local/bin:$PATH"
 Without `NEXUS_VERSION`, the installer follows the latest stable release. To pin a version or install a prerelease, set `NEXUS_VERSION` to a tag already published on [GitHub Releases](https://github.com/mikeholownych/nexus-code/releases). The `v1.2.2` examples below use the current stable tag; replace it with another published tag if you need a different version:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v1.2.2 sh
+curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v1.3.0 sh
 ```
 
 For inspect-before-running, download [install.sh](https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh), read it, then run `sh install.sh`.
@@ -95,7 +95,7 @@ Inside the interactive live TUI, run `/upgrade` or `/upgrade --check`. An upgrad
 Alternatively, run the installer pipeline to reinstall or upgrade:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v1.2.2 sh
+curl -fsSL https://raw.githubusercontent.com/mikeholownych/nexus-code/main/install.sh | NEXUS_VERSION=v1.3.0 sh
 ```
 
 Removal is manual and limited to Nexus-owned paths:
