@@ -126,7 +126,11 @@ describe("the model-visible list", () => {
     registry.register(native("enable_tool", { offer: "until-all-groups" }));
     registry.register(native("skills_tool", { offer: "skills" }));
     registry.register(native("group_tool", { offer: "group" }));
-    const everything = ctx({ enabledGroups: new Set(), hasSkills: true, offerObjective: true, offerRequirements: true, maskOutput: true, extensions: [definition("mcp__s__t"), definition("custom__p")] });
+    const mcpTool = definition("mcp__s__t");
+    const pluginTool = definition("custom__p");
+    registry.register({ spec: extensionCapability(mcpTool, { kind: "mcp", serverName: "s" }), binding: { kind: "extension" }, offer: "always" });
+    registry.register({ spec: extensionCapability(pluginTool, { kind: "plugin" }), binding: { kind: "extension" }, offer: "always" });
+    const everything = ctx({ enabledGroups: new Set(), hasSkills: true, offerObjective: true, offerRequirements: true, maskOutput: true, extensions: [mcpTool, pluginTool] });
     assert.deepEqual(names(registry.modelTools(everything)), ["skills_tool", "group_tool", "enable_tool", "objective_tool", "requirements_tool", "always_tool", "mask_tool", "mcp__s__t", "custom__p"]);
     assert.deepEqual(names(registry.modelTools(ctx())), ["group_tool", "enable_tool", "always_tool"]);
     assert.deepEqual(names(registry.modelTools({ ...everything, admits: (name) => name !== "always_tool" && name !== "custom__p" })), ["skills_tool", "group_tool", "enable_tool", "objective_tool", "requirements_tool", "mask_tool", "mcp__s__t"]);
@@ -164,7 +168,7 @@ describe("adding a tool is one registered spec and handler pair", () => {
 
     // The shipped catalogue is untouched, and the shipped derived lists do not know the test tool.
     assert.equal(before.resolve("zeta_probe"), undefined);
-    assert.equal(baselineTools.resolve("zeta_probe"), undefined);
+    assert.equal(names(baselineTools.baselineDefinitions()).includes("zeta_probe"), false);
     assert.equal(isKnownToolName("zeta_probe"), false);
   });
 
@@ -180,6 +184,38 @@ describe("adding a tool is one registered spec and handler pair", () => {
     const receipt = await spine.execute({ toolName: "ghost", args: {}, taskId: "t" }, context);
     assert.equal(receipt.success, false);
     assert.notEqual(receipt.status, "COMPLETED");
+  });
+
+  test("the exported baseline catalogue is read-only and returns defensive copies", () => {
+    assert.ok(Object.isFrozen(baselineTools));
+    assert.equal("register" in baselineTools, false);
+    assert.equal("unregisterExtensions" in baselineTools, false);
+    assert.equal("capabilities" in baselineTools, false);
+
+    const original = names(baselineTools.serveMcpDefinitions());
+    const exposed = baselineTools.serveMcpDefinitions();
+    (exposed[0]!.function as any).name = "unreviewed_tool";
+    assert.deepEqual(names(baselineTools.serveMcpDefinitions()), original);
+  });
+
+  test("built-ins keep their names and duplicate extension definitions are offered once", () => {
+    const registry = createToolRegistry();
+    const extension = definition("custom__duplicate");
+    registry.register({ spec: extensionCapability(extension, { kind: "plugin" }), binding: { kind: "extension" }, offer: "always" });
+    const offered = registry.modelTools(ctx({
+      enabledGroups: new Set(Object.keys(TOOL_GROUPS)),
+      extensions: [definition("read_file"), extension, definition("custom__duplicate")],
+    }));
+    assert.equal(names(offered).filter((name) => name === "read_file").length, 1);
+    assert.equal(offered.find((tool) => tool.function.name === "read_file"), HARNESS_TOOLS.find((tool) => tool.function.name === "read_file"));
+    assert.equal(names(offered).filter((name) => name === "custom__duplicate").length, 1);
+    assert.equal(offered.find((tool) => tool.function.name === "custom__duplicate"), extension);
+  });
+
+  test("an extension cannot expose a built-in hidden by its offer rule", () => {
+    const registry = createToolRegistry();
+    const offered = registry.modelTools(ctx({ extensions: [definition("browser_navigate")] }));
+    assert.equal(names(offered).includes("browser_navigate"), false);
   });
 });
 
@@ -208,5 +244,13 @@ describe("each binding resolves to its own route", () => {
     const spine = new ExecutionSpine({ tools: registry });
     spine.registerHandler("n_tool", async () => ({ success: true, output: "spine" }));
     assert.equal((await spine.execute({ toolName: "n_tool", args: {}, taskId: "t" }, context)).output, "spine");
+  });
+
+  test("a native binding takes precedence over a later capability handler", async () => {
+    const registry = new ToolRegistry();
+    registry.register(native("n_tool", { binding: { kind: "native", handler: async () => ({ success: true, output: "bound" }) } }));
+    registry.capabilities().setHandler("n_tool", async () => ({ success: true, output: "capability" }));
+    const spine = new ExecutionSpine({ tools: registry });
+    assert.equal((await spine.execute({ toolName: "n_tool", args: {}, taskId: "t" }, context)).output, "bound");
   });
 });
