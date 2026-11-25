@@ -71,6 +71,63 @@ test("a missing literal glob root is noticed when it is created later", async ()
   } finally { w.close(); rm(dir); }
 });
 
+test("reconciliation does not follow a symlink created for a previously missing glob root", () => {
+  const dir = repo();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-watch-out-"));
+  fs.mkdirSync(path.join(outside, "nested"));
+  const opened: string[] = [];
+  const listeners = new Map<string, (event: string, name: string | Buffer | null) => void>();
+  const w = make(dir, ["generated/**/*.ts"], {
+    watch: (watched, listener) => {
+      opened.push(watched);
+      listeners.set(watched, listener);
+      return { close: () => undefined, on: () => undefined } as any;
+    },
+  });
+  try {
+    w.reconcile();
+    assert.deepEqual(opened, [dir], "only the workspace is watched while the literal root is missing");
+
+    fs.symlinkSync(outside, path.join(dir, "generated"), "dir");
+    listeners.get(dir)!("rename", "generated");
+    w.reconcile();
+
+    const escaped = opened.filter((watched) => {
+      const relative = path.relative(dir, fs.realpathSync(watched));
+      return relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+    });
+    assert.deepEqual(escaped, [], "reconciliation must not attach to a directory outside the workspace");
+    assert.deepEqual(opened, [dir]);
+  } finally {
+    w.close();
+    rm(dir);
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("a directory replaced by a symlink while attaching is closed and not retained", () => {
+  const dir = repo();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-watch-out-"));
+  let closed = false;
+  const w = make(dir, ["src/**"], {
+    watch: (watched) => {
+      assert.equal(watched, path.join(dir, "src"));
+      fs.renameSync(path.join(dir, "src"), path.join(dir, "src-real"));
+      fs.symlinkSync(outside, path.join(dir, "src"), "dir");
+      return { close: () => { closed = true; }, on: () => undefined } as any;
+    },
+  });
+  try {
+    w.reconcile();
+    assert.equal(closed, true, "the watcher attached during path replacement is closed immediately");
+    assert.equal(w.dirs, 0, "the unsafe watcher is not retained in the active set");
+  } finally {
+    w.close();
+    rm(dir);
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
 test(".git and .nexus never produce an event and are not even watched, whatever the glob", async () => {
   const dir = repo();
   const w = make(dir, ["**"]);

@@ -22,6 +22,35 @@ export const DEFAULT_MAX_PENDING = 1000;
 export const DEFAULT_DEBOUNCE_MS = 2_000;
 const MAX_ERRORS = 5;
 
+/** Reject a watch path if any existing component below the real workspace is a symlink. */
+function hasSymlinkComponent(workspace: string, target: string): boolean {
+  const relative = path.relative(workspace, target);
+  if (path.isAbsolute(relative) || relative === ".." || relative.startsWith(`..${path.sep}`)) return true;
+  let current = workspace;
+  for (const segment of relative.split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment);
+    try {
+      if (fs.lstatSync(current).isSymbolicLink()) return true;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") return false;
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Return the canonical path only when it still resolves to a real directory inside the workspace. */
+function safeWatchDirectory(workspace: string, target: string): string | undefined {
+  if (hasSymlinkComponent(workspace, target)) return undefined;
+  try {
+    const real = fs.realpathSync(target);
+    return isInside(real, workspace) && fs.statSync(real).isDirectory() ? real : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export type WatchFactory = (dir: string, listener: (event: string, name: string | Buffer | null) => void) => fs.FSWatcher;
 
 /** Directories the runner may watch in all, across triggers. */
@@ -101,6 +130,10 @@ export class FileTriggerWatcher {
     const walk: Array<[string, number]> = [...roots.entries()];
     for (let i = 0; i < walk.length; i++) {
       const [dir, depth] = walk[i]!;
+      if (hasSymlinkComponent(this.options.workspace, dir)) {
+        this.note(`cannot watch ${path.relative(this.options.workspace, dir) || "."}: symbolic link in path`);
+        continue;
+      }
       let watchDir = dir;
       let rootMissing = false;
       try {
@@ -129,6 +162,12 @@ export class FileTriggerWatcher {
           continue;
         }
       }
+      const safeWatchDir = safeWatchDirectory(this.options.workspace, watchDir);
+      if (!safeWatchDir) {
+        this.note(`cannot watch ${path.relative(this.options.workspace, watchDir) || "."}: path is not a real directory inside the workspace`);
+        continue;
+      }
+      watchDir = safeWatchDir;
       if (!this.watchers.has(watchDir)) {
         if (this.watchers.size >= maxDirs || !this.options.budget.take()) {
           this.truncated = true;
@@ -146,7 +185,7 @@ export class FileTriggerWatcher {
       if (depth <= 0) continue;
       let entries: fs.Dirent[];
       try {
-        entries = fs.readdirSync(dir, { withFileTypes: true });
+        entries = fs.readdirSync(watchDir, { withFileTypes: true });
       } catch (error) {
         this.note(`cannot read ${path.relative(this.options.workspace, dir) || "."}: ${(error as NodeJS.ErrnoException).code ?? "error"}`);
         continue;
@@ -162,14 +201,25 @@ export class FileTriggerWatcher {
   private attach(dir: string): boolean {
     const watch = this.options.watch ?? defaultWatch;
     try {
-      const watcher = watch(dir, (event, name) => this.onEvent(dir, event, name));
-      watcher.on("error", (error: NodeJS.ErrnoException) => {
-        this.note(`watching ${path.relative(this.options.workspace, dir) || "."} failed: ${error.code ?? error.message}`);
+      const safeDir = safeWatchDirectory(this.options.workspace, dir);
+      if (!safeDir) {
+        this.note(`cannot watch ${path.relative(this.options.workspace, dir) || "."}: path is not a real directory inside the workspace`);
+        return false;
+      }
+      const watcher = watch(safeDir, (event, name) => this.onEvent(safeDir, event, name));
+      // Recheck after attachment so a path replaced during the filesystem call is closed immediately.
+      if (safeWatchDirectory(this.options.workspace, safeDir) !== safeDir) {
         watcher.close();
-        this.watchers.delete(dir);
+        this.note(`cannot watch ${path.relative(this.options.workspace, safeDir) || "."}: path changed while attaching`);
+        return false;
+      }
+      watcher.on("error", (error: NodeJS.ErrnoException) => {
+        this.note(`watching ${path.relative(this.options.workspace, safeDir) || "."} failed: ${error.code ?? error.message}`);
+        watcher.close();
+        this.watchers.delete(safeDir);
         this.options.budget.give(1);
       });
-      this.watchers.set(dir, watcher);
+      this.watchers.set(safeDir, watcher);
       return true;
     } catch (error) {
       this.note(`cannot watch ${path.relative(this.options.workspace, dir) || "."}: ${(error as NodeJS.ErrnoException).code ?? (error as Error).message}`);
