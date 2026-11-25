@@ -284,45 +284,240 @@ const inside = (root: string, target: string): boolean => {
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
 };
 
-/** The first executable regular file named `name` on PATH, as the hook's own lookup would find it. */
-function onPath(name: string): string | undefined {
-  for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
-    if (!dir) continue;
-    const candidate = path.resolve(dir, name);
+/** Where no interpreter is taken from, whatever PATH says: anyone, or the workspace itself, can put a file there. */
+export const UNTRUSTED_PROGRAM_ROOTS: readonly string[] = ["/proc", "/dev", "/tmp", "/var/tmp", "/run", "/sys"];
+/** Looked in after the trusted entries of PATH. */
+export const TRUSTED_PROGRAM_DIRS: readonly string[] = ["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+
+export interface TrustedProgramOptions {
+  /** PATH to search for a bare name. Default: this process's PATH. */
+  searchPath?: string;
+  untrustedRoots?: readonly string[];
+}
+
+/**
+ * The installed program a project hook's interpreter name stands for, as an absolute path, or why there is none.
+ * A bare name is looked up in the entries of PATH that are trusted directories, then in the fixed system directories;
+ * an absolute path must lie in a trusted directory itself. A directory is trusted when it is absolute, resolves
+ * outside the workspace and outside the untrusted roots, belongs to root or this user, and is not writable by group
+ * or others. Empty and relative PATH entries, which mean "the current directory", are never used. The file found
+ * must be a regular executable file under the same conditions.
+ */
+export function trustedProgram(name: string, workspace: string, options: TrustedProgramOptions = {}): { path: string } | { problem: string } {
+  const untrusted = options.untrustedRoots ?? UNTRUSTED_PROGRAM_ROOTS;
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  const ownedAndClosed = (stat: fs.Stats) => (uid === undefined || stat.uid === 0 || stat.uid === uid) && (stat.mode & 0o022) === 0;
+  const outside = (real: string) => !inside(workspace, real) && !untrusted.some((root) => inside(root, real));
+  /** The real path of `dir` when it is a trusted directory. */
+  const trustedDir = (dir: string): string | undefined => {
+    if (!path.isAbsolute(dir)) return undefined;
     try {
-      if (fs.statSync(candidate).isFile()) {
-        fs.accessSync(candidate, fs.constants.X_OK);
-        return candidate;
-      }
+      const real = fs.realpathSync(dir);
+      const stat = fs.statSync(real);
+      return stat.isDirectory() && outside(real) && outside(path.resolve(dir)) && ownedAndClosed(stat) ? real : undefined;
     } catch {
-      // not here
+      return undefined;
     }
+  };
+  /** `base` in the trusted directory `dir`, when it is a program nobody else can replace. */
+  const programIn = (dir: string, base: string): string | undefined => {
+    const candidate = path.join(dir, base);
+    try {
+      const real = fs.realpathSync(candidate);
+      const stat = fs.statSync(real);
+      if (!stat.isFile() || !outside(real) || !ownedAndClosed(stat) || trustedDir(path.dirname(real)) === undefined) return undefined;
+      fs.accessSync(real, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      return undefined;
+    }
+  };
+  if (name.includes("/")) {
+    if (!path.isAbsolute(name)) return { problem: `${name} is a relative path that leaves the workspace` };
+    const dir = trustedDir(path.dirname(name));
+    const found = dir === undefined ? undefined : programIn(dir, path.basename(name));
+    return found ? { path: found } : { problem: `${name} is not a program in a trusted directory (one that belongs to root or to you, that others cannot write, and that is not the workspace, a temporary directory, /proc or /dev)` };
   }
+  const dirs = [...(options.searchPath ?? process.env.PATH ?? "").split(path.delimiter), ...TRUSTED_PROGRAM_DIRS];
+  for (const entry of dirs) {
+    const dir = trustedDir(entry);
+    const found = dir === undefined ? undefined : programIn(dir, name);
+    if (found) return { path: found };
+  }
+  return { problem: `${name} was not found in a trusted directory of PATH (one that belongs to root or to you, that others cannot write, and that is not the workspace, the current directory, a temporary directory, /proc or /dev)` };
+}
+
+/** The bytes of the regular file at `target`, at most `limit`. Never waits: a FIFO or device put there is refused. */
+export function readRegularFile(target: string, limit: number): Buffer {
+  const fd = fs.openSync(target, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) throw Object.assign(new Error("not a regular file"), { code: "ENOTREG" });
+    if (stat.size > limit) throw Object.assign(new Error("larger than 1 MiB"), { code: "EFBIG" });
+    return fs.readFileSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
+ * The interpreters a project hook may name, each with the options allowed before its script: flags that change how
+ * the script is checked or traced, and nothing that takes code, a module, a file to load or another program. A name
+ * that is not here (and every wrapper: env, nice, script, su, awk, make, npm, ...) is not accepted for a project hook.
+ */
+const PROJECT_INTERPRETERS: ReadonlyArray<ProjectInterpreter> = [
+  { name: /^(?:sh|dash)$/, options: /^-[eux]+$/ },
+  { name: /^(?:bash|zsh)$/, options: /^(?:-[eux]+|--posix|--norc|--noprofile)$/ },
+  { name: /^(?:node|nodejs)$/, options: /^--(?:no-warnings|no-deprecation)$/ },
+  { name: /^python(?:3(?:\.\d+)?)?$/, options: /^-[BEIsSu]+$/ },
+  // These two act on a script's #! line even when they are named explicitly: perl starts the program the line
+  // names, and both take options from it.
+  { name: /^perl$/, options: /^-[wT]+$/, readsShebang: true },
+  { name: /^ruby$/, options: /^-w$/, readsShebang: true },
+];
+interface ProjectInterpreter {
+  name: RegExp;
+  options: RegExp;
+  readsShebang?: boolean;
+}
+const PROJECT_COMMAND_RULE = "A project hook is either a script file in the workspace run directly ([\"./guard.sh\"]), or one of sh, bash, dash, zsh, node, python3, perl, ruby followed by a script file in the workspace. Any other command belongs in your own hooks file (~/.config/nexus/hooks.json)";
+
+/** A workspace file a project hook command names: which argument, where in it the path starts, and the file. */
+export interface ProjectCommandPin {
+  index: number;
+  /** Offset of the path inside the argument (0, or after `--option=` / `-o`). */
+  start: number;
+  /** Relative to the workspace: the name the approval records. */
+  path: string;
+  /** Absolute. */
+  target: string;
+}
+
+export interface ProjectCommandPlan {
+  pins: ProjectCommandPin[];
+  /** The interpreter form: the installed interpreter as an absolute path, to start in place of the name written. */
+  program?: string;
+  /** Which pin is the script that is run. */
+  script: ProjectCommandPin;
+  /** The interpreter form: the list entry of the interpreter named. Absent when the script is run directly. */
+  interpreter?: ProjectInterpreter;
+}
+
+/**
+ * Why the first line of a script that a project hook runs is not acceptable, if so. A `#!` line names a program the
+ * kernel starts (when the script is run directly), and some interpreters act on it even when they are named
+ * explicitly (perl starts the program it names; ruby takes options from it). So it must name a listed interpreter by
+ * an absolute path in a trusted directory, with at most one of that interpreter's harmless options; `env` is not
+ * accepted, since it looks the real program up on PATH. A script run directly must have such a line. After an
+ * explicit shell, node or python the line is a comment and is not looked at; after perl or ruby it may be absent, and
+ * when present is held to the same rule.
+ */
+export function shebangProblem(bytes: Buffer, workspace: string, interpreter: ProjectInterpreter | undefined, options: TrustedProgramOptions = {}): string | undefined {
+  const advice = "Start it with an absolute interpreter path such as #!/bin/sh or #!/usr/bin/python3, or name the interpreter in the command ([\"bash\", \"./guard.sh\"])";
+  const end = bytes.indexOf(0x0a);
+  const first = bytes.subarray(0, end === -1 ? Math.min(bytes.length, 256) : Math.min(end, 256)).toString("latin1");
+  if (interpreter && !interpreter.readsShebang) return undefined;
+  if (!first.startsWith("#!")) return interpreter ? undefined : `it has no #! line, so it cannot be run directly. ${advice}`;
+  if (end === -1 || end > 256) return `its #! line is not a complete line of at most 256 bytes. ${advice}`;
+  // Read as the kernel reads it: only space and tab separate, the interpreter ends at the first of them, and the
+  // rest of the line is one argument. Any other control byte or non-ASCII byte would be part of a path to the kernel
+  // (a relative one, found in the workspace) while looking like blank space here, so the line is refused.
+  if (/[^\t\x20-\x7e]/.test(first)) return `its #! line contains a control or non-ASCII character. ${advice}`;
+  const [, program = "", argument = ""] = /^#![ \t]*([^ \t]*)[ \t]*(.*?)[ \t]*$/.exec(first) ?? [];
+  const args = argument ? [argument] : [];
+  if (!program || !path.isAbsolute(program)) return `its #! line names ${JSON.stringify(program ?? "")}, which is not an absolute path (a relative one is looked up in the workspace). ${advice}`;
+  const entry = PROJECT_INTERPRETERS.find((candidate) => candidate.name.test(path.basename(program)));
+  if (!entry) return `its #! line names ${program}, which is not one of the interpreters a project hook may use${path.basename(program) === "env" ? " (env finds the real program on PATH)" : ""}. ${advice}`;
+  const trusted = trustedProgram(program, workspace, options);
+  if ("problem" in trusted) return `its #! line: ${trusted.problem}`;
+  if (args.length === 1 && !entry.options.test(args[0])) return `its #! line passes ${JSON.stringify(args[0])} to ${path.basename(program)}, which is not one harmless option of it`;
   return undefined;
 }
 
-/** Programs that run code given on their command line: for these, inline-code and module-loading options are refused. */
-const INTERPRETERS = /^(?:sh|bash|zsh|dash|ksh|fish|node|nodejs|bun|deno|python|perl|ruby|php|pwsh)[0-9.]*$/;
 /**
- * Programs that only start another program (or nest an interpreter), which would hide what a hook really runs. Matched
- * at every argv index: `["nice","bash","-c",…]` must not slip past rules that only inspected argv[0].
+ * Checks one project hook command against the allowlist and finds the workspace files it names. The command is
+ * accepted only as (a) a regular file in the workspace, run directly, or (b) a listed interpreter, options from its
+ * short list, then a regular file in the workspace. After that, an argument (or the value of `--option=value` or
+ * `-ovalue`) that is an existing workspace path must be a regular file, which is pinned too.
+ * `workspace` is the workspace's real path.
  */
-const WRAPPERS = /^(?:env|busybox|nice|timeout|nohup|stdbuf|ionice|time|chrt|taskset)$/;
-/** Interpreter options whose value is code to load: accepted only when that value is a pinned workspace file. */
-const LOADER_OPTIONS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader"]);
-/** Interpreter options that take code, or the name of code to find, on the command line. */
-const INLINE_OPTIONS = /^--(?:eval|print|command|encodedcommand)(?:=|$)/i;
-/**
- * A single-dash option of an interpreter with one of these letters may carry inline code or a module to load (-c, -e,
- * -p, -m, -r, -I, -M, clusters such as -lc, and attached forms such as -e'code'), whichever interpreter it is.
- */
-const INLINE_LETTERS = /[ceimpr]/i;
-const NAME_FILES = "A project hook names a program and files; inline code is not accepted. Put the logic in one script file and name it directly";
+export function planProjectCommand(command: string | string[], workspace: string, options: TrustedProgramOptions = {}): ProjectCommandPlan | { problem: string } {
+  const refuse = (problem: string) => ({ problem: `${problem}. ${PROJECT_COMMAND_RULE}` });
+  // A shell string can reach any file by any spelling; only an argument list says which files are run.
+  if (!Array.isArray(command)) return refuse("a project hook's command must be an array (it is run without a shell)");
+  const pins: ProjectCommandPin[] = [];
+  /** "none": not an existing workspace path. "pinned": a regular file there, now in `pins`. Else why it cannot be pinned. */
+  const reference = (index: number, start: number): "none" | "pinned" | { problem: string } => {
+    const value = command[index].slice(start);
+    if (!value) return "none";
+    const target = path.resolve(workspace, value);
+    if (!inside(workspace, target)) return "none";
+    try {
+      fs.lstatSync(target);
+    } catch {
+      // Nothing by that name. If it appears later it is a file the approval does not cover, or a refusal here.
+      return "none";
+    }
+    let real: string;
+    try {
+      real = fs.realpathSync(target);
+      if (!fs.statSync(real).isFile()) return { problem: `${JSON.stringify(value)} is a directory (or not a regular file) in the workspace, whose content cannot be pinned` };
+    } catch {
+      return { problem: `${JSON.stringify(value)} is in the workspace and cannot be read as a regular file` };
+    }
+    if (!inside(workspace, real)) return { problem: `${JSON.stringify(value)} is a symbolic link out of the workspace` };
+    pins.push({ index, start, path: path.relative(workspace, target), target });
+    return "pinned";
+  };
 
-/** Basename of a command word for WRAPPERS / INTERPRETERS: strips a directory and a trailing version suffix already in the regex. */
-function commandBase(word: string): string {
-  const named = word.startsWith("~/") ? path.join(os.homedir(), word.slice(2)) : word;
-  return path.basename(named);
+  const program = command[0];
+  let rest = 1;
+  let installed: string | undefined;
+  let listed: ProjectInterpreter | undefined;
+  if (program.includes("/") && inside(workspace, path.resolve(workspace, program))) {
+    // (a) A script of the workspace, run directly.
+    const found = reference(0, 0);
+    if (found === "none") return refuse(`${program} does not exist`);
+    if (typeof found === "object") return refuse(found.problem);
+  } else {
+    // (b) A listed interpreter that is installed outside the workspace, then its script.
+    if (program.includes("/") && !path.isAbsolute(program)) return refuse(`${program} is a relative path that leaves the workspace`);
+    const interpreter = PROJECT_INTERPRETERS.find((entry) => entry.name.test(path.basename(program)));
+    if (!interpreter) return refuse(`${program} is not a script in the workspace and not one of the interpreters a project hook may name`);
+    listed = interpreter;
+    while (rest < command.length && command[rest].startsWith("-")) {
+      if (!interpreter.options.test(command[rest])) return refuse(`option ${JSON.stringify(command[rest])} is not one a project hook may pass to ${path.basename(program)} before its script`);
+      rest++;
+    }
+    if (rest >= command.length) return refuse(`${program} is not followed by a script file`);
+    const script = reference(rest, 0);
+    if (script === "none") return refuse(`${JSON.stringify(command[rest])} after ${program} is not an existing file in the workspace`);
+    if (typeof script === "object") return refuse(script.problem);
+    rest++;
+    // The name is resolved here, to an absolute path in a trusted directory, and that path is what is started: a
+    // name left to the hook's own PATH lookup could be answered by the workspace (".", an empty or relative entry).
+    const trusted = trustedProgram(program, workspace, options);
+    if ("problem" in trusted) return refuse(trusted.problem);
+    installed = trusted.path;
+  }
+  const script = pins[0];
+  try {
+    const problem = shebangProblem(readRegularFile(script.target, COVERED_FILE_BYTES), workspace, listed, options);
+    if (problem) return refuse(`${script.path}: ${problem}`);
+  } catch (error: any) {
+    return refuse(`${script.path} cannot be read as a regular file (${error?.code ?? "error"})`);
+  }
+  // What follows is given to the script: a workspace path among it is pinned, or refused when it cannot be.
+  for (let index = rest; index < command.length; index++) {
+    const arg = command[index];
+    const starts = [0, ...(arg.startsWith("-") && arg.includes("=") ? [arg.indexOf("=") + 1] : []), ...(/^-[^-=]./.test(arg) ? [2] : [])];
+    for (const start of starts) {
+      const found = reference(index, start);
+      if (typeof found === "object") return refuse(`argument ${JSON.stringify(arg)}: ${found.problem}`);
+      if (found === "pinned") break;
+    }
+  }
+  return { pins, script, ...(installed ? { program: installed, interpreter: listed } : {}) };
 }
 
 /** SHA-256 of files already hashed, by the identity of their content on disk, so an unchanged file is not read again. */
@@ -330,123 +525,126 @@ const hashed = new Map<string, string>();
 
 /**
  * The files inside the workspace that a project hooks file runs, each with the SHA-256 of its bytes now. An approval
- * covers these bytes too, since a hooks file that names `./guard.sh` is only as fixed as `guard.sh` is.
- *
- * The rule: a command is a program and arguments, and every argument is either pinned (an existing regular file in the
- * workspace, hashed) or not a reference into the workspace at all. An argument that names a workspace directory, an
- * option whose value is an unpinned workspace path, and inline code for a known shell or interpreter are refused, so
- * what cannot be pinned cannot be approved. A program outside the workspace (an absolute path, or a name found
- * through PATH) is trusted as installed: nothing in the workspace can replace it.
+ * covers these bytes too, since a hooks file that names `./guard.sh` is only as fixed as `guard.sh` is. Every command
+ * must pass `planProjectCommand`; what that refuses cannot be pinned, and so cannot be approved.
  * `workspace` is the workspace's real path. Returns `problem` when the file cannot be pinned.
  */
 export function coveredProjectFiles(file: HooksFile, workspace: string): { files: ExtensionTrustFile[] } | { problem: string } {
   const covered = new Map<string, string>();
-  const cover = (shown: string, target: string): string | undefined => {
-    if (covered.has(shown)) return undefined;
-    try {
-      const stat = fs.statSync(target, { bigint: true });
-      if (!stat.isFile()) return `${shown} is not a regular file`;
-      if (stat.size > BigInt(COVERED_FILE_BYTES)) return `${shown} is larger than 1 MiB and cannot be pinned`;
-      // The change time is part of the identity: a writer cannot set it back.
-      const identity = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
-      let sha256 = hashed.get(identity);
-      if (sha256 === undefined) {
-        sha256 = createHash("sha256").update(fs.readFileSync(target)).digest("hex");
-        if (hashed.size >= 256) hashed.clear();
-        hashed.set(identity, sha256);
-      }
-      covered.set(shown, sha256);
-    } catch (error: any) {
-      return `${shown} cannot be read (${error?.code ?? "error"})`;
-    }
-    return covered.size > COVERED_FILES_LIMIT ? `more than ${COVERED_FILES_LIMIT} workspace files are named by its commands` : undefined;
-  };
-  /**
-   * What `value` is as a reference into the workspace: "none" (not an existing path there), "pinned" (a regular file,
-   * now covered), or the reason it cannot be pinned.
-   */
-  const reference = (value: string): "none" | "pinned" | { problem: string } => {
-    if (!value) return "none";
-    const target = path.resolve(workspace, value);
-    if (!inside(workspace, target)) return "none";
-    try {
-      fs.lstatSync(target);
-    } catch {
-      // Nothing by that name. If it appears later it is a new file the approval does not cover, or a refusal here.
-      return "none";
-    }
-    let isFile: boolean;
-    try {
-      isFile = fs.statSync(target).isFile();
-    } catch {
-      return { problem: `${JSON.stringify(value)} is in the workspace and cannot be read as a regular file` };
-    }
-    if (!isFile) return { problem: `${JSON.stringify(value)} is a directory (or not a regular file) in the workspace, whose content cannot be pinned` };
-    const problem = cover(path.relative(workspace, target), target);
-    return problem ? { problem } : "pinned";
-  };
   for (const event of HOOK_EVENTS) {
     for (const [index, hook] of (file.hooks[event] ?? []).entries()) {
       const at = `hooks.${event}[${index}].command`;
-      const refuse = (problem: string) => ({ problem: `${at}: ${problem}. ${NAME_FILES}` });
-      // A shell string can reach any file by any spelling; only an argument list says which files are run.
-      if (!Array.isArray(hook.command)) return { problem: `${at}: a project hook's command must be an array (it is run without a shell), so that the files it runs can be pinned` };
-      const argv = hook.command;
-      // Wrapper and interpreter rules apply at every index: a prefix launcher must not hide bash -c / node -e.
-      for (let word = 0; word < argv.length; word++) {
-        const token = argv[word];
-        const base = commandBase(token);
-        if (WRAPPERS.test(base)) return refuse(`${token} only starts another program, which hides what the hook runs`);
-        if (!INTERPRETERS.test(base)) continue;
-        for (let i = word + 1; i < argv.length; i++) {
-          const arg = argv[i];
-          const shown = JSON.stringify(arg);
-          const [option, attached] = arg.startsWith("--") && arg.includes("=") ? [arg.slice(0, arg.indexOf("=")), arg.slice(arg.indexOf("=") + 1)] : [arg, undefined];
-          if (LOADER_OPTIONS.has(option)) {
-            const value = attached ?? argv[i + 1] ?? "";
-            if (reference(value) !== "pinned") return refuse(`argument ${shown} loads ${JSON.stringify(value)}, which is not a file in the workspace that can be pinned`);
-            if (attached === undefined) i++;
-            continue;
-          }
-          if (INLINE_OPTIONS.test(arg) || (/^-[^-]/.test(arg) && INLINE_LETTERS.test(arg)) || ((base.startsWith("deno") || base.startsWith("bun")) && arg === "eval")) {
-            return refuse(`argument ${shown} gives ${token} code, or the name of code, on the command line`);
-          }
-        }
-      }
-      const [program, ...args] = argv;
-      const named = program.startsWith("~/") ? path.join(os.homedir(), program.slice(2)) : program;
-      const resolved = named.includes("/") ? path.resolve(workspace, named) : onPath(named);
-      if (resolved !== undefined) {
-        if (!inside(workspace, resolved) && !path.isAbsolute(named) && named.includes("/")) return { problem: `${at}: ${program} is a relative path that leaves the workspace` };
-        let real: string;
+      const plan = planProjectCommand(hook.command, workspace);
+      if ("problem" in plan) return { problem: `${at}: ${plan.problem}` };
+      for (const pin of plan.pins) {
+        if (covered.has(pin.path)) continue;
         try {
-          real = fs.realpathSync(resolved);
-        } catch {
-          return { problem: `${at}: ${program} does not exist` };
+          const stat = fs.statSync(pin.target, { bigint: true });
+          if (stat.size > BigInt(COVERED_FILE_BYTES)) return { problem: `${at}: ${pin.path} is larger than 1 MiB and cannot be pinned` };
+          // The change time is part of the identity: a writer cannot set it back.
+          const identity = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+          let sha256 = hashed.get(identity);
+          if (sha256 === undefined) {
+            sha256 = createHash("sha256").update(readRegularFile(pin.target, COVERED_FILE_BYTES)).digest("hex");
+            if (hashed.size >= 256) hashed.clear();
+            hashed.set(identity, sha256);
+          }
+          covered.set(pin.path, sha256);
+        } catch (error: any) {
+          return { problem: `${at}: ${pin.path} cannot be read (${error?.code ?? "error"})` };
         }
-        if (inside(workspace, resolved)) {
-          if (!inside(workspace, real)) return { problem: `${at}: ${program} is a symbolic link out of the workspace` };
-          const problem = cover(path.relative(workspace, resolved), real);
-          if (problem) return { problem: `${at}: ${problem}` };
-        } else if (inside(workspace, real)) {
-          // Outside by name, inside in fact (a PATH entry or a link that leads into the workspace).
-          const problem = cover(resolved, real);
-          if (problem) return { problem: `${at}: ${problem}` };
-        }
-      }
-      for (let i = 0; i < args.length; i++) {
-        const arg = args[i];
-        const shown = JSON.stringify(arg);
-        // The argument itself, then the value of `--option=value` and of `-ovalue`.
-        const values = [arg, ...(arg.startsWith("-") && arg.includes("=") ? [arg.slice(arg.indexOf("=") + 1)] : []), ...(/^-[^-=]./.test(arg) ? [arg.slice(2)] : [])];
-        for (const value of values) {
-          const found = reference(value);
-          if (typeof found === "object") return refuse(`argument ${shown}: ${found.problem}`);
-        }
+        if (covered.size > COVERED_FILES_LIMIT) return { problem: `${at}: more than ${COVERED_FILES_LIMIT} workspace files are named by its commands` };
       }
     }
   }
   return { files: [...covered].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([name, sha256]) => ({ path: name, sha256 })) };
+}
+
+/** How old a per-run directory must be to count as left behind by a run that was killed or crashed. */
+export const HOOK_RUN_STALE_MS = 10 * 60 * 1000;
+const swept = new Map<string, number>();
+
+/**
+ * Removes per-run directories of verified copies that an ended process left behind (a hook runs for at most two
+ * minutes). Only this user's own `run-*` directories, by age; at most once a minute for a root.
+ */
+export function sweepHookRuns(privateRoot: string, now = Date.now()): string[] {
+  if (now - (swept.get(privateRoot) ?? -Infinity) < 60_000) return [];
+  swept.set(privateRoot, now);
+  const removed: string[] = [];
+  let names: string[];
+  try {
+    names = fs.readdirSync(privateRoot);
+  } catch {
+    return removed;
+  }
+  for (const name of names) {
+    if (!name.startsWith("run-")) continue;
+    const dir = path.join(privateRoot, name);
+    try {
+      const stat = fs.lstatSync(dir);
+      if (!stat.isDirectory() || (typeof process.getuid === "function" && stat.uid !== process.getuid()) || now - stat.mtimeMs < HOOK_RUN_STALE_MS) continue;
+      fs.rmSync(dir, { recursive: true, force: true });
+      removed.push(name);
+    } catch {
+      // gone already, or not ours to remove
+    }
+  }
+  return removed;
+}
+
+/** A project hook command made ready to run from verified bytes, and how to remove what that took. */
+export interface VerifiedCommand {
+  command: string[];
+  cleanup: () => void;
+}
+
+/**
+ * Makes a project hook command run the approved bytes and nothing else. Each workspace file the command names is
+ * read once; those bytes must have the approved SHA-256; the same bytes are written to a private directory outside
+ * the workspace (0700, files 0500) and the command is given the copies in place of the workspace paths. A change to
+ * the workspace file after this, or between two reads of it, cannot reach the running hook: there is no second read.
+ * `privateRoot` is where the per-run directory is made. Returns `problem` when a file is not the approved one.
+ */
+export function verifiedProjectCommand(command: string | string[], workspace: string, approved: readonly ExtensionTrustFile[], privateRoot: string, options: TrustedProgramOptions = {}): VerifiedCommand | { problem: string } {
+  const plan = planProjectCommand(command, workspace, options);
+  if ("problem" in plan) return plan;
+  const argv = [...(command as string[])];
+  // The interpreter as it was resolved and checked, not the name: the hook's own lookup is not asked again.
+  if (plan.program) argv[0] = plan.program;
+  let dir: string | undefined;
+  const cleanup = () => {
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+  };
+  try {
+    for (const [n, pin] of plan.pins.entries()) {
+      const expected = approved.find((file) => file.path === pin.path)?.sha256;
+      if (expected === undefined) throw new Error(`${pin.path} is not covered by the approval`);
+      const bytes = readRegularFile(pin.target, COVERED_FILE_BYTES);
+      if (createHash("sha256").update(bytes).digest("hex") !== expected) throw new Error(`${pin.path} changed since approval`);
+      // The line the kernel (or the interpreter) acts on is judged on the bytes that will run.
+      const shebang = pin === plan.script ? shebangProblem(bytes, workspace, plan.interpreter, options) : undefined;
+      if (shebang) throw new Error(`${pin.path}: ${shebang}`);
+      if (dir === undefined) {
+        fs.mkdirSync(privateRoot, { recursive: true, mode: 0o700 });
+        // A directory someone else owns or can write could be swapped under the copies.
+        const owner = fs.lstatSync(privateRoot);
+        if (!owner.isDirectory() || (typeof process.getuid === "function" && owner.uid !== process.getuid()) || (owner.mode & 0o022)) throw new Error("the private directory for verified copies is not this user's own");
+        sweepHookRuns(privateRoot);
+        dir = fs.mkdtempSync(path.join(privateRoot, "run-"));
+        if (inside(workspace, fs.realpathSync(dir))) throw new Error("no private directory outside the workspace is available for the verified copies");
+      }
+      // One directory per file keeps each file's own name, which an interpreter may read meaning from (.mjs, $0).
+      const copy = path.join(dir, String(n), path.basename(pin.target));
+      fs.mkdirSync(path.dirname(copy), { mode: 0o700 });
+      fs.writeFileSync(copy, bytes, { mode: 0o500, flag: "wx" });
+      argv[pin.index] = argv[pin.index].slice(0, pin.start) + copy;
+    }
+  } catch (error: any) {
+    cleanup();
+    return { problem: error?.code ? `a file the hook names cannot be read (${error.code})` : String(error?.message ?? error) };
+  }
+  return { command: argv, cleanup };
 }
 
 export interface ProjectHooksState {
@@ -534,6 +732,8 @@ export interface HookRegistryOptions {
   operatorFile?: string;
   trustStorePath?: string;
   run?: typeof runHookProcess;
+  /** Where the per-run directories of verified copies are made (tests). */
+  privateRoot?: string;
   totalBudgetMs?: number;
 }
 
@@ -650,6 +850,16 @@ export class HookRegistry {
       && hooksFor(entry.file, event, toolName).some((current) => JSON.stringify(current) === expected));
   }
 
+  private verifiedCommand(hook: HookDeclaration): VerifiedCommand | { problem: string } {
+    const workspace = realWorkspace(this.options.workspace());
+    const approval = extensionTrustEntry(this.approvals().entries, { kind: "project-hooks", scope: workspace, key: PROJECT_HOOKS_FILE });
+    // The state directory, which the sandbox keeps from the agent's commands; the temporary directory when the
+    // workspace is the home directory itself.
+    const state = path.join(os.homedir(), ".nexus", "hook-runs");
+    const root = this.options.privateRoot ?? (inside(workspace, state) ? path.join(os.tmpdir(), `nexus-hook-runs-${process.getuid?.() ?? 0}`) : state);
+    return verifiedProjectCommand(hook.command, workspace, approval?.files ?? [], root);
+  }
+
   /** `budget.leftMs` is what the hooks of this call may still use; the run's own time is taken from it. */
   private async runOne(event: HookEvent, source: HookSource, hook: HookDeclaration, input: HookInput, budget: { leftMs: number }): Promise<{ summary: HookRunSummary; denialReason?: HookDenialReason }> {
     const base = { source, name: hook.name, event };
@@ -673,13 +883,17 @@ export class HookRegistry {
           durationMs: 0,
         };
       }
+      const unstarted = (detail: string) => ({ exit: null, signal: null, stdout: "", stderr: "", failure: "spawn" as const, detail, durationMs: 0 });
+      // A project hook runs from verified copies of the approved bytes, never from the workspace paths themselves.
+      const verified = source === "project" ? this.verifiedCommand(hook) : undefined;
+      if (verified && "problem" in verified) return unstarted(verified.problem);
       return (this.options.run ?? runHookProcess)({
-        command: hook.command,
+        command: verified ? verified.command : hook.command,
         cwd: input.cwd,
         env: hookEnvironment({ event, name: hook.name, source, workspace: input.cwd }),
         stdin: JSON.stringify(input),
         timeoutMs: Math.min((hook.timeout_secs ?? HOOK_DEFAULT_TIMEOUT_SECS) * 1000, budget.leftMs),
-      });
+      }).finally(() => verified?.cleanup());
     });
     this.last = turn.catch(() => undefined);
     const result = await turn;

@@ -58,7 +58,8 @@ test("the hook reads exactly the payload on standard input, then end of input", 
 
 test("the environment carries no credential of the parent, only the safe variables and the hook's own", async () => {
   const dir = scratch();
-  const secrets = ["FAKE_API_KEY", "NEXUS_API_KEY", "NEXUS_GATEWAY_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GITHUB_TOKEN", "AWS_SECRET_ACCESS_KEY", "NEXUS_TRUST_WORKSPACE"];
+  // NODE_PATH is not a secret, and not passed either: it says where node finds code.
+  const secrets = ["NODE_PATH", "FAKE_API_KEY", "NEXUS_API_KEY", "NEXUS_GATEWAY_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GITHUB_TOKEN", "AWS_SECRET_ACCESS_KEY", "NEXUS_TRUST_WORKSPACE"];
   const saved = Object.fromEntries(secrets.map((name) => [name, process.env[name]]));
   try {
     for (const name of secrets) process.env[name] = `secret-value-of-${name}`;
@@ -68,7 +69,7 @@ test("the environment carries no credential of the parent, only the safe variabl
     const names = result.stdout.split("\n").filter(Boolean).map((line) => line.split("=")[0]);
     for (const name of secrets) assert.ok(!names.includes(name), `${name} is not passed`);
     const allowed = new Set([
-      "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "USER", "LOGNAME", "SHELL", "TMPDIR", "NODE_PATH", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+      "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "USER", "LOGNAME", "SHELL", "TMPDIR", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
       "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "no_proxy", "all_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
       "NEXUS_HOOK_EVENT", "NEXUS_HOOK_NAME", "NEXUS_HOOK_SOURCE", "NEXUS_PROJECT_DIR", "CLAUDE_PROJECT_DIR",
       // Set by the shell itself.
@@ -216,6 +217,20 @@ test("a hook that exits while something it started holds its output open is a fa
     started.push({ pid, started: startedAt(pid) });
     assert.deepEqual({ exit: holding.exit, failure: holding.failure }, { exit: 0, failure: "output_left_open" });
     assert.equal(reduceHookOutput(holding).denialReason, "HOOK_FAILED");
+    // The answer was refused, so what the hook left running in its process group is ended, not orphaned.
+    // (It may be gone already, so it is recognised by what it runs, not by a start time read now.)
+    const stillSleeping = () => {
+      try {
+        return fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").includes("sleep");
+      } catch {
+        return false;
+      }
+    };
+    try {
+      await eventually(() => !stillSleeping(), "the process the hook left behind to be gone");
+    } finally {
+      if (stillSleeping()) process.kill(pid, "SIGKILL");
+    }
 
     // Detached from the output, the background process is the hook's own business.
     const detached = await runHookProcess({ command: `sleep 300 >/dev/null 2>&1 & echo $! > "${pidFile}"; echo ok`, cwd: dir, env: env(dir), stdin: "{}", timeoutMs: 60_000, drainMs: 500 });

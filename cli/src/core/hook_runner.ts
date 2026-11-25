@@ -48,13 +48,16 @@ export interface HookProcessRequest {
 
 /** The environment of a hook: the MCP server scrubber's safe variables plus the hook's own, and nothing else. */
 export function hookEnvironment(hook: { event: HookEvent; name: string; source: HookSource; workspace: string }): Record<string, string> {
-  return buildMcpEnvironment({
+  const env = buildMcpEnvironment({
     NEXUS_HOOK_EVENT: hook.event,
     NEXUS_HOOK_NAME: hook.name,
     NEXUS_HOOK_SOURCE: hook.source,
     NEXUS_PROJECT_DIR: hook.workspace,
     CLAUDE_PROJECT_DIR: hook.workspace,
   });
+  // Where node looks for modules: a value that leads into the workspace would load its code into a hook.
+  delete env.NODE_PATH;
+  return env;
 }
 
 /** One line, bounded: what a hook said, safe to show and to store. */
@@ -95,6 +98,7 @@ export function runHookProcess(request: HookProcessRequest): Promise<HookProcess
     let exited: { code: number | null; signal: string | null } | undefined;
     let killTimer: NodeJS.Timeout | undefined;
     let drainTimer: NodeJS.Timeout | undefined;
+    let drainNote: NodeJS.Timeout | undefined;
     const tree = new ProcessTreeMemory();
 
     let child: ReturnType<typeof spawn>;
@@ -126,6 +130,7 @@ export function runHookProcess(request: HookProcessRequest): Promise<HookProcess
       clearTimeout(deadline);
       clearTimeout(killTimer);
       clearTimeout(drainTimer);
+      clearTimeout(drainNote);
       forget();
       child.stdout?.destroy();
       child.stderr?.destroy();
@@ -194,10 +199,25 @@ export function runHookProcess(request: HookProcessRequest): Promise<HookProcess
       }
       // Output may still be in the pipe. If something the hook started keeps the pipe open, the answer cannot be known
       // to be complete, and an incomplete answer must not read as "no objection".
+      const drainMs = request.drainMs ?? HOOK_DRAIN_MS;
+      // The pipes normally close at once. When they have not after a moment, what the hook left in its process group
+      // is noted while the group still exists, each with its start time, so that it can be ended by pid below.
+      let noted = false;
+      const note = () => {
+        noted = true;
+        if (child.pid !== undefined) tree.rememberGroup(child.pid);
+        tree.remember(undefined);
+      };
+      const noteTimer = setTimeout(note, Math.min(50, drainMs));
       drainTimer = setTimeout(() => {
+        clearTimeout(noteTimer);
+        if (!noted) note();
         failure = "output_left_open";
+        // The answer is refused, so nothing the hook started has a reason to go on running.
+        tree.signal("SIGKILL");
         finish();
-      }, request.drainMs ?? HOOK_DRAIN_MS);
+      }, drainMs);
+      drainNote = noteTimer;
     });
     child.once("close", () => {
       if (exited) finish();
