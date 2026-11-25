@@ -1037,8 +1037,19 @@ export class RustCoreBridge {
   /** One language-server manager per bridge, so diagnostics and open documents persist across tool calls. */
   private async lspManager(): Promise<import("./lsp.js").LspBridgeManager> {
     if (!this.lsp) {
-      const { LspBridgeManager } = await import("./lsp.js");
+      const [{ LspBridgeManager, parseLspSharedServerLimit }, { credentialStorageHome, operatorSetting }, { SharedResourceAdmission }] = await Promise.all([
+        import("./lsp.js"),
+        import("./client.js"),
+        import("./core/shared_resource_admission.js"),
+      ]);
+      const sharedServerLimit = parseLspSharedServerLimit(operatorSetting("NEXUS_MAX_LSP_SERVER_PROCESSES"));
+      const sharedAdmission = new SharedResourceAdmission(
+        path.join(credentialStorageHome(), ".local/state/nexus/resource-admission"),
+        { operatorMaxUnits: sharedServerLimit },
+      );
       this.lsp = new LspBridgeManager(this.workspace, {
+        sharedAdmission,
+        sharedServerLimit,
         gate: () => {
           if (this.readOnly) return "read-only mode; language server not started";
           if (!isWorkspaceTrusted(this.workspace)) return "workspace not trusted; language server not started";
