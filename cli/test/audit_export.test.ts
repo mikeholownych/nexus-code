@@ -66,6 +66,22 @@ function setReceiptCandidateId(subject: SubjectFixture, candidateId: string): vo
 
 test("a saved task exports every artefact with its role, and the bundle verifies as intact by hash only", () => {
   const subject = savedSubject();
+  const acceptanceIdentity = {
+    schemaVersion: 1,
+    sourceRevision: "a".repeat(40),
+    candidateDigest: "b".repeat(64),
+    candidateId: "c".repeat(64),
+    verifierCommand: "npm test",
+    verifierExitCode: 0,
+    verifierDefinitionSha256: "d".repeat(64),
+    runtime: { nexusBuild: { version: "1.3.0", commit: "e".repeat(40), dirty: false }, nodeVersion: process.version, platform: process.platform, architecture: process.arch },
+    acceptancePolicySha256: "f".repeat(64),
+    independentApproval: "unavailable_single_maintainer",
+  };
+  const subjectFile = path.join(subject.storeDir, `${subject.id}.json`);
+  const subjectState = JSON.parse(fs.readFileSync(subjectFile, "utf8"));
+  subjectState.validationReceipts[0].evidence = { acceptanceIdentity };
+  fs.writeFileSync(subjectFile, `${JSON.stringify(subjectState, null, 2)}\n`);
   const receipt = path.join(subject.root, "verify-receipt.json");
   // VR-3: a named verify receipt carries typed sandbox denials. GV-2 copies it byte for byte, so they reach the bundle.
   const sandboxEvents = [{ kind: "unavailable", engine: "bwrap", profile: "default", operation: "verify", category: "engine", reason: "Bubblewrap could not confine the run", at: FIXED_NOW().toISOString() }];
@@ -100,7 +116,9 @@ test("a saved task exports every artefact with its role, and the bundle verifies
   assert.equal(exportJson.workspace, subject.workspace);
   assert.match(files["session/export.md"], new RegExp(`- \\*\\*Workspace:\\*\\* \`${subject.workspace}\``));
   assert.ok(!Object.values(files).some((text) => text.includes("NEXUS_AUDIT_")), "no stand-in is left in any file");
-  assert.equal(JSON.parse(files["receipts/validation-receipts.json"])[0].receiptId, "r1");
+  const validationReceipt = JSON.parse(files["receipts/validation-receipts.json"])[0];
+  assert.equal(validationReceipt.receiptId, "r1");
+  assert.deepEqual(validationReceipt.evidence.acceptanceIdentity, acceptanceIdentity, "the audit bundle carries the acceptance identity bound to the persisted receipt");
   const binding = JSON.parse(files["receipts/candidate-binding.json"]);
   assert.equal(binding.status, process.platform === "linux" ? "partial" : "unavailable", "a legacy or malformed candidate id is not treated as a match");
   assert.equal(binding.receipts[0].relation, "unverifiable");

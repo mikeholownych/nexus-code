@@ -14,6 +14,8 @@ import { TOOL_GROUPS } from "./tool_groups.js";
 import { readWorkspaceTestSnapshot, snapshotVerifierDefinitionWithReason, requiresWorkspaceVerifierDefinitionBinding, trustedDeliverablesFromBaseline, testsChangedSince, verifierDefinitionChangedSince, verifierDefinitionMatchesSnapshot, tddRedTestsMatchSnapshot, type Independence } from "./independent_check.js";
 import { VerificationEvidence } from "./turn.js";
 import { createHash } from "node:crypto";
+import { getBuildIdentity } from "../build_identity.js";
+import { canonicalJson } from "./hash_chain.js";
 import { unmetObligationsMessage } from "./regression_obligations.js";
 import { RequirementUpdate, applyRequirementUpdates, invalidateVerified, isHardRequirement, readObjective, blockedRequirements, failedCheckFrom, attemptEvidence, describeAttemptEvidence, gatingRequirements, openRequirements, priorAttempt, convergenceSignal, convergenceHistory, recordAttempt } from "./objective.js";
 import { readArchive, readFindings } from "./findings.js";
@@ -29,6 +31,18 @@ import { isSpecialistRole, missingSpecialistInputs, specialistInputsProblem } fr
 
 function sha256Digest(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
+function canonicalSha256(value: unknown): string {
+  return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
+}
+
+function verifierDefinitionSha256(verifier: Map<string, string> | undefined): string | null {
+  if (!verifier || verifier.size === 0) return null;
+  const files = [...verifier.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([file, content]) => [file, createHash("sha256").update(content, "utf8").digest("hex")]);
+  return canonicalSha256(files);
 }
 
 export interface TestSnapshotDigest {
@@ -425,6 +439,7 @@ export function setupSpineHandlersImpl(this: any): void {
     const verifierOutputHash = this.verificationEvidence?.outputSha256;
     const isVerified = sha256Digest(verifierOutputHash) && this.verificationEvidence?.definitionBound !== false &&
       (this.verificationEvidence?.source === "configured" || this.verificationEvidence?.independent === true);
+    const boundVerifierDefinitionSha256 = verifierDefinitionSha256(this.changeBaseline?.verifier);
     recordVerificationIfEligible(this.config.workspace, {
       unrecordableWorktree: !recordableWorktree || this.receiptBaselineUntrusted,
       dryRun: Boolean(this.config.dryRun),
@@ -452,9 +467,23 @@ export function setupSpineHandlersImpl(this: any): void {
         try {
           const candidateWorkspace = this.activeWorktree.worktreePath;
           const candidateIdentity = this.candidateTracker.computeCandidateIdentitySync(candidateWorkspace);
+          const verifierCommand = this.config.authoritativeVerifierCommand?.trim() || "authoritative_verifier";
+          const effectivePolicy = this.bridge.getSecurityManager().getEffectivePolicy();
+          const buildIdentity = getBuildIdentity();
+          const acceptancePolicySha256 = canonicalSha256({
+            schemaVersion: 1,
+            effectivePolicy,
+            approvalMode: this.config.approvalMode ?? "review",
+            fullAccess: Boolean(this.config.fullAccess),
+            readOnly: this.isReadOnly(),
+            sandbox: this.config.sandbox ?? false,
+            trustedDeliverableFiles: [...(this.config.trustedDeliverableFiles ?? [])].sort(),
+            verifierCommand,
+            verifierDefinitionSha256: boundVerifierDefinitionSha256,
+          });
           this.activeValidationReceipt = this.candidateTracker.recordValidationReceipt({
             candidateId: candidateIdentity.candidateId,
-            verifierCommand: this.config.authoritativeVerifierCommand?.trim() || "authoritative_verifier",
+            verifierCommand,
             exitCode: 0,
             stdoutHash: verifierOutputHash,
             status: "PASSED",
@@ -464,6 +493,25 @@ export function setupSpineHandlersImpl(this: any): void {
               testSuite: this.config.authoritativeVerifierCommand?.trim(),
             },
             materialDependencies: collectMaterialDependencies(candidateWorkspace),
+            evidence: {
+              acceptanceIdentity: {
+                schemaVersion: 1,
+                sourceRevision: candidateIdentity.rootBaseSha,
+                candidateDigest: candidateIdentity.manifestHash,
+                candidateId: candidateIdentity.candidateId,
+                verifierCommand,
+                verifierExitCode: 0,
+                verifierDefinitionSha256: boundVerifierDefinitionSha256,
+                runtime: {
+                  nexusBuild: buildIdentity,
+                  nodeVersion: process.version,
+                  platform: process.platform,
+                  architecture: process.arch,
+                },
+                acceptancePolicySha256,
+                independentApproval: "unavailable_single_maintainer",
+              },
+            },
           });
           this.verifiedWorktreeCompletion = true;
           if (this.durable && this.stateManager && this.currentTaskId) {

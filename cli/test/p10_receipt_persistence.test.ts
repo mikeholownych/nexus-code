@@ -27,6 +27,7 @@ test("candidate receipt persistence failure cannot yield verified acceptance", {
     'const test = require("node:test");',
     'const assert = require("node:assert/strict");',
     'const { add } = require("../math.js");',
+    '// VERIFIER_CONFIG_SENTINEL must be represented by a digest, never copied into acceptance evidence.',
     'test("adds", () => assert.equal(add(2, 3), 5));',
     "",
   ].join("\n"));
@@ -63,8 +64,12 @@ test("candidate receipt persistence failure cannot yield verified acceptance", {
     (agent as any).ui = new Proxy({}, { get: () => () => {} });
     const stateManager = (agent as any).stateManager;
     let persistenceAttempted = false;
-    stateManager.recordCandidateAndReceipt = () => {
+    let attemptedReceipt: any;
+    let attemptedCandidateIdentity: any;
+    stateManager.recordCandidateAndReceipt = (_taskId: string, update: any) => {
       persistenceAttempted = true;
+      attemptedReceipt = update.receipt;
+      attemptedCandidateIdentity = update.candidateIdentity;
       throw new Error("injected receipt persistence failure");
     };
 
@@ -77,6 +82,19 @@ test("candidate receipt persistence failure cannot yield verified acceptance", {
     assert.equal(result?.execution, "FAILED", "mandatory receipt persistence failure fails the turn closed");
     assert.equal(result?.reason, "PERSISTENCE_FAILED", "the turn names the mandatory persistence failure");
     assert.equal((agent as any).verifiedWorktreeCompletion, false, "the worktree cannot be marked complete without its durable receipt");
+    const identity = attemptedReceipt.evidence.acceptanceIdentity;
+    assert.equal(identity.schemaVersion, 1);
+    assert.equal(identity.sourceRevision, attemptedCandidateIdentity.rootBaseSha);
+    assert.equal(identity.candidateDigest, attemptedCandidateIdentity.manifestHash);
+    assert.equal(identity.candidateId, attemptedReceipt.candidateId);
+    assert.match(identity.verifierDefinitionSha256, /^[a-f0-9]{64}$/);
+    assert.equal(identity.verifierCommand, "npm test");
+    assert.equal(identity.verifierExitCode, 0);
+    assert.match(identity.acceptancePolicySha256, /^[a-f0-9]{64}$/);
+    assert.equal(identity.runtime.nodeVersion, process.version);
+    assert.equal(identity.runtime.platform, process.platform);
+    assert.equal(identity.runtime.architecture, process.arch);
+    assert.ok(!JSON.stringify(attemptedReceipt.evidence).includes("VERIFIER_CONFIG_SENTINEL"), "verifier source is represented by a digest, not copied into the receipt");
     assert.equal(fs.readFileSync(path.join(repo, "math.js"), "utf8"), "exports.add = (a, b) => a - b;\n", "failed receipt persistence cannot auto-merge the candidate");
     assert.ok(agent.getActiveWorktree(), "the unverifiable candidate worktree is retained for recovery");
   } finally {
