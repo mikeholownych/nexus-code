@@ -23,7 +23,7 @@
           "type": "string"
         },
         "kind": {
-          "const": "project-hooks"
+          "$ref": "#/$defs/ExtensionTrustKind"
         },
         "scope": {
           "description": "The workspace's real path.",
@@ -61,6 +61,13 @@
       "required": [
         "path",
         "sha256"
+      ]
+    },
+    "ExtensionTrustKind": {
+      "description": "What an approval covers. `project-hooks`: a workspace's `.nexus/hooks.json`. `workspace-plugin`: a workspace plugin module.",
+      "enum": [
+        "project-hooks",
+        "workspace-plugin"
       ]
     },
     "ExtensionTrustStore": {

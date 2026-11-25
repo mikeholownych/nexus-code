@@ -12,9 +12,9 @@ import { decodeStrictUtf8, parseStrictJson, readHardenedFile } from "./strict_js
 export const EXTENSION_TRUST_VERSION = 1;
 const STORE_LIMIT = 256 * 1024;
 
-/** What an approval covers. `project-hooks`: a workspace's `.nexus/hooks.json`. */
-export type ExtensionTrustKind = "project-hooks";
-const KINDS: readonly string[] = ["project-hooks"] satisfies ExtensionTrustKind[];
+/** What an approval covers. `project-hooks`: a workspace's `.nexus/hooks.json`. `workspace-plugin`: a workspace plugin module. */
+export type ExtensionTrustKind = "project-hooks" | "workspace-plugin";
+const KINDS: readonly string[] = ["project-hooks", "workspace-plugin"] satisfies ExtensionTrustKind[];
 
 export interface ExtensionTrustEntry {
   kind: ExtensionTrustKind;
