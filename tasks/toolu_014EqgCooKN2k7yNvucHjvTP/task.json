@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_014EqgCooKN2k7yNvucHjvTP",
+  "agent_id": "a77f1919e27f026c8",
+  "subagent_type": "reviewer",
+  "task_description": "Re-review PR #811 sandbox ancestors",
+  "token_usage": {
+    "input_tokens": 76,
+    "cache_creation_tokens": 86674,
+    "cache_read_tokens": 2338145,
+    "output_tokens": 25354,
+    "api_call_count": 38
+  },
+  "started_at": "2026-11-25T02:45:50.328851762Z",
+  "completed_at": "2026-11-25T03:04:12.223410031Z"
+}
