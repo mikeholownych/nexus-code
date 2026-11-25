@@ -398,6 +398,15 @@ test("while the session approves everything, prompt and steer are NOT_PERMITTED;
 
 // ------------------------------------------------------------------ directories and paths
 
+test("listen refuses a caller-supplied directory that others can enter, and binds nothing in it (bind-then-chmod window)", async () => {
+  const open = tmp();
+  fs.chmodSync(open, 0o755);
+  const server = new SessionSocketServer({ session: new FakeSession(), dir: open });
+  servers.push(server);
+  await assert.rejects(() => server.listen(), /private directory/);
+  assert.deepEqual(fs.readdirSync(open), [], "nothing was bound or written in the open directory");
+});
+
 test("a runtime directory that is not private to this user is refused, never repaired or replaced", () => {
   const open = tmp();
   fs.chmodSync(open, 0o755);

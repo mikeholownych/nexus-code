@@ -33,7 +33,7 @@ export interface SocketDescriptor {
 const effectiveUid = (): number => (typeof process.geteuid === "function" ? process.geteuid() : -1);
 
 /** Throws unless `dir` is a real directory (not a symlink) owned by this user with no group or other permission bits. */
-function assertPrivateDir(dir: string, uid: number): void {
+export function assertPrivateDir(dir: string, uid: number = effectiveUid()): void {
   const stat = fs.lstatSync(dir);
   if (!stat.isDirectory() || stat.isSymbolicLink() || (uid >= 0 && stat.uid !== uid) || (stat.mode & 0o077) !== 0) {
     throw new SocketFilesError(`socket directory ${dir} is not a private directory owned by this user (mode 0700, not a symlink)`);

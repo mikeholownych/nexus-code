@@ -428,6 +428,9 @@ export function buildConfig(options: any): HarnessConfig {
  * policy disables is refused when it was asked for explicitly, and what it requires is switched on.
  */
 export function buildConfigWithPolicy(options: any, policy: EffectivePolicy): HarnessConfig {
+  // A build that is refused part-way must not leave the network choice of an earlier build in force.
+  setSandboxNetworkFlag(false);
+  setSandboxNetworkProfile(undefined);
   if (operatorJsonOperationPolicyError) throw operatorJsonOperationPolicyError;
   // `appliance: true` resolves the appliance connection regardless of any provider selection (the model picker's
   // appliance entry).
@@ -499,7 +502,8 @@ export function buildConfigWithPolicy(options: any, policy: EffectivePolicy): Ha
   const approval = clampApprovalRequest(policy, { mode: approvalMode, modeOrigin, yes, ...(fullAccess && !yes ? { fullAccessOrigin } : {}) });
   if (!approval.allowed) throw new Error(approval.message);
 
-  // SB-1: expand a named permission profile into the existing sandbox/read-only flags before managed-policy clamps.
+  // SB-1: expand a named permission profile into the existing sandbox/read-only flags before the sandbox and network clamps
+  // (the approval clamp above has already run; a profile only tightens it).
   const networkEnv = /^(1|true|yes|on)$/i.test((operatorSetting("NEXUS_SANDBOX_NETWORK") ?? "").trim());
   const expanded = expandSandboxProfile(options, networkEnv);
   for (const notice of expanded.notices) warnOnce(notice);

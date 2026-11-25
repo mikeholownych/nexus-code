@@ -131,6 +131,13 @@ describe("doctor findings name the actual failure", () => {
     assert.match(finding.action ?? "", /--sandbox bwrap/);
   });
 
+  test("sandbox.confinement does not claim a boxed worker or HOME masking for a bare :read-only profile (#795)", async () => {
+    const evidence = find(await doctor({ config: cfg({ approvalMode: "read-only", sandboxProfile: ":read-only" }) }), "sandbox.confinement")!.evidence.join("\n");
+    assert.match(evidence, /native worker \(harness-core\): runs outside any sandbox/);
+    assert.doesNotMatch(evidence, /runs inside this sandbox|masked with an empty tmpfs|files-only worker/);
+    assert.match(evidence, /HOME is not mounted/);
+  });
+
   test("sandbox.confinement says where the worker runs under Docker and names the files-only worker (CS-10)", async () => {
     const evidence = find(await doctor({ config: cfg({ sandbox: "docker" }) }), "sandbox.confinement")!.evidence.join("\n");
     if (process.platform === "linux") {

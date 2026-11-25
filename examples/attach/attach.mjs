@@ -35,6 +35,9 @@ try {
       for (const line of buffer.split("\n")) if (line.includes('"type":"listening"')) resolve(JSON.parse(line));
     });
   });
+  // Read it as a client must: a regular file owned by this user, mode 0600, at most 4 KiB (a descriptor is a bearer secret).
+  const info = fs.lstatSync(listening.descriptor);
+  if (!info.isFile() || info.isSymbolicLink() || info.uid !== process.getuid() || (info.mode & 0o077) !== 0 || info.size > 4096) throw new Error("the descriptor is not a private regular file owned by this user");
   const descriptor = JSON.parse(fs.readFileSync(listening.descriptor, "utf8"));
 
   // A client: connect, send the attach line first, then read newline-delimited events.
