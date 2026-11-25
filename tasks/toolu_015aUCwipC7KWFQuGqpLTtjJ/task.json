@@ -1,0 +1,7 @@
+{
+  "tool_use_id": "toolu_015aUCwipC7KWFQuGqpLTtjJ",
+  "agent_id": "a0287b52f3a6989b3",
+  "subagent_type": "reviewer",
+  "task_description": "Delta review PR #805 shebang parsing",
+  "started_at": "2026-11-25T00:27:47.142644912Z"
+}
