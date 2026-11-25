@@ -949,6 +949,10 @@ export function wrapSandboxedCommand(
     const overlays = sandboxWorkspaceOverlays(absWorkspace);
     for (const dir of overlays.dirs) dockerArgs.push("--tmpfs", `${dir}:ro,nosuid,nodev,size=1m`);
     for (const file of overlays.files) dockerArgs.push("-v", `/dev/null:${file}:ro`);
+    // PA-3: same task-state / socket hides as bwrap (nested tmpfs over the workspace bind).
+    for (const dir of directoriesToHide(options.hideDirectories)) {
+      dockerArgs.push("--tmpfs", `${dir}:ro,nosuid,nodev,size=1m`);
+    }
     dockerArgs.push("-w", absWorkspace, image, "sh", "-c", cmd);
 
     return {
