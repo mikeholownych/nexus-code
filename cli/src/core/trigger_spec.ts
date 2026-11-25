@@ -6,7 +6,7 @@
  * anything: there is no "allow this trigger", "auto-fire this trigger" or "widen this policy" key. Every field either
  * narrows what may run or records how tightly it is bounded.
  *
- * BG-3 itself (the trigger firer that watches files and HTTP) is deferred to v1.4. This module is the trust and abuse
+ * The trigger firer (trigger_firer.ts) imports this module. It is the trust and abuse
  * model that unblocks it: a firer built later imports `parseTriggerSpec`, `TriggerSpec`, `validateTriggerSpec`,
  * `defaultTriggerBounds` and the rate-limit constants from here and can trust that a spec it reads has already been
  * shaped and bounded by this code.

@@ -128,3 +128,24 @@ export function post(port: number, urlPath: string, body: string | Buffer, heade
     req.end(body);
   });
 }
+
+// ---------------------------------------------------------------- the real runner
+
+import { parseTriggerFile, specSha256 } from "../../src/core/trigger_load.js";
+import type { RunnerWorld } from "./runner_fixture.js";
+
+/** Writes `.nexus/triggers.json` into `repo` from `specs`, and records the approvals a person would have typed `yes` for. */
+export function approveInRepo(world: RunnerWorld, repo: string, specs: unknown[] | { copyFrom: string }, ids?: string[]): void {
+  const file = path.join(repo, ".nexus", "triggers.json");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  if (Array.isArray(specs)) fs.writeFileSync(file, JSON.stringify({ version: 1, triggers: specs }), { mode: 0o600 });
+  else fs.copyFileSync(specs.copyFrom, file), fs.chmodSync(file, 0o600);
+  const parsed = parseTriggerFile(file);
+  if (parsed.problem) throw new Error(parsed.problem);
+  const storePath = path.join(world.home, ".config", "nexus", "trigger_trust.json");
+  for (const spec of parsed.specs) {
+    if (ids && !ids.includes(spec.id)) continue;
+    void specSha256;
+    approveTrigger(entryForSpec(fs.realpathSync(repo), spec, new Date().toISOString()), { workspaceTrusted: true, storePath });
+  }
+}

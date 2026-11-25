@@ -4,7 +4,7 @@
  * Approving a trigger is the act of a person at a terminal: there is no `--yes`, and without a terminal nothing is
  * approved. A trigger spec's bytes are pinned by SHA-256; changed bytes are a different spec and need a new approval.
  *
- * BG-3 itself (the trigger firer that watches files and HTTP) is deferred to v1.4. This CLI is the trust surface it
+ * The trigger firer (core/trigger_firer.ts, run by `nexus runner serve`) builds on this trust surface. This CLI is the trust surface it
  * builds on: `nexus triggers list` shows what is approved and what is not, `approve` pins a spec by hash, `revoke`
  * withdraws approval. A firer reads `triggerMayRun` from trigger_trust.ts before starting any run.
  */

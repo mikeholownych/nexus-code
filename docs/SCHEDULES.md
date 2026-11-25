@@ -36,7 +36,7 @@ The job a run starts is built by the same code as `nexus job start` (`core/job_s
 - **A read-only run does not run its verifier.** A `read-only` run cannot change anything, so its completion is not gated and the verifier is not started. The receipt says so: `verifier.status` is `NOT_RUN` with the reason. Use `--allow-worktree-write` for a schedule whose point is a verified change.
 - **The verifier string is yours, and a schedule file is a file.** A verifier runs without a prompt, so `add` and every fire hold it to what an interactive command is held to: one line of at most 2000 characters, not on the security policy's blocked-command list, not forbidden by your `command_rules.json`. A hand-edited record can name any verifier that passes those checks and it will then run in the sandbox without a prompt: the schedule directory is protected from the agent's file tools and from other users, not from your own account (see below).
 
-Not in v1.3.0: event triggers, SSH execution, wake checks, goal (objective-ledger) targets, time zones, schedule spec files (a repository cannot supply a schedule).
+Event triggers (file change, webhook) are [a separate order](TRIGGERS.md), not a schedule. Not in v1.3.0: SSH execution, wake checks, goal (objective-ledger) targets, time zones, schedule spec files (a repository cannot supply a schedule).
 
 ## Missed runs, overlap and the clock
 
