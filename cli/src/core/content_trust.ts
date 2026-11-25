@@ -254,11 +254,11 @@ function takeOverStaleLock(lock: string): boolean {
   if (fs.existsSync(lock) && !isStale(lock)) return false;
   const guard = `${lock}.takeover`;
   if (!createHeld(guard)) {
-    // Someone is removing a stale lock now. A guard left by a taker that died in those few instructions is itself
-    // moved aside; that is the one step here that is not under a lock.
+    // Do not reap a stale guard by pathname. Two processes can both judge it stale; after one moves it, the other
+    // can move a replacement guard belonging to the new taker. Without an OS compare-and-swap primitive, the safe
+    // response is to stop and require an operator to inspect the narrowly scoped recovery guard.
     if (isStale(guard)) {
-      moveAside(guard);
-      return true;
+      throw new Error(`the approval store has an abandoned stale-lock recovery guard (${guard}); inspect that no process is recovering the store, then remove the guard before retrying`);
     }
     // The taker that holds the guard is about to free the lock: wait for it like for any holder.
     return false;

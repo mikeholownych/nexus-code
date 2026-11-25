@@ -11,7 +11,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Command } from "commander";
 import { approveExtension, lockIsStale, readExtensionTrust } from "../src/core/content_trust.js";
 import { hookLine } from "../src/core/hook_runner.js";
@@ -283,7 +283,8 @@ test("a changed plugin file is announced as out of force, once; skipped operator
   assert.equal(listed.status, 0, listed.stderr);
   assert.deepEqual(JSON.parse(listed.stdout.slice(listed.stdout.indexOf("{"))).skippedOperatorDirs, [path.join(home, ".nexus", "plugins")]);
   const text = spawnSync(TSX, [INDEX, "plugins", "list", "-w", home], { encoding: "utf8", env: { ...process.env, HOME: home, NO_COLOR: "1" }, timeout: 200_000 });
-  assert.match(text.stdout, new RegExp(`Not loaded: your plugins in ${path.join(home, ".nexus", "plugins").replace(/[.]/g, "\\.")}\\. The directory lies inside the workspace .*Start Nexus in a project directory, not in your home directory\\.`));
+  const skippedDir = path.join(home, ".nexus", "plugins");
+  assert.ok(text.stdout.includes(`Not loaded: your plugins in ${skippedDir}. The directory lies inside the workspace (${home}), where the agent's tools can write it. Start Nexus in a project directory, not in your home directory.`), "the warning identifies the skipped operator directory and explains why");
   const report = await runDoctor({ home, timeoutMs: 1500, config: { endpoint: "http://127.0.0.1:9/v1", model: "m", maxSteps: 4, temperature: 0, workspace: home, shell: "bash" } as any });
   const finding = report.findings.find((entry) => entry.id === "plugins.config")!;
   assert.equal(finding.status, "warn");
@@ -313,6 +314,42 @@ test("a lock whose holder cannot be identified is live while it is young; a dead
   fs.utimesSync(lock, old, old);
   assert.equal(lockIsStale(lock), true);
   assert.equal(lockIsStale(path.join(base, "absent.lock")), false);
+});
+
+test("concurrent waiters fail closed on an abandoned stale-lock recovery guard", { timeout: 20_000 }, async () => {
+  const store = path.join(base, "store.json");
+  fs.mkdirSync(path.dirname(store), { recursive: true, mode: 0o700 });
+  const lock = `${store}.lock`;
+  const guard = `${lock}.takeover`;
+  const dead = JSON.stringify({ pid: 2 ** 22 - 3, started: "1" });
+  fs.writeFileSync(lock, dead);
+  fs.writeFileSync(guard, dead);
+  const worker = path.join(base, "stale-guard-worker.mts");
+  const moduleUrl = pathToFileURL(path.join(CLI_DIR, "src", "core", "content_trust.ts")).href;
+  fs.writeFileSync(worker, `
+import { approveExtension } from ${JSON.stringify(moduleUrl)};
+try {
+  approveExtension({ kind: "workspace-plugin", scope: "/ws", key: "audit.mjs", sha256: "${"0".repeat(64)}", approvedAt: new Date().toISOString(), summary: "audit" }, process.argv[2]);
+  process.exitCode = 0;
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 2;
+}
+`);
+  const runWaiter = (): Promise<{ code: number | null; output: string }> => new Promise((resolve, reject) => {
+    const child = spawn(TSX, [worker, store], { env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config") } });
+    let output = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk) => { output += chunk; });
+    child.stderr.setEncoding("utf8").on("data", (chunk) => { output += chunk; });
+    child.once("error", reject);
+    child.once("close", (code) => resolve({ code, output }));
+  });
+  const waiters = await Promise.all([runWaiter(), runWaiter()]);
+  assert.deepEqual(waiters.map(({ code }) => code), [2, 2], "neither waiter claims an abandoned guard");
+  assert.ok(waiters.every(({ output }) => /abandoned stale-lock recovery guard/.test(output)));
+  assert.equal(fs.readFileSync(lock, "utf8"), dead, "the primary stale lock is left for operator inspection");
+  assert.equal(fs.readFileSync(guard, "utf8"), dead, "the guard is never removed by a pathname race");
+  assert.equal(fs.existsSync(store), false, "the approval is not written while recovery ownership is uncertain");
 });
 
 test("eight writers over stale locks: one taker at a time, nothing lost", { timeout: 280_000 }, async () => {
