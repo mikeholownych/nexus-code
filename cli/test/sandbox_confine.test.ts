@@ -340,6 +340,16 @@ describe("the state root is hidden from --sandbox commands and workers (PA-3)", 
     return path.join(root, "tasks", "g.json");
   };
 
+  /** The read-only profile as the product runs it: the workspace descriptor is inherited as fd 3. */
+  const readOnlyRun = (command: string, workspace: string) => {
+    const fd = fs.openSync(workspace, "r");
+    try {
+      const wrapped = wrapSandboxedCommand(command, workspace, { mode: "bwrap", readOnlyHost: true, workspaceFd: 3, network: false });
+      assert.equal(wrapped.sandboxed, true, wrapped.warning);
+      return spawnSync(wrapped.argv![0], wrapped.argv!.slice(1), { encoding: "utf8", timeout: 20_000, env: buildCommandEnvironment(), stdio: ["ignore", "pipe", "pipe", fd] });
+    } finally { fs.closeSync(fd); }
+  };
+
   test("workspace = $HOME: a command can neither read, rewrite nor rename ~/.nexus", { skip: SKIP }, () => {
     const { home } = throwawayHome();
     const file = taskFile(path.join(home, ".nexus"));
@@ -349,8 +359,26 @@ describe("the state root is hidden from --sandbox commands and workers (PA-3)", 
     assert.equal(fs.readFileSync(file, "utf8"), "SENTINEL-GOAL-STATE", "the host file is untouched");
     assert.equal(fs.existsSync(path.join(home, ".nexus.old")), false, "the root was not renamed");
     assert.equal(fs.existsSync(path.join(home, ".nexus", "tasks", "goal-forged.json")), false, "nothing forged on the host");
-    const readOnly = sandboxRun(`cat ${file} 2>&1`, home, { readOnlyHost: true, network: false, workspaceFd: fs.openSync(home, "r") });
-    assert.doesNotMatch(readOnly.stdout, /SENTINEL/);
+  });
+
+  test("the read-only profile with workspace = $HOME runs, and the state root is empty and its tasks unreachable", { skip: SKIP }, () => {
+    const { home } = throwawayHome();
+    const file = taskFile(path.join(home, ".nexus"));
+    const r = readOnlyRun(`echo MARKER; cat ${file} 2>&1; echo "LS=$(ls -A ${home}/.nexus 2>&1)"; echo x > ${home}/.nexus/probe 2>&1; echo x > ${home}/plain.txt 2>&1 || echo WRITEFAIL; mv ${home}/.nexus ${home}/.nexus.old 2>&1`, home);
+    assert.match(r.stdout, /MARKER/, `the command ran: ${r.stderr}`);
+    assert.doesNotMatch(r.stdout, /SENTINEL/);
+    assert.match(r.stdout, /^LS=$/m, "the root lists empty");
+    assert.match(r.stdout, /WRITEFAIL/, "the workspace is read-only");
+    assert.equal(fs.existsSync(path.join(home, ".nexus", "probe")), false);
+    assert.equal(fs.existsSync(`${home}/.nexus.old`), false);
+    assert.equal(fs.readFileSync(file, "utf8"), "SENTINEL-GOAL-STATE");
+  });
+
+  test("the read-only profile with an absent root: the root is created first and the command runs", { skip: SKIP }, () => {
+    const { home } = throwawayHome();
+    const r = readOnlyRun(`echo MARKER; ls -A ${home}`, home);
+    assert.match(r.stdout, /MARKER/, r.stderr);
+    assert.equal(fs.statSync(path.join(home, ".nexus")).mode & 0o777, 0o700);
   });
 
   test("an absent state root is created 0700 before wrapping, so a command cannot plant one on the host", { skip: SKIP }, () => {
@@ -402,14 +430,15 @@ describe("the state root cannot be renamed away through an ancestor, a symlink o
     assert.equal(fs.existsSync(path.join(root, "tasks", "goal-forged.json")), false, "nothing forged on the host");
   };
 
-  test("workspace = parent of HOME: HOME cannot be renamed and a forged goal file never reaches the host", { skip: SKIP }, () => {
-    const parent = scratch();
-    const home = path.join(parent, "home");
-    fs.mkdirSync(home);
+  test("workspace = a grandparent of HOME: no directory above the root can be renamed and a forged goal file never reaches the host", { skip: SKIP }, () => {
+    const grand = scratch();
+    const home = path.join(grand, "mid", "home");
+    fs.mkdirSync(home, { recursive: true });
     process.env.HOME = home;
     seed(path.join(home, ".nexus"));
-    const r = sandboxRun(`mv ${home} ${home}-x 2>&1; ${forge(home)}`, parent);
-    assert.match(r.stdout, BUSY);
+    const r = sandboxRun(`mv ${grand}/mid ${grand}/mid-x 2>&1; mv ${home} ${home}-x 2>&1; ${forge(home)}`, grand);
+    assert.equal((r.stdout.match(/busy/gi) ?? []).length, 2, r.stdout);
+    assert.equal(fs.existsSync(`${grand}/mid-x`), false, "an ancestor was not renamed");
     assert.equal(fs.existsSync(`${home}-x`), false, "HOME was not renamed");
     untouched(path.join(home, ".nexus"));
   });
@@ -474,6 +503,34 @@ describe("the state root cannot be renamed away through an ancestor, a symlink o
       assert.equal(w.sandboxed, false, workspace);
       assert.match(w.warning ?? "", /Start Nexus outside the state directory/);
     }
+  });
+
+  test("a workspace inside an external state root: tasks/ is unreadable, unwritable and cannot be renamed; the workspace works", { skip: SKIP }, () => {
+    const outer = scratch();
+    const root = path.join(outer, "st");
+    const workspace = path.join(root, "worktrees", "j");
+    fs.mkdirSync(workspace, { recursive: true });
+    seed(root);
+    throwawayHome();
+    withState(root, () => {
+      const r = sandboxRun(`cat ${root}/tasks/g.json 2>&1; echo pwned > ${root}/tasks/g.json 2>&1; mv ${root}/tasks ${root}/tasks.old 2>&1; echo built > out.txt && cat out.txt`, workspace);
+      assert.doesNotMatch(r.stdout, /SENTINEL/);
+      assert.match(r.stdout, /busy|Read-only/i);
+      assert.match(r.stdout, /built/);
+      assert.equal(fs.readFileSync(path.join(root, "tasks", "g.json"), "utf8"), "SENTINEL-GOAL-STATE");
+      assert.equal(fs.existsSync(path.join(root, "tasks.old")), false);
+    });
+  });
+
+  test("a refused wrap leaves nothing created in a symlink target", { skip: SKIP }, () => {
+    const outer = scratch();
+    fs.mkdirSync(path.join(outer, "real"));
+    fs.symlinkSync(path.join(outer, "real"), path.join(outer, "lnk"));
+    throwawayHome();
+    withState(path.join(outer, "lnk"), () => {
+      assert.equal(wrapSandboxedCommand("true", outer, { mode: "bwrap" }).sandboxed, false);
+      assert.deepEqual(fs.readdirSync(path.join(outer, "real")), []);
+    });
   });
 
   test("BG-1: an unattended job worktree under <repo>/.nexus/worktrees works when the repository is HOME", { skip: SKIP }, () => {

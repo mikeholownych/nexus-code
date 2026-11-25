@@ -66,17 +66,28 @@ function stateRootPlan(absWorkspace: string): StateRootPlan {
   try {
     fs.mkdirSync(configured, { recursive: true, mode: 0o700 });
     root = fs.realpathSync(configured);
-  } catch {
-    return { pins: [] };
+  } catch (error: any) {
+    const reason = String(error?.message ?? error).replace(/[\r\n\x00-\x1f\x7f]/g, " ").slice(0, 240);
+    return { pins: [], refusal: `The Nexus state directory (${configured}) could not be created or resolved for sandbox protection: ${reason}. Fix the path or permissions before running a sandboxed command.` };
   }
   const inside = (dir: string) => isPathWithin(workspaceReal, dir) || isPathWithin(absWorkspace, dir);
   if (inside(root) && (workspaceReal === root || inside(path.join(root, "tasks")))) {
     return { pins: [], refusal: `The workspace (${absWorkspace}) is the Nexus state directory (${root}) or inside its tasks directory, which hold goal state and which the sandbox must hide. Start Nexus outside the state directory, or point NEXUS_STATE_DIR elsewhere.` };
   }
-  // A workspace elsewhere below the root (a worktree under <repo>/.nexus/worktrees when the repository is HOME) mounts
-  // nothing else of the root: the rest of it is not in the sandbox, so there is nothing to mask, and masking would hide
-  // the workspace itself.
-  if (inside(root)) return { pins: [] };
+  // A workspace elsewhere below the root (a worktree under <repo>/.nexus/worktrees, or any workspace inside an external
+  // NEXUS_STATE_DIR) cannot have the root masked, because the mask would hide the workspace. Mask what holds goal
+  // state, `<root>/tasks`, instead: a tmpfs mount point cannot be read through, written or renamed. The root's other
+  // contents that lie outside the workspace are read-only to the sandbox (write profile) or absent (read-only profile).
+  if (inside(root)) {
+    try {
+      const tasks = path.join(root, "tasks");
+      fs.mkdirSync(tasks, { recursive: true, mode: 0o700 });
+      return { pins: [], root: fs.realpathSync(tasks) };
+    } catch (error: any) {
+      const reason = String(error?.message ?? error).replace(/[\r\n\x00-\x1f\x7f]/g, " ").slice(0, 240);
+      return { pins: [], refusal: `The Nexus tasks directory under ${root} could not be created for sandbox protection: ${reason}.` };
+    }
+  }
   const pins: string[] = [];
   if (isPathWithin(root, workspaceReal)) {
     for (let dir = path.dirname(root); dir !== workspaceReal && isPathWithin(dir, workspaceReal); dir = path.dirname(dir)) pins.unshift(dir);
@@ -170,7 +181,8 @@ export interface SandboxHomeMounts {
   refused: Array<{ path: string; reason: string }>;
 }
 
-function deniedReason(candidate: string, home: string): string | undefined {
+function deniedReason(candidate: string, home: string, stateRoots: readonly string[] = []): string | undefined {
+  if (stateRoots.some((root) => isPathWithin(candidate, root) || isPathWithin(root, candidate))) return "overlaps the Nexus state directory";
   for (const entry of HOME_DENIED) {
     const denied = path.join(home, entry);
     if (BROAD_DENIED.has(entry)) {
@@ -187,6 +199,10 @@ function deniedReason(candidate: string, home: string): string | undefined {
 /** The directories under HOME a write-mode sandbox binds back read-only. Pure function of HOME, PATH and the operator setting. */
 export function sandboxHomeMounts(env: NodeJS.ProcessEnv = process.env): SandboxHomeMounts {
   const home = path.resolve(env.HOME || os.homedir());
+  const stateRoots = new Set([path.resolve(env.NEXUS_STATE_DIR || path.join(home, ".nexus"))]);
+  for (const configured of [...stateRoots]) {
+    try { stateRoots.add(fs.realpathSync(configured)); } catch { /* absent: retain lexical path */ }
+  }
   const result: SandboxHomeMounts = { home, mounts: [], masked: [], refused: [] };
   if (home === "/") return result;
   const seen = new Set<string>();
@@ -194,7 +210,7 @@ export function sandboxHomeMounts(env: NodeJS.ProcessEnv = process.env): Sandbox
     const candidate = path.resolve(raw.startsWith("~/") ? path.join(home, raw.slice(2)) : raw);
     if (!isPathWithin(candidate, home) || candidate === home || seen.has(candidate)) return;
     seen.add(candidate);
-    const refusal = deniedReason(candidate, home);
+    const refusal = deniedReason(candidate, home, [...stateRoots]);
     if (refusal) {
       if (source !== "default") result.refused.push({ path: candidate, reason: refusal });
       return;
@@ -209,7 +225,7 @@ export function sandboxHomeMounts(env: NodeJS.ProcessEnv = process.env): Sandbox
     // A symlink must not lead into a credential directory.
     const realHome = (() => { try { return fs.realpathSync(home); } catch { return home; } })();
     if (isPathWithin(real, realHome)) {
-      const viaLink = deniedReason(real, realHome);
+      const viaLink = deniedReason(real, realHome, [...stateRoots]);
       if (viaLink) {
         result.refused.push({ path: candidate, reason: `resolves to a path ${viaLink}` });
         return;
@@ -223,7 +239,7 @@ export function sandboxHomeMounts(env: NodeJS.ProcessEnv = process.env): Sandbox
     if (!isPathWithin(resolved, home)) continue;
     // `<prefix>/bin` needs its prefix for lib/ (npm, node_modules); prefix must itself be a safe directory.
     const prefix = path.basename(resolved) === "bin" ? path.dirname(resolved) : resolved;
-    if (prefix !== resolved && prefix !== home && !deniedReason(prefix, home)) consider(prefix, "PATH");
+    if (prefix !== resolved && prefix !== home && !deniedReason(prefix, home, [...stateRoots])) consider(prefix, "PATH");
     else consider(resolved, "PATH");
   }
   for (const raw of (operatorSetting(SANDBOX_HOME_READONLY_SETTING) ?? "").split(",").map((v) => v.trim()).filter(Boolean)) {

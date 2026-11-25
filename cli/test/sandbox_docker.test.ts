@@ -274,3 +274,50 @@ describe("docker pins the state root's ancestors and refuses a symlinked root (P
     });
   });
 });
+
+describe("docker with a workspace inside the state root (PA-3)", { skip: HAVE_DOCKER && spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0 ? false : "docker daemon is not usable" }, () => {
+  const scratch = () => {
+    const dir = fs.mkdtempSync(path.join(fs.existsSync("/var/tmp") ? "/var/tmp" : os.tmpdir(), "nexus-s5-in-"));
+    fs.chmodSync(dir, 0o755);
+    cleanup.push(dir);
+    delete process.env.NEXUS_SANDBOX_NETWORK;
+    process.env.HOME = dir;
+    return dir;
+  };
+  const withState = <T>(dir: string, run: () => T): T => {
+    const saved = process.env.NEXUS_STATE_DIR;
+    process.env.NEXUS_STATE_DIR = dir;
+    try { return run(); } finally { if (saved === undefined) delete process.env.NEXUS_STATE_DIR; else process.env.NEXUS_STATE_DIR = saved; }
+  };
+
+  test("a workspace that is the state root, or inside its tasks/, is refused", () => {
+    const dir = scratch();
+    const root = path.join(dir, "st");
+    fs.mkdirSync(path.join(root, "tasks"), { recursive: true });
+    withState(root, () => {
+      for (const workspace of [root, path.join(root, "tasks")]) {
+        const w = wrapSandboxedCommand("true", workspace, { mode: "docker" });
+        assert.equal(w.sandboxed, false, workspace);
+        assert.match(w.warning ?? "", /Start Nexus outside the state directory/);
+      }
+    });
+  });
+
+  test("a workspace below the root: tasks/ is unreadable, unwritable and cannot be renamed; the workspace works", () => {
+    const dir = scratch();
+    const root = path.join(dir, "st");
+    const workspace = path.join(root, "worktrees", "j");
+    fs.mkdirSync(workspace, { recursive: true });
+    fs.mkdirSync(path.join(root, "tasks"));
+    fs.writeFileSync(path.join(root, "tasks", "g.json"), "SENTINEL-GOAL-STATE");
+    withState(root, () => {
+      const w = wrapSandboxedCommand(`cat ${root}/tasks/g.json 2>&1; echo pwned > ${root}/tasks/g.json 2>&1; mv ${root}/tasks ${root}/tasks.old 2>&1; echo built > out.txt && cat out.txt`, workspace, { mode: "docker" });
+      assert.equal(w.sandboxed, true, w.warning);
+      const r = spawnSync(w.argv![0], w.argv!.slice(1), { encoding: "utf8", timeout: 120_000, env: buildCommandEnvironment() });
+      assert.doesNotMatch(r.stdout, /SENTINEL/, r.stdout + r.stderr);
+      assert.match(r.stdout, /built/);
+      assert.equal(fs.readFileSync(path.join(root, "tasks", "g.json"), "utf8"), "SENTINEL-GOAL-STATE");
+      assert.equal(fs.existsSync(path.join(root, "tasks.old")), false);
+    });
+  });
+});
