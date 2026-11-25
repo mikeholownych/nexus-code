@@ -164,6 +164,9 @@ export class OperationRunner {
       this.activeBudgetExpired = true;
       budgetController.abort(new Error("operation active-time budget exhausted"));
     }, remainingMs);
+    // The budget timer must not keep a process alive after an operation runner is abandoned.
+    // Active work (inference, subprocesses, waits) owns its own handles; the timer only bounds it.
+    timer.unref();
     const onAbort = () => {
       if (this.activeBudgetExpired) return;
       clearTimeout(timer);
