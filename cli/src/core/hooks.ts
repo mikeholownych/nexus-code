@@ -419,14 +419,18 @@ export function shebangProblem(bytes: Buffer, workspace: string, interpreter: Pr
   if (interpreter && !interpreter.readsShebang) return undefined;
   if (!first.startsWith("#!")) return interpreter ? undefined : `it has no #! line, so it cannot be run directly. ${advice}`;
   if (end === -1 || end > 256) return `its #! line is not a complete line of at most 256 bytes. ${advice}`;
-  const words = first.slice(2).trim().split(/[ \t]+/).filter(Boolean);
-  const [program, ...args] = words;
+  // Read as the kernel reads it: only space and tab separate, the interpreter ends at the first of them, and the
+  // rest of the line is one argument. Any other control byte or non-ASCII byte would be part of a path to the kernel
+  // (a relative one, found in the workspace) while looking like blank space here, so the line is refused.
+  if (/[^\t\x20-\x7e]/.test(first)) return `its #! line contains a control or non-ASCII character. ${advice}`;
+  const [, program = "", argument = ""] = /^#![ \t]*([^ \t]*)[ \t]*(.*?)[ \t]*$/.exec(first) ?? [];
+  const args = argument ? [argument] : [];
   if (!program || !path.isAbsolute(program)) return `its #! line names ${JSON.stringify(program ?? "")}, which is not an absolute path (a relative one is looked up in the workspace). ${advice}`;
   const entry = PROJECT_INTERPRETERS.find((candidate) => candidate.name.test(path.basename(program)));
   if (!entry) return `its #! line names ${program}, which is not one of the interpreters a project hook may use${path.basename(program) === "env" ? " (env finds the real program on PATH)" : ""}. ${advice}`;
   const trusted = trustedProgram(program, workspace, options);
   if ("problem" in trusted) return `its #! line: ${trusted.problem}`;
-  if (args.length > 1 || (args.length === 1 && !entry.options.test(args[0]))) return `its #! line passes ${JSON.stringify(args.join(" "))} to ${path.basename(program)}, which is not one harmless option of it`;
+  if (args.length === 1 && !entry.options.test(args[0])) return `its #! line passes ${JSON.stringify(args[0])} to ${path.basename(program)}, which is not one harmless option of it`;
   return undefined;
 }
 

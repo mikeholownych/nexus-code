@@ -103,7 +103,8 @@ nexus hooks revoke
   **The `#!` line.** A script run directly (form 1) must begin with `#!` followed by the absolute path of one of
   the interpreters above in a trusted directory, and at most one of its options listed above: `#!/bin/sh`,
   `#!/bin/bash -eu`, `#!/usr/bin/python3 -I`. `#!/usr/bin/env bash` is refused (`env` finds the real program on
-  `PATH`), and so is a relative path (`#!./tool` is looked up in the workspace). For such a script use form 2,
+  `PATH`), and so is a relative path (`#!./tool` is looked up in the workspace). The line is read as the kernel reads
+  it: only spaces and tabs separate, and a line with any other control character or a non-ASCII character is refused. For such a script use form 2,
   `["bash", "./guard.sh"]`: after an explicit shell, `node` or `python` the line is a comment and is not looked at.
   After `perl` or `ruby`, which act on the line themselves, it must be absent or follow the same rule.
 

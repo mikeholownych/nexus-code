@@ -509,6 +509,9 @@ test("a #! line or an interpreter name that leads into the workspace does not ru
       { command: ["./shebang.sh"], files: { "shebang.sh": "#!./evil\nexit 0\n", evil: planted }, pinned: ["shebang.sh"], why: /its #! line names "\.\/evil", which is not an absolute path/ },
       { command: ["./shebang.sh"], files: { "shebang.sh": "#!/proc/self/cwd/evil\nexit 0\n", evil: planted }, pinned: ["shebang.sh"], why: /its #! line names \/proc\/self\/cwd\/evil, which is not one of the interpreters/ },
       { command: ["./shebang.sh"], files: { "shebang.sh": "#!/usr/bin/env bash\nexit 0\n", bash: planted }, pinned: ["shebang.sh"], why: /env finds the real program on PATH/ },
+      // To the kernel "\f/bin/sh" is a relative path: the directory named form-feed in the workspace, and its bin/sh.
+      { command: ["./shebang.sh"], files: { "shebang.sh": "#!\f/bin/sh\nexit 0\n", "\f/bin/sh": planted }, pinned: ["shebang.sh"], why: /its #! line contains a control or non-ASCII character/ },
+      { command: ["./shebang.sh"], files: { "shebang.sh": "#!\r/bin/sh\nexit 0\n", "\r/bin/sh": planted }, pinned: ["shebang.sh"], why: /its #! line contains a control or non-ASCII character/ },
       { command: ["/proc/self/cwd/bash", "g.sh"], files: { "g.sh": "#!/bin/sh\nexit 0\n", bash: planted }, pinned: ["g.sh"], why: /\/proc\/self\/cwd\/bash is not a program in a trusted directory/ },
       { command: ["python3.99", "g.sh"], files: { "g.sh": "#!/bin/sh\nexit 0\n", "python3.99": planted }, pinned: ["g.sh"], why: /python3\.99 was not found in a trusted directory of PATH/ },
     ];

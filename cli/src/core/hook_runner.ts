@@ -48,13 +48,16 @@ export interface HookProcessRequest {
 
 /** The environment of a hook: the MCP server scrubber's safe variables plus the hook's own, and nothing else. */
 export function hookEnvironment(hook: { event: HookEvent; name: string; source: HookSource; workspace: string }): Record<string, string> {
-  return buildMcpEnvironment({
+  const env = buildMcpEnvironment({
     NEXUS_HOOK_EVENT: hook.event,
     NEXUS_HOOK_NAME: hook.name,
     NEXUS_HOOK_SOURCE: hook.source,
     NEXUS_PROJECT_DIR: hook.workspace,
     CLAUDE_PROJECT_DIR: hook.workspace,
   });
+  // Where node looks for modules: a value that leads into the workspace would load its code into a hook.
+  delete env.NODE_PATH;
+  return env;
 }
 
 /** One line, bounded: what a hook said, safe to show and to store. */

@@ -523,7 +523,17 @@ test("the #! line of a script a project hook runs must name a trusted, listed in
     assert.deepEqual(answer.asked, [], String(first));
     assert.equal((await listJson()).sources[1].status, "invalid", String(first));
   }
-  for (const first of ["#!/bin/sh", "#! /bin/sh", "#!/bin/sh -eu", "#!/bin/bash --posix", "#!/usr/bin/bash"]) {
+  // Bytes the kernel takes as part of the path, which a looser reader takes for blank space: with a directory of that
+  // name in the workspace, the kernel would start a workspace file.
+  const CONTROL = /hook: its #! line contains a control or non-ASCII character/;
+  for (const first of ["#!\f/bin/sh", "#!\r/bin/sh", "#!\v/bin/sh", "#!\xa0/bin/sh", "#!/bin/sh\r", "#!/bin/sh \f-e", "#! \f/bin/sh", "#!/bin/sh\x7f", "#!\x00/bin/sh", "#!\x1b/bin/sh", "#!/bin/sh \u00e9", "#!\u2028/bin/sh"]) {
+    fs.writeFileSync(path.join(workspace, "hook"), Buffer.concat([Buffer.from(first, first.includes("\u2028") || first.includes("\u00e9") ? "utf8" : "latin1"), Buffer.from("\nexit 0\n")]), { mode: 0o755 });
+    projectHooks(guard(["./hook"]));
+    const listing = (await listJson()).sources[1];
+    assert.equal(listing.status, "invalid", JSON.stringify(first));
+    assert.match(listing.problem, CONTROL, JSON.stringify(first));
+  }
+  for (const first of ["#!/bin/sh", "#! /bin/sh", "#!\t/bin/sh", "#! \t /bin/sh\t-eu \t", "#!/bin/sh -eu", "#!/bin/sh\t-e", "#!/bin/bash --posix", "#!/usr/bin/bash", "#!/bin/sh   "]) {
     script(first);
     projectHooks(guard(["./hook"]));
     assert.equal((await listJson()).sources[1].status, "not_approved", first);
