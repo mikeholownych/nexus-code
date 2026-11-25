@@ -1,0 +1,61 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M89FR7FPW4ZRV4NDRG071SDS",
+  "session_id": "510e321c-b22e-4b25-83f4-2659ff26b968",
+  "strategy": "manual-commit",
+  "created_at": "2026-11-25T13:54:03.381014119Z",
+  "branch": "v1/v130-release-docs",
+  "checkpoints_count": 2,
+  "save_step_count": 8,
+  "files_touched": [],
+  "agent": "Cursor",
+  "model": "default",
+  "turn_id": "aa3f285e9830",
+  "checkpoint_transcript_start": 899,
+  "transcript_lines_at_start": 899,
+  "compact_transcript_start": 101,
+  "redaction": {
+    "replacements": 0,
+    "layers": {
+      "betterleaks": 0,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 0,
+      "credentialed_uri": 0,
+      "entropy": 0,
+      "key_context": 0,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-cursor-goal-2026-11-24T18:22:55.228291995Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "goal"
+      },
+      "source": {
+        "agent": "cursor",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "af9e9ff782c3",
+      "timestamp": "2026-11-24T18:22:55.228291995Z",
+      "native": {
+        "command": "/goal"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/goal",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 31,
+    "context_tokens": 233824,
+    "context_window_size": 256000
+  }
+}
