@@ -58,7 +58,8 @@ invalid.
 In your own file, name programs that live outside the workspace. A relative path such as `./scripts/guard.sh` is
 looked up in the workspace, where the agent can change it; your file is not pinned the way a project's is.
 
-Hooks run in this order: the operator's, then the project's. No file can remove or disable another file's hooks.
+Hooks run in this order: the operator's, then those of the workspace's manifest plugins (see
+[`PLUGINS.md`](PLUGINS.md)), then the project's. No file can remove or disable another file's hooks.
 
 ## Project hooks need your approval
 

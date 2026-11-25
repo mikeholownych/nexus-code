@@ -12,9 +12,12 @@ import { decodeStrictUtf8, parseStrictJson, readHardenedFile } from "./strict_js
 export const EXTENSION_TRUST_VERSION = 1;
 const STORE_LIMIT = 256 * 1024;
 
-/** What an approval covers. `project-hooks`: a workspace's `.nexus/hooks.json`. `workspace-plugin`: a workspace plugin module. */
-export type ExtensionTrustKind = "project-hooks" | "workspace-plugin";
-const KINDS: readonly string[] = ["project-hooks", "workspace-plugin"] satisfies ExtensionTrustKind[];
+/**
+ * What an approval covers. `project-hooks`: a workspace's `.nexus/hooks.json`. `workspace-plugin`: a workspace plugin
+ * module. `workspace-manifest`: a workspace manifest plugin's whole directory, by its tree digest.
+ */
+export type ExtensionTrustKind = "project-hooks" | "workspace-plugin" | "workspace-manifest";
+const KINDS: readonly string[] = ["project-hooks", "workspace-plugin", "workspace-manifest"] satisfies ExtensionTrustKind[];
 
 export interface ExtensionTrustEntry {
   kind: ExtensionTrustKind;
@@ -33,6 +36,18 @@ export interface ExtensionTrustEntry {
    * approved. The approval holds only while every one of them is unchanged and no other is named.
    */
   files?: ExtensionTrustFile[];
+  /**
+   * Set by the loader when the approved content could not be loaded, and removed when it loads: the approval stands,
+   * but the extension is not active. For listing and diagnosis, which do not run the content themselves.
+   */
+  loadFailed?: ExtensionLoadFailure;
+}
+
+export interface ExtensionLoadFailure {
+  /** ISO 8601 time of the failed load. */
+  at: string;
+  /** One line, redacted and capped. */
+  reason: string;
 }
 
 export interface ExtensionTrustFile {
@@ -64,11 +79,15 @@ const same = (a: ExtensionTrustId, b: ExtensionTrustId) => a.kind === b.kind && 
 
 function entryOf(raw: unknown): ExtensionTrustEntry | undefined {
   if (!isRecord(raw)) return undefined;
-  const { kind, scope, key, sha256, approvedAt, summary, files } = raw;
+  const { kind, scope, key, sha256, approvedAt, summary, files, loadFailed } = raw;
   if (typeof kind !== "string" || !KINDS.includes(kind)) return undefined;
   if (typeof scope !== "string" || typeof key !== "string" || typeof approvedAt !== "string" || typeof summary !== "string") return undefined;
   if (typeof sha256 !== "string" || !/^[0-9a-f]{64}$/.test(sha256)) return undefined;
   const entry: ExtensionTrustEntry = { kind: kind as ExtensionTrustKind, scope, key, sha256, approvedAt, summary };
+  if (loadFailed !== undefined) {
+    if (!isRecord(loadFailed) || typeof loadFailed.at !== "string" || typeof loadFailed.reason !== "string") return undefined;
+    entry.loadFailed = { at: loadFailed.at, reason: loadFailed.reason };
+  }
   if (files === undefined) return entry;
   if (!Array.isArray(files)) return undefined;
   const covered: ExtensionTrustFile[] = [];
@@ -129,5 +148,20 @@ export function revokeExtension(id: ExtensionTrustId, storePath = extensionTrust
   const kept = entries.filter((other) => !same(other, id));
   if (kept.length === entries.length) return false;
   write(storePath, kept);
+  return true;
+}
+
+/**
+ * Records on the approval of `id` that its content failed to load (`failure`), or that it loaded (undefined). Nothing
+ * is written when the record already says so, or when there is no approval. Returns whether the store was written.
+ */
+export function noteExtensionLoad(id: ExtensionTrustId, failure: ExtensionLoadFailure | undefined, storePath = extensionTrustStorePath()): boolean {
+  const { entries, problem } = readExtensionTrust(storePath);
+  if (problem) return false;
+  const entry = entries.find((other) => same(other, id));
+  if (!entry || entry.loadFailed?.reason === failure?.reason) return false;
+  if (failure) entry.loadFailed = failure;
+  else delete entry.loadFailed;
+  write(storePath, entries);
   return true;
 }

@@ -4,6 +4,23 @@
   "description": "Generated from HooksDocument in cli/src/core/hooks.ts by cli/scripts/gen_hooks_schema.mjs. Do not edit by hand. $defs.HooksFile is a hooks file (hooks.json), $defs.HookInput what a hook reads on standard input, $defs.HookOutput what it may print, $defs.ExtensionTrustStore the approval store (extension_trust.json). The schema describes shape only; Nexus's own reader is stricter (unknown and duplicate keys are refused; see docs/HOOKS.md).",
   "$ref": "#/$defs/HooksDocument",
   "$defs": {
+    "ExtensionLoadFailure": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "description": "ISO 8601 time of the failed load.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "One line, redacted and capped.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "at",
+        "reason"
+      ]
+    },
     "ExtensionTrustEntry": {
       "type": "object",
       "properties": {
@@ -24,6 +41,10 @@
         },
         "kind": {
           "$ref": "#/$defs/ExtensionTrustKind"
+        },
+        "loadFailed": {
+          "description": "Set by the loader when the approved content could not be loaded, and removed when it loads: the approval stands,\nbut the extension is not active. For listing and diagnosis, which do not run the content themselves.",
+          "$ref": "#/$defs/ExtensionLoadFailure"
         },
         "scope": {
           "description": "The workspace's real path.",
@@ -64,9 +85,10 @@
       ]
     },
     "ExtensionTrustKind": {
-      "description": "What an approval covers. `project-hooks`: a workspace's `.nexus/hooks.json`. `workspace-plugin`: a workspace plugin module.",
+      "description": "What an approval covers. `project-hooks`: a workspace's `.nexus/hooks.json`. `workspace-plugin`: a workspace plugin\nmodule. `workspace-manifest`: a workspace manifest plugin's whole directory, by its tree digest.",
       "enum": [
         "project-hooks",
+        "workspace-manifest",
         "workspace-plugin"
       ]
     },
