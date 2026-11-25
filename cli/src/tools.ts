@@ -1,5 +1,5 @@
 import { wrapSandboxedWorker } from "./sandbox.js";
-import { spawn, spawnSync, ChildProcess } from "node:child_process";
+import { spawn, ChildProcess } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as http from "node:http";
@@ -549,6 +549,8 @@ export const RUN_COMMAND_DEFAULT_TIMEOUT_SECS = 60;
 /** Extra time the bridge waits beyond the runner's own deadline (kill grace + reply), so the runner's structured result wins. */
 export const RPC_GRACE_SECS = 5;
 const RPC_DEFAULT_TIMEOUT_MS = 35_000;
+const FALLBACK_KILL_GRACE_MS = 500;
+const FALLBACK_MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
 
 /** Maximum allowed tool timeout in seconds per REQ-SEC-107 (default 1800). */
 export function maxToolTimeoutSecs(): number {
@@ -1270,7 +1272,7 @@ export class RustCoreBridge {
     });
   }
 
-  private executeViaSpawnSync(toolName: string, args: Record<string, any>): ExecutionResult {
+  private async executeViaSpawn(toolName: string, args: Record<string, any>): Promise<ExecutionResult> {
     const argsJson = JSON.stringify(args);
 
     const launch = this.workerLaunch(["call", "--tool", toolName, "--args", argsJson], this.roleOf(this.channelFor(toolName)));
@@ -1280,42 +1282,93 @@ export class RustCoreBridge {
     const command = launch.command;
     const spawnArgs = launch.args;
 
-    try {
-      const res = spawnSync(command, spawnArgs, {
-        cwd: this.workspace,
-        // Same environment as the persistent engine, so the two paths cannot drift.
-        env: buildCommandEnvironment(),
-        encoding: "utf-8",
-        maxBuffer: 10 * 1024 * 1024,
-      });
-
-      if (res.error) {
-        return {
-          success: false,
-          output: "",
-          error: `Failed to execute core engine: ${res.error.message}`,
-        };
-      }
-
-      if (res.status !== 0) {
-        return {
-          success: false,
-          output: res.stdout || "",
-          error: res.stderr || `Tool exited with code ${res.status}`,
-        };
-      }
-
-      return {
-        success: true,
-        output: res.stdout.trim(),
-      };
-    } catch (err: any) {
-      return {
-        success: false,
-        output: "",
-        error: `Unexpected error executing tool: ${err.message}`,
-      };
+    const signal = this.turnSignal;
+    if (signal?.aborted) {
+      return { success: false, output: "", error: `'${toolName}' was not started: the turn was cancelled`, cancelled: true };
     }
+
+    return await new Promise<ExecutionResult>((resolve) => {
+      let child: ChildProcess;
+      try {
+        child = spawn(command, spawnArgs, {
+          cwd: this.workspace,
+          // Same environment as the persistent engine, so the two paths cannot drift.
+          env: buildCommandEnvironment(),
+          detached: process.platform !== "win32",
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+      } catch (err: any) {
+        resolve({ success: false, output: "", error: `Failed to execute core engine: ${err?.message ?? String(err)}` });
+        return;
+      }
+
+      const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
+      let stdoutBytes = 0;
+      let stderrBytes = 0;
+      let settled = false;
+      let termination: "timeout" | "cancelled" | "output_limit" | undefined;
+      let killTimer: NodeJS.Timeout | undefined;
+      const output = (chunks: Buffer[]) => Buffer.concat(chunks).toString("utf8");
+      const signalChild = (signalName: NodeJS.Signals) => {
+        if (process.platform !== "win32" && child.pid !== undefined) {
+          try { process.kill(-child.pid, signalName); }
+          catch (err: any) { if (err?.code !== "ESRCH") child.kill(signalName); }
+        } else {
+          child.kill(signalName);
+        }
+      };
+      const stop = (reason: "timeout" | "cancelled" | "output_limit") => {
+        if (termination || settled) return;
+        termination = reason;
+        signalChild("SIGTERM");
+        killTimer = setTimeout(() => signalChild("SIGKILL"), FALLBACK_KILL_GRACE_MS);
+      };
+      const deadlineMs = rpcDeadlines(toolName, args).bridgeMs;
+      const deadlineTimer = setTimeout(() => stop("timeout"), deadlineMs);
+      const onAbort = () => stop("cancelled");
+      const finish = (code: number | null, error?: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(deadlineTimer);
+        if (killTimer) clearTimeout(killTimer);
+        signal?.removeEventListener("abort", onAbort);
+        const out = output(stdout);
+        const errOut = output(stderr);
+        if (termination === "cancelled") {
+          resolve({ success: false, output: out, error: `Tool '${toolName}' was cancelled; its final side-effect outcome may be unknown${errOut ? `: ${errOut.trim()}` : ""}`, cancelled: true, outcomeUnknown: true });
+        } else if (termination === "timeout") {
+          resolve({ success: false, output: out, error: `Tool '${toolName}' exceeded its ${Math.ceil(deadlineMs / 1000)}s deadline; its final side-effect outcome is unknown${errOut ? `: ${errOut.trim()}` : ""}`, timedOut: true, outcomeUnknown: true });
+        } else if (termination === "output_limit") {
+          resolve({ success: false, output: out, error: `Tool '${toolName}' exceeded the ${FALLBACK_MAX_OUTPUT_BYTES}-byte output limit; its final side-effect outcome may be unknown`, outcomeUnknown: true });
+        } else if (error) {
+          resolve({ success: false, output: out, error: `Failed to execute core engine: ${error.message}` });
+        } else if (code !== 0) {
+          resolve({ success: false, output: out, error: errOut || `Tool exited with code ${code}` });
+        } else {
+          resolve({ success: true, output: out.trim() });
+        }
+      };
+      const collect = (chunks: Buffer[], chunk: Buffer | string, stream: "stdout" | "stderr") => {
+        const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        const next = (stream === "stdout" ? stdoutBytes : stderrBytes) + data.length;
+        if (stream === "stdout") stdoutBytes = next;
+        else stderrBytes = next;
+        if (next > FALLBACK_MAX_OUTPUT_BYTES) {
+          const remaining = Math.max(0, FALLBACK_MAX_OUTPUT_BYTES - (next - data.length));
+          if (remaining) chunks.push(data.subarray(0, remaining));
+          stop("output_limit");
+        } else {
+          chunks.push(data);
+        }
+      };
+      child.stdout?.on("data", (chunk) => collect(stdout, chunk, "stdout"));
+      child.stderr?.on("data", (chunk) => collect(stderr, chunk, "stderr"));
+      child.once("error", (err) => finish(null, err));
+      child.once("close", (code) => finish(code));
+      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) onAbort();
+    });
   }
 
   /**
@@ -1846,8 +1899,8 @@ export class RustCoreBridge {
       // Fall through to fallback
     }
 
-    // Fallback: spawnSync invocation
-    return applyNotice(this.executeViaSpawnSync(toolName, args));
+    // Fallback: bounded asynchronous worker invocation. A synchronous fallback blocks the event loop and defeats turn cancellation.
+    return applyNotice(await this.executeViaSpawn(toolName, args));
   }
 
   public async listServices(): Promise<Array<{ name: string; pgid: number; command: string }>> {

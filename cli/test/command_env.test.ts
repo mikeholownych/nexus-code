@@ -1,7 +1,7 @@
 /**
  * Hardening slice 1: run_command must not inherit the operator's credentials.
  * config.env is loaded into process.env with override, so before this fix `env` printed every provider key, with or
- * without a sandbox. These tests run the real tool path (the persistent engine, the spawnSync fallback and the
+ * without a sandbox. These tests run the real tool path (the persistent engine, the one-shot fallback and the
  * write-mode bwrap sandbox) against a throwaway HOME whose config.env holds sentinel secrets.
  */
 import "./helpers/leak_guard.js";
@@ -109,8 +109,8 @@ describe("run_command environment", { skip: resolveCoreBinary() ? false : "harne
     assertScrubbed(res.output);
   });
 
-  test("spawnSync fallback uses the same environment", () => {
-    const res = (bridge() as any).executeViaSpawnSync("run_command", { command: "env", shell: "bash" });
+  test("one-shot fallback uses the same environment", async () => {
+    const res = await (bridge() as any).executeViaSpawn("run_command", { command: "env", shell: "bash" });
     assert.equal(res.success, true, res.error);
     assertScrubbed(res.output);
   });
