@@ -133,6 +133,7 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   this.completionSummary = undefined;
   this.turnPersistenceFailures = this.initialStatePersistenceFailure ? [this.initialStatePersistenceFailure] : [];
+  this.candidateReceiptPersistenceFailure = undefined;
   this.objectiveBudgetPersistenceFailure = undefined;
   this.turnMutations = 0;
   this.turnToolCallSyntax = { native: 0, trailing: 0, structural: 0, invalid: 0, schema: 0 };
@@ -1217,6 +1218,11 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
       this.cancelQueuedSteering(
         interruption ? "the turn was cancelled before it could be applied" : `the turn ended (${stopReason ?? (inferenceFailure as InferenceFailure | null)?.kind ?? (capacityBlock ? "context capacity" : persistenceFailure ? "persistence failure" : "stopped")}) before it could be applied`,
       );
+    }
+
+    if (this.candidateReceiptPersistenceFailure) {
+      persistenceFailure ??= this.candidateReceiptPersistenceFailure;
+      stopReason ??= "PERSISTENCE_FAILED";
     }
 
     triggerNotification("Nexus Code", "Turn finished.", this.surface);
