@@ -93,6 +93,24 @@ describe("named profile network enforcement", () => {
     }
   });
 
+  test("a build refused by managed policy leaves no network permission from the build before it (#795)", () => {
+    try {
+      buildConfigWithPolicy({ endpoint: "http://127.0.0.1:1/v1", model: "fixture", sandbox: ":network" }, mergePolicies());
+      assert.equal(sandboxNetworkEnabled(), true);
+      assert.throws(
+        () => buildConfigWithPolicy({ endpoint: "http://127.0.0.1:1/v1", model: "fixture", sandbox: ":network" }, systemPolicy("forbid_network = true")),
+        /is refused/,
+      );
+      assert.equal(sandboxNetworkEnabled(), false, "the earlier :network must not outlive the refused build");
+      buildConfigWithPolicy({ endpoint: "http://127.0.0.1:1/v1", model: "fixture", sandbox: ":network", sandboxNetwork: true }, mergePolicies());
+      assert.throws(() => buildConfigWithPolicy({ endpoint: "http://127.0.0.1:1/v1", model: "fixture", sandbox: "nonsense:profile" }, mergePolicies()));
+      assert.equal(sandboxNetworkEnabled(), false, "a refused profile expansion resets the state too");
+    } finally {
+      setSandboxNetworkProfile(undefined);
+      setSandboxNetworkFlag(false);
+    }
+  });
+
   test("a profile overrides CLI and environment opt-ins, then legacy behavior returns without a profile", () => {
     try {
       setSandboxNetworkFlag(true);

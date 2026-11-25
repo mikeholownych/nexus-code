@@ -101,6 +101,7 @@ async function mock(behaviour: { models?: string[]; status?: number; hang?: bool
   } as Mock;
 }
 
+import { setSandboxNetworkProfile } from "../src/sandbox_network.js";
 const tmp = (prefix: string) => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 let home: string;
 let workspace: string;
@@ -129,6 +130,31 @@ describe("doctor findings name the actual failure", () => {
     assert.match(finding.explanation, /Effective sandbox profile: unconfined/);
     assert.ok(finding.evidence.some((e) => /^bubblewrap \(bwrap\): (available|not available)$/.test(e)));
     assert.match(finding.action ?? "", /--sandbox bwrap/);
+  });
+
+  test("sandbox.confinement follows the resolved configuration, not the raw flag, for every way to ask for a sandbox (#795)", async () => {
+    const linux = process.platform === "linux";
+    const cases: Array<{ name: string; flag?: string; config: Partial<HarnessConfig>; boxed: boolean; profile: string }> = [
+      { name: "no sandbox", config: {}, boxed: false, profile: "unconfined" },
+      { name: "--sandbox bwrap", flag: "bwrap", config: { sandbox: "bwrap" }, boxed: true, profile: ":workspace" },
+      { name: "--sandbox :workspace", flag: ":workspace", config: { sandbox: true, sandboxProfile: ":workspace" }, boxed: true, profile: ":workspace" },
+      { name: "--sandbox :read-only", flag: ":read-only", config: { approvalMode: "read-only", sandboxProfile: ":read-only" }, boxed: false, profile: ":read-only" },
+      { name: "--sandbox :network", flag: ":network", config: { sandbox: true, sandboxProfile: ":network" }, boxed: true, profile: ":network" },
+      { name: "--sandbox docker", flag: "docker", config: { sandbox: "docker" }, boxed: linux, profile: ":workspace" },
+    ];
+    for (const c of cases) {
+      // buildConfig records a profile's network posture in module state; doctor reads it from there.
+      setSandboxNetworkProfile(c.config.sandboxProfile === undefined ? undefined : c.config.sandboxProfile === ":network");
+      // Both a configuration and the flags that produced it, as the CLI passes them.
+      const finding = find(await doctor({ config: cfg(c.config), flags: c.flag ? { sandbox: c.flag } : {} } as any), "sandbox.confinement")!;
+      const text = `${finding.explanation}\n${finding.evidence.join("\n")}`;
+      assert.match(finding.explanation, new RegExp(`Effective sandbox profile: ${c.profile}`), c.name);
+      if (c.profile === "unconfined") continue;
+      assert.equal(/runs inside this sandbox/.test(text), c.boxed, `${c.name}: worker claim`);
+      assert.equal(/masked with an empty tmpfs/.test(text), c.config.sandbox !== undefined, `${c.name}: HOME masking claim`);
+      if (c.name.endsWith(":read-only")) assert.match(text, /runs outside any sandbox/);
+    }
+    setSandboxNetworkProfile(undefined);
   });
 
   test("sandbox.confinement says where the worker runs under Docker and names the files-only worker (CS-10)", async () => {

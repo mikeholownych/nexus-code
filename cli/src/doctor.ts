@@ -28,7 +28,7 @@ import { allProviders, providerSource } from "./providers.js";
 import { effortLevels } from "./core/models_snapshot.js";
 import { mcpConfigFiles } from "./mcp.js";
 import { isBwrapAvailable, sandboxHomeMounts, sandboxNetworkEnabled, sandboxWorkspaceOverlays } from "./sandbox.js";
-import { describeSandboxPosture } from "./sandbox_profile.js";
+import { describeSandboxPosture, parseSandboxValue } from "./sandbox_profile.js";
 import { pluginDirs } from "./plugins.js";
 import { policyFindings, processPolicyReport } from "./policy_cli.js";
 import { USER_POLICY_FILE_NAME } from "./core/managed_policy_load.js";
@@ -595,8 +595,17 @@ const shellCheck: Check = async (ctx, signal) => {
 };
 
 /** Effective confinement posture and the residual holes it does not close (SB-1). */
+/** The engine word of a raw `--sandbox` value (`bwrap:network` gives `bwrap`, `:read-only` gives none); a value that does not parse gives none. */
+function flagEngine(raw: unknown): string | boolean | undefined {
+  if (raw === undefined || raw === null || raw === false) return undefined;
+  if (raw === true) return true;
+  try { return parseSandboxValue(String(raw)).engine; } catch { return undefined; }
+}
+
 const sandboxCheck: Check = async (ctx) => {
-  const sandbox = ctx.config?.sandbox ?? ctx.flags.sandbox;
+  // The resolved configuration decides: its `sandbox` is what the tools launch from, and undefined means no engine (a bare
+  // profile such as :read-only names none). The raw flag is read only when there is no configuration, and then without its profile.
+  const sandbox = ctx.config ? ctx.config.sandbox : flagEngine(ctx.flags.sandbox);
   const posture = describeSandboxPosture({
     sandbox,
     readOnly: Boolean(ctx.config?.approvalMode === "read-only" || ctx.flags.readOnly),
@@ -622,23 +631,30 @@ const sandboxCheck: Check = async (ctx) => {
     return f("sandbox.confinement", "runtime", "warn", `Effective sandbox profile: ${posture.profile}, but bubblewrap (bwrap) is not available.`, [`source: ${posture.source}`], "Install bubblewrap, or run without --sandbox.");
   }
   const m = sandboxHomeMounts();
-  const workerInBox = posture.engine !== "docker" || process.platform === "linux";
+  // Read-only mode confines each command in Bubblewrap whether or not --sandbox names an engine; the native worker and
+  // the HOME mounts below belong to --sandbox itself, so with no engine set they are not in force.
+  const engineSet = Boolean(sandbox) && String(sandbox).trim().toLowerCase() !== "none";
+  const workerInBox = engineSet && (posture.engine !== "docker" || process.platform === "linux");
   const evidence = [
     `profile: ${posture.profile} (${posture.source})`,
     `engine: ${posture.engine} · network: ${posture.network ? "on" : "off"} · read-only: ${posture.readOnly ? "yes" : "no"}`,
     workerInBox
       ? "native worker (harness-core): runs inside this sandbox, so a compromised worker has the same limits as a command (CS-10)"
-      : "native worker (harness-core): runs outside Docker on this host (a container can only run it on Linux), so Docker confines commands only here",
+      : engineSet
+        ? "native worker (harness-core): runs outside Docker on this host (a container can only run it on Linux), so Docker confines commands only here"
+        : "native worker (harness-core): runs outside any sandbox (read-only mode confines each command only; add --sandbox to confine the worker)",
     ...(workerInBox ? ["file tools use a separate files-only worker: it refuses to run commands and has no network even with --sandbox-network (CS-10 phase 2)"] : []),
-    `HOME ${m.home} is masked with an empty tmpfs; read-only mounts back under it:`,
-    ...(m.mounts.length ? m.mounts.map((x) => `  ${x.path}  (${x.source})`) : ["  (none)"]),
-    ...m.masked.map((x) => `  hidden file: ${x}`),
-    ...m.refused.map((x) => `  refused: ${x.path} (${x.reason})`),
+    ...(engineSet ? [
+      `HOME ${m.home} is masked with an empty tmpfs; read-only mounts back under it:`,
+      ...(m.mounts.length ? m.mounts.map((x) => `  ${x.path}  (${x.source})`) : ["  (none)"]),
+      ...m.masked.map((x) => `  hidden file: ${x}`),
+      ...m.refused.map((x) => `  refused: ${x.path} (${x.reason})`),
+    ] : ["each command sees a synthetic read-only root holding the workspace and the runtime only; HOME is not mounted"]),
     "residual holes (not closed by this profile):",
     ...posture.residual.map((r) => `  - ${r}`),
   ];
   const workspace = ctx.config?.workspace;
-  if (workspace) {
+  if (workspace && engineSet) {
     const o = sandboxWorkspaceOverlays(workspace);
     if (o.dirs.length || o.files.length) {
       evidence.push("the workspace holds credential paths; they are emptied inside the sandbox:", ...o.dirs.map((x) => `  masked dir: ${x}`), ...o.files.map((x) => `  masked file: ${x}`));
