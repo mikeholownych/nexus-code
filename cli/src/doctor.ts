@@ -44,6 +44,7 @@ import { redactSecrets } from "./ui.js";
 import { SafePathError, ancestryProblem, chmodVerified, identityOf, mkdirVerified, readVerified, unlinkVerified, writeExclusiveVerified, type Identity } from "./safe_fs.js";
 import { isNexusDirPermissive } from "./core/durable_file.js";
 import { diagnoseHooks } from "./doctor_hooks.js";
+import { diagnoseWorkspacePlugins } from "./doctor_plugins.js";
 export { isNexusDirPermissive };
 import { DEFAULT_REPEATED_CALL_HARD, DEFAULT_REPEATED_CALL_SOFT } from "./core/repeated_calls.js";
 import { DEFAULT_CONVERGENCE_ATTEMPTS, DEFAULT_MAX_INFERENCE_SUBMISSIONS, type HarnessConfig } from "./types.js";
@@ -1239,7 +1240,7 @@ const pluginCheck: Check = async (ctx) => {
   const found: string[] = [];
   const risky: string[] = [];
   for (const file of untrustedWorkspaceExtensions(workspace).filter((f) => !WORKSPACE_MCP_FILES.includes(path.basename(f)))) {
-    risky.push(`${file}: not loaded — this workspace is not trusted. Trust it with \`nexus trust ${workspace}\` to load its plugins.`);
+    risky.push(`${file}: not loaded — this workspace is not trusted. Trust it with \`nexus trust ${workspace}\`, then approve the file itself with \`nexus plugins trust\`.`);
   }
   for (const dir of pluginDirs(workspace, true)) {
     let names: string[];
@@ -1256,8 +1257,14 @@ const pluginCheck: Check = async (ctx) => {
     }
   }
   const note = "Plugin modules were listed, not loaded (loading runs their code).";
-  if (risky.length) return f("plugins.config", "extensions", "warn", `${risky.length} plugin problem(s): untrusted workspace plugins are not loaded; world-writable plugin files could be changed by anyone. ${note}`, [...risky, ...found.slice(0, 10)], "Trust the workspace (`nexus trust`) or remove its plugins; restrict writable files with `chmod o-w <file>`.");
+  if (risky.length) return f("plugins.config", "extensions", "warn", `${risky.length} plugin problem(s): untrusted workspace plugins are not loaded; world-writable plugin files could be changed by anyone. ${note}`, [...risky, ...found.slice(0, 10)], "Trust the workspace (`nexus trust`) for its MCP servers; each of its plugin files also needs its own approval (`nexus plugins trust <file>`, see plugins.workspace). Restrict writable files with `chmod o-w <file>`.");
   return f("plugins.config", "extensions", found.length ? "pass" : "skip", found.length ? `${found.length} plugin module(s) found. ${note}` : "No plugins are installed (optional).", found.slice(0, 10));
+};
+
+/** HK-3: workspace plugin files that are declared and not in force (see doctor_plugins.ts). */
+const workspacePluginsCheck: Check = async (ctx) => {
+  const { status, explanation, evidence, action } = diagnoseWorkspacePlugins(ctx.config?.workspace ?? process.cwd());
+  return f("plugins.workspace", "extensions", status, explanation, evidence, action);
 };
 
 /** HK-1: command hooks that are declared and not in force (see doctor_hooks.ts). */
@@ -1350,6 +1357,7 @@ const CHECKS: Array<[string, Check]> = [
   ["custom_ca", customCaCheck],
   ["mcp", mcpCheck],
   ["plugins", pluginCheck],
+  ["plugins_workspace", workspacePluginsCheck],
   ["hooks", hooksCheck],
   ["policy", policyCheck],
   ["background_runner", backgroundRunnerCheck],

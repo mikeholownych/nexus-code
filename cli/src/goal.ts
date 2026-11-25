@@ -1,7 +1,8 @@
 /** Durable engineering goals are existing team operations with a pinned ObjectiveLedger. */
 import { randomUUID } from "node:crypto";
 import { acceptDescoping, applyRequirementUpdates, createLedger, recordAttempt, requirementDone, type ObjectiveLedger, type VerificationAttempt } from "./core/objective.js";
-import { OperationRunner, AgentWorkUnitExecutor, OperationLockedError, OperationStore, driveOperation, currentBootId, type WorkUnitExecutor } from "./core/operation_runner.js";
+import { OperationRunner, AgentWorkUnitExecutor, OperationLockedError, OperationStore, driveOperation, type WorkUnitExecutor } from "./core/operation_runner.js";
+import { STALE_PAUSE_PREFIX, stampDriver, staleDriver, withDerivedPause } from "./core/driver_identity.js";
 import { TeamOrchestrator } from "./team.js";
 import type { DurableOperationState, OperationEvent, WorkUnit } from "./core/operation.js";
 import type { ResourceDescriptor } from "./core/resources.js";
@@ -58,33 +59,17 @@ function deterministicVerificationPassed(operation: DurableOperationState): bool
   return tester?.status === "COMPLETE" && tester.result?.verification?.status === "PASSED" && tester.result.verification.hasExecutedTests && tester.result.verification.definitionBound !== false;
 }
 
-import * as os from "node:os";
-
-function processAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; }
-  catch (err: any) { return err?.code === "EPERM"; }
+function goalReason(operation: DurableOperationState): { status: GoalStatus; reason?: string } | undefined {
+  const stale = staleDriver(operation);
+  if (operation.status !== "PAUSED" && !stale) return undefined;
+  const reason = [operation.pauseReason, stale?.reason].filter((text, i, all): text is string => Boolean(text) && all.indexOf(text) === i).join(" ");
+  return { status: "PAUSED", ...(reason ? { reason } : {}) };
 }
 
-function staleDriverReason(operation: DurableOperationState, bootId = currentBootId()): string | undefined {
-  if (!["RUNNING", "WAITING", "BLOCKED"].includes(operation.status)) return undefined;
-  const reasons: string[] = [];
-  if (bootId && operation.activeBootId && operation.activeBootId !== bootId) reasons.push(`earlier host boot (${operation.activeBootId.slice(0, 12)})`);
-  if (operation.activePid !== undefined && operation.activeHost === os.hostname() && !processAlive(operation.activePid)) {
-    reasons.push(`earlier process (pid ${operation.activePid}) is no longer running`);
-  }
-  if (reasons.length === 0 && operation.activePid === undefined && operation.activeBootId === undefined) {
-    reasons.push("an earlier process left it active without driver identity metadata");
-  }
-  if (reasons.length === 0) return undefined;
-  return operation.pauseReason?.startsWith("Paused on resume:")
-    ? operation.pauseReason
-    : `Paused on resume: this goal was left active by ${reasons.join("; ")}. It was not cleanly paused before this process started. Resume it explicitly after inspecting its state.`;
-}
-
-export function goalStatus(operation: DurableOperationState, ledger?: ObjectiveLedger, bootId = currentBootId()): { status: GoalStatus; reason?: string } {
+export function goalStatus(operation: DurableOperationState, ledger?: ObjectiveLedger): { status: GoalStatus; reason?: string } {
   if (operation.status === "CANCELLED") return { status: "CANCELLED" };
-  const stale = staleDriverReason(operation, bootId);
-  if (operation.status === "PAUSED" || stale) return { status: "PAUSED", ...(operation.pauseReason || stale ? { reason: operation.pauseReason ?? stale } : {}) };
+  const paused = goalReason(operation);
+  if (paused) return paused;
   if (operation.status === "WAITING") return { status: "WAITING" };
   if (operation.status === "RUNNING") return { status: "RUNNING" };
   if (operation.status === "BLOCKED") return { status: "BLOCKED", reason: "A required work unit or operator decision is blocked." };
@@ -201,16 +186,7 @@ export class GoalOrchestrator {
   }
 
   list(): GoalResult[] {
-    return this.store.list().filter(isGoal).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map((operation) => {
-      try { return this.result(operation); }
-      catch (error) {
-        if (!(error instanceof OperationLockedError)) throw error;
-        let ledger: ObjectiveLedger | undefined;
-        try { ledger = this.store.manager.loadTaskState(operation.id, this.config.workspace).objective ?? undefined; } catch { /* fail closed below */ }
-        const state = goalStatus(operation, ledger);
-        return { id: operation.id, status: state.status, operation, ...(ledger ? { ledger } : {}), ...(state.reason ? { reason: state.reason } : {}) };
-      }
-    });
+    return this.store.list().filter(isGoal).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map((operation) => this.result(operation));
   }
 
   resolveTarget(id?: string): DurableOperationState {
@@ -261,15 +237,31 @@ export class GoalOrchestrator {
     return usage;
   }
 
+  /**
+   * Status of a goal. When another process holds the driver lock the goal is read without it (nothing is folded or
+   * written) and reported as driven by that process: reading never fails because a driver is working.
+   */
   private result(operation: DurableOperationState): GoalResult {
-    const release = this.store.acquire(operation.id);
+    let release: (() => void) | undefined;
+    try { release = this.store.acquire(operation.id); }
+    catch (error) {
+      if (!(error instanceof OperationLockedError)) throw error;
+    }
     try {
       const fresh = this.store.load(operation.id);
-      const ledger = foldUnitLedgers(fresh, this.store, this.config.workspace);
+      let ledger: ObjectiveLedger | undefined;
+      if (release) ledger = foldUnitLedgers(fresh, this.store, this.config.workspace);
+      else {
+        try { ledger = this.store.manager.loadTaskState(operation.id, this.config.workspace).objective ?? undefined; } catch { /* fail closed: goalStatus reports the missing ledger */ }
+      }
       const state = goalStatus(fresh, ledger);
-      return { id: fresh.id, status: state.status, operation: fresh, usage: this.usage(fresh), ...(ledger ? { ledger } : {}), ...(state.reason ? { reason: state.reason } : {}) };
+      const holder = release ? undefined : this.store.activeLock(operation.id);
+      const reason = [state.reason, holder ? `Driven by pid ${holder.pid} on ${holder.host ?? "unknown host"}; this is a read-only view.` : undefined].filter(Boolean).join(" ");
+      // Nested operation.status must match result.status for API consumers (derived pause; nothing written).
+      const view = withDerivedPause(fresh);
+      return { id: fresh.id, status: state.status, operation: view, usage: this.usage(view), ...(ledger ? { ledger } : {}), ...(reason ? { reason } : {}) };
     } finally {
-      release();
+      release?.();
     }
   }
 
@@ -289,10 +281,7 @@ export class GoalOrchestrator {
       maxInProcessWaitMs: this.options.maxInProcessWaitMs,
     });
     const operation = team.plan("full", text);
-    const bootId = currentBootId();
-    if (bootId) operation.activeBootId = bootId;
-    operation.activePid = process.pid;
-    operation.activeHost = os.hostname();
+    stampDriver(operation);
     const reviewer = operation.units.find((unit) => unit.id === "review");
     if (!reviewer || !operation.units.some((unit) => unit.id === "verify")) throw new Error("goal workflow is missing its verification or independent review unit");
     // Independent acceptance review must inspect the post-verification candidate, including any test changes.
@@ -361,10 +350,10 @@ export class GoalOrchestrator {
     let unchanged = false;
     try {
       operation = this.store.load(selected.id);
-      const stale = staleDriverReason(operation);
+      const stale = staleDriver(operation);
       if (stale) {
         operation.status = "PAUSED";
-        operation.pauseReason = stale;
+        operation.pauseReason = operation.pauseReason?.startsWith(STALE_PAUSE_PREFIX) ? operation.pauseReason : stale.reason;
         delete operation.wait;
         delete operation.blocked;
         this.store.save(operation);

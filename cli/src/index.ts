@@ -34,6 +34,7 @@ import { describeTarget, registerProviderCommands } from "./provider_cli.js";
 import { registerHookCommands } from "./hooks_cli.js";
 import { registerTriggerCommands } from "./triggers_cli.js";
 import { registerPluginPackageCommands } from "./plugins_cli.js";
+import { printable } from "./core/printable.js";
 import { UsageLedger } from "./usage.js";
 import { DOCTOR_EXIT, DOCTOR_SCHEMA_VERSION, doctorExitCode, renderDoctorJson, renderDoctorText, runDoctor, runRepairs } from "./doctor.js";
 import { promptWorkspaceTrust } from "./startup_trust.js";
@@ -1093,27 +1094,85 @@ program
 {
   const pluginsCmd = program
     .command("plugins")
-    .description("Loaded JS plugins, or installed packages (install|list-installed|remove|verify)")
+    .description("Loaded JS plugins, package install (HK-2), or workspace plugin trust (HK-3)");
+  pluginsCmd
+    .command("list")
+    .description("List loaded custom plugins and lifecycle hooks")
     .option("-w, --workspace <path>", "Workspace directory")
+    .option("-j, --json", "Print as JSON")
     .action(async (options: any) => {
       const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
       const pm = new PluginManager(ws);
       const { untrustedWorkspaceExtensions } = await import("./workspace_trust.js");
       for (const file of untrustedWorkspaceExtensions(ws).filter((f) => !/(^|[\\/])\.?mcp\.json$/.test(f))) {
-        console.log(pc.yellow(`Not loaded (workspace not trusted; run \`nexus trust\`): ${file}`));
+        console.log(pc.yellow(`Not loaded (workspace not trusted; run \`nexus trust\`): ${printable(file)}`));
       }
       await pm.loadPlugins();
       const plugins = pm.listPlugins();
-      if (plugins.length === 0) {
-        console.log(pc.yellow("\nNo active plugins found in ~/.nexus/plugins/ or ~/.config/nexus/plugins/\n"));
-        return;
+      const records = pm.getPluginTrustRecords();
+      const { workspaceManifestPlugins } = await import("./plugins_cli.js");
+      const manifestPlugins = workspaceManifestPlugins(ws).map((p) => ({ name: p.name, dir: p.dir, status: p.status, ...(p.problem ? { problem: p.problem } : {}), ...(p.changed ? { changed: p.changed } : {}), ...(p.digest ? { treeSha256: p.digest } : {}), hooks: p.hooks.flatMap((file) => [...(file.hooks["pre-tool"] ?? []), ...(file.hooks["post-tool"] ?? [])].map((hook) => hook.name)), skills: p.skills, files: p.files.map((file) => file.path) }));
+      if (options.json) { console.log(JSON.stringify({ plugins, records, manifestPlugins }, null, 2)); return; }
+      if (plugins.length === 0) console.log(pc.yellow("\nNo active plugins loaded.\n"));
+      else {
+        console.log(pc.bold(pc.cyan("\n=== Loaded Custom Plugins ===\n")));
+        for (const p of plugins) console.log(`• ${pc.bold(pc.green(printable(p.name, 80)))}: ${printable(p.description)} (custom tools: ${p.customToolCount})\n`);
       }
-      console.log(pc.bold(pc.cyan("\n=== Loaded Custom Plugins ===\n")));
-      for (const p of plugins) {
-        console.log(`• ${pc.bold(pc.green(p.name))}: ${p.description} (custom tools: ${p.customToolCount})\n`);
+      if (manifestPlugins.length) {
+        console.log(pc.bold(pc.cyan("=== Workspace manifest plugins (command hooks) ===\n")));
+        for (const p of manifestPlugins) {
+          console.log(`• ${p.status === "active" ? pc.green(p.status) : pc.yellow(p.status)} ${pc.bold(printable(p.name, 80))} ${pc.dim(printable(p.dir))}${p.treeSha256 ? pc.dim(` tree sha256 ${p.treeSha256}`) : ""}`);
+          if (p.problem) console.log(`  ${pc.dim(printable(p.problem))}`);
+          if (p.changed) console.log(`  ${pc.dim(`changed since approval: ${printable(p.changed.join(", "))}`)}`);
+          if (p.hooks.length) console.log(`  hooks: ${printable(p.hooks.join(", "))}`);
+          if (p.status === "not_approved" || p.status === "changed") console.log(`  ${pc.dim(`review it, then run \`nexus plugins trust ${printable(path.relative(ws, p.dir))}\` in a terminal`)}`);
+        }
+        console.log();
+      }
+      const blocked = records.filter((r) => r.status !== "global" && r.status !== "trusted");
+      if (blocked.length) {
+        console.log(pc.bold(pc.yellow("=== Plugins not active ===\n")));
+        for (const r of blocked) {
+          console.log(`• ${pc.yellow(r.status)} ${printable(r.path)}${r.sha256 ? pc.dim(` sha256 ${r.sha256}`) : ""}`);
+          if (r.reason) console.log(`  ${pc.dim(printable(r.reason, 600))}`);
+        }
+        console.log();
       }
     });
+  pluginsCmd
+    .command("trust <pluginPath>")
+    .description("Approve a workspace plugin file by its exact bytes, or a workspace manifest plugin's directory by its tree (a change needs a new approval)")
+    .option("-w, --workspace <path>", "Workspace directory")
+    .option("--sha256 <hex>", "Approve only if the file has this SHA-256 (you are still asked; approving needs a terminal)")
+    .action(async (pluginPath: string, options: any) => {
+      const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
+      const { trustWorkspacePlugin } = await import("./plugins_cli.js");
+      const code = await trustWorkspacePlugin(ws, pluginPath, { sha256: options.sha256 }, {
+        interactive: () => Boolean(process.stdin.isTTY) && Boolean(process.stdout.isTTY),
+        confirm: async (question) => {
+          const readline = await import("node:readline/promises");
+          const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+          try { return /^y(es)?$/i.test((await rl.question(question)).trim()); } finally { rl.close(); }
+        },
+      });
+      if (code) process.exitCode = code;
+    });
+  pluginsCmd
+    .command("revoke <pluginPath>")
+    .description("Withdraw approval for a workspace plugin")
+    .option("-w, --workspace <path>", "Workspace directory")
+    .action(async (pluginPath: string, options: any) => {
+      const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
+      const { revokeWorkspacePlugin } = await import("./plugins_cli.js");
+      const abs = path.resolve(ws, pluginPath);
+      console.log(revokeWorkspacePlugin(ws, pluginPath) ? `No longer approved: ${abs}` : `There was no approval for ${abs}.`);
+    });
   registerPluginPackageCommands(pluginsCmd);
+  // default: list
+  pluginsCmd.action(async (_opts: any, cmd: any) => {
+    const list = cmd.commands.find((c: any) => c.name() === "list");
+    if (list) await list.parseAsync(["node", "nexus", "plugins", "list", ...process.argv.slice(3).filter((a: string) => a !== "list")]);
+  });
 }
 
 program

@@ -13,6 +13,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { readExtensionTrust } from "../src/core/content_trust.js";
+import { trustedProgram } from "../src/core/hooks.js";
 import { isInteractiveTerminal, registerHookCommands } from "../src/hooks_cli.js";
 
 const CLI_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -200,10 +201,10 @@ test("approve refuses a missing, invalid or unpinnable file; a change after appr
   // What cannot be pinned cannot be approved: a shell string, a program that is not there, a path or link out.
   fs.symlinkSync("/bin/true", path.join(workspace, "linked-out"));
   const unpinnable: Array<[unknown, RegExp]> = [
-    ["./check.sh", /a project hook's command must be an array \(it is run without a shell\), so that the files it runs can be pinned/],
+    ["./check.sh", /a project hook's command must be an array \(it is run without a shell\)/],
     [["./not-there.sh"], /\.\/not-there\.sh does not exist/],
     [["../outside.sh"], /\.\.\/outside\.sh is a relative path that leaves the workspace/],
-    [["./linked-out"], /\.\/linked-out is a symbolic link out of the workspace/],
+    [["./linked-out"], /"\.\/linked-out" is a symbolic link out of the workspace/],
   ];
   for (const [command, pattern] of unpinnable) {
     projectHooks(guard(command as string));
@@ -314,85 +315,279 @@ test("a person can be asked only when standard input and standard output are bot
   assert.equal(isInteractiveTerminal({}, {}), false);
 });
 
-test("a project command that refers into the workspace by anything but a pinned file cannot be approved", async () => {
+const RULE = /A project hook is either a script file in the workspace run directly \(\["\.\/guard\.sh"\]\), or one of sh, bash, dash, zsh, node, python3, perl, ruby followed by a script file in the workspace\. Any other command belongs in your own hooks file \(~\/\.config\/nexus\/hooks\.json\)/;
+
+test("a project command outside the allowlist cannot be approved and lists as invalid", async () => {
+  workspaceScript("g.sh");
   workspaceScript("guard.sh");
+  workspaceScript("guard.js", "// js");
   workspaceScript("pre.js", "// preload");
   workspaceScript("hookdir/index.js", "// entry");
+  fs.writeFileSync(path.join(workspace, "package.json"), '{"scripts":{"x":"sh g.sh"}}');
   fs.symlinkSync("nowhere", path.join(workspace, "dangling"));
+  const NOT_LISTED = /is not a script in the workspace and not one of the interpreters a project hook may name/;
+  const OPTION = /is not one a project hook may pass to \S+ before its script/;
   const refused: Array<[string[], RegExp]> = [
-    // The four forms of the review, each of which ran replaced content after an approval.
-    [["node", "hookdir"], /argument "hookdir": "hookdir" is a directory \(or not a regular file\) in the workspace, whose content cannot be pinned/],
-    [["sh", "-c", "./guard.sh x"], /argument "-c" gives sh code, or the name of code, on the command line/],
-    [["bash", "-c", "exec ./guard.sh"], /argument "-c" gives bash code/],
-    [["node", "--require", "dotenv/config", "guard.js"], /argument "--require" loads "dotenv\/config", which is not a file in the workspace that can be pinned/],
-    // Their relatives.
-    [["node", "--require=hookdir", "x"], /argument "--require=hookdir" loads "hookdir", which is not a file/],
-    [["node", "-r", "./missing.js"], /argument "-r" loads "\.\/missing\.js"/],
-    [["node", "--import=some-module"], /loads "some-module"/],
-    [["node", "-e", "require('./pre.js')"], /argument "-e" gives node code/],
-    [["node", "-pe", "1"], /argument "-pe" gives node code/],
-    [["node", "--eval=1"], /argument "--eval=1" gives node code/],
-    [["node", "--print", "1"], /argument "--print" gives node code/],
-    [["bash", "-lc", "./guard.sh"], /argument "-lc" gives bash code/],
-    [["python3", "-m", "hookdir"], /argument "-m" gives python3 code/],
-    [["python3.12", "-cimport os"], /argument "-cimport os" gives python3\.12 code/],
-    [["/usr/bin/perl", "-Mstrict", "x"], /argument "-Mstrict" gives \/usr\/bin\/perl code/],
-    [["deno", "eval", "1"], /argument "eval" gives deno code/],
-    [["env", "sh", "./guard.sh"], /env only starts another program, which hides what the hook runs/],
-    [["/usr/bin/env", "node", "guard.js"], /only starts another program/],
-    [["busybox", "sh", "./guard.sh"], /only starts another program/],
-    // Nested launchers: rules apply past argv[0], otherwise these approved with files:[] and ran replaced code.
-    [["nice", "bash", "-c", "exec ./guard.sh"], /nice only starts another program|argument "-c" gives bash code/],
-    [["timeout", "5", "python3", "-c", "open('pwned','w').write('x')"], /timeout only starts another program|argument "-c" gives python3 code/],
-    [["nohup", "node", "-e", "require('fs').writeFileSync('pwned','x')"], /nohup only starts another program|argument "-e" gives node code/],
-    [["stdbuf", "-oL", "bash", "-c", "./guard.sh"], /stdbuf only starts another program|argument "-c" gives bash code/],
-    [["ionice", "-c2", "bash", "-c", "exec ./guard.sh"], /ionice only starts another program|argument "-c" gives bash code/],
-    // An unknown prefix still cannot hide an interpreter's inline code.
-    [["unshare", "--fork", "bash", "-c", "exec ./guard.sh"], /argument "-c" gives bash code/],
-    [["/bin/cat", "."], /argument "\.": "\." is a directory/],
-    [["/bin/cat", "--file=hookdir"], /argument "--file=hookdir": "hookdir" is a directory/],
-    [["/bin/cat", "-fhookdir"], /argument "-fhookdir": "hookdir" is a directory/],
-    [["/bin/cat", path.join(workspace, "hookdir")], /is a directory/],
-    [["/bin/cat", "dangling"], /argument "dangling": "dangling" is in the workspace and cannot be read as a regular file/],
+    // The commands of the hostile check: each was approved with no file covered, and then ran edited workspace code.
+    [["script", "-qec", "sh g.sh", "/dev/null"], NOT_LISTED],
+    [["awk", 'BEGIN{system("sh g.sh")}'], NOT_LISTED],
+    [["node", "--run", "x"], /option "--run" is not one a project hook may pass to node before its script/],
+    [["npm", "run", "x"], NOT_LISTED],
+    [["npx", "x"], NOT_LISTED],
+    // Shells and interpreters that are not on the list, with and without inline code.
+    [["ash", "g.sh"], NOT_LISTED], [["csh", "g.sh"], NOT_LISTED], [["tcsh", "g.sh"], NOT_LISTED], [["mksh", "g.sh"], NOT_LISTED], [["rbash", "g.sh"], NOT_LISTED],
+    [["ksh", "g.sh"], NOT_LISTED], [["fish", "g.sh"], NOT_LISTED], [["php", "g.sh"], NOT_LISTED], [["deno", "run", "guard.js"], NOT_LISTED], [["bun", "guard.js"], NOT_LISTED],
+    [["lua5.4", "-e", "os.execute('sh g.sh')"], NOT_LISTED],
+    [["Rscript", "-e", "system('sh g.sh')"], NOT_LISTED],
+    // Programs that start another program.
+    [["su", "-c", "sh g.sh"], NOT_LISTED], [["runuser", "-c", "sh g.sh"], NOT_LISTED], [["sudo", "sh", "g.sh"], NOT_LISTED],
+    [["env", "sh", "g.sh"], NOT_LISTED], [["/usr/bin/env", "node", "guard.js"], NOT_LISTED], [["busybox", "sh", "g.sh"], NOT_LISTED],
+    [["xargs", "sh", "g.sh"], NOT_LISTED], [["nice", "bash", "-c", "sh g.sh"], NOT_LISTED], [["timeout", "5", "bash", "-c", "sh g.sh"], NOT_LISTED],
+    [["setsid", "sh", "g.sh"], NOT_LISTED], [["flock", "x", "sh", "g.sh"], NOT_LISTED], [["unshare", "sh", "g.sh"], NOT_LISTED],
+    [["make", "x"], NOT_LISTED], [["git", "status"], NOT_LISTED], [["jq", "."], NOT_LISTED],
+    // Any other installed program, however harmless: a project file does not get to choose programs.
+    [["/usr/bin/true"], NOT_LISTED], [["/bin/cat", "guard.sh"], NOT_LISTED], [["true"], NOT_LISTED],
+    // A listed interpreter with anything but its harmless options before the script.
+    [["sh", "-c", "./guard.sh x"], OPTION], [["bash", "-c", "exec ./guard.sh"], OPTION], [["sh", "--", "-c", "sh g.sh"], OPTION],
+    [["bash", "-ec", "sh g.sh"], OPTION], [["bash", "-lc", "./guard.sh"], OPTION], [["bash", "--command=sh g.sh"], OPTION],
+    [["bash", "--rcfile", "g.sh", "guard.sh"], OPTION], [["bash", "--init-file=g.sh", "guard.sh"], OPTION], [["bash", "-i", "guard.sh"], OPTION],
+    [["sh", "-s", "guard.sh"], OPTION], [["zsh", "-c", "x"], OPTION], [["dash", "-c", "x"], OPTION],
+    [["node", "-e", "require('./pre.js')"], OPTION], [["node", "--eval=1"], OPTION], [["node", "-p", "1"], OPTION], [["node", "--print", "1"], OPTION],
+    [["node", "--require", "./pre.js", "guard.js"], OPTION], [["node", "--require=./pre.js", "guard.js"], OPTION], [["node", "-r", "pre.js", "guard.js"], OPTION],
+    [["node", "--import=./pre.js", "guard.js"], OPTION], [["node", "--loader", "./pre.js", "guard.js"], OPTION], [["node", "--experimental-loader=./pre.js", "guard.js"], OPTION],
+    [["node", "--env-file=pre.js", "guard.js"], OPTION], [["node", "--test"], OPTION], [["node", "--watch", "guard.js"], OPTION], [["node", "-"], OPTION],
+    [["python3", "-c", "import os"], OPTION], [["python3", "-m", "hookdir"], OPTION], [["python3.12", "-cimport os"], OPTION], [["python", "-i", "guard.sh"], OPTION],
+    [["perl", "-e", "system('sh g.sh')"], OPTION], [["perl", "-Mstrict", "guard.sh"], OPTION], [["perl", "-I.", "guard.sh"], OPTION],
+    [["ruby", "-e", "system('sh g.sh')"], OPTION], [["ruby", "-r./pre", "guard.sh"], OPTION],
+    // A listed interpreter whose script is not a regular file of the workspace.
+    [["node", "hookdir"], /"hookdir" is a directory \(or not a regular file\) in the workspace, whose content cannot be pinned/],
+    [["node", "."], /"\." is a directory/],
+    [["bash", "not-there.sh"], /"not-there\.sh" after bash is not an existing file in the workspace/],
+    [["bash", "/etc/profile"], /"\/etc\/profile" after bash is not an existing file in the workspace/],
+    [["bash", "dangling"], /"dangling" is in the workspace and cannot be read as a regular file/],
+    [["bash"], /bash is not followed by a script file/], [["bash", "-e"], /bash is not followed by a script file/],
+    // After the script: a workspace path that cannot be pinned.
+    [["./guard.sh", "hookdir"], /argument "hookdir": "hookdir" is a directory/],
+    [["bash", "guard.sh", "--dir=hookdir"], /argument "--dir=hookdir": "hookdir" is a directory/],
+    [["bash", "guard.sh", "-dhookdir"], /argument "-dhookdir": "hookdir" is a directory/],
+    [["./guard.sh", "dangling"], /argument "dangling": "dangling" is in the workspace and cannot be read as a regular file/],
   ];
   for (const [command, pattern] of refused) {
     projectHooks(guard(command));
     const answer = await nexusHooks(["approve", "-w", workspace], true);
     assert.equal(answer.exitCode, 1, JSON.stringify(command));
     assert.match(answer.out, pattern, JSON.stringify(command));
-    assert.match(answer.out, /A project hook names a program and files; inline code is not accepted\. Put the logic in one script file and name it directly/, JSON.stringify(command));
+    assert.match(answer.out, RULE, JSON.stringify(command));
     assert.deepEqual(answer.asked, [], JSON.stringify(command));
-    assert.equal((await listJson()).sources[1].status, "invalid", JSON.stringify(command));
+    const listing = (await listJson()).sources[1];
+    assert.equal(listing.status, "invalid", JSON.stringify(command));
+    assert.equal(listing.covered_files, undefined, JSON.stringify(command));
   }
   assert.deepEqual(readExtensionTrust().entries, []);
 
-  // The operator's own file is not held to this: it is not pinned, and its author is the operator.
-  operatorHooks(guard(["sh", "-c", "exit 0"]));
-  assert.equal((await listJson()).sources[0].status, "active");
+  // The operator's own file is not held to this: its author is the operator.
+  for (const command of [["sh", "-c", "exit 0"], ["script", "-qec", "true", "/dev/null"], ["/usr/bin/true"]]) {
+    operatorHooks(guard(command));
+    assert.equal((await listJson()).sources[0].status, "active", JSON.stringify(command));
+  }
 });
 
-test("ordinary project commands are accepted, and every workspace file they name is covered", async () => {
+test("an interpreter is taken only from a trusted directory, never from the workspace, the current directory or a temporary one", async () => {
+  workspaceScript("g.sh");
+  // Files in the workspace that carry interpreter names.
+  for (const name of ["bash", "python3.99", "bin/bash", "bin/python3.99"]) workspaceScript(name, "exit 0");
+  const lookup = (name: string, searchPath: string) => trustedProgram(name, workspace, { searchPath });
+  const NOT_FOUND = /was not found in a trusted directory of PATH/;
+  const paths = ["/usr/bin::/bin", ".:/usr/bin", "/usr/bin:.", "bin:/usr/bin", `${workspace}:/usr/bin`, `${workspace}/bin:/usr/bin`, `/usr/bin:${workspace}/bin`, ":", "", "/proc/self/cwd:/usr/bin", `/usr/bin/../..${workspace}/bin`];
+  for (const searchPath of paths) {
+    // A name only the workspace has is not found, whatever PATH says.
+    const missing = lookup("python3.99", searchPath);
+    assert.match((missing as any).problem ?? "", NOT_FOUND, searchPath);
+    // A name the system has resolves to the system's, in a trusted directory.
+    const found = lookup("bash", searchPath) as { path: string };
+    assert.ok(found.path && path.isAbsolute(found.path) && !fs.realpathSync(found.path).startsWith(workspace), `${searchPath}: ${JSON.stringify(found)}`);
+    assert.ok(["/usr/local/bin", "/usr/bin", "/bin"].includes(path.dirname(found.path)), `${searchPath}: ${found.path}`);
+  }
+
+  // The same through the command of a project hook, with the process's own PATH hostile.
+  const previous = process.env.PATH;
+  process.env.PATH = `.:${workspace}:${workspace}/bin::/usr/bin:/bin`;
+  try {
+    projectHooks(guard(["python3.99", "g.sh"]));
+    const missing = (await listJson()).sources[1];
+    assert.equal(missing.status, "invalid");
+    assert.match(missing.problem, /python3\.99 was not found in a trusted directory of PATH \(one that belongs to root or to you, that others cannot write, and that is not the workspace, the current directory, a temporary directory, \/proc or \/dev\)/);
+    projectHooks(guard(["bash", "g.sh"]));
+    assert.equal((await listJson()).sources[1].status, "not_approved", "the system's bash is found past the hostile entries");
+  } finally {
+    process.env.PATH = previous;
+  }
+
+  // An absolute path is held to the same test: /proc, /dev, temporary directories and the workspace are refused.
+  const tmp = fs.mkdtempSync("/tmp/nexus-hk1-bash-");
+  const shm = fs.mkdtempSync("/dev/shm/nexus-hk1-bash-");
+  try {
+    for (const dir of [tmp, shm]) fs.copyFileSync("/bin/sh", path.join(dir, "bash"));
+    for (const program of ["/proc/self/cwd/bash", "/proc/self/root/usr/bin/bash", "/dev/fd/0/bash", path.join(tmp, "bash"), path.join(shm, "bash"), "/usr/bin/../../tmp/" + path.basename(tmp) + "/bash", "/nonexistent/bash"]) {
+      projectHooks(guard([program, "g.sh"]));
+      const listing = (await listJson()).sources[1];
+      assert.equal(listing.status, "invalid", program);
+      assert.match(listing.problem, /is not a program in a trusted directory \(one that belongs to root or to you, that others cannot write, and that is not the workspace, a temporary directory, \/proc or \/dev\)/, program);
+    }
+    projectHooks(guard(["/bin/sh", "g.sh"]));
+    assert.equal((await listJson()).sources[1].status, "not_approved");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(shm, { recursive: true, force: true });
+  }
+});
+
+test("a trusted directory belongs to root or the user and is closed to others, and so is the program in it", () => {
+  // Under a scratch directory, with the "temporary directory" rule lifted so that owner and mode are what decide.
+  const dir = path.join(scripts, "tools");
+  fs.mkdirSync(dir, { mode: 0o755 });
+  fs.chmodSync(dir, 0o755);
+  fs.copyFileSync("/bin/sh", path.join(dir, "sh"));
+  fs.chmodSync(path.join(dir, "sh"), 0o755);
+  const lookup = (name = "sh") => trustedProgram(name, workspace, { searchPath: dir, untrustedRoots: ["/proc"] }) as { path?: string; problem?: string };
+  const absolute = () => trustedProgram(path.join(dir, "sh"), workspace, { untrustedRoots: ["/proc"] }) as { path?: string; problem?: string };
+  assert.equal(lookup().path, path.join(fs.realpathSync(dir), "sh"), "the fixture: a closed directory of the user is trusted");
+  assert.equal(absolute().path, path.join(fs.realpathSync(dir), "sh"));
+  const fallback = lookup("sh").path;
+  // A relative PATH entry is never used, even one that (from this process's directory) leads to a trusted directory:
+  // for the hook it would mean a directory of the workspace.
+  fs.copyFileSync("/bin/sh", path.join(dir, "python3.99"));
+  const byAbsolute = trustedProgram("python3.99", workspace, { searchPath: dir, untrustedRoots: ["/proc"] }) as { path?: string };
+  assert.equal(byAbsolute.path, path.join(fs.realpathSync(dir), "python3.99"), "the fixture: found by the absolute entry");
+  const byRelative = trustedProgram("python3.99", workspace, { searchPath: path.relative(process.cwd(), dir), untrustedRoots: ["/proc"] }) as { problem?: string };
+  assert.match(byRelative.problem ?? "", /was not found in a trusted directory of PATH/);
+  fs.rmSync(path.join(dir, "python3.99"));
+
+  for (const mode of [0o775, 0o757, 0o777]) {
+    fs.chmodSync(dir, mode);
+    assert.notEqual(lookup().path, fallback, `a directory of mode ${mode.toString(8)} is skipped`);
+    assert.match(absolute().problem ?? "", /is not a program in a trusted directory/, mode.toString(8));
+  }
+  fs.chmodSync(dir, 0o755);
+  for (const mode of [0o775, 0o757]) {
+    fs.chmodSync(path.join(dir, "sh"), mode);
+    assert.match(absolute().problem ?? "", /is not a program in a trusted directory/, `a program of mode ${mode.toString(8)}`);
+  }
+  fs.chmodSync(path.join(dir, "sh"), 0o644);
+  assert.match(absolute().problem ?? "", /is not a program in a trusted directory/, "not executable");
+
+  // A link in a trusted directory to a file in the workspace, or in a directory others can write.
+  const planted = workspaceScript("planted", "exit 0");
+  fs.rmSync(path.join(dir, "sh"));
+  fs.symlinkSync(planted, path.join(dir, "sh"));
+  assert.match(absolute().problem ?? "", /is not a program in a trusted directory/);
+  const open = path.join(scripts, "open");
+  fs.mkdirSync(open);
+  fs.chmodSync(open, 0o777);
+  fs.copyFileSync("/bin/sh", path.join(open, "sh"));
+  fs.rmSync(path.join(dir, "sh"));
+  fs.symlinkSync(path.join(open, "sh"), path.join(dir, "sh"));
+  assert.match(absolute().problem ?? "", /is not a program in a trusted directory/);
+  // With the rule in place, the scratch directory is refused as a temporary one whatever its mode.
+  fs.rmSync(path.join(dir, "sh"));
+  fs.copyFileSync("/bin/sh", path.join(dir, "sh"));
+  assert.match((trustedProgram(path.join(dir, "sh"), workspace) as any).problem ?? "", /is not a program in a trusted directory/);
+});
+
+test("the #! line of a script a project hook runs must name a trusted, listed interpreter by absolute path", async () => {
+  workspaceScript("evil", "exit 0");
+  const script = (first: string | null) => fs.writeFileSync(path.join(workspace, "hook"), `${first === null ? "" : `${first}\n`}exit 0\n`, { mode: 0o755 });
+  const refused: Array<[string | null, RegExp]> = [
+    ["#!./evil", /hook: its #! line names "\.\/evil", which is not an absolute path \(a relative one is looked up in the workspace\)/],
+    ["#!evil", /which is not an absolute path/],
+    ["#!/proc/self/cwd/evil", /hook: its #! line names \/proc\/self\/cwd\/evil, which is not one of the interpreters a project hook may use/],
+    ["#!/proc/self/cwd/bash", /hook: its #! line: \/proc\/self\/cwd\/bash is not a program in a trusted directory/],
+    [`#!${path.join(workspace, "evil")}`, /which is not one of the interpreters/],
+    ["#!/tmp/bash", /its #! line: \/tmp\/bash is not a program in a trusted directory/],
+    ["#!/usr/bin/env bash", /hook: its #! line names \/usr\/bin\/env, which is not one of the interpreters a project hook may use \(env finds the real program on PATH\)/],
+    ["#!/usr/bin/env -S bash -c evil", /env finds the real program on PATH/],
+    ["#!/usr/bin/awk -f", /names \/usr\/bin\/awk, which is not one of the interpreters/],
+    ["#!/bin/sh -c ./evil", /its #! line passes "-c \.\/evil" to sh, which is not one harmless option of it/],
+    ["#!/bin/sh -c", /passes "-c" to sh/],
+    ["#!/bin/sh -e -u", /passes "-e -u" to sh/],
+    ["#!", /names "", which is not an absolute path/],
+    [null, /hook: it has no #! line, so it cannot be run directly\. Start it with an absolute interpreter path such as #!\/bin\/sh or #!\/usr\/bin\/python3, or name the interpreter in the command \(\["bash", "\.\/guard\.sh"\]\)/],
+    [`#!/bin/sh ${"x".repeat(300)}`, /its #! line is not a complete line of at most 256 bytes/],
+  ];
+  for (const [first, pattern] of refused) {
+    script(first);
+    projectHooks(guard(["./hook"]));
+    const answer = await nexusHooks(["approve", "-w", workspace], true);
+    assert.equal(answer.exitCode, 1, String(first));
+    assert.match(answer.out, pattern, String(first));
+    assert.deepEqual(answer.asked, [], String(first));
+    assert.equal((await listJson()).sources[1].status, "invalid", String(first));
+  }
+  // Bytes the kernel takes as part of the path, which a looser reader takes for blank space: with a directory of that
+  // name in the workspace, the kernel would start a workspace file.
+  const CONTROL = /hook: its #! line contains a control or non-ASCII character/;
+  for (const first of ["#!\f/bin/sh", "#!\r/bin/sh", "#!\v/bin/sh", "#!\xa0/bin/sh", "#!/bin/sh\r", "#!/bin/sh \f-e", "#! \f/bin/sh", "#!/bin/sh\x7f", "#!\x00/bin/sh", "#!\x1b/bin/sh", "#!/bin/sh \u00e9", "#!\u2028/bin/sh"]) {
+    fs.writeFileSync(path.join(workspace, "hook"), Buffer.concat([Buffer.from(first, first.includes("\u2028") || first.includes("\u00e9") ? "utf8" : "latin1"), Buffer.from("\nexit 0\n")]), { mode: 0o755 });
+    projectHooks(guard(["./hook"]));
+    const listing = (await listJson()).sources[1];
+    assert.equal(listing.status, "invalid", JSON.stringify(first));
+    assert.match(listing.problem, CONTROL, JSON.stringify(first));
+  }
+  for (const first of ["#!/bin/sh", "#! /bin/sh", "#!\t/bin/sh", "#! \t /bin/sh\t-eu \t", "#!/bin/sh -eu", "#!/bin/sh\t-e", "#!/bin/bash --posix", "#!/usr/bin/bash", "#!/bin/sh   "]) {
+    script(first);
+    projectHooks(guard(["./hook"]));
+    assert.equal((await listJson()).sources[1].status, "not_approved", first);
+  }
+
+  // After an explicit shell, node or python the line is a comment: nothing acts on it.
+  for (const first of ["#!/usr/bin/env bash", "#!./evil", null]) {
+    script(first);
+    projectHooks(guard(["bash", "./hook"]));
+    assert.equal((await listJson()).sources[1].status, "not_approved", `bash ${first}`);
+  }
+  // perl starts the program the line names, so there the line is held to the rule (when perl is installed at all).
+  if (!("problem" in trustedProgram("perl", workspace))) {
+    for (const [first, status] of [["#!./evil", "invalid"], ["#!/usr/bin/env perl", "invalid"], ["#!/bin/sh", "not_approved"], [null, "not_approved"]] as const) {
+      script(first);
+      projectHooks(guard(["perl", "./hook"]));
+      assert.equal((await listJson()).sources[1].status, status, `perl ${first}`);
+    }
+  }
+});
+
+test("the two accepted forms, and every workspace file they name is covered", async () => {
   workspaceScript("guard.sh");
   workspaceScript("guard.js", "// js");
+  workspaceScript("guard.py", "pass");
   workspaceScript("scripts/guard.js", "// js");
-  workspaceScript("pre.js", "// preload");
   workspaceScript("rules.txt", "rule");
   const accepted: Array<[string[], string[]]> = [
     [["./guard.sh"], ["guard.sh"]],
+    [[path.join(workspace, "guard.sh")], ["guard.sh"]],
+    [["scripts/../guard.sh"], ["guard.sh"]],
     [["bash", "./guard.sh"], ["guard.sh"]],
+    [["/bin/sh", "./guard.sh"], ["guard.sh"]],
+    [["sh", "-eu", "guard.sh"], ["guard.sh"]],
+    [["bash", "-eux", "--posix", "--norc", "--noprofile", "guard.sh"], ["guard.sh"]],
     [["node", "guard.js"], ["guard.js"]],
-    [["node", "scripts/guard.js", "--flag"], ["scripts/guard.js"]],
-    [["/usr/bin/true"], []],
-    [["/usr/bin/true", "--level", "3", "not-a-file", "../outside", "/etc/hostname"], []],
-    [["node", "--require=./pre.js", "guard.js"], ["guard.js", "pre.js"]],
-    [["node", "--require", "./pre.js", "guard.js"], ["guard.js", "pre.js"]],
-    [["node", "-r", "pre.js", "guard.js", "--rules=rules.txt"], ["guard.js", "pre.js", "rules.txt"]],
-    [["/usr/bin/grep", "-q", "--file=rules.txt", "-frules.txt"], ["rules.txt"]],
-    [["./guard.sh", "-c", "anything"], ["guard.sh"]],
+    [["node", "--no-warnings", "scripts/guard.js", "--flag"], ["scripts/guard.js"]],
+    [["python3", "-I", "-B", "guard.py"], ["guard.py"]],
+    [["python3.12", "-Bu", "guard.py"], ["guard.py"]],
+    [["perl", "-w", "guard.sh"], ["guard.sh"]],
+    [["ruby", "-w", "guard.sh"], ["guard.sh"]],
+    // After the script, arguments are the script's own: options of any spelling, and files that are pinned.
+    [["./guard.sh", "-c", "anything", "--eval=1", "not-a-file", "../outside", "/etc/hostname"], ["guard.sh"]],
+    [["bash", "guard.sh", "rules.txt", "--rules=rules.txt", "-frules.txt"], ["guard.sh", "rules.txt"]],
+    [["node", "guard.js", "--config", "scripts/guard.js"], ["guard.js", "scripts/guard.js"]],
   ];
   for (const [command, files] of accepted) {
     projectHooks(guard(command));
     const project = (await listJson()).sources[1];
+    // An interpreter this host does not have (in a trusted directory) is refused for that reason, and no other.
+    if (!command[0].includes("/") && "problem" in trustedProgram(command[0], workspace)) {
+      assert.match(project.problem ?? "", /was not found in a trusted directory of PATH/, JSON.stringify(command));
+      continue;
+    }
     assert.equal(project.status, "not_approved", `${JSON.stringify(command)}: ${project.problem ?? ""}`);
     assert.deepEqual((project.covered_files ?? []).map((file: any) => file.path), files, JSON.stringify(command));
   }

@@ -45,8 +45,9 @@ function agentFor(options: Partial<HookAgentOptions> = {}): AutonomousAgent {
 }
 /** A project hook that logs and refuses every write_file: whether it ran is visible both ways. */
 function projectDenyHook(reason = "project says no"): Record<string, unknown> {
-  const hook = loggingHook(scripts, "project.sh", log, `echo '${reason}' >&2\nexit 2`);
-  return { version: 1, hooks: { "pre-tool": [{ name: "project-guard", tools: ["write_file"], command: [hook] }] } };
+  // A project hook is a script of the workspace: anything else is refused for a project file.
+  loggingHook(repo, "project.sh", log, `echo '${reason}' >&2\nexit 2`);
+  return { version: 1, hooks: { "pre-tool": [{ name: "project-guard", tools: ["write_file"], command: ["./project.sh"] }] } };
 }
 const WRITE = { path: "out.txt", content: "x\n" };
 const hookNotices = () => notices.filter((notice) => /project hooks/.test(notice));
@@ -93,7 +94,7 @@ test("approved, it runs; one byte changed, it does not run again and the notice 
   assert.equal(changed.status, "COMPLETED", "the changed file is not in force");
   assert.equal(changed.hooks, undefined);
   assert.equal(runsOf(log).length, 1, "the program was not started again");
-  assert.deepEqual(hookNotices(), [`nexus: project hooks in ${file()} are not approved (.nexus/hooks.json changed since approval); review them and run \`nexus hooks approve\` in a terminal`]);
+  assert.deepEqual(hookNotices(), [`nexus: WARNING: project hooks in ${file()} are NO LONGER IN FORCE: .nexus/hooks.json changed since approval. They do not run. Review the change, then run \`nexus hooks approve\` in a terminal.`]);
 
   // Approving the new bytes puts it back in force. (A whole-second modification time, so it can be put back exactly.)
   fs.rmSync(path.join(repo, "out.txt"));
@@ -196,8 +197,8 @@ test("the approval is for one workspace path: the same file in a git worktree or
 });
 
 test("project hooks never run in read-only mode, approved or not", async () => {
-  const hook = loggingHook(scripts, "project.sh", log, "exit 0");
-  writeProjectHooks(repo, { version: 1, hooks: { "pre-tool": [{ name: "project-guard", tools: ["*"], command: [hook] }] } });
+  loggingHook(repo, "project.sh", log, "exit 0");
+  writeProjectHooks(repo, { version: 1, hooks: { "pre-tool": [{ name: "project-guard", tools: ["*"], command: ["./project.sh"] }] } });
   approveProjectHooks(repo);
   assert.equal((await dispatch(agentFor(), "read_file", { path: "a.txt" })).hooks.length, 1, "the fixture: it runs in a writable session");
 
@@ -222,8 +223,8 @@ test("a project file cannot remove or outvote the operator's hooks", async () =>
   const operatorHook = loggingHook(scripts, "operator.sh", operatorLog, `echo 'operator says no' >&2\nexit 2`);
   writeOperatorHooks({ version: 1, hooks: { "pre-tool": [{ name: "operator-guard", tools: ["write_file"], command: [operatorHook] }] } });
   // The same hook name, answering allow: a second source is added to the chain, it replaces nothing.
-  const allow = loggingHook(scripts, "project.sh", log, `printf '{"decision":"approve","hookSpecificOutput":{"permissionDecision":"allow"}}'`);
-  writeProjectHooks(repo, { version: 1, hooks: { "pre-tool": [{ name: "operator-guard", tools: ["*"], command: [allow] }] } });
+  loggingHook(repo, "project.sh", log, `printf '{"decision":"approve","hookSpecificOutput":{"permissionDecision":"allow"}}'`);
+  writeProjectHooks(repo, { version: 1, hooks: { "pre-tool": [{ name: "operator-guard", tools: ["*"], command: ["./project.sh"] }] } });
   approveProjectHooks(repo);
 
   const receipt = await dispatch(agentFor(), "write_file", WRITE);

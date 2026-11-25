@@ -199,7 +199,7 @@ test("a stale goal from an earlier host boot resumes paused with a visible reaso
     const orchestrator = new GoalOrchestrator(f.config, { store: f.store, executor: acceptingExecutor(), resources: f.resources });
     const listed = orchestrator.list().find((goal) => goal.id === operation.id);
     assert.equal(listed?.status, "PAUSED");
-    assert.match(listed?.reason ?? "", /earlier host boot|earlier process/);
+    assert.match(listed?.reason ?? "", /reboot|another host|no longer running/);
 
     const resumed = await orchestrator.resume(operation.id);
     // Completion still requires ledger closure/review/verifier; stale pause must not be silently auto-resumed.
@@ -232,7 +232,7 @@ test("a stale goal from an earlier same-boot process resumes paused with a visib
     const orchestrator = new GoalOrchestrator(f.config, { store: f.store, executor: acceptingExecutor(), resources: f.resources });
     const listed = orchestrator.list().find((goal) => goal.id === operation.id);
     assert.equal(listed?.status, "PAUSED");
-    assert.match(listed?.reason ?? "", /no longer running|earlier process/);
+    assert.match(listed?.reason ?? "", /no longer running/);
 
     const resumed = await orchestrator.resume(operation.id);
     assert.equal(resumed.operation.status, "COMPLETE");

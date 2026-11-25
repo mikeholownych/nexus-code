@@ -8,5 +8,20 @@
     "schema_version": 1,
     "schemaSha256": "910e96e745d70ca49b68746ae6f9a2f0b108cc7e38a6d19b6b133934935e4256",
     "note": "Same version: an approval in extension_trust.json gains the optional member `files` (ExtensionTrustFile: path and sha256), the workspace files a project's hooks run, whose bytes the approval now covers. Additive: a store written before it has no `files`, and such an approval of hooks that run workspace files no longer matches, so those hooks ask for approval again. The hooks file, the hook input and the hook output are unchanged."
+  },
+  {
+    "schema_version": 1,
+    "schemaSha256": "693f960812db2c115a1e547d16878793d8cdbfb1cfe14fe7144a125f2faafb14",
+    "note": "Same version: extension_trust.json adds the workspace-plugin kind so the existing approval store can authorize individual workspace plugin modules. Existing project-hooks records remain valid; the document shape and hook input/output are unchanged."
+  },
+  {
+    "schema_version": 1,
+    "schemaSha256": "ce59f5a2bca5a47ce671ee091b0a7b99269b042b1d49b70b08dbee44b0fc1fef",
+    "note": "Same version: an approval in extension_trust.json gains the optional member `loadFailed` (ExtensionLoadFailure: at, reason), written by the loader when approved content could not be loaded and removed when it loads, so that `nexus plugins list` and `nexus doctor` can say so without running the content. Additive: a store without it reads as before. The hooks file, the hook input and the hook output are unchanged."
+  },
+  {
+    "schema_version": 1,
+    "schemaSha256": "b548295fd11087c29345028cc3dcf57d39bdee160bd22ac63843a9edea4aecfc",
+    "note": "Same version: the `kind` of an approval in extension_trust.json may also be `workspace-manifest` (a workspace manifest plugin's directory, approved by its tree digest, with every file of the tree in `files`). Additive: a reader that does not know the kind treats the store as it treats any entry it cannot read, and approves nothing from it; stores without such entries read as before."
   }
 ]

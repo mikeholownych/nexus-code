@@ -40,7 +40,7 @@ Both use the same format:
 | `hooks` | An object with `pre-tool` and/or `post-tool`, each a list of at most 16 hooks. Other events are refused ("not supported in this version"). |
 | `name` | 1 to 64 characters of `A-Z a-z 0-9 . _ -`, unique within its event. It is shown in denials, receipts and the flight log. |
 | `tools` | 1 to 64 exact Nexus tool names, or `["*"]` for every tool. There are no patterns. `nexus hooks list` warns about a name no built-in tool has. |
-| `command` | A string is run with `/bin/sh -c` (your own file only). An array is executed directly, without a shell; a leading `~/` in its first element is your home directory. A project file must use arrays, so that the files it runs can be pinned (see below). |
+| `command` | A string is run with `/bin/sh -c` (your own file only). An array is executed directly, without a shell; a leading `~/` in its first element is your home directory. A project file may only name a script of the workspace, alone or after a listed interpreter (see below). |
 | `timeout_secs` | 1 to 60; 10 when omitted. All hooks of one call together get 120 seconds. |
 
 The file is at most 64 KiB. The reader is strict: an unknown key, a key written twice (at any depth), a pattern in
@@ -58,7 +58,8 @@ invalid.
 In your own file, name programs that live outside the workspace. A relative path such as `./scripts/guard.sh` is
 looked up in the workspace, where the agent can change it; your file is not pinned the way a project's is.
 
-Hooks run in this order: the operator's, then the project's. No file can remove or disable another file's hooks.
+Hooks run in this order: the operator's, then those of the workspace's manifest plugins (see
+[`PLUGINS.md`](PLUGINS.md)), then the project's. No file can remove or disable another file's hooks.
 
 ## Project hooks need your approval
 
@@ -83,35 +84,59 @@ nexus hooks revoke
 - Approving is the act of a person at a terminal. Without one (standard input and standard output both a terminal)
   `nexus hooks approve` shows the file and approves nothing, whatever `--sha256` says; there is no `--yes`.
   `nexus hooks revoke` needs no terminal, since it only removes trust.
-- **A project hook names a program and files; inline code is not accepted.** Its command is an array, and each
-  argument must be either a regular file in the workspace, which is then *pinned* (recorded with its SHA-256 and
-  shown by `nexus hooks list` and `approve`), or no reference into the workspace at all. The same holds for the value
-  of `--option=value` and `-ovalue`. If a pinned file changes, or the commands come to name another, the hooks stop
-  on the next tool call and the notice names what changed, exactly as for the hooks file itself.
-- What cannot be pinned is refused, and the file is then invalid (not run, cannot be approved):
-  - a program that is a relative path or a symbolic link leading out of the workspace;
-  - an argument (or option value) that is a directory or anything else in the workspace that is not a regular file,
-    such as `node hookdir`;
-  - for a known shell or interpreter (`sh`, `bash`, `zsh`, `dash`, `ksh`, `fish`, `node`, `nodejs`, `bun`, `deno`,
-    `python*`, `perl`, `ruby`, `php`, `pwsh`, with version suffixes): any single-dash option containing one of the
-    letters `c e i m p r` (`-c`, `-e`, `-p`, `-m`, `-lc`, `-I…`, `-M…`), `--eval`, `--print`, `--command`, `eval` for
-    `deno` and `bun`, and `-r`, `--require`, `--import`, `--loader` unless their value is a pinned workspace file
-    (`--require=./pre.js` is accepted and pinned);
-  - `env` and `busybox` as the program, since they only start another program.
+- **A project hook is one script file of the workspace.** Its command is an array, accepted in two forms only:
+  1. the script itself, run directly: `["./guard.sh"]`;
+  2. one of `sh`, `dash`, `bash`, `zsh`, `node`, `python3` (also `python`, `python3.N`), `perl`, `ruby`, installed
+     outside the workspace, followed by the script: `["bash", "./guard.sh"]`, `["node", "scripts/guard.js", "--flag"]`.
+     Before the script only these options are accepted: `-e`, `-u`, `-x` (and combinations) for the shells, plus
+     `--posix`, `--norc`, `--noprofile` for `bash` and `zsh`; `--no-warnings`, `--no-deprecation` for `node`;
+     `-B`, `-E`, `-I`, `-s`, `-S`, `-u` for Python; `-w`, `-T` for `perl`; `-w` for `ruby`.
 
-  Put the logic in one script file and name it directly: `["./guard.sh"]`, `["bash", "./guard.sh"]`,
-  `["node", "scripts/guard.js", "--flag"]`.
-- A program outside the workspace (an absolute path such as `/usr/bin/python3`, or a bare name found through `PATH`)
-  is **trusted as installed**: nothing in the workspace can replace it, and its bytes are not recorded.
-- This does **not** cover everything a command can reach:
-  - the inline-code refusals are a list for known interpreters; another program that accepts code or a module name
-    on its command line (`awk`, `make`, `sqlite3`, a build tool) is not recognised;
-  - files that a pinned script itself runs, sources, imports or reads are not pinned, and neither is anything a
-    program finds by its own rules (a configuration file in the working directory, `node_modules`);
-  - the files are checked just before the hook is started; a process that changes one between that check and the
-    program reading it is not detected.
+  **Where the interpreter is taken from.** Nexus resolves the name itself, to an absolute path, and starts that path.
+  A bare name is looked up in the entries of `PATH` that are trusted directories, then in `/usr/local/bin`,
+  `/usr/bin`, `/bin`, `/usr/sbin`, `/sbin`; an absolute path (`/usr/bin/python3`) must lie in a trusted directory. A
+  directory is trusted when it is an absolute path, belongs to root or to you, cannot be written by group or others,
+  and is not inside the workspace, `/tmp`, `/var/tmp`, `/dev` (so not `/dev/shm`), `/proc`, `/run` or `/sys`; the
+  program itself must meet the same conditions. Empty and relative `PATH` entries (the current directory) are never
+  used. An interpreter in a directory that your group can write (a `~/.local/bin` of mode 775, say) is therefore not
+  found: `chmod g-w` the directory, or use the system's interpreter.
 
-  A hook that must hold against the agent belongs in your own hooks file, with its program outside the workspace.
+  **The `#!` line.** A script run directly (form 1) must begin with `#!` followed by the absolute path of one of
+  the interpreters above in a trusted directory, and at most one of its options listed above: `#!/bin/sh`,
+  `#!/bin/bash -eu`, `#!/usr/bin/python3 -I`. `#!/usr/bin/env bash` is refused (`env` finds the real program on
+  `PATH`), and so is a relative path (`#!./tool` is looked up in the workspace). The line is read as the kernel reads
+  it: only spaces and tabs separate, and a line with any other control character or a non-ASCII character is refused. For such a script use form 2,
+  `["bash", "./guard.sh"]`: after an explicit shell, `node` or `python` the line is a comment and is not looked at.
+  After `perl` or `ruby`, which act on the line themselves, it must be absent or follow the same rule.
+
+  The script must be a regular file in the workspace. What follows it is passed to the script; an argument there (or
+  the value of `--option=value` or `-ovalue`) that is an existing path in the workspace must be a regular file too.
+- **Everything else is refused for a project file**, which is then invalid (not run, cannot be approved). That
+  includes any other program, installed or not (`/usr/bin/true`, `awk`, `make`, `git`, `jq`, `npm run`, `npx`); every
+  program that starts another (`env`, `nice`, `timeout`, `xargs`, `script`, `su`, `sudo`, `runuser`, `busybox`,
+  `setsid`); other shells and interpreters (`ash`, `ksh`, `csh`, `fish`, `lua`, `Rscript`, `php`, `deno`, `bun`); any
+  inline code or loader option (`-c`, `-e` for `node`, `-m`, `--eval`, `--require`, `--import`, `--run`, `--`); and a
+  directory where the script should be (`node hookdir`). This is an allowlist: a form that is not listed above is
+  refused whether or not anyone has thought of it. A hook that needs another program belongs in your own
+  `~/.config/nexus/hooks.json`, which is not restricted this way.
+- **The approval covers the script and the files given to it.** Each is recorded with its SHA-256 and shown by
+  `nexus hooks list` and `approve`. If one changes, or the command comes to name another, the hooks stop on the next
+  tool call and the notice names what changed, exactly as for the hooks file itself.
+- **A project hook runs from the approved bytes, not from the workspace.** Just before a hook starts, each covered
+  file is read once, those bytes are checked against the approval, and the same bytes are written to a private
+  directory under `~/.nexus/hook-runs/` (owner-only; removed when the hook ends, and one that a killed run left
+  behind is removed by a later run once it is ten minutes old). The command is started with those
+  copies in place of the workspace paths, so a file replaced at that very moment cannot be what runs. The working
+  directory is still the workspace. Consequences for a script:
+  - it runs under a path outside the workspace, so `$0`, `__filename`, `__file__` and `dirname "$0"` do not lead back
+    to the repository, and a file it looks for beside itself (`require("./lib")`, `import` of a sibling, a
+    `package.json` that makes a `.js` file an ES module: use `.mjs` or `.cjs`) is not there;
+  - **it must be one self-contained file.** A file it sources, imports or reads by a workspace path
+    (`. ./lib.sh`, `cat rules.txt`) is taken from the workspace as it is at that moment and is **not** covered by the
+    approval: anyone who can write the workspace can change it. Pass a data file as an argument to have it covered.
+- What this does not cover: the files just named; the interpreter itself and the rest of the system, which are
+  trusted as installed; and a process that already runs with your rights outside the sandbox, which can write
+  `~/.nexus/hook-runs/` and the approval store directly.
 
 Approvals are kept in `~/.config/nexus/extension_trust.json` (mode 600). If that file is unreadable, malformed or
 readable by other users, it approves nothing.
@@ -196,7 +221,8 @@ name, source, exit status, decision, reason and the SHA-256 of its standard outp
 - At its timeout it gets SIGTERM, then two seconds later SIGKILL, together with everything it started (including a
   process that left its process group).
 - A hook that starts something in the background must detach it from standard output and standard error
-  (`cmd >/dev/null 2>&1 &`). Otherwise Nexus cannot tell that the answer is complete and treats the run as failed.
+  (`cmd >/dev/null 2>&1 &`). Otherwise Nexus cannot tell that the answer is complete and treats the run as failed. What the hook left running in its
+  process group is then killed.
 
 ## Where hooks sit among Nexus's own checks
 
@@ -277,11 +303,13 @@ not run. It exits 2 when the hooks deny the call.
 ## Limits and residual risks
 
 - An approved hook runs with your authority, outside the sandbox.
-- A project's hooks are a service the repository offers, not a control over the agent: the agent can edit
-  `.nexus/hooks.json` like any other file, and a changed file stops running until you approve it again. Put a guard
-  you rely on in your own `~/.config/nexus/hooks.json`. That file is outside the workspace, where the file tools
-  cannot write; a shell command that runs without the sandbox can still change it, like any file of yours, and a
-  change that breaks the file denies every call instead of dropping the guard.
+- A project's hooks (and a workspace plugin's) are a service the repository offers, not a control over the agent:
+  the agent can edit `.nexus/hooks.json`, or a script it runs, like any other file. An edit takes the hooks out of
+  force until you approve again; one notice says so (`WARNING: project hooks ... are NO LONGER IN FORCE`), once per
+  session. Nothing unapproved runs, but the guard is gone. Put a guard you rely on in your own
+  `~/.config/nexus/hooks.json`. That file is outside the workspace, where the file tools cannot write; a shell
+  command that runs without the sandbox can still change it, like any file of yours, and a change that breaks the
+  file denies every call instead of dropping the guard.
 - The terminal check on `nexus hooks approve` stops a tool call that simply runs the command. It is not a boundary
   against a shell command that runs **outside the sandbox with your rights** (auto mode, sandbox off): such a command
   can fake a terminal (for example with `script`), or write `~/.config/nexus/extension_trust.json` directly. Nexus

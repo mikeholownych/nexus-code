@@ -10,6 +10,36 @@ import { approvalHint, emitPolicyNotice, processPolicyHost } from "./core/policy
 import { FILE_EDIT_TOOLS } from "./file_diff.js";
 import { linkRecord, verifyChain, type ChainLink, type ChainVerdict } from "./core/hash_chain.js";
 import { runnerRoot } from "./core/runner_store.js";
+import { defaultTaskStateDir } from "./core/state.js";
+import { extensionTrustStorePath } from "./core/content_trust.js";
+
+/** The task-state directory as configured and as it really resolves (a symlinked HOME has two spellings). */
+function taskStatePaths(): string[] {
+  const dir = defaultTaskStateDir();
+  try {
+    const real = fs.realpathSync(dir);
+    return real === dir ? [dir] : [dir, real];
+  } catch {
+    return [dir];
+  }
+}
+
+/** Whether `file` is a second name for a file in the task-state directory. Only files with other links are looked up. */
+function isHardLinkToTaskState(file: string): boolean {
+  try {
+    const st = fs.statSync(file, { bigint: true });
+    if (!st.isFile() || st.nlink < 2n) return false;
+    const dir = fs.realpathSync(defaultTaskStateDir());
+    return fs.readdirSync(dir).some((name) => {
+      try {
+        const other = fs.statSync(path.join(dir, name), { bigint: true });
+        return other.ino === st.ino && other.dev === st.dev;
+      } catch { return false; }
+    });
+  } catch {
+    return false;
+  }
+}
 
 export type VerificationMode = "off" | "record" | "approve" | "block";
 export type VerificationClass = "ci" | "build" | "test_config" | "verifier_script" | "test_file" | "package_scripts" | "policy";
@@ -181,6 +211,34 @@ const DEFAULT_PROTECTED_PATHS = [
   "id_rsa*",
   "id_ed25519*",
 ];
+
+/**
+ * HK-1: the operator's hooks file and the store of hook approvals, by absolute path. The names above match them from
+ * outside; these match them when the workspace is their own directory, where the relative name is just `hooks.json`.
+ */
+function hookTrustFiles(): string[] {
+  const store = extensionTrustStorePath();
+  return [store, path.join(path.dirname(store), "hooks.json")];
+}
+
+/**
+ * HK-3: the operator's own plugin directories, by absolute path (and real path): a module there is imported into
+ * Nexus with no approval, so the agent's file tools must not be able to put one there, in any workspace.
+ */
+function operatorPluginPaths(): string[] {
+  const config = path.dirname(extensionTrustStorePath());
+  // The home directory as the store's own path gives it (`~/.config/nexus`).
+  const dirs = [path.join(path.resolve(config, "..", ".."), ".nexus", "plugins"), path.join(config, "plugins")];
+  const real = dirs.flatMap((dir) => {
+    try {
+      const resolved = fs.realpathSync(dir);
+      return resolved === dir ? [] : [resolved];
+    } catch {
+      return [];
+    }
+  });
+  return [...dirs, ...real];
+}
 
 const SCRIPT_NAMES = ["test", "verify", "ci", "check", "lint"];
 /** [class, globs]; a glob matches a workspace-relative path, case-insensitively, `**\/` meaning any depth (zero or more directories). */
@@ -410,7 +468,8 @@ export class SecurityManager {
     if (inspector.notice) say(inspector.notice);
     return {
       blockedCommands: [...DEFAULT_BLOCKED_COMMANDS, ...loaded.project.blockedCommandPatterns],
-      protectedPaths: [...DEFAULT_PROTECTED_PATHS, runnerRoot(), ...effective.paths.protected.values],
+      // PA-3: the task-state directory holds goal state, caps and stall counts; the agent must not edit its own limits.
+      protectedPaths: [...DEFAULT_PROTECTED_PATHS, runnerRoot(), ...taskStatePaths(), ...hookTrustFiles(), ...operatorPluginPaths(), ...effective.paths.protected.values],
       allowedDomains: projectDomains ? (projectDomains.length > 0 ? [...projectDomains] : [NO_HOST]) : undefined,
       verificationPaths: {
         mode: effectiveVerificationMode(effective).value,
@@ -718,6 +777,11 @@ export class SecurityManager {
         }
       }
     } catch {}
+
+    // 4. A hard link to a goal-state file is the same file under another name: compare device and inode.
+    if (isHardLinkToTaskState(absPath)) {
+      return { protected: true, reason: `Security Policy Violation: Path '${targetPath}' is a hard link to protected goal state` };
+    }
 
     return { protected: false };
   }

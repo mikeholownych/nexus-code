@@ -141,4 +141,26 @@ nexus plugins verify [name]
 nexus plugins remove <name>
 ```
 
-`nexus plugins` with no subcommand still lists **loaded** JS modules from the plugin search path (unchanged).
+`nexus plugins` / `nexus plugins list` lists **loaded** JS modules from the plugin search path.
+
+## 2.3 Workspace plugin trust (HK-3 / D18)
+
+The full rules, how an approved plugin is run, and the migration from earlier versions are in [`PLUGINS.md`](PLUGINS.md).
+
+Global plugins (`~/.nexus/plugins/`, `~/.config/nexus/plugins/`) are operator-managed and load when present.
+
+Workspace plugins (`.nexus/plugins/`, `plugins/`) are repository content. They require **per-plugin trust** keyed by the SHA-256 of the exact plugin bytes. Trusting a workspace (`nexus trust .`) is necessary but no longer sufficient to execute workspace plugin code.
+
+```bash
+nexus plugins list                        # loaded plugins + unapproved workspace plugins
+nexus plugins trust .nexus/plugins/p.js   # approve exact bytes for this workspace
+nexus plugins revoke .nexus/plugins/p.js  # withdraw approval
+```
+
+A changed workspace plugin file needs a new approval. Managed policy may refuse plugins.
+
+**Single-file load:** Nexus hashes the entry file's bytes once and imports those same bytes from a private temp copy (not the path on disk). Relative `import` / `require` of siblings under the plugins directory therefore cannot run: only the approved entry file executes. Keep a workspace plugin as one self-contained file. Absolute/`file:`/`createRequire` loads of other workspace paths inside an approved entry still run with process authority — approving that entry approves those loads; do not approve code that reaches outside itself.
+
+**Approving needs a real terminal** (same limit as `nexus hooks approve`): `nexus plugins trust` refuses when stdin/stdout are not a TTY. An unsandboxed command that can drive a PTY still has the operator's rights and can approve; under `--sandbox` the trust store is unreachable. Prefer reviewing the file yourself in a terminal.
+
+**Migration note (HK-3/D18):** in-process workspace JS plugins remain supported for now but are deprecated as a trust boundary. They run with full process authority. Prefer operator-managed/global plugins or future subprocess/manifest plugin packaging. Subprocess isolation of workspace plugin hooks is Phase D / v1.4.
