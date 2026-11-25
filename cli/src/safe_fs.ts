@@ -18,6 +18,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { isPathStrictlyWithin } from "./path_within.js";
 
 export class SafePathError extends Error {
   constructor(message: string) {
@@ -35,9 +36,13 @@ export interface Identity {
 }
 
 function relativeParts(root: string, target: string): string[] {
-  const rel = path.relative(path.resolve(root), path.resolve(target));
-  if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) throw new SafePathError(`${target} is not inside ${root}`);
-  return rel.split(path.sep).filter(Boolean);
+  const resolvedRoot = path.resolve(root);
+  const resolvedTarget = path.resolve(target);
+  // Strictly below root: equal-to-root is refused. `..hid` is inside (#800).
+  if (!isPathStrictlyWithin(resolvedTarget, resolvedRoot)) {
+    throw new SafePathError(`${target} is not inside ${root}`);
+  }
+  return path.relative(resolvedRoot, resolvedTarget).split(path.sep).filter(Boolean);
 }
 
 /**

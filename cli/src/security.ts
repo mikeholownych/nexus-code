@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { egressPolicyFromEnv, type EgressPolicy } from "./core/egress_policy.js";
 import { isTestPath } from "./tester.js";
 import { envTrustRequested, isWorkspaceListed, realWorkspace } from "./workspace_trust.js";
+import { isPathStrictlyWithin, pathEscapesRoot } from "./path_within.js";
 import { clampEgressInspector, decideManagedCommand, describeSource, effectiveVerificationMode, type EffectivePolicy, type PolicySource } from "./core/managed_policy.js";
 import type { LoadedPolicy } from "./core/managed_policy_load.js";
 import { approvalHint, emitPolicyNotice, processPolicyHost } from "./core/policy_runtime.js";
@@ -904,7 +905,8 @@ export class SecurityManager {
     for (const a of absolutes) {
       for (const root of roots) {
         const rel = path.relative(root, a).replace(/\\/g, "/");
-        if (rel && !rel.startsWith("..") && !path.isAbsolute(rel) && !rels.includes(rel)) rels.push(rel);
+        // `..hid` is inside (#800); keep workspace-relative form when strictly below root.
+        if (rel && isPathStrictlyWithin(a, root) && !rels.includes(rel)) rels.push(rel);
       }
     }
     return { rels, abs, exists, directory };
@@ -928,7 +930,7 @@ export class SecurityManager {
         } else {
           for (const root of roots) {
             const rel = path.relative(root, child).replace(/\\/g, "/");
-            const found = rel && !rel.startsWith("..") ? this.classifyVerificationPath(rel) : null;
+            const found = rel && isPathStrictlyWithin(child, root) ? this.classifyVerificationPath(rel) : null;
             if (found && !isConditionalConfig(rel)) return { rel, found };
           }
         }
@@ -1119,7 +1121,8 @@ export class SecurityManager {
 
   private restoreVerificationFile(change: VerificationShellChange, before: VerificationFileState | undefined): boolean {
     const abs = path.resolve(this.workspace, change.path);
-    if (path.relative(this.workspace, abs).startsWith("..")) return false;
+    // Refuse restore outside the workspace; `..hid` is inside (#800).
+    if (pathEscapesRoot(abs, this.workspace)) return false;
     try {
       if (change.kind === "added") {
         fs.rmSync(abs, { force: true });

@@ -5,6 +5,7 @@ import { writePrivateFile } from "./core/durable_file.js";
 import { clampEnvTrust, type EffectivePolicy } from "./core/managed_policy.js";
 import { ManagedPolicyError } from "./core/managed_policy_load.js";
 import { emitPolicyNotice, managedPolicy, processPolicyHost } from "./core/policy_runtime.js";
+import { isPathStrictlyWithin } from "./path_within.js";
 
 /** Workspace files that configure MCP servers, and directories plugins are loaded from: used only when trusted. */
 export const WORKSPACE_MCP_FILES = [".mcp.json", "mcp.json"];
@@ -34,10 +35,7 @@ export function untrustedWorkspaceExtensions(workspace: string, readOnly = false
  * switches the workspace's MCP servers or plugins off, so a link cannot relabel them.
  */
 export function isWorkspaceFile(workspace: string, file: string): boolean {
-  const inside = (root: string, candidate: string): boolean => {
-    const relative = path.relative(root, candidate);
-    return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
-  };
+  const inside = (root: string, candidate: string): boolean => isPathStrictlyWithin(candidate, root);
   if (inside(path.resolve(workspace), path.resolve(file))) return true;
   try {
     return inside(realWorkspace(workspace), fs.realpathSync(file));
