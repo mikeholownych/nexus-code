@@ -8,6 +8,7 @@ import { isWorkspaceFile, isWorkspaceTrusted, WORKSPACE_PLUGIN_DIRS } from "./wo
 import { extensionTrustEntry, extensionTrustStorePath, noteExtensionLoad, readExtensionTrust, type ExtensionTrustEntry, type ExtensionTrustId } from "./core/content_trust.js";
 import { decodeStrictUtf8, fileStamp, readHardenedFile } from "./core/strict_json.js";
 import { redactSecrets } from "./ui.js";
+import { printable } from "./core/printable.js";
 import { permitsPlugin, type EffectivePolicy } from "./core/managed_policy.js";
 import { ManagedPolicyError } from "./core/managed_policy_load.js";
 import { emitPolicyNotice, managedPolicy, printableRefusal } from "./core/policy_runtime.js";
@@ -48,31 +49,57 @@ export interface PluginHooks {
 
 export type PluginSource = "global" | "workspace";
 
+function realOf(dir: string): string {
+  try {
+    return fs.realpathSync(dir);
+  } catch {
+    return path.resolve(dir);
+  }
+}
+
+const within = (root: string, target: string): boolean => {
+  const relative = path.relative(root, target);
+  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+};
+
+/** The operator's own plugin directories. */
+export function operatorPluginDirs(): string[] {
+  return [path.join(os.homedir(), ".nexus", "plugins"), path.join(os.homedir(), ".config", "nexus", "plugins")];
+}
+
+/**
+ * Whether an operator plugin directory lies inside the workspace (the workspace is the home directory, or holds it).
+ * There the agent's tools can write it, so what is in it is not the operator's word and is not loaded as theirs: the
+ * same rule as for the operator's hooks file. By real path, and by the path as written.
+ */
+export function operatorDirInWorkspace(dir: string, workspace: string): boolean {
+  const root = realOf(workspace);
+  return within(root, realOf(dir)) || within(path.resolve(workspace), path.resolve(dir));
+}
+
 /**
  * Directories Nexus loads plugin modules (`*.js`, `*.mjs`) from, each with what it is: the operator's own (`global`)
  * or the repository's (`workspace`). The kind travels with the directory; it is never worked out from the path, so a
- * workspace that is the home directory, or a directory whose name merely begins like the workspace's, is not
- * mistaken. A workspace directory that is one of the operator's own directories (the workspace is the home
- * directory) is listed once, as the operator's. The operator's come first: on a name clash theirs is the one kept.
+ * directory whose name merely begins like the workspace's is not mistaken. An operator directory inside the workspace
+ * is left out (`skippedOperatorDirs` names it); the same directory may still be one of the workspace's own, where
+ * each file needs its approval. The operator's come first: on a name clash theirs is the one kept.
  */
 export function pluginDirSources(workspace: string, isWorkspaceTrusted = false): Array<{ dir: string; source: PluginSource }> {
-  const real = (dir: string): string => {
-    try {
-      return fs.realpathSync(dir);
-    } catch {
-      return path.resolve(dir);
-    }
-  };
-  const global = [path.join(os.homedir(), ".nexus", "plugins"), path.join(os.homedir(), ".config", "nexus", "plugins")];
-  const sources: Array<{ dir: string; source: PluginSource }> = global.map((dir) => ({ dir, source: "global" }));
-  if (isWorkspaceTrusted) {
-    const own = new Set(global.map(real));
-    for (const relative of WORKSPACE_PLUGIN_DIRS) {
-      const dir = path.join(workspace, relative);
-      if (!own.has(real(dir))) sources.push({ dir, source: "workspace" });
-    }
-  }
+  const sources: Array<{ dir: string; source: PluginSource }> = operatorPluginDirs().filter((dir) => !operatorDirInWorkspace(dir, workspace)).map((dir) => ({ dir, source: "global" }));
+  if (isWorkspaceTrusted) for (const relative of WORKSPACE_PLUGIN_DIRS) sources.push({ dir: path.join(workspace, relative), source: "workspace" });
   return sources;
+}
+
+/** The operator plugin directories that are not used because they lie inside the workspace and hold plugin files. */
+export function skippedOperatorDirs(workspace: string): string[] {
+  return operatorPluginDirs().filter((dir) => {
+    if (!operatorDirInWorkspace(dir, workspace)) return false;
+    try {
+      return fs.readdirSync(dir).some((name) => name.endsWith(".js") || name.endsWith(".mjs"));
+    } catch {
+      return false;
+    }
+  });
 }
 
 /** Directories Nexus loads plugin modules (`*.js`, `*.mjs`) from at turn start (REQ-SEC-115). */
@@ -141,7 +168,7 @@ const TRUST_COMMAND = "nexus plugins trust";
 export function workspacePluginTrust(workspace: string, filePath: string, digest: string, trust = readExtensionTrust(extensionTrustStorePath())): { status: PluginTrustStatus; reason?: string; entry?: ExtensionTrustEntry } {
   if (trust.problem) return { status: "invalid", reason: `trust store unreadable: ${trust.problem}` };
   const entry = extensionTrustEntry(trust.entries, workspacePluginTrustId(workspace, filePath));
-  const shown = path.relative(path.resolve(workspace), path.resolve(filePath));
+  const shown = printable(path.relative(path.resolve(workspace), path.resolve(filePath)));
   if (!entry) return { status: "untrusted", reason: `workspace plugin not approved; review it and run \`${TRUST_COMMAND} ${shown}\` in a terminal (each workspace plugin file needs its own approval)` };
   if (entry.sha256 !== digest) return { status: "changed", reason: `workspace plugin changed since approval; review it and run \`${TRUST_COMMAND} ${shown}\` in a terminal again` };
   if (entry.loadFailed) return { status: "load-failed", reason: entry.loadFailed.reason, entry };
@@ -180,8 +207,7 @@ export function inspectWorkspacePlugins(workspace: string): PluginTrustRecord[] 
 
 /** One line, without secrets, bounded: why a plugin did not load. */
 function loadFailureText(error: unknown): string {
-  const text = redactSecrets(error instanceof Error ? `${error.name}: ${error.message}` : String(error)).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim();
-  return text.length > 300 ? `${text.slice(0, 299)}…` : text;
+  return printable(redactSecrets(error instanceof Error ? `${error.name}: ${error.message}` : String(error)).replace(/\s+/g, " ").trim(), 300);
 }
 
 /**
@@ -293,6 +319,9 @@ export class PluginManager {
       }
     }
     this.announcePending();
+    for (const dir of skippedOperatorDirs(this.workspace)) {
+      this.notify(`nexus: plugins in ${printable(dir)} are not loaded: the directory lies inside the workspace (${printable(this.workspace)}), where the agent's tools can write it, so its files cannot be taken as yours. Start Nexus in a project directory, not in your home directory.`);
+    }
   }
 
   /**
@@ -304,7 +333,7 @@ export class PluginManager {
     const root = this.workspace;
     const pending = this.pluginTrustRecords.filter((record) => record.status === "untrusted" || record.status === "changed");
     if (!pending.length) return;
-    const shown = (record: PluginTrustRecord) => path.relative(root, record.path);
+    const shown = (record: PluginTrustRecord) => printable(path.relative(root, record.path));
     const lines = pending.slice(0, PENDING_NOTICE_LIMIT).map((record) => `  ${TRUST_COMMAND} ${shown(record)}${record.status === "changed" ? "   (changed since it was approved)" : ""}`);
     if (pending.length > PENDING_NOTICE_LIMIT) lines.push(`  ... and ${pending.length - PENDING_NOTICE_LIMIT} more: see \`nexus plugins list\``);
     const notice = `nexus: ${pending.length} workspace plugin${pending.length === 1 ? " is" : "s are"} not loaded. Since v1.3.0 each workspace plugin file needs its own approval; trusting the workspace no longer loads them. Review each file, then run in a terminal:\n${lines.join("\n")}`;
@@ -324,7 +353,7 @@ export class PluginManager {
         const read = readPluginFile(filePath);
         if ("problem" in read) {
           Object.assign(record, { status: "invalid", reason: read.problem });
-          this.notify(`nexus: workspace plugin ${filePath} is not loaded: ${read.problem}`);
+          this.notify(`nexus: workspace plugin ${printable(filePath)} is not loaded: ${printable(read.problem)}`);
           return;
         }
         record.sha256 = read.sha256;
@@ -354,8 +383,8 @@ export class PluginManager {
       const earlier = this.pluginTrustRecords.find((other) => other !== record && other.name === plugin.name && (other.status === "global" || other.status === "trusted"));
       if (earlier && source === "workspace") {
         // The operator's plugin of that name was loaded first and stays: a repository cannot replace it.
-        Object.assign(record, { status: "shadowed", reason: `${earlier.source === "global" ? "the operator's" : "another"} plugin ${earlier.path} has the same name '${plugin.name}' and is the one used` });
-        this.notify(`nexus: workspace plugin ${filePath} is not used: ${record.reason}`);
+        Object.assign(record, { status: "shadowed", reason: `${earlier.source === "global" ? "the operator's" : "another"} plugin ${printable(earlier.path)} has the same name '${printable(plugin.name, 80)}' and is the one used` });
+        this.notify(`nexus: workspace plugin ${printable(filePath)} is not used: ${record.reason}`);
         return;
       }
       this.registerPlugin(plugin);
@@ -365,7 +394,7 @@ export class PluginManager {
       const reason = loadFailureText(error);
       Object.assign(record, { status: "load-failed", reason });
       if (approved) this.noteLoad(approved, { at: new Date().toISOString(), reason });
-      this.notify(`nexus: plugin ${filePath} failed to load and is not active: ${reason}${source === "workspace" ? " (a workspace plugin runs from a private copy of its one file: imports of sibling files and of the workspace's packages do not resolve)" : ""}`);
+      this.notify(`nexus: plugin ${printable(filePath)} failed to load and is not active: ${reason}${source === "workspace" ? " (a workspace plugin runs from a private copy of its one file: imports of sibling files and of the workspace's packages do not resolve)" : ""}`);
     }
   }
 

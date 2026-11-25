@@ -22,6 +22,7 @@ import { managedPolicy } from "./core/policy_runtime.js";
 import { inspectWorkspaceManifestPlugins, type WorkspaceManifestPlugin } from "./core/workspace_plugins.js";
 import type { EffectivePolicy } from "./core/managed_policy.js";
 import { readPluginFile, workspacePluginTrustId } from "./plugins.js";
+import { printable } from "./core/printable.js";
 import { isWorkspaceFile, isWorkspaceTrusted } from "./workspace_trust.js";
 
 export interface PluginTrustDeps {
@@ -67,19 +68,19 @@ export function revokeWorkspacePlugin(workspace: string, pluginPath: string): bo
 async function trustWorkspaceManifestPlugin(ws: string, abs: string, options: { sha256?: string }, deps: PluginTrustDeps, log: (line: string) => void, fail: (line: string, code: number) => number): Promise<number> {
   const find = () => workspaceManifestPlugins(ws, deps.policy).find((plugin) => plugin.dir === abs);
   const shown = find();
-  if (!shown) return fail(`Not a workspace plugin: ${abs} (a manifest plugin is a directory in .nexus/plugins/ with a nexus-plugin.json)`, 1);
-  if (shown.status === "invalid" || !shown.digest) return fail(`${abs} is not a workspace plugin that can be approved: ${shown.problem}`, 1);
-  if (shown.status === "policy_refused") return fail(`Not approved: ${shown.problem}`, 2);
-  log(`${abs}\ntree sha256 ${shown.digest}\nWorkspace plugin '${shown.name}'. Its hooks would run with your authority, outside the sandbox, on the tool calls they name:`);
+  if (!shown) return fail(`Not a workspace plugin: ${printable(abs)} (a manifest plugin is a directory in .nexus/plugins/ with a nexus-plugin.json)`, 1);
+  if (shown.status === "invalid" || !shown.digest) return fail(`${printable(abs)} is not a workspace plugin that can be approved: ${printable(shown.problem)}`, 1);
+  if (shown.status === "policy_refused") return fail(`Not approved: ${printable(shown.problem)}`, 2);
+  log(`${printable(abs)}\ntree sha256 ${shown.digest}\nWorkspace plugin '${printable(shown.name, 80)}'. Its hooks would run with your authority, outside the sandbox, on the tool calls they name:`);
   for (const file of shown.hooks) {
     for (const event of HOOK_EVENTS) {
-      for (const hook of file.hooks[event] ?? []) log(`  ${event}  ${hook.name}  tools: ${hook.tools.join(", ")}\n    ${(hook.command as string[]).map((part) => JSON.stringify(part)).join(" ")}`);
+      for (const hook of file.hooks[event] ?? []) log(`  ${event}  ${printable(hook.name, 200)}  tools: ${printable(hook.tools.join(", "))}\n    ${printable((hook.command as string[]).map((part) => JSON.stringify(part)).join(" "), 1000)}`);
     }
   }
   if (!shown.hooks.length) log("  (no hooks)");
-  if (shown.skills.length) log(`It names these skills (recorded and covered by the approval; not loaded into requests in this version): ${shown.skills.join(", ")}`);
+  if (shown.skills.length) log(`It names these skills (recorded and covered by the approval; not loaded into requests in this version): ${printable(shown.skills.join(", "))}`);
   log("The approval covers every file of its directory, as it is now (a change to one needs a new approval):");
-  for (const file of shown.files) log(`  ${file.path}  sha256 ${file.sha256}`);
+  for (const file of shown.files) log(`  ${printable(file.path)}  sha256 ${file.sha256}`);
   if (shown.status === "untrusted_workspace") log("Note: the workspace is not trusted (`nexus trust`), so the plugin stays unused until it is.");
   if (!deps.interactive()) return fail("Not approved: approving a workspace plugin needs a person at a terminal. Review it, then run `nexus plugins trust` yourself in a terminal.", 2);
   const pinned = options.sha256?.trim().toLowerCase();
@@ -87,10 +88,10 @@ async function trustWorkspaceManifestPlugin(ws: string, abs: string, options: { 
   if (!(await deps.confirm("Approve this workspace plugin for this workspace? [y/N] "))) return fail("Not approved.", 1);
   // Read again after the answer: what is recorded is a tree that is still the tree that was shown.
   const confirmed = find();
-  if (!confirmed?.digest || confirmed.status === "invalid") return fail(`Not approved: the plugin could not be read again: ${confirmed?.problem ?? "it is gone"}`, 2);
+  if (!confirmed?.digest || confirmed.status === "invalid") return fail(`Not approved: the plugin could not be read again: ${printable(confirmed?.problem ?? "it is gone")}`, 2);
   if (confirmed.digest !== shown.digest) return fail(`Not approved: the plugin changed while you were asked (was ${shown.digest}, now ${confirmed.digest}). Review it and run \`nexus plugins trust\` again.`, 2);
   approveExtension({ kind: "workspace-manifest", scope: confirmed.id.scope, key: confirmed.id.key, sha256: confirmed.digest, approvedAt: new Date().toISOString(), summary: `${confirmed.name}: ${confirmed.hooks.reduce((sum, file) => sum + HOOK_EVENTS.reduce((n, event) => n + (file.hooks[event]?.length ?? 0), 0), 0)} hook(s)`, files: confirmed.files });
-  log(`Approved workspace plugin '${confirmed.name}': ${abs}\ntree sha256 ${confirmed.digest}\nUndo with \`nexus plugins revoke ${confirmed.id.key}\`.`);
+  log(`Approved workspace plugin '${printable(confirmed.name, 80)}': ${printable(abs)}\ntree sha256 ${confirmed.digest}\nUndo with \`nexus plugins revoke ${printable(confirmed.id.key)}\`.`);
   return 0;
 }
 
@@ -101,9 +102,12 @@ async function trustWorkspaceManifestPlugin(ws: string, abs: string, options: { 
  * question was open is not approved. Returns the process exit code.
  */
 export async function trustWorkspacePlugin(workspace: string, pluginPath: string, options: { sha256?: string }, deps: PluginTrustDeps): Promise<number> {
-  const log = deps.log ?? ((line: string) => console.log(line));
+  // Everything shown here names repository content (paths, hook names, commands): each line is made printable, so
+  // that a name cannot move the cursor over, or add a line to, what the operator is asked to approve.
+  const clean = (text: string) => text.split("\n").map((line) => printable(line, 2000)).join("\n");
+  const log = (line: string) => (deps.log ?? ((text: string) => console.log(text)))(clean(line));
   const fail = (line: string, code: number) => {
-    (deps.error ?? ((text: string) => console.error(pc.red(text))))(line);
+    (deps.error ?? ((text: string) => console.error(pc.red(text))))(clean(line));
     return code;
   };
   // A plugin file is approved for the workspace path as the loader names it; a manifest plugin for its real path, as
@@ -119,21 +123,21 @@ export async function trustWorkspacePlugin(workspace: string, pluginPath: string
     // not there: the file reader below says so
   }
   if (isDirectory) return trustWorkspaceManifestPlugin(real, dir, options, deps, log, fail);
-  if (!isWorkspaceFile(ws, abs)) return fail(`Plugin must be a real file inside the workspace: ${abs}`, 1);
+  if (!isWorkspaceFile(ws, abs)) return fail(`Plugin must be a real file inside the workspace: ${printable(abs)}`, 1);
   const shown = readPluginFile(abs);
-  if ("problem" in shown) return fail(`Not a plugin file that can be approved: ${abs}: ${shown.problem}`, 1);
+  if ("problem" in shown) return fail(`Not a plugin file that can be approved: ${printable(abs)}: ${printable(shown.problem)}`, 1);
   const id = workspacePluginTrustId(ws, abs);
-  log(`${abs}\nsha256 ${shown.sha256}\nThis workspace plugin would run with full process authority (HK-3/D18: in-process, deprecated).`);
+  log(`${printable(abs)}\nsha256 ${shown.sha256}\nThis workspace plugin would run with full process authority (HK-3/D18: in-process, deprecated).`);
   if (!deps.interactive()) return fail("Not approved: approving a workspace plugin needs a person at a terminal. Review the file, then run `nexus plugins trust` yourself in a terminal.", 2);
   const pinned = options.sha256?.trim().toLowerCase();
   if (pinned !== undefined && pinned !== shown.sha256) return fail(`Not approved: --sha256 does not match the file, whose SHA-256 is ${shown.sha256}.`, 2);
   if (!(await deps.confirm("Approve this workspace plugin for this workspace? [y/N] "))) return fail("Not approved.", 1);
   // Read again after the answer: the bytes may have been replaced while the question was open.
   const confirmed = readPluginFile(abs);
-  if ("problem" in confirmed) return fail(`Not approved: could not re-read ${abs}: ${confirmed.problem}`, 2);
+  if ("problem" in confirmed) return fail(`Not approved: could not re-read ${printable(abs)}: ${confirmed.problem}`, 2);
   if (confirmed.sha256 !== shown.sha256) return fail(`Not approved: the file changed while you were asked (was ${shown.sha256}, now ${confirmed.sha256}). Review it and run \`nexus plugins trust\` again.`, 2);
   approveExtension({ kind: "workspace-plugin", scope: id.scope, key: id.key, sha256: confirmed.sha256, approvedAt: new Date().toISOString(), summary: path.basename(abs) });
-  log(`Approved workspace plugin: ${abs}\nsha256 ${confirmed.sha256}\nUndo with \`nexus plugins revoke ${pluginPath}\`.`);
+  log(`Approved workspace plugin: ${printable(abs)}\nsha256 ${confirmed.sha256}\nUndo with \`nexus plugins revoke ${pluginPath}\`.`);
   return 0;
 }
 

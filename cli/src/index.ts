@@ -34,6 +34,7 @@ import { describeTarget, registerProviderCommands } from "./provider_cli.js";
 import { registerHookCommands } from "./hooks_cli.js";
 import { registerTriggerCommands } from "./triggers_cli.js";
 import { registerPluginPackageCommands } from "./plugins_cli.js";
+import { printable } from "./core/printable.js";
 import { UsageLedger } from "./usage.js";
 import { DOCTOR_EXIT, DOCTOR_SCHEMA_VERSION, doctorExitCode, renderDoctorJson, renderDoctorText, runDoctor, runRepairs } from "./doctor.js";
 import { promptWorkspaceTrust } from "./startup_trust.js";
@@ -1104,7 +1105,7 @@ program
       const pm = new PluginManager(ws);
       const { untrustedWorkspaceExtensions } = await import("./workspace_trust.js");
       for (const file of untrustedWorkspaceExtensions(ws).filter((f) => !/(^|[\\/])\.?mcp\.json$/.test(f))) {
-        console.log(pc.yellow(`Not loaded (workspace not trusted; run \`nexus trust\`): ${file}`));
+        console.log(pc.yellow(`Not loaded (workspace not trusted; run \`nexus trust\`): ${printable(file)}`));
       }
       await pm.loadPlugins();
       const plugins = pm.listPlugins();
@@ -1115,16 +1116,16 @@ program
       if (plugins.length === 0) console.log(pc.yellow("\nNo active plugins loaded.\n"));
       else {
         console.log(pc.bold(pc.cyan("\n=== Loaded Custom Plugins ===\n")));
-        for (const p of plugins) console.log(`• ${pc.bold(pc.green(p.name))}: ${p.description} (custom tools: ${p.customToolCount})\n`);
+        for (const p of plugins) console.log(`• ${pc.bold(pc.green(printable(p.name, 80)))}: ${printable(p.description)} (custom tools: ${p.customToolCount})\n`);
       }
       if (manifestPlugins.length) {
         console.log(pc.bold(pc.cyan("=== Workspace manifest plugins (command hooks) ===\n")));
         for (const p of manifestPlugins) {
-          console.log(`• ${p.status === "active" ? pc.green(p.status) : pc.yellow(p.status)} ${pc.bold(p.name)} ${pc.dim(p.dir)}${p.treeSha256 ? pc.dim(` tree sha256 ${p.treeSha256}`) : ""}`);
-          if (p.problem) console.log(`  ${pc.dim(p.problem)}`);
-          if (p.changed) console.log(`  ${pc.dim(`changed since approval: ${p.changed.join(", ")}`)}`);
-          if (p.hooks.length) console.log(`  hooks: ${p.hooks.join(", ")}`);
-          if (p.status === "not_approved" || p.status === "changed") console.log(`  ${pc.dim(`review it, then run \`nexus plugins trust ${path.relative(ws, p.dir)}\` in a terminal`)}`);
+          console.log(`• ${p.status === "active" ? pc.green(p.status) : pc.yellow(p.status)} ${pc.bold(printable(p.name, 80))} ${pc.dim(printable(p.dir))}${p.treeSha256 ? pc.dim(` tree sha256 ${p.treeSha256}`) : ""}`);
+          if (p.problem) console.log(`  ${pc.dim(printable(p.problem))}`);
+          if (p.changed) console.log(`  ${pc.dim(`changed since approval: ${printable(p.changed.join(", "))}`)}`);
+          if (p.hooks.length) console.log(`  hooks: ${printable(p.hooks.join(", "))}`);
+          if (p.status === "not_approved" || p.status === "changed") console.log(`  ${pc.dim(`review it, then run \`nexus plugins trust ${printable(path.relative(ws, p.dir))}\` in a terminal`)}`);
         }
         console.log();
       }
@@ -1132,8 +1133,8 @@ program
       if (blocked.length) {
         console.log(pc.bold(pc.yellow("=== Plugins not active ===\n")));
         for (const r of blocked) {
-          console.log(`• ${pc.yellow(r.status)} ${r.path}${r.sha256 ? pc.dim(` sha256 ${r.sha256}`) : ""}`);
-          if (r.reason) console.log(`  ${pc.dim(r.reason)}`);
+          console.log(`• ${pc.yellow(r.status)} ${printable(r.path)}${r.sha256 ? pc.dim(` sha256 ${r.sha256}`) : ""}`);
+          if (r.reason) console.log(`  ${pc.dim(printable(r.reason, 600))}`);
         }
         console.log();
       }
