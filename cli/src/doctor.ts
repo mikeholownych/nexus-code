@@ -28,7 +28,7 @@ import { allProviders, providerSource } from "./providers.js";
 import { effortLevels } from "./core/models_snapshot.js";
 import { mcpConfigFiles } from "./mcp.js";
 import { isBwrapAvailable, sandboxHomeMounts, sandboxNetworkEnabled, sandboxWorkspaceOverlays } from "./sandbox.js";
-import { describeSandboxPosture, parseSandboxValue } from "./sandbox_profile.js";
+import { describeSandboxPosture, parseSandboxValue, sandboxPostureText } from "./sandbox_profile.js";
 import { pluginDirs } from "./plugins.js";
 import { policyFindings, processPolicyReport } from "./policy_cli.js";
 import { USER_POLICY_FILE_NAME } from "./core/managed_policy_load.js";
@@ -90,6 +90,9 @@ export interface DoctorReport {
     mode: "auto" | "review" | "read-only";
     sandbox: string;
     trusted: boolean;
+    /** The effective sandbox profile (`:workspace`, `:read-only`, `:network` or `unconfined`) and what decided it (SB-1). */
+    profile?: string;
+    profileSource?: string;
   };
   /** `cli`: a fresh configuration built from flags and environment. `session`: the running session's configuration. */
   context: "cli" | "session";
@@ -1467,14 +1470,23 @@ export async function runDoctor(optionsOrConfig: DoctorOptions | HarnessConfig |
   const summary: Record<DoctorStatus, number> = { pass: 0, warn: 0, fail: 0, skip: 0 };
   for (const finding of findings) summary[finding.status]++;
   const config = options.config;
-  let posture: { mode: "auto" | "review" | "read-only"; sandbox: string; trusted: boolean } | undefined;
+  let posture: DoctorReport["posture"];
   if (config) {
     const trusted = isWorkspaceTrusted(config.workspace, Boolean(config.readOnly));
-    const sandboxStatus = config.sandbox ? (typeof config.sandbox === "string" ? config.sandbox : "on") : "off";
+    const sandboxInput = {
+      sandbox: config.sandbox,
+      readOnly: Boolean(config.approvalMode === "read-only" || ctx.flags.readOnly),
+      network: sandboxNetworkEnabled(),
+      profile: config.sandboxProfile,
+      source: "configured setting",
+    };
+    const sandboxPosture = describeSandboxPosture(sandboxInput);
     posture = {
       mode: config.approvalMode ?? (config.readOnly ? "read-only" : config.fullAccess ? "auto" : "review"),
-      sandbox: sandboxStatus,
+      sandbox: sandboxPostureText(sandboxInput),
       trusted,
+      profile: sandboxPosture.profile,
+      profileSource: sandboxPosture.source,
     };
   }
   const report: DoctorReport = {

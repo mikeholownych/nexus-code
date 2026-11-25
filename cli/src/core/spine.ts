@@ -678,6 +678,7 @@ export class ExecutionSpine {
       ? sandboxDenialEvent({
           kind: result.sandboxDenial.kind,
           engine: sandboxEngineLabel((context.metadata as any)?.sandbox ?? (context as any)?.config?.sandbox),
+          profile: (context.metadata as any)?.sandboxProfile,
           operation: toolName,
           category: result.sandboxDenial.category,
           reason: result.sandboxDenial.reason,

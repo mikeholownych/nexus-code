@@ -1,7 +1,8 @@
 /**
  * VR-3: the profile-agnostic shape of a sandbox refusal. A denial is evidence for a receipt and a flight record; it is
- * never an approval and never raises a verdict. `profile` is `"default"` until SB-1 introduces named profiles, so the
- * shape does not have to change when those names arrive.
+ * never an approval and never raises a verdict. `profile` is the named SB-1 profile the session was started with
+ * (`:workspace`, `:read-only`, `:network`) and `"default"` when none was named (a refusal from `verify`, or a session
+ * that set only the legacy flags), so the shape did not have to change when those names arrived.
  */
 
 export type SandboxEventEngine = "auto" | "bwrap" | "docker" | "none";

@@ -21,6 +21,23 @@ pub struct PostureInfo {
     pub mode: String,
     pub sandbox: String,
     pub trusted: bool,
+    /// The effective sandbox profile (`:workspace`, `:read-only`, `:network` or `unconfined`). Absent from an older sidecar.
+    #[serde(default)]
+    pub profile: Option<String>,
+}
+
+impl PostureInfo {
+    /// The profile to show beside the sandbox text, or none when the text already says it or there is nothing to add
+    /// (an unconfined session with the sandbox off, or the legacy `none` text).
+    pub fn profile_to_show(&self) -> Option<&str> {
+        let profile = self.profile.as_deref()?;
+        if self.sandbox.starts_with(profile)
+            || (profile == "unconfined" && matches!(self.sandbox.as_str(), "off" | "none"))
+        {
+            return None;
+        }
+        Some(profile)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -592,6 +609,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn profile_to_show_hides_an_unconfined_profile_when_the_sandbox_text_is_off_or_none() {
+        let posture = |sandbox: &str, profile: Option<&str>| PostureInfo {
+            mode: "review".into(),
+            sandbox: sandbox.into(),
+            trusted: true,
+            profile: profile.map(Into::into),
+        };
+        assert_eq!(posture("off", Some("unconfined")).profile_to_show(), None);
+        assert_eq!(posture("none", Some("unconfined")).profile_to_show(), None);
+        assert_eq!(
+            posture("off", Some(":read-only")).profile_to_show(),
+            Some(":read-only")
+        );
+        assert_eq!(
+            posture("none", Some(":read-only")).profile_to_show(),
+            Some(":read-only")
+        );
+        assert_eq!(posture("off", None).profile_to_show(), None);
+    }
+
+    #[test]
     fn parses_every_rendered_event_type() {
         assert_eq!(
             parse_event(r#"{"v":1,"type":"hello","protocol":1,"pid":42}"#),
@@ -640,6 +678,31 @@ mod tests {
                     mode: "review".into(),
                     sandbox: "off".into(),
                     trusted: false,
+                    profile: None,
+                }),
+                read_only: None,
+                context_tokens: None,
+                context_limit: None,
+                endpoint_kind: None,
+            })
+        );
+        // SB-1: the effective sandbox profile is an additive, optional field of the posture.
+        assert_eq!(
+            parse_event(
+                r#"{"v":1,"type":"session.state","workspace":"/w/app","workspace_name":"app","model":"m","mode":"review","git":null,"busy":false,"posture":{"mode":"review","sandbox":":workspace (bwrap, network off, --sandbox :workspace)","trusted":true,"profile":":workspace"}}"#
+            ),
+            Ok(Event::SessionState {
+                workspace_name: "app".into(),
+                model: "m".into(),
+                mode: "review".into(),
+                git: None,
+                busy: false,
+                session: None,
+                posture: Some(PostureInfo {
+                    mode: "review".into(),
+                    sandbox: ":workspace (bwrap, network off, --sandbox :workspace)".into(),
+                    trusted: true,
+                    profile: Some(":workspace".into()),
                 }),
                 read_only: None,
                 context_tokens: None,
