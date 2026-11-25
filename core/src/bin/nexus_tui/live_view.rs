@@ -5074,6 +5074,10 @@ mod surface_tests {
         let status = line("off", "unconfined");
         assert!(status.contains("sandbox: off · workspace: trusted"), "{status}");
         assert!(!status.contains("profile:"), "{status}");
+        // The legacy `none` text with an unconfined profile is the same non-news.
+        let status = line("none", "unconfined");
+        assert!(status.contains("sandbox: none · workspace: trusted"), "{status}");
+        assert!(!status.contains("profile:"), "{status}");
     }
 
     #[test]

@@ -28,10 +28,10 @@ pub struct PostureInfo {
 
 impl PostureInfo {
     /// The profile to show beside the sandbox text, or none when the text already says it or there is nothing to add
-    /// (an unconfined session with the sandbox off).
+    /// (an unconfined session with the sandbox off, or the legacy `none` text).
     pub fn profile_to_show(&self) -> Option<&str> {
         let profile = self.profile.as_deref()?;
-        if self.sandbox.starts_with(profile) || (profile == "unconfined" && self.sandbox == "off") {
+        if self.sandbox.starts_with(profile) || (profile == "unconfined" && matches!(self.sandbox.as_str(), "off" | "none")) {
             return None;
         }
         Some(profile)
@@ -605,6 +605,21 @@ pub fn encode_command(command: &Command) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_to_show_hides_an_unconfined_profile_when_the_sandbox_text_is_off_or_none() {
+        let posture = |sandbox: &str, profile: Option<&str>| PostureInfo {
+            mode: "review".into(),
+            sandbox: sandbox.into(),
+            trusted: true,
+            profile: profile.map(Into::into),
+        };
+        assert_eq!(posture("off", Some("unconfined")).profile_to_show(), None);
+        assert_eq!(posture("none", Some("unconfined")).profile_to_show(), None);
+        assert_eq!(posture("off", Some(":read-only")).profile_to_show(), Some(":read-only"));
+        assert_eq!(posture("none", Some(":read-only")).profile_to_show(), Some(":read-only"));
+        assert_eq!(posture("off", None).profile_to_show(), None);
+    }
 
     #[test]
     fn parses_every_rendered_event_type() {
