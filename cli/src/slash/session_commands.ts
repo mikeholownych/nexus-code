@@ -14,6 +14,7 @@ import { getGitInfo, scaffoldProjectRules } from "../git.js";
 import { scanAndOnboardWorkspace } from "../onboard.js";
 import { ThemeManager } from "../theme.js";
 import { renderTokenGauge } from "../tokens.js";
+import { clampRuntimeApprovalMode } from "../core/managed_policy.js";
 import { SLASH_COMMANDS, SlashContext, SlashHandler, SlashOutcome, errorText, oneLine, reply } from "./catalog.js";
 
 function help(): SlashOutcome {
@@ -173,6 +174,9 @@ function mode({ host, args }: SlashContext): SlashOutcome {
   const wanted = args.trim().toLowerCase();
   if (wanted === "auto" || wanted === "autonomous") {
     host.setMode("auto");
+    // GV-1: a mode managed policy disables was not entered; say so, with the policy source, instead of "Mode: auto".
+    const refused = clampRuntimeApprovalMode(host.app.getAgent().getBridge().getSecurityManager().getEffectivePolicy(), host.mode(), "auto", "/mode auto").notice;
+    if (refused) return reply("mode", refused, false);
     if (host.mode() === "read-only") return reply("mode", "Mode: read-only. Auto mode will take effect after a safe workspace checkpoint.");
     return reply("mode", "Mode: auto. Edits and commands run without asking.");
   }

@@ -5,12 +5,26 @@ import { isWorkspaceTrusted } from "../workspace_trust.js";
 import { safeTerminal } from "../ui.js";
 import { workspaceChangedPaths } from "../git.js";
 import { buildNeedsInput } from "./needs_input.js";
+import { humanRequirementForEffect } from "./policy_runtime.js";
 import { runTestSuiteWithExecutor, discoverTypechecks, runTypecheck, typecheckMode, discoverVerifier, describeVerifier, hasExecutedTests } from "../tester.js";
 import { isInlineProgramVerifier, snapshotVerifierDefinitionWithReason, judgeWithoutCopy, prepareBaselineTestsCopy, snapshotTests, type ChangeBaseline, type Independence } from "./independent_check.js";
 import { TypecheckEvidence } from "./turn.js";
 import { createHash } from "node:crypto";
 import { failedCheckFrom, attemptEvidence, priorAttempt, recordAttempt } from "./objective.js";
 import { DEFAULT_VERIFIER_TIMEOUT_SECS, ConfirmHandler, foldVoluminousOutput } from "./agent_support.js";
+
+/**
+ * BG-1/BG-2: an unattended run (surface "unattended") has no operator to approve a command, so no command runs. The one
+ * exception is the operator's own verifier: the exact command the operator configured when the job or schedule was made
+ * (`authoritativeVerifierCommand`), which they chose to gate completion. It still runs in the sandbox, managed
+ * `require_human` for exec still applies, and any other command (model-declared, discovered, a type-check) stays denied.
+ */
+export function isUnattendedOperatorVerifier(agent: any, command: string): boolean {
+  if (agent.config.surface !== "unattended") return false;
+  const configured = agent.config.authoritativeVerifierCommand?.trim();
+  if (!configured || command.trim() !== configured) return false;
+  return !humanRequirementForEffect(agent.bridge.getSecurityManager().getEffectivePolicy(), "exec");
+}
 
 /**
  * `askHeadless`: with no operator present, record the decision as a NEEDS_INPUT question (VC-9) instead of only
@@ -30,6 +44,7 @@ export async function ensureVerifierApprovedImpl(this: any, command: string, con
   if (!this.approvalPolicy.requiresDecision("exec", policyContext)) {
     return true;
   }
+  if (isUnattendedOperatorVerifier(this, command)) return true;
 
   const desc = describeVerifier(this.config.workspace, command);
   const verifierCmd = desc?.command || command;

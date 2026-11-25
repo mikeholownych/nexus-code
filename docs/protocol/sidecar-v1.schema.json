@@ -1,0 +1,3117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Nexus sidecar protocol v1",
+  "description": "Generated from cli/src/protocol.ts by cli/scripts/gen_protocol_schema.mjs. Do not edit by hand. Every message is one line of JSON carrying `v`, the protocol version.",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/SidecarEvent"
+    },
+    {
+      "$ref": "#/$defs/SidecarCommand"
+    }
+  ],
+  "$defs": {
+    "ApprovalReview": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "after": {
+              "type": "string"
+            },
+            "before": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "created": {
+              "type": "boolean"
+            },
+            "kind": {
+              "const": "change"
+            },
+            "path": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "after",
+            "before",
+            "created",
+            "kind",
+            "path",
+            "truncated"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "verifier"
+            },
+            "script": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "command",
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "command"
+            }
+          },
+          "required": [
+            "command",
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "args"
+            },
+            "text": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "text",
+            "truncated"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "patch"
+            },
+            "patch": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "patch",
+            "path",
+            "truncated"
+          ]
+        }
+      ]
+    },
+    "CapacityRecord": {
+      "description": "Evidence for a context-admission refusal (the request was rejected before any inference call, fail-closed).\n`modelCalled` says whether an earlier step of the same turn already reached the model; `pendingMessageRetained`\nsays whether the operator's submission is part of the conversation history after the refusal.",
+      "type": "object",
+      "properties": {
+        "completionReserveTokens": {
+          "type": "number"
+        },
+        "contextLimit": {
+          "type": "number"
+        },
+        "estimatedPromptTokens": {
+          "type": "number"
+        },
+        "missingRequirements": {
+          "description": "Gating requirements the request would not have carried (CX-5): the turn stopped rather than send without them.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "modelCalled": {
+          "type": "boolean"
+        },
+        "pendingMessageChars": {
+          "type": "number"
+        },
+        "pendingMessageRetained": {
+          "type": "boolean"
+        },
+        "promptCountSource": {
+          "description": "How the refused prompt was counted (provider_capabilities.ts CountSource); absent on records from earlier versions.",
+          "type": "string"
+        },
+        "step": {
+          "type": "number"
+        },
+        "toolResponseReserveTokens": {
+          "type": "number"
+        },
+        "unmeasured": {
+          "description": "Strict counting refused a request it could not measure: why.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "completionReserveTokens",
+        "contextLimit",
+        "estimatedPromptTokens",
+        "modelCalled",
+        "pendingMessageChars",
+        "pendingMessageRetained",
+        "step",
+        "toolResponseReserveTokens"
+      ]
+    },
+    "CatalogModel": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "provider"
+      ]
+    },
+    "CatalogProvider": {
+      "type": "object",
+      "properties": {
+        "connected": {
+          "type": "boolean"
+        },
+        "disclosure": {
+          "description": "\"local\" for the appliance, \"cloud\" otherwise.",
+          "enum": [
+            "cloud",
+            "local"
+          ]
+        },
+        "error": {
+          "type": "string"
+        },
+        "external": {
+          "description": "True when the credential is read from another client (Codex CLI, opencode, crush, Copilot plugin).",
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "methods": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConnectMethod"
+          }
+        },
+        "source": {
+          "description": "Where the connection's credential comes from (\"$OPENROUTER_API_KEY\", \"Nexus\", \"Codex CLI\", ...).",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "cached",
+            "disconnected",
+            "error",
+            "ok"
+          ]
+        }
+      },
+      "required": [
+        "connected",
+        "disclosure",
+        "id",
+        "label",
+        "methods",
+        "status"
+      ]
+    },
+    "ConnectMethod": {
+      "description": "How an operator can connect a provider from the TUI or `nexus connect`.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "browser",
+            "device",
+            "key"
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "unofficial": {
+          "description": "Uses another vendor's client identity; the providers' terms may not permit it.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "label"
+      ]
+    },
+    "EngineeringOutcome": {
+      "description": "VERIFIED        - the verifier selected for this workspace ran and passed against the current changes\nUNVERIFIED      - work ended with a result that was not (or could not be) verified; see reason. Either changes\n                  no passing verifier covers, or an answer resting on tool output that context compaction removed\n                  during the turn and the model did not re-read (CONTEXT_EVIDENCE_NOT_RETAINED)\nNOT_ESTABLISHED - no engineering result was established (turn did not complete, or verifier failed)\nNOT_REQUIRED    - the turn made no workspace change and every tool output it relied on was still in context",
+      "enum": [
+        "NOT_ESTABLISHED",
+        "NOT_REQUIRED",
+        "REGRESSION_FREE",
+        "UNVERIFIED",
+        "VERIFIED"
+      ]
+    },
+    "ErrorCode": {
+      "description": "`UNSUPPORTED_PROTOCOL`: `initialize` named a version range that shares no version with the sidecar's.\n`EXPERIMENTAL_DISABLED`: an experimental feature was used on a connection that did not enable it at `initialize`.\nSocket transport only (docs/PROTOCOL.md, \"Socket transport\"): `UNAUTHORIZED`: the attach was refused (the reason is never given);\n`NOT_CONTROLLER`: an observer sent a command; `NOT_PERMITTED`: the controller sent a command a socket client may not send.",
+      "enum": [
+        "BAD_REQUEST",
+        "BUSY",
+        "EXPERIMENTAL_DISABLED",
+        "INTERNAL",
+        "NOT_CONTROLLER",
+        "NOT_FOUND",
+        "NOT_PERMITTED",
+        "NO_PENDING_APPROVAL",
+        "NO_PROVIDER",
+        "UNAUTHORIZED",
+        "UNSUPPORTED_PROTOCOL"
+      ]
+    },
+    "EvidenceStatus": {
+      "enum": [
+        "failed",
+        "running",
+        "succeeded"
+      ]
+    },
+    "ExecutionState": {
+      "enum": [
+        "BLOCKED",
+        "COMPLETED",
+        "FAILED",
+        "INTERRUPTED",
+        "LIMIT_REACHED"
+      ]
+    },
+    "ExecutionStatus": {
+      "description": "What is known about whether the provider executed the failed request.\nNOT_EXECUTED: proven not run (never sent, refused, or answered with a rejection status).\nUNKNOWN: it may have been admitted and generated; nothing complete reached Nexus.\nCOMPLETED: the provider finished it (terminal evidence was received).",
+      "enum": [
+        "COMPLETED",
+        "NOT_EXECUTED",
+        "UNKNOWN"
+      ]
+    },
+    "HistoryEntry": {
+      "description": "One entry of a resumed conversation: a message, a tool the agent called, or the last turn's outcome.",
+      "type": "object",
+      "properties": {
+        "heading": {
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "assistant",
+            "outcome",
+            "steering",
+            "tool",
+            "tool_result",
+            "user"
+          ]
+        },
+        "status": {
+          "enum": [
+            "completed",
+            "failed",
+            "pending"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "toolCallId": {
+          "type": "string"
+        },
+        "turn": {
+          "$ref": "#/$defs/TurnResult"
+        }
+      },
+      "required": [
+        "role",
+        "text"
+      ]
+    },
+    "InferenceFailure": {
+      "type": "object",
+      "properties": {
+        "condition": {
+          "$ref": "#/$defs/ProviderCondition"
+        },
+        "execution": {
+          "$ref": "#/$defs/ExecutionStatus"
+        },
+        "hints": {
+          "$ref": "#/$defs/ProviderHints"
+        },
+        "httpStatus": {
+          "type": "number"
+        },
+        "kind": {
+          "$ref": "#/$defs/InferenceFailureKind"
+        },
+        "message": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/InferenceFailureOrigin"
+        },
+        "partialTextChars": {
+          "description": "Text received before the failure. Diagnostic only - never a complete answer.",
+          "type": "number"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "transportCause": {
+          "description": "Lower-level transport errors, outermost first.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TransportCause"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "message",
+        "origin"
+      ]
+    },
+    "InferenceFailureKind": {
+      "enum": [
+        "aborted",
+        "configuration_error",
+        "http_error",
+        "malformed_event",
+        "network_error",
+        "output_truncated",
+        "policy_denied",
+        "protocol_error",
+        "provider_error_frame",
+        "stream_incomplete",
+        "stream_interrupted",
+        "timeout"
+      ]
+    },
+    "InferenceFailureOrigin": {
+      "enum": [
+        "client",
+        "operator",
+        "provider",
+        "transport"
+      ]
+    },
+    "InterruptionRecord": {
+      "type": "object",
+      "properties": {
+        "outstandingTool": {
+          "description": "A tool that was already executing when cancellation was requested. It cannot be force-stopped; it is awaited.",
+          "type": "string"
+        },
+        "outstandingToolSettled": {
+          "type": "boolean"
+        },
+        "phase": {
+          "description": "Where the turn was when cancellation was observed.",
+          "enum": [
+            "between_steps",
+            "confirmation",
+            "inference",
+            "provider_wait",
+            "tool_dispatch",
+            "tool_settling"
+          ]
+        },
+        "providerEligibleAt": {
+          "description": "phase `provider_wait` only: when the provider may be asked again (the planned next attempt, which honours its\nRetry-After). A resumed turn waits until then before its first request (bounded by the recovery deadline).",
+          "type": "string"
+        },
+        "requestedAt": {
+          "type": "string"
+        },
+        "undispatchedToolCalls": {
+          "description": "Tool calls the model asked for that were never dispatched.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "phase",
+        "requestedAt",
+        "undispatchedToolCalls"
+      ]
+    },
+    "ModelRef": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "model",
+        "provider"
+      ]
+    },
+    "ModelStop": {
+      "description": "What made the model/agent loop stop issuing actions. Not itself evidence of success.",
+      "enum": [
+        "FINAL_TEXT",
+        "NONE",
+        "TASK_COMPLETED_TOOL"
+      ]
+    },
+    "ModelSummary": {
+      "type": "object",
+      "properties": {
+        "notes": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary"
+      ]
+    },
+    "NeedsInputKind": {
+      "description": "VC-9: a headless run that needs an operator decision ends BLOCKED with reason NEEDS_INPUT and one of these, and\nresumes with `nexus run --resume <task> --answer <id>=<option>`.\n\nThe id is a digest of what is being decided, so the same decision gets the same id when the resumed run reaches it\nagain, and an answer for one decision never approves another (a different tool, argument or verifier script has a\ndifferent id).",
+      "enum": [
+        "blocked_requirement",
+        "steering_conflict",
+        "tool_approval",
+        "verification_edit",
+        "verifier_approval"
+      ]
+    },
+    "NeedsInputQuestion": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/NeedsInputKind"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "enum": [
+                  "approve",
+                  "decline",
+                  "reply"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label"
+            ]
+          }
+        },
+        "prompt": {
+          "description": "One sentence the operator can answer.",
+          "type": "string"
+        },
+        "subagent": {
+          "description": "Present when a delegated subagent raised the question: how deep it ran and what it was asked to do. The id is unchanged, so `--answer` works as for any other question.",
+          "type": "object",
+          "properties": {
+            "depth": {
+              "type": "number"
+            },
+            "objective": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "depth",
+            "objective"
+          ]
+        },
+        "subject": {
+          "description": "What is being decided, as short strings (never secrets: arguments are clipped and redacted by the caller).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "options",
+        "prompt",
+        "subject"
+      ]
+    },
+    "OperatorAcceptance": {
+      "enum": [
+        "ACCEPTED",
+        "NOT_ACCEPTED",
+        "NOT_REQUESTED"
+      ]
+    },
+    "ProviderCondition": {
+      "description": "What a failed inference request says about the provider. The first four are temporary: the agent loop may wait\nfor them. The rest need a different request, configuration, or the operator.",
+      "enum": [
+        "AUTH_FAILURE",
+        "AVAILABLE",
+        "CAPACITY_REJECTED",
+        "DRAINING",
+        "OVERLOADED",
+        "PERMANENT_FAILURE",
+        "QUOTA_EXHAUSTED",
+        "RATE_LIMITED",
+        "REQUEST_REJECTED",
+        "TEMPORARILY_UNAVAILABLE"
+      ]
+    },
+    "ProviderHints": {
+      "description": "Retry metadata a provider advertised with a failure. All optional: plain OpenAI-compatible servers send none.",
+      "type": "object",
+      "properties": {
+        "errorCode": {
+          "description": "Provider error code, e.g. `context_length_exceeded`, `gateway_restarting`, `pre_generation`.",
+          "type": "string"
+        },
+        "errorType": {
+          "type": "string"
+        },
+        "rateLimitResetMs": {
+          "type": "number"
+        },
+        "remainingRequests": {
+          "type": "number"
+        },
+        "remainingTokens": {
+          "type": "number"
+        },
+        "retryAfterMs": {
+          "type": "number"
+        }
+      }
+    },
+    "ProviderRecoveryRecord": {
+      "description": "Provider recovery for one inference step. WAITING/PROBING are live states (also checkpointed durably);\nthe rest are final. Created only when a submission fails.",
+      "type": "object",
+      "properties": {
+        "condition": {
+          "description": "Latest provider condition observed by a submission or probe.",
+          "$ref": "#/$defs/ProviderCondition"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "everSucceeded": {
+          "type": "boolean"
+        },
+        "nextAttemptAt": {
+          "type": "string"
+        },
+        "policy": {
+          "type": "object",
+          "properties": {
+            "deadlineMs": {
+              "type": "number"
+            },
+            "maxDelayMs": {
+              "type": "number"
+            },
+            "maxUnknownReplays": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "deadlineMs",
+            "maxDelayMs",
+            "maxUnknownReplays"
+          ]
+        },
+        "probes": {
+          "type": "number"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "resumedAt": {
+          "type": "string"
+        },
+        "resumedRequestId": {
+          "description": "X-Request-ID of the submission that completed; it replaces the last entry of `submissions`.",
+          "type": "string"
+        },
+        "startedAt": {
+          "type": "string"
+        },
+        "state": {
+          "description": "YIELDED: the operation scheduler took the step back (NOT_EXECUTED only) to reroute or park the work.",
+          "enum": [
+            "CANCELLED",
+            "EXHAUSTED",
+            "NOT_RECOVERABLE",
+            "PROBING",
+            "RESUMED",
+            "WAITING",
+            "YIELDED"
+          ]
+        },
+        "step": {
+          "type": "number"
+        },
+        "submissions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RecoverySubmissionRecord"
+          }
+        },
+        "unknownReplays": {
+          "type": "number"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "waitedMs": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "condition",
+        "policy",
+        "probes",
+        "startedAt",
+        "state",
+        "step",
+        "submissions",
+        "unknownReplays",
+        "updatedAt",
+        "waitedMs"
+      ]
+    },
+    "ReceiptRow": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "ReceiptSection": {
+      "type": "object",
+      "properties": {
+        "note": {
+          "description": "Why the section is empty, or a footnote.",
+          "type": "string"
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReceiptRow"
+          }
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rows",
+        "title"
+      ]
+    },
+    "RecoverySubmissionRecord": {
+      "description": "One submission of an inference request that failed while the agent loop was recovering the provider.",
+      "type": "object",
+      "properties": {
+        "attempt": {
+          "type": "number"
+        },
+        "condition": {
+          "$ref": "#/$defs/ProviderCondition"
+        },
+        "execution": {
+          "$ref": "#/$defs/ExecutionStatus"
+        },
+        "failedAt": {
+          "type": "string"
+        },
+        "httpStatus": {
+          "type": "number"
+        },
+        "kind": {
+          "$ref": "#/$defs/InferenceFailureKind"
+        },
+        "message": {
+          "type": "string"
+        },
+        "previousRequestId": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "retryAfterMs": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "attempt",
+        "condition",
+        "execution",
+        "failedAt",
+        "kind",
+        "message",
+        "requestId"
+      ]
+    },
+    "SidecarCommand": {
+      "description": "Client to sidecar. One JSON object per line.",
+      "oneOf": [
+        {
+          "title": "answer",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "option": {
+              "enum": [
+                "approve",
+                "decline"
+              ]
+            },
+            "question": {
+              "type": "string"
+            },
+            "type": {
+              "const": "answer"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "id",
+            "option",
+            "question",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "approve",
+          "type": "object",
+          "properties": {
+            "always": {
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "approve"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "always",
+            "id",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "cancel",
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "cancel"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "checkpoint.choice",
+          "type": "object",
+          "properties": {
+            "choice": {
+              "enum": [
+                "allow_sensitive",
+                "cancel",
+                "other",
+                "read_only",
+                "retry",
+                "without_checkpoint"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "checkpoint.choice"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "choice",
+            "id",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "deny",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "deny"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "id",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "initialize",
+          "type": "object",
+          "properties": {
+            "client": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "version"
+              ]
+            },
+            "experimental": {
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string"
+            },
+            "protocol_max": {
+              "type": "number"
+            },
+            "protocol_min": {
+              "type": "number"
+            },
+            "type": {
+              "const": "initialize"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "client",
+            "id",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "model.select",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            },
+            "type": {
+              "const": "model.select"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "id",
+            "model",
+            "provider",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "models.list",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "models.list"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "id",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "prompt.submit",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "prompt.submit"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "id",
+            "text",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "provider.cancel",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "provider.cancel"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "id",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "provider.connect",
+          "type": "object",
+          "properties": {
+            "endpoint": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            },
+            "method": {
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            },
+            "type": {
+              "const": "provider.connect"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "provider",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "provider.disconnect",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            },
+            "type": {
+              "const": "provider.disconnect"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "id",
+            "provider",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "provider.local-cancel",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "provider.local-cancel"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "id",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "receipt",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "receipt"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "id",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "shutdown",
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "shutdown"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "slash",
+          "type": "object",
+          "properties": {
+            "args": {
+              "type": "string"
+            },
+            "command": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "slash"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "args",
+            "command",
+            "id",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "steer",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "steer"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "id",
+            "text",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "tool.detail",
+          "type": "object",
+          "properties": {
+            "evidence": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "tool.detail"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "evidence",
+            "id",
+            "type",
+            "v"
+          ]
+        }
+      ]
+    },
+    "SidecarEvent": {
+      "description": "Sidecar to client. One JSON object per line.",
+      "oneOf": [
+        {
+          "title": "activity",
+          "type": "object",
+          "properties": {
+            "max_minutes": {
+              "type": "number"
+            },
+            "max_steps": {
+              "description": "The turn's budget: total steps across segments, and the wall-clock limit in minutes (when continuation is on).",
+              "type": "number"
+            },
+            "phase": {
+              "type": "string"
+            },
+            "segment": {
+              "type": "number"
+            },
+            "step": {
+              "type": "number"
+            },
+            "subject": {
+              "type": "string"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "activity"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "phase",
+            "segment",
+            "step",
+            "turn_id",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "approval.request",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "preview": {
+              "type": "string"
+            },
+            "review": {
+              "$ref": "#/$defs/ApprovalReview"
+            },
+            "subject": {
+              "type": "string"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "approval.request"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "id",
+            "preview",
+            "review",
+            "subject",
+            "tool",
+            "turn_id",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "assistant.delta",
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "assistant.delta"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "text",
+            "turn_id",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "checkpoint.choice.request",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "checkpoint.choice.request"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "id",
+            "message",
+            "turn_id",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "error",
+          "type": "object",
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            "id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "const": "error"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "file.diff",
+          "type": "object",
+          "properties": {
+            "added": {
+              "type": "number"
+            },
+            "call_id": {
+              "type": "string"
+            },
+            "diff_lines": {
+              "description": "Changed and context lines in the whole diff (what \"N more lines\" counts), and its hunks.",
+              "type": "number"
+            },
+            "evidence": {
+              "type": "string"
+            },
+            "full_path": {
+              "description": "The complete diff on disk (redacted), kept for the session whatever the in-memory limits.",
+              "type": "string"
+            },
+            "hunks": {
+              "type": "number"
+            },
+            "kind": {
+              "enum": [
+                "added",
+                "deleted",
+                "modified"
+              ]
+            },
+            "note": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "preview": {
+              "type": "string"
+            },
+            "removed": {
+              "type": "number"
+            },
+            "total_lines": {
+              "type": "number"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "file.diff"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "added",
+            "call_id",
+            "diff_lines",
+            "evidence",
+            "hunks",
+            "kind",
+            "path",
+            "preview",
+            "removed",
+            "total_lines",
+            "truncated",
+            "turn_id",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "hello",
+          "type": "object",
+          "properties": {
+            "capabilities": {
+              "description": "Stable features the sidecar supports (SIDECAR_CAPABILITIES), sorted.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "commands": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "summary": {
+                    "type": "string"
+                  },
+                  "usage": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "summary",
+                  "usage"
+                ]
+              }
+            },
+            "experimental": {
+              "description": "Experimental features the sidecar offers; each stays off until `initialize` asks with `experimental: true`.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "pid": {
+              "type": "number"
+            },
+            "protocol": {
+              "description": "The version the sidecar speaks by default.",
+              "type": "number"
+            },
+            "protocol_max": {
+              "type": "number"
+            },
+            "protocol_min": {
+              "description": "The inclusive range of protocol versions this sidecar can speak. Absent from a sidecar older than capability negotiation: it speaks exactly `protocol`.",
+              "type": "number"
+            },
+            "type": {
+              "const": "hello"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "commands",
+            "pid",
+            "protocol",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "history",
+          "type": "object",
+          "properties": {
+            "error": {
+              "type": "string"
+            },
+            "messages": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HistoryEntry"
+              }
+            },
+            "page": {
+              "type": "number"
+            },
+            "pages": {
+              "type": "number"
+            },
+            "session": {
+              "type": "string"
+            },
+            "total": {
+              "type": "number"
+            },
+            "type": {
+              "const": "history"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "messages",
+            "session",
+            "total",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "initialized",
+          "type": "object",
+          "properties": {
+            "capabilities": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "experimental": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "id": {
+              "type": "string"
+            },
+            "protocol": {
+              "type": "number"
+            },
+            "type": {
+              "const": "initialized"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "capabilities",
+            "experimental",
+            "id",
+            "protocol",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "model.result",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "success": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "model.result"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "id",
+            "message",
+            "success",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "models.catalog",
+          "type": "object",
+          "properties": {
+            "current": {
+              "$ref": "#/$defs/ModelRef"
+            },
+            "id": {
+              "type": "string"
+            },
+            "models": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/CatalogModel"
+              }
+            },
+            "providers": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/CatalogProvider"
+              }
+            },
+            "recent": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ModelRef"
+              }
+            },
+            "type": {
+              "const": "models.catalog"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "current",
+            "id",
+            "models",
+            "providers",
+            "recent",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "notice",
+          "type": "object",
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "notice"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "text",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "provider.auth",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "instructions": {
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            },
+            "type": {
+              "const": "provider.auth"
+            },
+            "url": {
+              "type": "string"
+            },
+            "user_code": {
+              "type": "string"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "id",
+            "instructions",
+            "provider",
+            "type",
+            "url",
+            "v"
+          ]
+        },
+        {
+          "title": "provider.result",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            },
+            "success": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "provider.result"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "id",
+            "message",
+            "provider",
+            "success",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "receipt",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "sections": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ReceiptSection"
+              }
+            },
+            "type": {
+              "const": "receipt"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "id",
+            "sections",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "session.state",
+          "type": "object",
+          "properties": {
+            "busy": {
+              "type": "boolean"
+            },
+            "context_limit": {
+              "type": "number"
+            },
+            "context_tokens": {
+              "type": "number"
+            },
+            "endpoint_kind": {
+              "enum": [
+                "cloud",
+                "local"
+              ]
+            },
+            "git": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "branch": {
+                      "type": "string"
+                    },
+                    "dirty": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "branch",
+                    "dirty"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "mode": {
+              "enum": [
+                "auto",
+                "read-only",
+                "review"
+              ]
+            },
+            "model": {
+              "type": "string"
+            },
+            "posture": {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "enum": [
+                    "auto",
+                    "read-only",
+                    "review"
+                  ]
+                },
+                "profile": {
+                  "description": "The effective sandbox profile (`:workspace`, `:read-only`, `:network` or `unconfined`); additive (SB-1).",
+                  "type": "string"
+                },
+                "sandbox": {
+                  "type": "string"
+                },
+                "trusted": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "mode",
+                "sandbox",
+                "trusted"
+              ]
+            },
+            "read_only": {
+              "description": "The same facts the REPL /status reports (gate I-3).",
+              "type": "boolean"
+            },
+            "session": {
+              "description": "The id the session is saved under (shown so it can be resumed or referred to).",
+              "type": "string"
+            },
+            "type": {
+              "const": "session.state"
+            },
+            "v": {
+              "const": 1
+            },
+            "workspace": {
+              "type": "string"
+            },
+            "workspace_name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "busy",
+            "git",
+            "mode",
+            "model",
+            "type",
+            "v",
+            "workspace",
+            "workspace_name"
+          ]
+        },
+        {
+          "title": "slash.result",
+          "type": "object",
+          "properties": {
+            "clipboard": {
+              "description": "Text for the client to write to the terminal clipboard with OSC 52 (the client encodes it; at most OSC52_MAX_BYTES).",
+              "type": "string"
+            },
+            "command": {
+              "type": "string"
+            },
+            "composer": {
+              "description": "Text for the client to put into the composer.",
+              "type": "string"
+            },
+            "format": {
+              "description": "\"diff\": colour unified-diff lines.",
+              "const": "diff"
+            },
+            "id": {
+              "type": "string"
+            },
+            "output": {
+              "type": "string"
+            },
+            "prompt": {
+              "description": "The command started a turn with this prompt; the turn's events follow under the same id.",
+              "type": "string"
+            },
+            "success": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "slash.result"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "command",
+            "id",
+            "output",
+            "success",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "steer.ack",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/$defs/SteerStatus"
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "steer.ack"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "id",
+            "message",
+            "status",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "stream.stall",
+          "type": "object",
+          "properties": {
+            "silent_secs": {
+              "type": "number"
+            },
+            "stalled": {
+              "type": "boolean"
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "stream.stall"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "silent_secs",
+            "stalled",
+            "turn_id",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "tool.detail",
+          "type": "object",
+          "properties": {
+            "args": {
+              "type": "string"
+            },
+            "diff": {
+              "description": "Full unified diff of the change this call made, when it changed a file (at most MAX_DIFF_DETAIL chars).",
+              "type": "string"
+            },
+            "diff_chars": {
+              "description": "Characters in the complete diff; more than `diff` holds when it was cut to the in-memory limit.",
+              "type": "number"
+            },
+            "diff_path": {
+              "description": "The complete diff on disk.",
+              "type": "string"
+            },
+            "duration_ms": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "evidence": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "output": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/$defs/EvidenceStatus"
+            },
+            "subject": {
+              "type": "string"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "type": {
+              "const": "tool.detail"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "args",
+            "duration_ms",
+            "evidence",
+            "id",
+            "output",
+            "status",
+            "subject",
+            "tool",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "tool.end",
+          "type": "object",
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "denied": {
+              "description": "The operator declined the call at its approval prompt (never set for a policy refusal). The call did not run.",
+              "const": true
+            },
+            "duration_ms": {
+              "type": "number"
+            },
+            "evidence": {
+              "type": "string"
+            },
+            "exit_code": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lines": {
+              "type": "number"
+            },
+            "preview": {
+              "description": "Commands: the first lines of their output (stdout, then stderr), redacted, controls made visible.",
+              "type": "string"
+            },
+            "success": {
+              "type": "boolean"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "timed_out": {
+              "type": "boolean"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "tool.end"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "call_id",
+            "evidence",
+            "lines",
+            "success",
+            "summary",
+            "tool",
+            "turn_id",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "tool.start",
+          "type": "object",
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "evidence": {
+              "type": "string"
+            },
+            "subject": {
+              "type": "string"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "tool.start"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "call_id",
+            "evidence",
+            "subject",
+            "tool",
+            "turn_id",
+            "type",
+            "v"
+          ]
+        },
+        {
+          "title": "turn.result",
+          "type": "object",
+          "properties": {
+            "heading": {
+              "type": "string"
+            },
+            "line": {
+              "type": "string"
+            },
+            "model_summary": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelSummary"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "saved": {
+              "type": "boolean"
+            },
+            "turn": {
+              "$ref": "#/$defs/TurnResult"
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "turn.result"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "heading",
+            "line",
+            "model_summary",
+            "saved",
+            "turn",
+            "turn_id",
+            "type",
+            "v"
+          ]
+        }
+      ]
+    },
+    "SteerStatus": {
+      "description": "What became of operator steering sent while work was running. `queued`: held for the next step boundary.\n`applied`: given to the agent (at a step boundary, or as a follow-up turn). `deferred`: the turn was finishing; it\nstarts a follow-up turn. `cancelled`: the turn ended first; `text` is returned to the operator. `rejected`: nothing\nit could steer (a command is running); `text` is returned. `duplicate`: this id was already received. `held`: the\nsteering negates a requirement and waits for the operator's decision; the outcome follows as `applied` or `cancelled`.",
+      "enum": [
+        "applied",
+        "cancelled",
+        "deferred",
+        "duplicate",
+        "held",
+        "queued",
+        "rejected"
+      ]
+    },
+    "ToolCallSyntaxCounts": {
+      "description": "Tool-call argument syntax, counted once per call the parser recognizes, on every path that can produce one: native\n`tool_calls`, `<tool_call>` tags, a reply that is solely one fenced JSON call, and, under\n`NEXUS_TEXT_TOOL_PARSING=legacy`, fenced code blocks and balanced JSON objects in prose. Each is `native` (valid JSON\nas sent), `trailing` (parsed after a trailing-class repair, which includes removing a wrapping Markdown fence),\n`structural` (parsed only after closing truncated brackets or strings), `schema` (valid JSON, but an argument value\nwas converted to the type the tool's schema declares) or `invalid` (did not parse). A call counts once, under its worst\nclass; only a call that needed nothing is `native`. Calls rejected\nfor needing structural repair are still counted under `structural`. Not counted: tool names that are not offered,\nmalformed native entries dropped for lacking a function name, and responses cut off at the output-token limit.",
+      "type": "object",
+      "properties": {
+        "invalid": {
+          "type": "number"
+        },
+        "native": {
+          "type": "number"
+        },
+        "schema": {
+          "description": "Parsed as sent, but an argument value was converted to the type the tool's schema declares (WM-1).",
+          "type": "number"
+        },
+        "structural": {
+          "type": "number"
+        },
+        "trailing": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "invalid",
+        "native",
+        "schema",
+        "structural",
+        "trailing"
+      ]
+    },
+    "TransportCause": {
+      "description": "One level of a transport error's cause chain (socket, TLS, or parser error beneath `fetch failed`).",
+      "type": "object",
+      "properties": {
+        "address": {
+          "type": "string"
+        },
+        "bytesRead": {
+          "type": "number"
+        },
+        "bytesWritten": {
+          "description": "Bytes the socket had written/read when it failed; 0 written means the request never left this host.",
+          "type": "number"
+        },
+        "code": {
+          "type": "string"
+        },
+        "errno": {
+          "type": "number"
+        },
+        "message": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "port": {
+          "type": "number"
+        },
+        "syscall": {
+          "type": "string"
+        }
+      }
+    },
+    "TurnEvidence": {
+      "type": "object",
+      "properties": {
+        "carriedChanges": {
+          "description": "Unverified changes from earlier turns were pending when this turn began.",
+          "type": "boolean"
+        },
+        "denied": {
+          "description": "Tool calls the operator denied during this turn.",
+          "type": "number"
+        },
+        "verifierRuns": {
+          "description": "Verifier runs during this turn, in order: the pre-change baseline or the completion check.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "passed": {
+                "type": "boolean"
+              },
+              "phase": {
+                "enum": [
+                  "before_change",
+                  "completion"
+                ]
+              }
+            },
+            "required": [
+              "command",
+              "passed",
+              "phase"
+            ]
+          }
+        },
+        "workspaceChanged": {
+          "description": "Whether workspace content differs from how this turn found it; \"unknown\" when the state could not be established.",
+          "enum": [
+            "no",
+            "unknown",
+            "yes"
+          ]
+        }
+      },
+      "required": [
+        "carriedChanges",
+        "denied",
+        "verifierRuns",
+        "workspaceChanged"
+      ]
+    },
+    "TurnReason": {
+      "enum": [
+        "CONTEXT_CAPACITY_EXCEEDED",
+        "CONTEXT_EVIDENCE_NOT_RETAINED",
+        "INFERENCE_FAILED",
+        "INFERENCE_SUBMISSION_BUDGET_EXHAUSTED",
+        "NEEDS_INPUT",
+        "NO_APPLICABLE_VERIFIER",
+        "NO_TESTS_EXECUTED",
+        "OPERATOR_INTERRUPT",
+        "PERSISTENCE_FAILED",
+        "REGRESSION_FREE",
+        "REPOSITORY_STATE_CHANGED",
+        "REQUIREMENTS_INCOMPLETE",
+        "STAGNATION_DETECTED",
+        "STEP_BUDGET_EXHAUSTED",
+        "STEP_LIMIT_REACHED",
+        "STEP_PAUSED",
+        "TIME_BUDGET_EXHAUSTED",
+        "TOOL_CALL_LOOP",
+        "TOOL_INVOCATION_BUDGET_EXHAUSTED",
+        "UNHANDLED_ERROR",
+        "VERIFICATION_NOT_RUN",
+        "VERIFIER_FAILED",
+        "VERIFIER_NOT_CONVERGING",
+        "VERIFIER_TIMED_OUT"
+      ]
+    },
+    "TurnResult": {
+      "type": "object",
+      "properties": {
+        "acceptance": {
+          "$ref": "#/$defs/OperatorAcceptance"
+        },
+        "capacity": {
+          "description": "Present only when execution is BLOCKED by context admission.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CapacityRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "contextNotRetained": {
+          "description": "Tool outputs that left the context during the turn and were not read again, when the turn still ended VERIFIED or\nREGRESSION_FREE: the verifier's result stands, but the work may rest on observations the model no longer had.",
+          "type": "number"
+        },
+        "continuation": {
+          "type": "object",
+          "properties": {
+            "cumulativeSteps": {
+              "description": "Steps run on this objective across all its turns (observability; never a limit).",
+              "type": "number"
+            },
+            "inferenceSubmissionHistoryComplete": {
+              "description": "False means earlier requests predate this counter or the persisted counter was malformed.",
+              "type": "boolean"
+            },
+            "inferenceSubmissions": {
+              "description": "Inference requests admitted for this objective, including provider retries.",
+              "type": "number"
+            },
+            "maxInferenceSubmissions": {
+              "type": "number"
+            },
+            "maxTaskElapsedMs": {
+              "description": "Fixed objective-wide wall-clock age ceiling.",
+              "type": "number"
+            },
+            "maxToolInvocations": {
+              "type": "number"
+            },
+            "repeated": {
+              "description": "Demonstrated loops: the same action and result on an unchanged workspace, at least REPEAT_THRESHOLD times.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string"
+                  },
+                  "count": {
+                    "type": "number"
+                  },
+                  "firstStep": {
+                    "type": "number"
+                  },
+                  "lastStep": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "action",
+                  "count",
+                  "firstStep",
+                  "lastStep"
+                ]
+              }
+            },
+            "segmentSteps": {
+              "type": "number"
+            },
+            "segments": {
+              "type": "number"
+            },
+            "stateUncertainty": {
+              "description": "Why repetition could not be judged against workspace state this turn, when it could not.",
+              "type": "string"
+            },
+            "stepsWithoutProgress": {
+              "type": "number"
+            },
+            "stopReason": {
+              "type": "string"
+            },
+            "taskElapsedHistoryComplete": {
+              "description": "False when the legacy objective start time was missing or malformed and prior elapsed time is unknown.",
+              "type": "boolean"
+            },
+            "taskElapsedMs": {
+              "description": "Objective wall-clock age charged across turns, resumes, and persisted in-flight intervals.",
+              "type": "number"
+            },
+            "toolInvocationHistoryComplete": {
+              "description": "False means earlier dispatches predate this counter or the persisted counter was malformed.",
+              "type": "boolean"
+            },
+            "toolInvocations": {
+              "description": "Tool dispatches charged to this objective and the fixed ceiling.",
+              "type": "number"
+            }
+          },
+          "required": [
+            "segmentSteps",
+            "segments",
+            "stepsWithoutProgress"
+          ]
+        },
+        "convergence": {
+          "description": "Present when the turn stopped because verifier attempts were not converging: the signal and the attempts behind it.",
+          "type": "object",
+          "properties": {
+            "attempts": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "candidate": {
+                    "type": "string"
+                  },
+                  "classification": {
+                    "type": "string"
+                  },
+                  "command": {
+                    "type": "string"
+                  },
+                  "failedCheck": {
+                    "type": "string"
+                  },
+                  "failingTests": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "n": {
+                    "type": "number"
+                  },
+                  "status": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "candidate",
+                  "command",
+                  "n",
+                  "status"
+                ]
+              }
+            },
+            "evidence": {
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "diverging",
+                "oscillating",
+                "stalled"
+              ]
+            }
+          },
+          "required": [
+            "attempts",
+            "evidence",
+            "state"
+          ]
+        },
+        "detail": {
+          "type": "string"
+        },
+        "execution": {
+          "$ref": "#/$defs/ExecutionState"
+        },
+        "finalOutputComplete": {
+          "description": "True only if the final model response was received completely (positive protocol evidence).",
+          "type": "boolean"
+        },
+        "finishedAt": {
+          "type": "string"
+        },
+        "furtherNeedsInput": {
+          "description": "VC-9: further questions recorded in the same turn (delegated subagents), in the order raised; `needsInput` is the first.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NeedsInputQuestion"
+          }
+        },
+        "inferenceFailure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InferenceFailure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "interruption": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InterruptionRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "modelStop": {
+          "$ref": "#/$defs/ModelStop"
+        },
+        "needsInput": {
+          "description": "Present when the turn stopped as NEEDS_INPUT: the decision wanted. Resume with `--answer <id>=approve|decline`, or `<id>=reply:<text>` for a question whose only option is `reply`.",
+          "$ref": "#/$defs/NeedsInputQuestion"
+        },
+        "objective": {
+          "description": "Where the operator's objective stands: open requirements, the failed check and the next action.",
+          "type": "object",
+          "properties": {
+            "failedCheck": {
+              "type": "string"
+            },
+            "implementedOnly": {
+              "description": "Requirements counted done on the model's report alone (implemented, not verified by a bound verifier run).",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "nextAction": {
+              "type": "string"
+            },
+            "remaining": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "status": {
+              "enum": [
+                "blocked",
+                "completed",
+                "incomplete"
+              ]
+            }
+          },
+          "required": [
+            "remaining",
+            "status"
+          ]
+        },
+        "outcome": {
+          "$ref": "#/$defs/EngineeringOutcome"
+        },
+        "pendingProviderWindows": {
+          "description": "Provider windows restored by a resume that this turn did not wait out (it ran on another endpoint, or was cancelled\nwhile waiting) and a later turn on those endpoints still owes. Persisted with the turn, so a restart keeps them.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "eligibleAt": {
+                "type": "string"
+              },
+              "endpoint": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "eligibleAt"
+            ]
+          }
+        },
+        "persistence": {
+          "description": "Durable writes that failed during the turn (absent when every write succeeded). Never hidden behind a success.",
+          "type": "object",
+          "properties": {
+            "durable": {
+              "const": false
+            },
+            "failures": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "durable",
+            "failures"
+          ]
+        },
+        "providerRecovery": {
+          "description": "Steps of this turn whose inference had to recover the provider (resumed or not).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProviderRecoveryRecord"
+          }
+        },
+        "reason": {
+          "$ref": "#/$defs/TurnReason"
+        },
+        "repeatedCall": {
+          "description": "Present when the turn stopped as TOOL_CALL_LOOP: the repeated call (arguments redacted) and the recent calls with their counts.",
+          "type": "object",
+          "properties": {
+            "arguments": {
+              "type": "string"
+            },
+            "count": {
+              "type": "number"
+            },
+            "history": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "arguments": {
+                    "type": "string"
+                  },
+                  "count": {
+                    "type": "number"
+                  },
+                  "tool": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "arguments",
+                  "count",
+                  "tool"
+                ]
+              }
+            },
+            "tool": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "arguments",
+            "count",
+            "history",
+            "tool"
+          ]
+        },
+        "stepPaused": {
+          "description": "True when the turn paused deterministically after one model/tool cycle under step mode.",
+          "type": "boolean"
+        },
+        "steps": {
+          "type": "object",
+          "properties": {
+            "limitReached": {
+              "type": "boolean"
+            },
+            "max": {
+              "type": "number"
+            },
+            "used": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "limitReached",
+            "max",
+            "used"
+          ]
+        },
+        "tokenAccounting": {
+          "description": "Context sizing and request counting: the limits in effect and where each came from (advertised, operator, client\ndefault), the tool-output headroom policy, capability availability, and how the last request was counted (source:\nexact_admitted, exact_sampled_worker, gateway_conservative, client_estimate), including worker differences.",
+          "type": "object",
+          "properties": {
+            "contextLimit": {
+              "type": "number"
+            },
+            "contextSource": {
+              "type": "string"
+            },
+            "discovery": {
+              "type": "string"
+            },
+            "lastRequest": {
+              "type": "object",
+              "properties": {
+                "admittedSource": {
+                  "type": "string"
+                },
+                "admittedTokens": {
+                  "type": "number"
+                },
+                "admittedWorker": {
+                  "type": "string"
+                },
+                "clientEstimate": {
+                  "type": "number"
+                },
+                "countedWorker": {
+                  "type": "string"
+                },
+                "promptTokens": {
+                  "type": "number"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "step": {
+                  "type": "number"
+                },
+                "uncertainty": {
+                  "type": "string"
+                },
+                "workerDiffers": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "clientEstimate",
+                "promptTokens",
+                "source",
+                "step"
+              ]
+            },
+            "limitsVersion": {
+              "type": "string"
+            },
+            "outputAllowance": {
+              "type": "number"
+            },
+            "outputSource": {
+              "type": "string"
+            },
+            "tokenCounting": {
+              "type": "string"
+            },
+            "toolHeadroomPolicy": {
+              "type": "number"
+            },
+            "workers": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "contextLimit",
+            "contextSource",
+            "discovery",
+            "outputAllowance",
+            "outputSource",
+            "tokenCounting",
+            "toolHeadroomPolicy"
+          ]
+        },
+        "toolCallSyntax": {
+          "description": "Argument syntax of the tool calls the model issued this turn (native, repaired or invalid JSON); absent when none.",
+          "$ref": "#/$defs/ToolCallSyntaxCounts"
+        },
+        "turnEvidence": {
+          "description": "What this turn itself did, so a verdict never reports earlier turns' changes or a pre-change verifier run as this\nturn's (TUI-AUDIT D-04). Absent on results built outside a turn.",
+          "$ref": "#/$defs/TurnEvidence"
+        },
+        "unverifiedChangesPending": {
+          "description": "Workspace has changes that no passing verifier run covers (may predate this turn).",
+          "type": "boolean"
+        },
+        "verification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VerificationEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "acceptance",
+        "execution",
+        "finalOutputComplete",
+        "finishedAt",
+        "inferenceFailure",
+        "interruption",
+        "modelStop",
+        "outcome",
+        "steps",
+        "unverifiedChangesPending",
+        "verification"
+      ]
+    },
+    "TypecheckEvidence": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "baselineErrorCount": {
+          "description": "Errors the baseline run (before the change) already had.",
+          "type": "number"
+        },
+        "candidateId": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        },
+        "configPath": {
+          "type": "string"
+        },
+        "configSha256": {
+          "type": "string"
+        },
+        "enforced": {
+          "description": "False when the result is recorded only (operator-configured verifier, or NEXUS_TYPECHECK mode \"record\").",
+          "type": "boolean"
+        },
+        "errorCount": {
+          "type": "number"
+        },
+        "excerpt": {
+          "description": "Redacted, control characters made visible, capped, and fenced as untrusted compiler output.",
+          "type": "string"
+        },
+        "exitCode": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "firstDiagnostics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "introducedCount": {
+          "description": "Errors in the run that the pre-change baseline run did not have (present only when a baseline was captured).",
+          "type": "number"
+        },
+        "projects": {
+          "description": "Per-project evidence when a workspace contains multiple configured type-check projects.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TypecheckEvidence"
+          }
+        },
+        "scope": {
+          "description": "What the result holds for: \"under <configPath>\", never universal.",
+          "type": "string"
+        },
+        "shellChangedFiles": {
+          "description": "Files counted as modified that no edit tool touched (changed through the shell), when any.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "status": {
+          "description": "ENVIRONMENT: the check could not run or be attributed here (not a candidate failure). PREEXISTING: errors exist, but\nnone in a file the candidate modified; it is not a pass and does not block.",
+          "enum": [
+            "ENVIRONMENT",
+            "FAILED",
+            "NOT_APPLICABLE",
+            "PASSED",
+            "PREEXISTING",
+            "TIMED_OUT",
+            "UNAVAILABLE"
+          ]
+        },
+        "tool": {
+          "type": "string"
+        },
+        "toolSha256": {
+          "description": "Hash of the resolved tool launcher.",
+          "type": "string"
+        },
+        "toolVersion": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "at",
+        "status"
+      ]
+    },
+    "VerificationEvidence": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "candidateId": {
+          "type": "string"
+        },
+        "command": {
+          "description": "The verifier actually selected: configured override or one discovered from repository files.",
+          "type": "string"
+        },
+        "deadlineSecs": {
+          "description": "Deadline the verifier was given, recorded when it timed out.",
+          "type": "number"
+        },
+        "definitionBound": {
+          "description": "False when the verifier's inputs could not be bound to the tree that was committed: either its workspace-resolved\ndefinition was unbindable (for example a node_modules tree under `npm test`) or test files changed while it ran\n(including a test that restored itself before exit). No such pass can be independent evidence; the turn is then at\nmost REGRESSION_FREE, and independenceDetail names which binding failed.",
+          "const": false
+        },
+        "exitSuccess": {
+          "type": "boolean"
+        },
+        "filtered": {
+          "description": "True when the selected test command includes a filter and therefore cannot stand for the full suite.",
+          "type": "boolean"
+        },
+        "hasExecutedTests": {
+          "type": "boolean"
+        },
+        "independenceDetail": {
+          "type": "string"
+        },
+        "independent": {
+          "description": "A discovered verifier's pass is independent evidence of the change: tests that existed before it, unmodified,\nfailed before and pass after. False (with independenceDetail) when only the agent's own tests, or tests that also\npassed before, check it — the turn is then REGRESSION_FREE, not VERIFIED.",
+          "type": "boolean"
+        },
+        "isDeliverableBound": {
+          "type": "boolean"
+        },
+        "outputSha256": {
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "configured",
+            "discovered"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/VerificationStatus"
+        },
+        "typecheck": {
+          "description": "Type-check run beside the verifier. A scoped fact about the named configuration, never about the code in general.",
+          "$ref": "#/$defs/TypecheckEvidence"
+        }
+      },
+      "required": [
+        "at",
+        "status"
+      ]
+    },
+    "VerificationStatus": {
+      "enum": [
+        "FAILED",
+        "NO_APPLICABLE_VERIFIER",
+        "PASSED",
+        "TIMED_OUT"
+      ]
+    }
+  }
+}

@@ -31,6 +31,10 @@ import { KnowledgeGraph } from "./knowledge.js";
 import { TaskStateNotFoundError } from "./core/state.js";
 import { buildConfig as buildConfigOrThrow, loadEnvironment, operatorConfigLoadError, withoutProjectEnvironment } from "./config.js";
 import { describeTarget, registerProviderCommands } from "./provider_cli.js";
+import { registerHookCommands } from "./hooks_cli.js";
+import { registerTriggerCommands } from "./triggers_cli.js";
+import { registerPluginPackageCommands } from "./plugins_cli.js";
+import { printable } from "./core/printable.js";
 import { UsageLedger } from "./usage.js";
 import { DOCTOR_EXIT, DOCTOR_SCHEMA_VERSION, doctorExitCode, renderDoctorJson, renderDoctorText, runDoctor, runRepairs } from "./doctor.js";
 import { promptWorkspaceTrust } from "./startup_trust.js";
@@ -38,6 +42,10 @@ import { isolateEvalCommandHome, runVersionedEvalCommand } from "./eval_cli.js";
 import { redactDiagnosticForOutput } from "./core/persistence_protection.js";
 import { formatDiagnosticForOutput } from "./ui.js";
 import { streamEventSink, streamObserver } from "./stream_json.js";
+import { RUN_RESULT_SCHEMA_VERSION, resolveRunTask, runExitCode, runJsonResult } from "./run_contract.js";
+import { VERIFY_RESULT_SCHEMA_VERSION, verifyExitCode, type VerifyJsonError } from "./verify_contract.js";
+import { VerifyInterrupted, VerifyUsageError, renderVerifyText, verifyChange, type VerifySandboxRequest } from "./core/verify.js";
+import { acpStartupRefusal, runAcpStdio } from "./acp_stdio.js";
 
 function collectAnswer(value: string, previous: string[] = []): string[] {
   return [...previous, value];
@@ -57,6 +65,12 @@ function buildConfig(options: any): HarnessConfig {
   }
 }
 import { registerOperationCommands } from "./operation_cli.js";
+import { registerBackgroundCommands } from "./background_cli.js";
+import { registerScheduleCommands } from "./schedule_cli.js";
+import { requireManagedPolicyAtStartup } from "./core/policy_runtime.js";
+import { registerPolicyCommands } from "./policy_cli.js";
+import { managedPolicy, verifyFlagRefusal } from "./core/policy_runtime.js";
+import { registerAuditCommands } from "./audit_cli.js";
 import pc from "picocolors";
 
 import * as os from "node:os";
@@ -377,6 +391,7 @@ program
   .option("--max-tool-invocations <number>", "Objective-wide tool dispatch limit shared across resumes (default: 1000; also NEXUS_MAX_TOOL_INVOCATIONS)")
   .option("--strict-token-count", "Refuse a request the connection could not count on a worker (default: proceed on the labelled estimate)")
   .option("--max-turn-minutes <number>", "Continuation: active invocation wall-clock limit in minutes (default: 480)")
+  .option("--max-task-minutes <number>", "Continuation: cumulative objective execution-time limit (default: 4320; also NEXUS_MAX_TASK_MINUTES)")
   .option("--stagnation-steps <number>", "Continuation: stop after this many steps without progress (default 12)")
   .option("--no-continuation", "End a turn at --max-steps instead of continuing while it makes progress")
   .option("-t, --temperature <number>", "Model temperature (default: 0.2)")
@@ -384,7 +399,7 @@ program
   .option("--fallback <urls>", "Comma-separated fallback LLM endpoints if primary is unavailable")
   .option("--context-limit <tokens>", "Context window limit in tokens; below the provider's advertised capacity it is kept, above it the advertised capacity applies (default: advertised capacity, else 65536)")
   .option("--dry-run", "Simulate file modifications without writing changes to disk")
-  .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
+  .option("--sandbox [mode]", "Isolate command execution (auto|bwrap|docker|none or [engine]:workspace|:read-only|:network; default: auto)")
   .option("--sandbox-network", "With --sandbox: let sandboxed commands and the sandboxed native worker use the network (off by default; also NEXUS_SANDBOX_NETWORK=1 in the operator environment)")
   .option("--worktree", "Isolate execution inside an ephemeral git worktree under .nexus/worktrees/<task-id>")
   .option("--worktree-branch <name>", "Run inside the named git worktree for this branch (created if missing); kept after the run, merge it with `nexus worktree merge`")
@@ -417,6 +432,7 @@ program
   .option("--max-tool-invocations <number>", "Objective-wide tool dispatch limit shared across resumes (default: 1000; also NEXUS_MAX_TOOL_INVOCATIONS)")
   .option("--strict-token-count", "Refuse a request the connection could not count on a worker (default: proceed on the labelled estimate)")
   .option("--max-turn-minutes <number>", "Continuation: active invocation wall-clock limit in minutes (default: 480)")
+  .option("--max-task-minutes <number>", "Continuation: cumulative objective execution-time limit (default: 4320; also NEXUS_MAX_TASK_MINUTES)")
   .option("--stagnation-steps <number>", "Continuation: stop after this many steps without progress (default 12)")
   .option("--no-continuation", "End a turn at --max-steps instead of continuing while it makes progress")
   .option("-t, --temperature <number>", "Model temperature (default: 0.2)")
@@ -425,7 +441,7 @@ program
   .option("--context-limit <tokens>", "Context window limit in tokens; below the provider's advertised capacity it is kept, above it the advertised capacity applies (default: advertised capacity, else 65536)")
   .option("--dry-run", "Simulate file modifications without writing changes to disk")
   .option("--read-only", "Reject all mutating tool executions and commands")
-  .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
+  .option("--sandbox [mode]", "Isolate command execution (auto|bwrap|docker|none or [engine]:workspace|:read-only|:network; default: auto)")
   .option("--sandbox-network", "With --sandbox: let sandboxed commands and the sandboxed native worker use the network (off by default; also NEXUS_SANDBOX_NETWORK=1 in the operator environment)")
   .option("--worktree", "Isolate execution inside an ephemeral git worktree under .nexus/worktrees/<task-id>")
   .option("--worktree-branch <name>", "Run inside the named git worktree for this branch (created if missing); kept after the run, merge it with `nexus worktree merge`")
@@ -463,6 +479,7 @@ program
   .option("--max-tool-invocations <number>", "Objective-wide tool dispatch limit shared across resumes (default: 1000; also NEXUS_MAX_TOOL_INVOCATIONS)")
   .option("--strict-token-count", "Refuse a request the connection could not count on a worker (default: proceed on the labelled estimate)")
   .option("--max-turn-minutes <number>", "Continuation: active invocation wall-clock limit in minutes (default: 480)")
+  .option("--max-task-minutes <number>", "Continuation: cumulative objective execution-time limit (default: 4320; also NEXUS_MAX_TASK_MINUTES)")
   .option("--stagnation-steps <number>", "Continuation: stop after this many steps without progress (default 12)")
   .option("--no-continuation", "End a turn at --max-steps instead of continuing while it makes progress")
   .option("-t, --temperature <number>", "Model temperature", "0.2")
@@ -474,7 +491,7 @@ program
   .option("-y, --yes", "Run non-interactively without approval prompts (forces auto mode)")
   .option("--approve", "Require human approval before destructive actions (forces review mode)")
   .option("--mode <mode>", "Execution mode: auto, review, or read-only (default: review; folder trust does not change it)")
-  .option("--sandbox [mode]", "Isolate command execution using bubblewrap (bwrap) or Docker (default: auto)")
+  .option("--sandbox [mode]", "Isolate command execution (auto|bwrap|docker|none or [engine]:workspace|:read-only|:network; default: auto)")
   .option("--sandbox-network", "With --sandbox: let sandboxed commands and the sandboxed native worker use the network (off by default; also NEXUS_SANDBOX_NETWORK=1 in the operator environment)")
   .option("--worktree", "Isolate execution inside an ephemeral git worktree under .nexus/worktrees/<task-id>")
   .option("--worktree-branch <name>", "Run inside the named git worktree for this branch (created if missing); kept after the run, merge it with `nexus worktree merge`")
@@ -492,6 +509,7 @@ program
   .option("--coder-provider <id>", "Cloud provider for the coder model (requires --coder-model)")
   .option("-j, --json", "Output machine-readable JSON structured result (UI-002, UI-003)")
   .option("--output <format>", "Output format: text (default), json (same as --json) or stream-json (one JSON event per line, nothing else on stdout; see docs/STREAM_JSON.md)")
+  .option("--input-json <file|->", "Read the task from a JSON document { \"schema_version\": 1, \"task\": \"...\" } in a file, or on stdin with '-' (see the manual: nexus run --json)")
   .option("-r, --resume [id]", "Resume previous session or task state")
   .option("--fork-session <id>", "Start in a new copy of the named session (the original is never changed; prints the new id)")
   .option("--fork-at <n>", "With --fork-session: copy only the first n messages (default: all)")
@@ -509,20 +527,28 @@ program
         answers = parseOperatorAnswers(options.answer);
       } catch (err: any) {
         console.error(`error: ${err.message}`);
-        exitAfterFlush(2);
+        exitAfterFlush(runExitCode("usage"));
         return;
       }
     }
     const forkError = forkStartError(options);
     if (forkError) {
       console.error(`error: ${forkError}`);
-      exitAfterFlush(2);
+      exitAfterFlush(runExitCode("usage"));
       return;
     }
     const outputFormat = String(options.output ?? (options.json ? "json" : "text"));
     if (!["text", "json", "stream-json"].includes(outputFormat) || (options.json && outputFormat !== "json")) {
       console.error(options.json && ["text", "stream-json"].includes(outputFormat) ? "error: --json cannot be combined with --output " + outputFormat : "error: --output must be text, json or stream-json");
-      exitAfterFlush(2);
+      exitAfterFlush(runExitCode("usage"));
+      return;
+    }
+    // PF-2: the task may also come from --input-json, or from stdin when no argument is given (src/run_contract.ts).
+    try {
+      prompt = await resolveRunTask({ prompt, inputJson: options.inputJson, resuming: (options.resume !== undefined && options.resume !== false) || options.forkSession !== undefined, stdin: process.stdin });
+    } catch (err: any) {
+      console.error(`error: ${redactDiagnosticForOutput(String(err?.message ?? err))}`);
+      exitAfterFlush(runExitCode("usage"));
       return;
     }
     const isStream = outputFormat === "stream-json";
@@ -560,7 +586,7 @@ program
       } catch (err: any) {
         console.error(`error: ${redactDiagnosticForOutput(String(err?.message ?? err))}`);
         app.shutdown();
-        exitAfterFlush(2);
+        exitAfterFlush(runExitCode("resume_unavailable"));
         return;
       }
     }
@@ -569,7 +595,7 @@ program
     if ((options.resume === undefined || options.resume === false) && !prompt) {
       console.error("error: missing required argument 'prompt'");
       app.shutdown();
-      exitAfterFlush(1);
+      exitAfterFlush(runExitCode("missing_prompt"));
       return;
     }
 
@@ -582,7 +608,7 @@ program
         abort.abort(new Error("SIGINT"));
         if (!isJson) console.error(pc.yellow("\nInterrupt received: no further work will be started (Ctrl-C again to terminate immediately)."));
       } else {
-        process.exit(130);
+        process.exit(runExitCode("interrupted"));
       }
     };
     process.on("SIGINT", onSigint);
@@ -600,7 +626,7 @@ program
           if (tasks.length === 0) {
             console.error(`no task to resume in ${formatDiagnosticForOutput(targetWorkspace)}; see 'nexus status'`);
             app.shutdown();
-            exitAfterFlush(2);
+            exitAfterFlush(runExitCode("resume_unavailable"));
             return;
           }
           resumeTaskId = tasks[0].taskId;
@@ -622,9 +648,9 @@ program
 
       const cloud = UsageLedger.global().cloudTotals();
       if (emitEvent) {
-        emitEvent("result", { ...(cloud.requests ? { ...result, cloudUsage: cloud } : result) });
+        emitEvent("result", { ...runJsonResult(result, cloud) });
       } else if (isJson) {
-        console.log(JSON.stringify(cloud.requests ? { ...result, cloudUsage: cloud } : result, null, 2));
+        console.log(JSON.stringify(runJsonResult(result, cloud), null, 2));
       } else if (cloud.requests) {
         console.error(pc.dim(UsageLedger.global().summary()!));
       }
@@ -636,6 +662,7 @@ program
         emitEvent("error", { taskId: app.getTaskId(), message: redactDiagnosticForOutput(String(err?.message ?? err)) });
       } else if (isJson) {
         console.log(JSON.stringify({
+          schema_version: RUN_RESULT_SCHEMA_VERSION,
           taskId: app.getTaskId(),
           success: false,
           status: "failed",
@@ -651,9 +678,106 @@ program
       } else {
         console.error(pc.red(`\nTask failed: ${formatDiagnosticForOutput(err)}`));
       }
-      const exitCode = (err instanceof TaskStateNotFoundError || err?.name === "TaskStateNotFoundError") ? 2 : 1;
+      const exitCode = runExitCode((err instanceof TaskStateNotFoundError || err?.name === "TaskStateNotFoundError") ? "task_not_found" : "failed");
       app.shutdown();
       exitAfterFlush(exitCode);
+    }
+  });
+
+// VR-1: the verdict on a change Nexus did not necessarily make (src/core/verify.ts; contract in src/verify_contract.ts).
+program
+  .command("verify")
+  .description("Verify a change without a model: run the verifier on the base and on the change, and report VERIFIED, REGRESSION_FREE, UNVERIFIED or BLOCKED")
+  .option("-w, --worktree <path>", "Top of the Git working tree (default: current directory); with no --head, its working tree is the change")
+  .option("--base <ref>", "Commit the change starts from (default: HEAD)")
+  .option("--head <ref>", "Commit that holds the change (default: the working tree)")
+  .option("--verifier <command>", "Your own verifier command (otherwise one is discovered in the base tree and needs approval)")
+  .option("--deliverable-file <path>", "Product file the change is meant to deliver, relative to the tree; VERIFIED needs at least one (repeatable)", collectDeliverableFile, [])
+  .option("-y, --yes", "Approve whatever verifier is discovered in the base tree")
+  .option("--approve-verifier <sha256>", "Approve the discovered verifier with exactly this digest (printed when approval is needed)")
+  .option("--approve-verification-edit <path>", "Approve the change's edit to this verification file (a weakened test, CI, build or test configuration); it lifts BLOCKED and never makes the change VERIFIED (repeatable)", collectDeliverableFile, [])
+  .option("--timeout-secs <n>", "Deadline of each verifier run, and of each side's type-checks, in seconds (default: NEXUS_VERIFIER_TIMEOUT_SECS, else 300)")
+  .option("--sandbox [engine]", "Confine every process verify starts on repository code: auto, bwrap or docker (default: auto); none explicitly opts out")
+  .option("--sandbox-network", "Let sandboxed verification processes use the network (off by default; incompatible with --sandbox none)")
+  .option("--receipt <file>", "Also write the result document (the receipt) to this file")
+  .option("-j, --json", "Print the result as one JSON document on stdout (see the manual: nexus verify)")
+  .action(async (_options: any, cmd: Command) => {
+    const options = commandOptions(cmd);
+    const isJson = Boolean(options.json);
+    const fail = (name: "usage" | "interrupted", message: string) => {
+      const exitCode = verifyExitCode(name);
+      console.error(`error: ${formatDiagnosticForOutput(message)}`);
+      if (isJson) console.log(JSON.stringify({ schema_version: VERIFY_RESULT_SCHEMA_VERSION, error: redactDiagnosticForOutput(message), exitCode } satisfies VerifyJsonError, null, 2));
+      exitAfterFlush(exitCode);
+    };
+    let timeoutSecs: number | undefined;
+    if (options.timeoutSecs !== undefined) {
+      timeoutSecs = Number(options.timeoutSecs);
+      if (!Number.isInteger(timeoutSecs) || timeoutSecs < 1 || timeoutSecs > 86_400) return fail("usage", "--timeout-secs must be a whole number of seconds from 1 to 86400");
+    }
+    if (options.verifier !== undefined && !String(options.verifier).trim()) return fail("usage", "--verifier needs a command");
+    if (options.approveVerifier !== undefined && !/^[0-9a-fA-F]{64}$/.test(String(options.approveVerifier).trim())) return fail("usage", "--approve-verifier needs the 64-character sha256 digest printed when approval is needed");
+    if (options.verifier !== undefined && (options.yes || options.approveVerifier !== undefined)) return fail("usage", "--verifier is your own command and needs no approval: do not combine it with --yes or --approve-verifier");
+    // Verification executes repository code, so confinement is the default. `none` is an explicit opt-out.
+    let sandbox: VerifySandboxRequest | undefined;
+    if (options.sandbox === "none") {
+      sandbox = { engine: "none" };
+    } else if (options.sandbox === undefined || options.sandbox === false) {
+      if (options.sandboxNetwork) sandbox = { engine: "auto", network: true };
+    } else if (options.sandbox === true) {
+      sandbox = { engine: "auto", network: Boolean(options.sandboxNetwork) };
+    } else {
+      const engine = options.sandbox === true ? "auto" : String(options.sandbox);
+      if (engine !== "auto" && engine !== "bwrap" && engine !== "docker") return fail("usage", "--sandbox takes auto, bwrap, docker or none");
+      sandbox = { engine, network: Boolean(options.sandboxNetwork) };
+    }
+    if (options.sandboxNetwork && sandbox?.engine === "none") return fail("usage", "--sandbox-network cannot be used with --sandbox none");
+    // GV-1: verify builds no session configuration, so managed policy meets its flags here; a refusal names its source.
+    const policyRefusal = verifyFlagRefusal(managedPolicy(), { yes: Boolean(options.yes), sandboxNone: sandbox?.engine === "none", sandboxNetwork: Boolean(options.sandboxNetwork) });
+    if (policyRefusal) return fail("usage", policyRefusal);
+
+    // The first signal stops verification once the running verifier process ends; a second one exits at once.
+    const abort = new AbortController();
+    const onSignal = () => {
+      if (abort.signal.aborted) process.exit(verifyExitCode("interrupted"));
+      abort.abort();
+      if (!isJson) console.error(pc.yellow("\nInterrupt received: stopping after the running verifier process (signal again to exit at once)."));
+    };
+    process.on("SIGINT", onSignal);
+    process.on("SIGTERM", onSignal);
+    try {
+      const result = await verifyChange(
+        { worktree: path.resolve(options.worktree ?? process.cwd()), base: options.base, head: options.head },
+        {
+          verifierCommand: options.verifier,
+          approveDiscoveredVerifier: Boolean(options.yes),
+          approvedVerifierDigest: options.approveVerifier,
+          deliverables: options.deliverableFile ?? [],
+          approvedVerificationEdits: options.approveVerificationEdit ?? [],
+          timeoutSecs,
+          sandbox,
+          signal: abort.signal,
+          onProgress: isJson ? undefined : (message) => console.error(pc.dim(message)),
+        },
+      );
+      const document = `${JSON.stringify(result, null, 2)}\n`;
+      if (options.receipt !== undefined) {
+        try {
+          fs.writeFileSync(path.resolve(String(options.receipt)), document);
+        } catch (err: any) {
+          return fail("usage", `--receipt: cannot write ${options.receipt} (${err?.code ?? "error"}); the verdict was ${result.verdict}`);
+        }
+      }
+      if (isJson) process.stdout.write(document);
+      else console.log(renderVerifyText(result));
+      exitAfterFlush(result.exitCode);
+    } catch (err: any) {
+      if (err instanceof VerifyUsageError) return fail("usage", err.message);
+      if (err instanceof VerifyInterrupted) return fail("interrupted", "interrupted: no verdict was reached");
+      throw err;
+    } finally {
+      process.removeListener("SIGINT", onSignal);
+      process.removeListener("SIGTERM", onSignal);
     }
   });
 
@@ -967,28 +1091,93 @@ program
     mcp.shutdownAll();
   });
 
-program
-  .command("plugins")
-  .description("List loaded custom plugins and lifecycle hooks")
-  .option("-w, --workspace <path>", "Workspace directory")
-  .action(async (options: any) => {
-    const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
-    const pm = new PluginManager(ws);
-    const { untrustedWorkspaceExtensions } = await import("./workspace_trust.js");
-    for (const file of untrustedWorkspaceExtensions(ws).filter((f) => !/(^|[\\/])\.?mcp\.json$/.test(f))) {
-      console.log(pc.yellow(`Not loaded (workspace not trusted; run \`nexus trust\`): ${file}`));
-    }
-    await pm.loadPlugins();
-    const plugins = pm.listPlugins();
-    if (plugins.length === 0) {
-      console.log(pc.yellow("\nNo active plugins found in ~/.nexus/plugins/ or ~/.config/nexus/plugins/\n"));
-      return;
-    }
-    console.log(pc.bold(pc.cyan("\n=== Loaded Custom Plugins ===\n")));
-    for (const p of plugins) {
-      console.log(`• ${pc.bold(pc.green(p.name))}: ${p.description} (custom tools: ${p.customToolCount})\n`);
-    }
+{
+  const pluginsCmd = program
+    .command("plugins")
+    .description("Loaded JS plugins, package install (HK-2), or workspace plugin trust (HK-3)");
+  pluginsCmd
+    .command("list")
+    .description("List loaded custom plugins and lifecycle hooks")
+    .option("-w, --workspace <path>", "Workspace directory")
+    .option("-j, --json", "Print as JSON")
+    .action(async (options: any) => {
+      const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
+      const pm = new PluginManager(ws);
+      const { untrustedWorkspaceExtensions } = await import("./workspace_trust.js");
+      for (const file of untrustedWorkspaceExtensions(ws).filter((f) => !/(^|[\\/])\.?mcp\.json$/.test(f))) {
+        console.log(pc.yellow(`Not loaded (workspace not trusted; run \`nexus trust\`): ${printable(file)}`));
+      }
+      await pm.loadPlugins();
+      const plugins = pm.listPlugins();
+      const records = pm.getPluginTrustRecords();
+      const { workspaceManifestPlugins } = await import("./plugins_cli.js");
+      const manifestPlugins = workspaceManifestPlugins(ws).map((p) => ({ name: p.name, dir: p.dir, status: p.status, ...(p.problem ? { problem: p.problem } : {}), ...(p.changed ? { changed: p.changed } : {}), ...(p.digest ? { treeSha256: p.digest } : {}), hooks: p.hooks.flatMap((file) => [...(file.hooks["pre-tool"] ?? []), ...(file.hooks["post-tool"] ?? [])].map((hook) => hook.name)), skills: p.skills, files: p.files.map((file) => file.path) }));
+      // The operator's own directories that are not used here, with why: otherwise their plugins are just absent.
+      const { skippedOperatorDirs } = await import("./plugins.js");
+      const skipped = skippedOperatorDirs(ws);
+      if (options.json) { console.log(JSON.stringify({ plugins, records, manifestPlugins, skippedOperatorDirs: skipped }, null, 2)); return; }
+      for (const dir of skipped) console.log(pc.yellow(`Not loaded: your plugins in ${printable(dir)}. The directory lies inside the workspace (${printable(ws)}), where the agent's tools can write it. Start Nexus in a project directory, not in your home directory.\n`));
+      if (plugins.length === 0) console.log(pc.yellow("\nNo active plugins loaded.\n"));
+      else {
+        console.log(pc.bold(pc.cyan("\n=== Loaded Custom Plugins ===\n")));
+        for (const p of plugins) console.log(`• ${pc.bold(pc.green(printable(p.name, 80)))}: ${printable(p.description)} (custom tools: ${p.customToolCount})\n`);
+      }
+      if (manifestPlugins.length) {
+        console.log(pc.bold(pc.cyan("=== Workspace manifest plugins (command hooks) ===\n")));
+        for (const p of manifestPlugins) {
+          console.log(`• ${p.status === "active" ? pc.green(p.status) : pc.yellow(p.status)} ${pc.bold(printable(p.name, 80))} ${pc.dim(printable(p.dir))}${p.treeSha256 ? pc.dim(` tree sha256 ${p.treeSha256}`) : ""}`);
+          if (p.problem) console.log(`  ${pc.dim(printable(p.problem))}`);
+          if (p.changed) console.log(`  ${pc.dim(`changed since approval: ${printable(p.changed.join(", "))}`)}`);
+          if (p.hooks.length) console.log(`  hooks: ${printable(p.hooks.join(", "))}`);
+          if (p.status === "not_approved" || p.status === "changed") console.log(`  ${pc.dim(`review it, then run \`nexus plugins trust ${printable(path.relative(ws, p.dir))}\` in a terminal`)}`);
+        }
+        console.log();
+      }
+      const blocked = records.filter((r) => r.status !== "global" && r.status !== "trusted");
+      if (blocked.length) {
+        console.log(pc.bold(pc.yellow("=== Plugins not active ===\n")));
+        for (const r of blocked) {
+          console.log(`• ${pc.yellow(r.status)} ${printable(r.path)}${r.sha256 ? pc.dim(` sha256 ${r.sha256}`) : ""}`);
+          if (r.reason) console.log(`  ${pc.dim(printable(r.reason, 600))}`);
+        }
+        console.log();
+      }
+    });
+  pluginsCmd
+    .command("trust <pluginPath>")
+    .description("Approve a workspace plugin file by its exact bytes, or a workspace manifest plugin's directory by its tree (a change needs a new approval)")
+    .option("-w, --workspace <path>", "Workspace directory")
+    .option("--sha256 <hex>", "Approve only if the file has this SHA-256 (you are still asked; approving needs a terminal)")
+    .action(async (pluginPath: string, options: any) => {
+      const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
+      const { trustWorkspacePlugin } = await import("./plugins_cli.js");
+      const code = await trustWorkspacePlugin(ws, pluginPath, { sha256: options.sha256 }, {
+        interactive: () => Boolean(process.stdin.isTTY) && Boolean(process.stdout.isTTY),
+        confirm: async (question) => {
+          const readline = await import("node:readline/promises");
+          const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+          try { return /^y(es)?$/i.test((await rl.question(question)).trim()); } finally { rl.close(); }
+        },
+      });
+      if (code) process.exitCode = code;
+    });
+  pluginsCmd
+    .command("revoke <pluginPath>")
+    .description("Withdraw approval for a workspace plugin")
+    .option("-w, --workspace <path>", "Workspace directory")
+    .action(async (pluginPath: string, options: any) => {
+      const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
+      const { revokeWorkspacePlugin } = await import("./plugins_cli.js");
+      const abs = path.resolve(ws, pluginPath);
+      console.log(revokeWorkspacePlugin(ws, pluginPath) ? `No longer approved: ${printable(abs)}` : `There was no approval for ${printable(abs)}.`);
+    });
+  registerPluginPackageCommands(pluginsCmd);
+  // default: list
+  pluginsCmd.action(async (_opts: any, cmd: any) => {
+    const list = cmd.commands.find((c: any) => c.name() === "list");
+    if (list) await list.parseAsync(["node", "nexus", "plugins", "list", ...process.argv.slice(3).filter((a: string) => a !== "list")]);
   });
+}
 
 program
   .command("trust [path]")
@@ -1032,7 +1221,7 @@ program
     console.log();
   });
 
-program
+const auditCommand = program
   .command("audit")
   .description("Inspect tool execution audit log and execution metrics")
   .option("-n, --limit <number>", "Number of recent records to display", "25")
@@ -1077,16 +1266,42 @@ program
     }
     console.log();
   });
+// GV-2: `nexus audit export` and `nexus audit verify`; `nexus audit` with any other argument is a usage error.
+registerAuditCommands(auditCommand);
 
 program
   .command("serve-mcp")
   .description("Run Nexus Code as a Model Context Protocol (MCP) server over stdio")
   .option("-w, --workspace <path>", "Workspace directory", process.cwd())
   .option("--shell <type>", "Linux shell to use", "bash")
-  .action(async (options: any) => {
+  .action(async (_options: any, cmd: Command) => {
+    const options = commandOptions(cmd);
     const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
+    // VR-2: nexus_verify runs only what the operator names here, so it is checked now, not at a caller's first request.
+    const verifierCommand = options.authoritativeVerifier === undefined ? undefined : String(options.authoritativeVerifier).trim();
+    let deliverables: string[];
+    const configModule = await import("./config.js");
+    try {
+      if (verifierCommand === "") throw new Error("--authoritative-verifier needs a command");
+      deliverables = configModule.normalizeTrustedDeliverableFiles(ws, options.deliverableFile);
+    } catch (err: any) {
+      console.error(`error: ${err?.message ?? err}`);
+      exitAfterFlush(2);
+      return;
+    }
+    // Read-only however it was selected (flag, NEXUS_APPROVAL_MODE, config.env): the resolution every command uses.
+    // A configuration that cannot be resolved leaves the mode unknown, so nexus_verify is refused rather than guessed at;
+    // the server still starts, as it did before, for its other tools.
+    let readOnly = true;
+    try {
+      const config = configModule.buildConfig(options);
+      readOnly = config.readOnly || config.approvalMode === "read-only";
+    } catch (err: any) {
+      console.error(`nexus serve-mcp: the configuration could not be resolved, so nexus_verify is refused as in read-only mode: ${formatDiagnosticForOutput(err)}`);
+    }
+    if (!verifierCommand) console.error("nexus serve-mcp: no --authoritative-verifier was given, so the nexus_verify tool runs no verifier (start with: nexus --authoritative-verifier <command> serve-mcp).");
     const { McpServer } = await import("./mcp.js");
-    const server = new McpServer(ws, options.shell);
+    const server = new McpServer(ws, options.shell, { verifierCommand, deliverables, readOnly });
     await server.startStdio();
   });
 
@@ -1123,10 +1338,12 @@ program
     const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
     const delay = parseInt(options.delay, 10) || 0;
     try {
-      const { manifest, events } = FlightPlayer.loadFlight(ws, flightId);
+      const { manifest, events, integrity } = FlightPlayer.loadFlight(ws, flightId);
       console.log(pc.bold(pc.cyan(`\n🛫 Replaying Flight: ${manifest.flightId}`)));
       console.log(`Model: ${pc.bold(manifest.model)} | Workspace: ${pc.dim(manifest.workspace)}`);
-      console.log(`Recorded: ${pc.dim(manifest.recordedAt)} | Events: ${events.length}\n`);
+      console.log(`Recorded: ${pc.dim(manifest.recordedAt)} | Events: ${events.length}`);
+      // GV-3: the chain is checked on load; showing the verdict here is what makes tampering visible to an operator.
+      console.log(`Record integrity: ${FlightPlayer.describeIntegrity(integrity)}\n`);
 
       await FlightPlayer.replay(events, (ev) => {
         const stepPrefix = ev.step !== undefined ? `[Step ${ev.step}] ` : "";
@@ -1385,8 +1602,30 @@ program
     uninstallCommand(options);
   });
 
+program
+  .command("acp")
+  .description("Serve the Agent Client Protocol over stdio")
+  .action(() => {
+    const config = buildConfig(program.opts());
+    // D-AC-3: an ACP client is untrusted, and under auto approval no tool call would ask it or anyone else. Whatever
+    // selected auto (--yes, --mode auto, NEXUS_APPROVAL_MODE), the adapter does not start.
+    const refusal = acpStartupRefusal(config);
+    if (refusal) {
+      console.error(refusal);
+      process.exit(2);
+    }
+    config.surface = "tui";
+    runAcpStdio({ config, version: getBuildIdentity().string });
+  });
+
 registerOperationCommands(program);
+registerBackgroundCommands(program);
+registerScheduleCommands(program);
 registerProviderCommands(program);
+registerHookCommands(program);
+registerTriggerCommands(program);
+// GV-1: `nexus policy show|check` (src/policy_cli.ts). Read-only, and it runs when a managed file is broken.
+registerPolicyCommands(program);
 
 program.hook("preAction", async (_thisCommand, actionCommand) => {
   let topLevelCommand = actionCommand;
@@ -1395,7 +1634,12 @@ program.hook("preAction", async (_thisCommand, actionCommand) => {
   }
   const name = topLevelCommand === program ? program.name() : topLevelCommand.name();
 
-  if (operatorConfigStartupError && name !== "doctor" && name !== "check") {
+  // GV-1: the managed policy is read here, once, before any command acts. A policy file that exists and cannot be used
+  // ends the process (exit 2). `doctor`, `check` and `policy` still run so the problem can be diagnosed; --version and
+  // --help never reach this hook.
+  if (name !== "doctor" && name !== "check" && name !== "policy") requireManagedPolicyAtStartup();
+
+  if (operatorConfigStartupError && name !== "doctor" && name !== "check" && name !== "policy") {
     console.error(pc.red(`Configuration error: ${formatDiagnosticForOutput(operatorConfigStartupError)}`));
     process.exit(2);
   }

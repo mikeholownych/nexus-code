@@ -82,27 +82,27 @@ export default {
   name: "metric-logger",
   description: "Logs timing metrics and custom alerts for builds",
 
-  // Lifecycle Hooks
-  async onTurnStart(prompt, workspace) {
+  // Lifecycle hooks take a single context object (not positional arguments).
+  async onTurnStart({ prompt, workspace }) {
     console.log(`[Plugin] Turn starting on workspace: ${workspace}`);
   },
 
-  async onToolCall(toolName, args) {
-    if (toolName === "run_command" && args.command.includes("cargo build")) {
+  async onToolCall({ toolName, args }) {
+    if (toolName === "run_command" && String(args.command ?? "").includes("cargo build")) {
       console.log("[Plugin] Cargo build detected!");
     }
   },
 
-  async onToolResult(toolName, result) {
+  async onToolResult({ toolName, result }) {
     // Inspect tool outputs
   },
 
-  async onTurnEnd(workspace) {
+  async onTurnEnd({ summary, isFinished }) {
     // Cleanup or post-turn actions
   },
 
-  // Custom Tools
-  tools: [
+  // Custom tools
+  customTools: [
     {
       definition: {
         type: "function",
@@ -119,7 +119,6 @@ export default {
         }
       },
       async handler(args) {
-        // Execute custom integration logic
         return {
           success: true,
           output: `Alert sent: ${args.message}`
@@ -129,3 +128,39 @@ export default {
   ]
 };
 ```
+
+### Installed packages (HK-2)
+
+A distributable plugin package is a directory with `nexus-plugin.json` at its root. Install records a tree digest so
+`verify` detects modification. There is no marketplace and no auto-update.
+
+```text
+nexus plugins install <local-dir>
+nexus plugins list-installed
+nexus plugins verify [name]
+nexus plugins remove <name>
+```
+
+`nexus plugins` / `nexus plugins list` lists **loaded** JS modules from the plugin search path.
+
+## 2.3 Workspace plugin trust (HK-3 / D18)
+
+The full rules, how an approved plugin is run, and the migration from earlier versions are in [`PLUGINS.md`](PLUGINS.md).
+
+Global plugins (`~/.nexus/plugins/`, `~/.config/nexus/plugins/`) are operator-managed and load when present.
+
+Workspace plugins (`.nexus/plugins/`, `plugins/`) are repository content. They require **per-plugin trust** keyed by the SHA-256 of the exact plugin bytes. Trusting a workspace (`nexus trust .`) is necessary but no longer sufficient to execute workspace plugin code.
+
+```bash
+nexus plugins list                        # loaded plugins + unapproved workspace plugins
+nexus plugins trust .nexus/plugins/p.js   # approve exact bytes for this workspace
+nexus plugins revoke .nexus/plugins/p.js  # withdraw approval
+```
+
+A changed workspace plugin file needs a new approval. Managed policy may refuse plugins.
+
+**Single-file load:** Nexus hashes the entry file's bytes once and imports those same bytes from a private temp copy (not the path on disk). Relative `import` / `require` of siblings under the plugins directory therefore cannot run: only the approved entry file executes. Keep a workspace plugin as one self-contained file. Absolute/`file:`/`createRequire` loads of other workspace paths inside an approved entry still run with process authority — approving that entry approves those loads; do not approve code that reaches outside itself.
+
+**Approving needs a real terminal** (same limit as `nexus hooks approve`): `nexus plugins trust` refuses when stdin/stdout are not a TTY. An unsandboxed command that can drive a PTY still has the operator's rights and can approve; under `--sandbox` the trust store is unreachable. Prefer reviewing the file yourself in a terminal.
+
+**Migration note (HK-3/D18):** in-process workspace JS plugins remain supported for now but are deprecated as a trust boundary. They run with full process authority. Prefer operator-managed/global plugins or future subprocess/manifest plugin packaging. Subprocess isolation of workspace plugin hooks is Phase D / v1.4.

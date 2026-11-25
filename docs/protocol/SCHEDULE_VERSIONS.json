@@ -1,0 +1,7 @@
+[
+  {
+    "schema_version": 1,
+    "schemaSha256": "935edc8a3b9aecae7df6d60445cfc99b06886a87edd258ded7d3959c790d8427",
+    "note": "First published schema of the schedule files (BG-2), generated from ScheduleFileDocument in cli/src/core/schedule_store.ts on release/v1.3.0: a schedule record nexus-schedule (the operator's trigger, permission level, verifier and budgets, and the runner's bookkeeping of next slot, last fire, outcome and reported gaps), the pointer nexus-schedule-latest to its newest result, and the missed-run receipt nexus-schedule-missed. The files carry their version in the member 'version'; this ledger keys it as schema_version. Nothing was published before it. The readers refuse any other version and any unknown key, so every added, removed or changed member bumps SCHEDULE_FILE_VERSION."
+  }
+]

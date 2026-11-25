@@ -10,6 +10,8 @@ import type { AgentObserver } from "./agent.js";
 import type { StartupEndpointProblem } from "./core/provider_recovery.js";
 import { autoDetectModel, buildConfig, loadEnvironment, operatorConfigLoadError } from "./config.js";
 import { withDurableSync, writePrivateFile } from "./core/durable_file.js";
+import { auditCompactionsOnResume, RECOVERY_REFUSAL_PREFIX } from "./core/agent_support.js";
+import { auditCompaction, fullTranscript, isCompactionRecord } from "./core/compaction_record.js";
 import { isNexusDirPermissive } from "./doctor.js";
 import { ApplicationCore } from "./core/app.js";
 import { redactForPersistence, redactPathForOutput, SensitivePersistenceError } from "./core/persistence_protection.js";
@@ -23,7 +25,12 @@ import type { ChatMessage, ApprovalMode } from "./types.js";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
 import { STEERING_PREFIX } from "./core/objective.js";
 
-/** Messages of a resumed conversation sent to the client, and the characters kept of each. */
+/** Bounded ACP history replay: pages stay small and complete transcripts never exceed this connection budget. */
+const HISTORY_PAGE_TARGET_BYTES = 32 * 1024;
+const HISTORY_PAGE_MAX_BYTES = 64 * 1024;
+const HISTORY_REPLAY_MAX_BYTES = 32 * 1024 * 1024;
+const HISTORY_REPLAY_MAX_PAGES = SIDECAR_MAX_HISTORY_PAGES;
+/** The terminal history panel keeps its established recent window; ACP opts into complete paged replay. */
 const HISTORY_ENTRIES = 60;
 const HISTORY_CHARS = 4000;
 type CheckpointChoice = "read_only" | "without_checkpoint" | "retry" | "allow_sensitive" | "cancel" | "other";
@@ -50,6 +57,11 @@ import {
   TOOL_PREVIEW_LINES,
   MAX_TEXT_FIELD,
   PROTOCOL_VERSION,
+  SIDECAR_MAX_HISTORY_PAGES,
+  PROTOCOL_MIN,
+  PROTOCOL_MAX,
+  SIDECAR_CAPABILITIES,
+  EXPERIMENTAL_FEATURES,
   SteerStatus,
   ProtocolError,
   SidecarCommand,
@@ -73,6 +85,11 @@ import { buildCatalog } from "./model_catalog.js";
 import { cancelLocalEndpointSetup, clearLocalEndpointSetup, clearLocalEndpointSetupAfterSelectionFailure, connectWithKey, disconnect, prepareLocalEndpoint, selectModel, startSignIn } from "./provider_connect.js";
 import { isHarnessNote, withHarnessProvenance } from "./harness_notes.js";
 import { persistableEndpoint } from "./core/endpoint_identity.js";
+import { clampAlwaysApproval } from "./core/managed_policy.js";
+import { SessionSocketServer, listeningLine } from "./session_socket.js";
+import { realpathAllowingMissing, socketRuntimeDir, socketRuntimeDirPath } from "./core/socket_files.js";
+import { hideDirectoryFromSandbox, isPathWithin, sandboxNetworkEnabled } from "./sandbox.js";
+import { describeSandboxPosture, sandboxPostureText } from "./sandbox_profile.js";
 
 export interface SidecarOptions {
   app: ApplicationCore;
@@ -82,8 +99,12 @@ export interface SidecarOptions {
   onShutdown?: () => void;
   /** Session to continue: an id, or "latest". */
   resume?: string;
+  /** ACP session/load requires the complete retained transcript, not the terminal's recent-history window. */
+  fullHistoryReplay?: boolean;
   /** Prompt history file; defaults to ~/.nexus_history. */
   historyFile?: string;
+  /** Experimental features this sidecar offers; defaults to EXPERIMENTAL_FEATURES (tests inject a list). */
+  experimentalFeatures?: readonly string[];
 }
 
 /** Drives one ApplicationCore from protocol commands and reports its activity as protocol events. */
@@ -95,7 +116,7 @@ export class SidecarServer {
   private alwaysApprove = false;
   private activeTurn?: Promise<void>;
   private turnAbort?: AbortController;
-  private pendingApproval?: { id: string; tool: string; settle: (approved: boolean) => void };
+  private pendingApproval?: { id: string; tool: string; settle: (approved: boolean) => void; event: SidecarEvent };
   /** Approvals are asked one at a time: a second request waits for the open one instead of replacing it. */
   private approvalTail: Promise<unknown> = Promise.resolve();
   /** The last approval was settled by the operator's Deny, not by a cancel or a shutdown. */
@@ -104,6 +125,7 @@ export class SidecarServer {
   private approvalSeq = 0;
   private shutdownPromise?: Promise<void>;
   private readonly resume?: string;
+  private readonly fullHistoryReplay: boolean;
   private readonly history: string[];
   private sessionId: string;
   /** The running slash command; undefined for prompt turns and for commands that became turns. */
@@ -125,6 +147,12 @@ export class SidecarServer {
   private providerProblem?: StartupEndpointProblem;
   /** The start-up probe in flight (at most 3 s); a prompt waits for it so it is gated like any later one. */
   private startupProbe: Promise<void> = Promise.resolve();
+  /** Experimental features this sidecar offers, sorted. */
+  private readonly experimentalOffered: readonly string[];
+  /** What `initialize` settled for this connection; undefined until one succeeds (a client need not send it). */
+  private negotiated?: { protocol: number; experimental: readonly string[] };
+  /** A valid initialize request found no common version; block commands until a compatible retry or shutdown. */
+  private unsupportedProtocol?: string;
 
   constructor(options: SidecarOptions) {
     this.app = options.app;
@@ -134,16 +162,38 @@ export class SidecarServer {
     this.app.getAgent().setApprovalMode(this.mode);
     this.onShutdown = options.onShutdown ?? (() => {});
     this.resume = options.resume;
+    this.fullHistoryReplay = options.fullHistoryReplay ?? false;
     this.sessionId = this.app.getSessionManager().generateSessionId();
     // Compaction archives the originals beside the current session before the session names it as committed.
     this.app.getAgent().setArchiveSink((compactionId, messages, record) => this.app.getSessionManager().appendArchivedHistory(this.sessionId, messages, compactionId, record));
     // Outside a turn (an operator /compact), a commit still writes this session's record.
     this.app.getAgent().setProgressListener(() => this.saveSession(this.sessionTitle));
     this.history = loadPromptHistory(options.historyFile ?? path.join(os.homedir(), ".nexus_history"));
+    this.experimentalOffered = [...new Set(options.experimentalFeatures ?? EXPERIMENTAL_FEATURES)].sort();
+  }
+
+  private helloEvent(): SidecarEvent {
+    return {
+      type: "hello", protocol: PROTOCOL_VERSION, pid: process.pid, commands: slashCatalog(),
+      protocol_min: PROTOCOL_MIN, protocol_max: PROTOCOL_MAX, capabilities: [...SIDECAR_CAPABILITIES], experimental: [...this.experimentalOffered],
+    };
+  }
+
+  /** What a client attaching over the socket (PF-3) is shown first: `hello`, the current state, and for a controller the open approval again. */
+  attachSnapshot(): { common: string[]; controller: string[] } {
+    const lines = (events: Array<SidecarEvent | undefined>): string[] => events.flatMap((event) => {
+      const safe = event && formatSafeSidecarEvent(event);
+      return safe ? [encodeEvent(safe)] : [];
+    });
+    return { common: lines([this.helloEvent(), this.sessionStateEvent()]), controller: lines([this.pendingApproval?.event]) };
+  }
+
+  socketMayDriveTurns(): boolean {
+    return this.app.getAgent().getApprovalMode() !== "auto" && !this.alwaysApprove;
   }
 
   start(): void {
-    this.emit({ type: "hello", protocol: PROTOCOL_VERSION, pid: process.pid, commands: slashCatalog() });
+    this.emit(this.helloEvent());
     let resumed: { ok: boolean; message: string } | undefined;
     try {
       resumed = this.resume ? this.resumeSession(this.resume) : undefined;
@@ -182,7 +232,19 @@ export class SidecarServer {
       this.emit({ type: "error", ...(id ? { id } : {}), code: "BAD_REQUEST", message: (err as Error).message });
       return;
     }
+    if (this.unsupportedProtocol && command.type !== "initialize" && command.type !== "shutdown") {
+      this.emit({
+        type: "error",
+        id: "id" in command ? command.id : undefined,
+        code: "UNSUPPORTED_PROTOCOL",
+        message: this.unsupportedProtocol,
+      });
+      return;
+    }
     switch (command.type) {
+      case "initialize":
+        this.initialize(command.id, command.protocol_min ?? PROTOCOL_VERSION, command.protocol_max ?? PROTOCOL_VERSION, command.experimental === true);
+        return;
       case "prompt.submit":
         this.submit(command.id, command.text);
         return;
@@ -263,6 +325,46 @@ export class SidecarServer {
         await this.shutdown();
         return;
     }
+  }
+
+  /**
+   * Negotiation for this connection. It only records connection state, so it is answered at any time, a running turn
+   * included. Rule: a connection negotiates once. After an `initialized` answer every later `initialize` is refused
+   * with BAD_REQUEST, because a version or an experimental set that changed mid-connection would leave both sides
+   * unsure which rules a message in flight was written under. An `initialize` refused with UNSUPPORTED_PROTOCOL
+   * settled nothing, so the client may send another; the sidecar keeps serving either way.
+   */
+  private initialize(id: string, clientMin: number, clientMax: number, experimental: boolean): void {
+    if (this.negotiated) {
+      this.emit({ type: "error", id, code: "BAD_REQUEST", message: `initialize was already answered on this connection (protocol ${this.negotiated.protocol}); a connection negotiates once.` });
+      return;
+    }
+    const protocol = Math.min(clientMax, PROTOCOL_MAX);
+    if (protocol < Math.max(clientMin, PROTOCOL_MIN)) {
+      this.unsupportedProtocol = `No common protocol version: the client speaks ${clientMin} to ${clientMax}, this sidecar speaks ${PROTOCOL_MIN} to ${PROTOCOL_MAX}.`;
+      this.emit({
+        type: "error", id, code: "UNSUPPORTED_PROTOCOL",
+        message: this.unsupportedProtocol,
+      });
+      return;
+    }
+    this.negotiated = { protocol, experimental: experimental ? this.experimentalOffered : [] };
+    this.unsupportedProtocol = undefined;
+    this.emit({ type: "initialized", id, protocol, capabilities: [...SIDECAR_CAPABILITIES], experimental: [...this.negotiated.experimental] });
+  }
+
+  /**
+   * The gate every experimental feature's handler calls first: true when this connection enabled `name` (it sent
+   * `initialize` with `experimental: true` and this sidecar offers `name`). Otherwise it answers `id` with
+   * EXPERIMENTAL_DISABLED and returns false, and the handler does nothing.
+   */
+  requireExperimental(name: string, id?: string): boolean {
+    if (this.negotiated?.experimental.includes(name)) return true;
+    const message = this.experimentalOffered.includes(name)
+      ? `${name} is experimental: send initialize with experimental: true before using it.`
+      : `${name} is not an experimental feature this sidecar offers.`;
+    this.emit({ type: "error", ...(id ? { id } : {}), code: "EXPERIMENTAL_DISABLED", message });
+    return false;
   }
 
   /** Sign-ins in progress, by request id (provider.cancel stops one). */
@@ -797,8 +899,7 @@ export class SidecarServer {
         resolve(approved);
       };
       signal.addEventListener("abort", onAbort, { once: true });
-      this.pendingApproval = { id, tool, settle };
-      this.emit({
+      const request: SidecarEvent = {
         type: "approval.request",
         id,
         turn_id: turnId,
@@ -806,7 +907,9 @@ export class SidecarServer {
         subject: toolSubject(args, tool),
         preview: redactedJson(args),
         review: approvalReview(tool, args, this.app.getConfig().workspace),
-      });
+      };
+      this.pendingApproval = { id, tool, settle, event: request };
+      this.emit(request);
     });
   }
 
@@ -816,6 +919,7 @@ export class SidecarServer {
       this.emit({ type: "error", id, code: "NO_PENDING_APPROVAL", message: `No pending approval with id ${id}.` });
       return;
     }
+    if (approved && always && pending.tool !== DELIBERATE_APPROVAL && !this.mayRememberAlways()) always = false;
     if (approved && always && pending.tool !== DELIBERATE_APPROVAL) {
       this.alwaysApprove = true;
       this.mode = "auto";
@@ -825,6 +929,18 @@ export class SidecarServer {
     // Only the operator's own Deny says "denied by you"; a cancelled turn or a shutdown settles the approval as false too.
     if (pending.tool !== DELIBERATE_APPROVAL) this.operatorDeclined = !approved;
     pending.settle(approved);
+  }
+
+  /**
+   * GV-1: whether an "always" answer may switch this session to approving without asking. Under
+   * `approval.disable_auto` it may not: the client's answer approves the one call it was given for, the mode and this
+   * server's own approve-everything state stay as they are, and the operator is told which policy decided. Decided
+   * here, so no client can remember the answer on the operator's behalf.
+   */
+  private mayRememberAlways(): boolean {
+    const clamp = clampAlwaysApproval(this.app.getAgent().getBridge().getSecurityManager().getEffectivePolicy());
+    if (clamp.notice) this.emit({ type: "notice", text: clamp.notice });
+    return clamp.remember;
   }
 
   private requestCheckpointChoice(
@@ -1034,7 +1150,7 @@ export class SidecarServer {
   }
 
   private receipt(): ReceiptSection[] {
-    return receiptSections(this.lastTurn, this.app.getActiveValidationReceipt() ?? null, this.app.getAgent().getObjective());
+    return receiptSections(this.lastTurn, this.app.getActiveValidationReceipt() ?? null, this.app.getAgent().getObjective(), this.app.getAgent().getSandboxDenialEvents());
   }
 
   private setWorkspace(dir: string): void {
@@ -1100,25 +1216,61 @@ export class SidecarServer {
     // The id changes together with the conversation, so a save after a partial restore never overwrites the previous session's record.
     this.sessionId = session.id;
     // What compaction replaced stays searchable after a resume (read_archive): only compactions this record committed.
-    const archiveNotice = this.app.getAgent().restoreConversation(session, (committed) => this.app.getSessionManager().readArchivedHistory(session.id, committed));
+    const sessionHistory = session.history as (typeof session.history & { committedCompactions?: unknown[] }) | undefined;
+    const committedCompactions = Array.isArray(sessionHistory?.committedCompactions)
+      ? sessionHistory.committedCompactions.filter((value: unknown): value is string => typeof value === "string")
+      : [];
+    let archiveRead: ReturnType<typeof manager.readArchivedHistory> | undefined;
+    const archiveNotice = this.app.getAgent().restoreConversation(session, (committed) => {
+      archiveRead = manager.readArchivedHistory(session.id, this.fullHistoryReplay ? new Set(committedCompactions) : committed);
+      return archiveRead;
+    });
     if (archiveNotice) this.emit({ type: "notice", text: archiveNotice });
     if (Array.isArray(session.activePlan)) this.app.getAgent().setActivePlan(session.activePlan);
     this.lastTurn = null;
-    this.emitHistory(session.id, withHarnessProvenance(session.messages), session.lastTurn);
+    if (this.fullHistoryReplay) {
+      const archive = archiveRead ?? manager.readArchivedHistory(session.id, new Set(committedCompactions));
+      const audit = auditCompactionsOnResume(session.messages, archive, committedCompactions);
+      const groups = archive.byCompaction;
+      const invalidCommitted = committedCompactions.some((id) => {
+        const group = groups?.get(id);
+        return !group || !isCompactionRecord(group.record) || auditCompaction(id, group.record, group.messages).status !== "ok";
+      });
+      const unboundArchive = committedCompactions.length === 0 && archive.messages.length > 0;
+      const expectedArchived = sessionHistory?.archivedMessages;
+      const archiveCountMismatch = typeof expectedArchived === "number"
+        ? expectedArchived !== archive.messages.length
+        : archive.messages.length > 0;
+      if (archive.unreadableLines || archive.missingCompactions.length || invalidCommitted || unboundArchive || archiveCountMismatch) {
+        this.emit({ type: "history", session: session.id, total: 0, page: 0, pages: 0, messages: [], error: "Retained session history is incomplete or failed integrity checks." });
+      } else {
+        const transcript = fullTranscript(this.app.getAgent().getMessages(), audit.trustedArchive);
+        this.emitHistory(session.id, withHarnessProvenance(transcript), session.lastTurn, true);
+      }
+    } else {
+      this.emitHistory(session.id, withHarnessProvenance(session.messages), session.lastTurn);
+    }
     // The count of the conversation is in the history header shown just before; this names the session.
     return { ok: true, message: `Resumed session ${session.id}.` };
   }
 
   /**
    * The resumed conversation for the client to show, in order: operator prompts, steering, the agent's replies, the
-   * tools it called (name and subject; results stay in the session record), and the last turn's outcome. Nexus's own
+   * tools it called (name and subject), their recorded results, and the last turn's outcome. Nexus's own
    * prompts (continuation, recovery) and the runtime context appended to prompts are left out; text is redacted and
-   * bounded, and only the latest HISTORY_ENTRIES entries are sent.
+   * bounded. ACP opts into complete, paged replay; terminal clients receive the established recent window.
    */
-  private emitHistory(sessionId: string, messages: ChatMessage[], lastTurn?: TurnResult | null): void {
+  private emitHistory(sessionId: string, messages: ChatMessage[], lastTurn?: TurnResult | null, complete = false): void {
     const text = (m: ChatMessage) => (typeof m.content === "string" ? m.content : Array.isArray(m.content) ? m.content.map((p: any) => (typeof p?.text === "string" ? p.text : "")).join("") : "");
+    const replayableContent = (content: ChatMessage["content"]) => content == null || typeof content === "string" ||
+      (Array.isArray(content) && content.every((part: any) => part && part.type === "text" && typeof part.text === "string"));
     const entries: HistoryEntry[] = [];
+    const historyToolIds = new Map<string, string>();
+    let toolSequence = 0;
+    let unpairedToolResult = false;
+    let unrepresentableContent = false;
     for (const m of messages) {
+      if (complete && (m.role === "user" || m.role === "assistant" || m.role === "tool") && !replayableContent(m.content)) unrepresentableContent = true;
       const body = text(m);
       if (m.role === "user") {
         if (!body.trim() || isHarnessNote(m)) continue;
@@ -1133,16 +1285,73 @@ export class SidecarServer {
           try {
             args = JSON.parse(call.function.arguments || "{}");
           } catch {}
-          entries.push({ role: "tool", tool: call.function.name, text: toolSubject(args, call.function.name) });
+          const toolCallId = `hist-${++toolSequence}`;
+          historyToolIds.set(call.id, toolCallId);
+          const entry: HistoryEntry = { role: "tool", tool: call.function.name, text: toolSubject(args, call.function.name) };
+          if (complete) Object.assign(entry, { toolCallId, status: "pending" as const });
+          entries.push(entry);
         }
+      } else if (m.role === "tool" && complete) {
+        const toolCallId = typeof m.tool_call_id === "string" ? historyToolIds.get(m.tool_call_id) : undefined;
+        if (!toolCallId) {
+          unpairedToolResult = true;
+          continue;
+        }
+        const failed = body.startsWith("Error executing ") || body.startsWith(RECOVERY_REFUSAL_PREFIX) || body.startsWith("Not executed:") ||
+          body.startsWith("Cancelled by operator before execution.") || body.startsWith("No result was recorded for this call:");
+        entries.push({ role: "tool_result", toolCallId, status: failed ? "failed" : "completed", text: body });
       }
+    }
+    const conversation = entries.filter((entry) => entry.role !== "tool" && entry.role !== "tool_result" && entry.role !== "outcome").length;
+    const resultIds = new Set(entries.filter((entry) => entry.role === "tool_result").map((entry) => entry.toolCallId));
+    const unresolvedToolCall = complete && entries.some((entry) => entry.role === "tool" && !resultIds.has(entry.toolCallId));
+    if (complete && (unpairedToolResult || unresolvedToolCall || unrepresentableContent)) {
+      this.emit({ type: "history", session: sessionId, total: conversation, page: 0, pages: 0, messages: [], error: "Retained session history cannot be replayed faithfully." });
+      return;
     }
     if (lastTurn) {
       const { heading, line } = summarizeTurn(lastTurn);
       entries.push({ role: "outcome", heading: heading, text: line, turn: projectTurn(lastTurn) });
     }
-    const conversation = entries.filter((e) => e.role !== "tool" && e.role !== "outcome").length;
-    this.emit({ type: "history", session: sessionId, total: conversation, messages: entries.slice(-HISTORY_ENTRIES) });
+    if (!complete) {
+      this.emit({ type: "history", session: sessionId, total: conversation, messages: entries.slice(-HISTORY_ENTRIES) });
+      return;
+    }
+    const pages: HistoryEntry[][] = [];
+    let current: HistoryEntry[] = [];
+    const eventFor = (page: number, count: number, pageMessages: HistoryEntry[]): SidecarEvent => ({
+      type: "history", session: sessionId, total: conversation, page, pages: count, messages: pageMessages,
+    });
+    for (const entry of entries) {
+      const candidate = [...current, entry];
+      const candidateEvent = formatSafeSidecarEvent(eventFor(pages.length, HISTORY_REPLAY_MAX_PAGES, candidate));
+      const bytes = candidateEvent ? Buffer.byteLength(encodeEvent(candidateEvent)) : HISTORY_PAGE_MAX_BYTES + 1;
+      if (bytes > HISTORY_PAGE_TARGET_BYTES && current.length) {
+        pages.push(current);
+        current = [entry];
+      } else {
+        current = candidate;
+      }
+      const single = formatSafeSidecarEvent(eventFor(pages.length, HISTORY_REPLAY_MAX_PAGES, current));
+      if (!single || Buffer.byteLength(encodeEvent(single)) > HISTORY_PAGE_MAX_BYTES) {
+        this.emit({ type: "history", session: sessionId, total: conversation, page: 0, pages: 0, messages: [], error: "Retained session history exceeds the safe replay page size." });
+        return;
+      }
+    }
+    if (current.length || pages.length === 0) pages.push(current);
+    if (pages.length > HISTORY_REPLAY_MAX_PAGES) {
+      this.emit({ type: "history", session: sessionId, total: conversation, page: 0, pages: 0, messages: [], error: "Retained session history exceeds the safe replay page count." });
+      return;
+    }
+    const totalBytes = pages.reduce((sum, page, index) => {
+      const safe = formatSafeSidecarEvent(eventFor(index, pages.length, page));
+      return sum + (safe ? Buffer.byteLength(encodeEvent(safe)) : HISTORY_REPLAY_MAX_BYTES + 1);
+    }, 0);
+    if (totalBytes > HISTORY_REPLAY_MAX_BYTES) {
+      this.emit({ type: "history", session: sessionId, total: conversation, page: 0, pages: 0, messages: [], error: "Retained session history exceeds the safe replay size." });
+      return;
+    }
+    pages.forEach((page, index) => this.emit(eventFor(index, pages.length, page)));
   }
 
   private shutdown(): Promise<void> {
@@ -1160,12 +1369,17 @@ export class SidecarServer {
   }
 
   private emitSessionState(): void {
+    this.emit(this.sessionStateEvent());
+  }
+
+  private sessionStateEvent(): SidecarEvent {
     const config = this.app.getConfig();
     const facts = surfaceFacts(this.app, this.sessionId);
     const git = getGitInfo(config.workspace);
     const trusted = isWorkspaceTrusted(config.workspace, Boolean(config.readOnly));
-    const sandboxStatus = config.sandbox ? (typeof config.sandbox === "string" ? config.sandbox : "on") : "off";
-    this.emit({
+    // SB-1: the one describer, as /status and `nexus doctor` use it.
+    const sandboxInput = { sandbox: config.sandbox, readOnly: config.approvalMode === "read-only", network: sandboxNetworkEnabled(), profile: config.sandboxProfile };
+    return {
       type: "session.state",
       workspace: config.workspace,
       workspace_name: path.basename(config.workspace),
@@ -1180,10 +1394,11 @@ export class SidecarServer {
       endpoint_kind: facts.endpoint_kind,
       posture: {
         mode: facts.mode,
-        sandbox: sandboxStatus,
+        sandbox: sandboxPostureText(sandboxInput),
         trusted,
+        profile: describeSandboxPosture(sandboxInput).profile,
       },
-    });
+    };
   }
 
   private emit(event: SidecarEvent): void {
@@ -1393,6 +1608,7 @@ async function main(argv: string[]): Promise<void> {
     .option("-y, --yes", "Run non-interactively without approval prompts (forces auto mode)")
     .option("--mode <mode>", "Execution mode: auto, review, or read-only (default: review; folder trust does not change it)")
     .option("-r, --resume [id]", "Resume a saved session (the latest when no id is given)")
+    .option("--listen", "Also accept clients on a private unix socket; the socket path is printed as one stdout line and the token is in a 0600 descriptor file. Stdio stays the owner. Refused under auto approval")
     .parse(argv);
 
   // Commander help is ordinary CLI output, before protocol-only stdout
@@ -1428,17 +1644,34 @@ async function main(argv: string[]): Promise<void> {
   const config = await autoDetectModel(buildConfig(options), { resuming: Boolean(options.resume) });
   config.surface = "tui";
   const app = new ApplicationCore(config);
+  let hub: SessionSocketServer | undefined;
   const server = new SidecarServer({
     app,
     mode: config.approvalMode,
     resume: typeof options.resume === "string" ? options.resume : options.resume ? "latest" : undefined,
     write: (line) => {
       protocolWrite(line);
+      hub?.broadcast(line);
     },
-    onShutdown: () => process.exit(0),
+    onShutdown: () => {
+      hub?.closeSync();
+      process.exit(0);
+    },
   });
 
   const report = (err: unknown) => process.stderr.write(`nexus sidecar: ${formatSafeSidecarDiagnostic([err])}\n`);
+  if (options.listen) {
+    // A socket client must never reach a session that approves everything: refuse before anything is bound.
+    if (app.getAgent().getApprovalMode() === "auto") throw new Error("--listen is refused under auto approval (-y, --mode auto); use review or read-only");
+    // The model can read and write the workspace, so a token kept there is no secret from it. Decided before the
+    // directory is created, so a refusal leaves nothing behind.
+    const planned = socketRuntimeDirPath();
+    if (isPathWithin(realpathAllowingMissing(planned), fs.realpathSync(config.workspace))) throw new Error(`--listen is refused: the socket directory ${planned} is inside the workspace`);
+    const dir = socketRuntimeDir();
+    // Under --sandbox no command may see the descriptor, wherever XDG_RUNTIME_DIR points.
+    hideDirectoryFromSandbox(dir);
+    hub = new SessionSocketServer({ session: server, dir, onError: report });
+  }
   const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
   input.on("line", (line) => {
     server.handleLine(line).catch(report);
@@ -1449,6 +1682,11 @@ async function main(argv: string[]): Promise<void> {
   input.on("close", requestShutdown);
   process.stdout.on("error", requestShutdown);
   server.start();
+  if (hub) {
+    process.once("exit", () => hub?.closeSync());
+    for (const signal of ["SIGTERM", "SIGINT"] as const) process.once(signal, requestShutdown);
+    protocolWrite(listeningLine(await hub.listen()));
+  }
 }
 
 /** True when argv[1] names this module, comparing real paths so a symlinked launcher still counts. */

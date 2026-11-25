@@ -5,12 +5,14 @@ import { randomUUID } from "node:crypto";
 import { assertValidContinuationBudget, ChatMessage, DEFAULT_CONTINUATION, EvaluationToolReceipt, HarnessConfig, MAX_CONTINUATION_STEPS, ToolCall, ToolDefinition } from "./types.js";
 import { LocalLlmClient } from "./client.js";
 import { normalizeToolArguments } from "./core/tool_arguments.js";
-import { HARNESS_TOOLS, RustCoreBridge } from "./tools.js";
-import { CapabilityRegistry, createDefaultRegistry, changesWorkspace, type EffectClass } from "./core/capabilities.js";
+import { RustCoreBridge } from "./tools.js";
+import { ToolRegistry, createToolRegistry } from "./core/tool_registry.js";
+import { CapabilityRegistry, changesWorkspace, type EffectClass } from "./core/capabilities.js";
 import { fenceSuspected, scanForInjection } from "./core/injection_scanner.js";
 import { ApprovalPolicy, defaultApprovalPolicy, ApprovalMode } from "./core/approval_policy.js";
 import { ExecutionSpine, ExecutionReceipt } from "./core/spine.js";
-import { extensionCapability, isExtensionCapability } from "./core/extension_capabilities.js";
+import { HookRegistry } from "./core/hooks.js";
+import { extensionCapability } from "./core/extension_capabilities.js";
 import { SkillActivationRegistry } from "./core/skill_activation.js";
 import { AuthorityAdmissionEngine } from "./core/authority.js";
 import type { AuthorityGrant } from "./core/authority.js";
@@ -28,6 +30,7 @@ import { SecurityManager } from "./security.js";
 import { calculateContextBudget, countTokens, isContextAdmissible, isContextPressureHigh, TokenBudget } from "./tokens.js";
 import { selectRelevantFewShots } from "./fewshots.js";
 import { FlightRecorder } from "./flight.js";
+import type { SandboxDenialEvent } from "./sandbox_events.js";
 import { WorktreeManager } from "./worktree.js";
 import { captureVerificationState } from "./worktrunk/verification.js";
 import { homeDir } from "./worktrunk/core.js";
@@ -37,7 +40,7 @@ import { WORKTREE_BINDING_VERSION } from "./core/state.js";
 import { argsFingerprint } from "./core/operation_identity.js";
 import { isSandboxAvailable } from "./sandbox.js";
 import { discoverVerifier, verifierTimeoutSecs } from "./tester.js";
-import { ENABLE_TOOLS_CAPABILITY, TOOL_GROUPS, groupsTriggeredBy, toolGroupOf } from "./core/tool_groups.js";
+import { ENABLE_TOOLS_CAPABILITY, groupsTriggeredBy } from "./core/tool_groups.js";
 import { snapshotTests, snapshotVerifierDefinition, type ChangeBaseline, type Independence } from "./core/independent_check.js";
 import { credentialOriginOf, InferenceError, TokenCountError } from "./client.js";
 import { TurnResult, VerificationEvidence, TypecheckEvidence, InterruptionRecord, InferenceFailure, CapacityRecord, ModelStop, ProviderRecoveryRecord, assertTurnResultInvariants, deepFreezeTurn, summarizeTurn, lifecycleStatusForTurn, turnSucceeded } from "./core/turn.js";
@@ -57,8 +60,8 @@ import { advertisementChanged, describeCapabilities, resolveLimits, toolHeadroom
 import { snapshotModel } from "./core/models_snapshot.js";
 import { ProviderRecoveryController, RecoveryCancelled, RecoveryClock, RecoveryHooks, RecoveryPolicy, realRecoveryClock, recoveryPolicyFromEnv, startupProblemWarning, startupEndpointProblems, type StartupEndpointProblem } from "./core/provider_recovery.js";
 import { LocalTraceRecorder, type SpanHandle, type TraceAttributes, type TraceStatus } from "./core/trace.js";
-import { ObjectiveLedger, SteeringConflict, READ_OBJECTIVE_CAPABILITY, REQUIREMENTS_CAPABILITY, STEERING_PREFIX, invalidateVerified, requirementDone, blockedRequirements, gatingRequirements, isNewObjective, ledgerNeedsPinning, openRequirements, priorAttempt, queueSteering, steeringNegations, recordSteeringConflict, resolveSteeringConflict, settleSteeringConflicts, recoveryInput, renderPinnedLedger, missingGatingRequirements, PINNED_LEDGER_PREFIX, renderRecoveryContext, trackingOf } from "./core/objective.js";
-import { maskToolOutputs, maskThresholdFromEnv } from "./core/tool_output_mask.js";
+import { ObjectiveLedger, SteeringConflict, LEDGER_VERSION, READ_OBJECTIVE_CAPABILITY, REQUIREMENTS_CAPABILITY, STEERING_PREFIX, createLedger, invalidateVerified, requirementDone, blockedRequirements, gatingRequirements, isNewObjective, ledgerNeedsPinning, openRequirements, priorAttempt, queueSteering, steeringNegations, recordSteeringConflict, resolveSteeringConflict, settleSteeringConflicts, recoveryInput, renderPinnedLedger, missingGatingRequirements, PINNED_LEDGER_PREFIX, renderRecoveryContext, trackingOf } from "./core/objective.js";
+import { maskToolOutputs, maskThresholdFromEnv, READ_TOOL_OUTPUT_CAPABILITY } from "./core/tool_output_mask.js";
 import { ELIDED_FINDINGS_PREFIX, READ_FINDINGS_CAPABILITY, READ_ARCHIVE_CAPABILITY, readArchive, condenseFinding, elidedFindingsNote, findingId, incompleteOutputNotice, indexFinding, isCondensedFinding } from "./core/findings.js";
 import { FILE_EDIT_TOOLS, snapshot } from "./file_diff.js";
 import { TurnEvidence, TurnReason } from "./core/turn.js";
@@ -68,6 +71,8 @@ import { untrustedWorkspaceExtensions } from "./workspace_trust.js";
 import { ConfirmHandler, SubagentResult, AgentObserver, AgentActivity, CompactionOutcome, CompactionCommitError, CAPABILITY_TTL_MS, TOKEN_COUNT_COOLDOWN_MS, LOW_YIELD_COMPACTIONS_BEFORE_HOLD, NEXUS_RUNTIME_IDENTITY, ContextBudgetError, LedgerNotRetainedError, DurablePlanState, CanonicalDurableProvenance, CanonicalDurableSummary, canonicalDurableProvenance, REMOVED_OBSERVATION, REMOVED_UNSEEN, REMOVED_PARTIAL, REMOVED_CHANGED, REMOVED_RECORDED, REMOVED_UNRECORDED, REMOVED_CONDENSED, REMOVED_DROPPED, REMOVAL_PREFIXES, MEMORY_NOTES_BUDGET_CHARS, ARCHIVE_FOR_READING, boundMemoryNotes, FINDINGS_PREFIX, FINDINGS_NOTE_LIMIT, FINDINGS_BUDGET_CHARS, LEGACY_SHORTENED, FINDINGS_OUTGROWN, FINDINGS_INSTRUCTIONS, unseenTruncationNotice, isTruncatedObservation, observationKey, labelSummaryBlocks, observationPresence, unreacquiredRemovals, LONG_RESPONSE_MS, truncatedReplyNotice, harnessNoteMessage, cutResponseNotice, outputDigest, withoutStepNotices, findingIdentity, shortenedFrom, withoutFindingId, recordedFindings, recordedFindingsState, recordedRetainedObservations, applyDetailBudget, normalizeMessageContent, externalInputsFingerprint, externalInputsContentIdentity, gitIndexIdentity, withPersistableEndpoints, RESUMED_WINDOW_REASON, auditCompactionsOnResume, describeArchiveRead, stepPosition, STATE_IDENTITY_BUDGET_MS, logAudit } from "./core/agent_support.js";
 import { setupSpineHandlersImpl } from "./core/spine_handlers.js";
 import { NO_COMMAND_RULES, readCommandRulesFile, type CommandRuleDecision, type CommandRuleSet } from "./core/command_rules.js";
+import { clampRuntimeApprovalMode } from "./core/managed_policy.js";
+import { managedPolicy } from "./core/policy_runtime.js";
 import { buildTurnResultImpl, runTurnImpl } from "./core/run_turn.js";
 import { dispatchToolCallImpl } from "./core/dispatch_tool_call.js";
 import type { NeedsInputOption, NeedsInputQuestion } from "./core/needs_input.js";
@@ -199,6 +204,8 @@ export class AutonomousAgent {
   private findingsShown = { reduced: 0, total: 0 };
   /** Whether the last durable record showed any finding only condensed, indexed or not at all. */
   private findingsCondensed = false;
+  /** Masking and its recovery tool are a per-agent opt-in captured at construction. */
+  private readonly toolOutputMaskThreshold = maskThresholdFromEnv();
   private stepNoticeStep = 0;
   /** A response of this step was cut off after running this long; its first tool result says so (see submitGuardingLength). */
   private cutResponse: { step: number; seconds: number } | undefined;
@@ -241,6 +248,15 @@ export class AutonomousAgent {
     tddRed?: boolean;
   };
   private lastTurnResult?: TurnResult;
+  /** VR-3: structured sandbox refusals observed during this process; shown in receipt projections. */
+  private sandboxDenialEvents: SandboxDenialEvent[] = [];
+  recordSandboxDenialEvent(event: SandboxDenialEvent): void {
+    this.sandboxDenialEvents.push(event);
+    if (this.sandboxDenialEvents.length > 50) this.sandboxDenialEvents.splice(0, this.sandboxDenialEvents.length - 50);
+  }
+  getSandboxDenialEvents(): readonly SandboxDenialEvent[] {
+    return this.sandboxDenialEvents;
+  }
   private completionSummary?: { summary: string; notes?: string };
   private observer?: AgentObserver;
   private toolDispatchSeq = 0;
@@ -275,6 +291,7 @@ export class AutonomousAgent {
   private browser: BrowserDriver;
   private knowledge: KnowledgeGraph;
   public readonly capabilityRegistry: CapabilityRegistry;
+  private readonly toolRegistry: ToolRegistry;
   public readonly authorityEngine: AuthorityAdmissionEngine;
   public readonly spine: ExecutionSpine;
   public readonly candidateTracker: CandidateTracker;
@@ -481,7 +498,8 @@ export class AutonomousAgent {
       this.pluginManager.setFlightRecorder(this.flightRecorder);
     }
     this.candidateTracker = new CandidateTracker();
-    this.capabilityRegistry = createDefaultRegistry();
+    this.toolRegistry = createToolRegistry();
+    this.capabilityRegistry = this.toolRegistry.capabilities();
     this.authorityEngine = new AuthorityAdmissionEngine({
       readOnly: initialReadOnly,
       fullAccess: Boolean(config.fullAccess) && !initialReadOnly,
@@ -491,6 +509,7 @@ export class AutonomousAgent {
     });
     this.spine = new ExecutionSpine({
       registry: this.capabilityRegistry,
+      tools: this.toolRegistry,
       hooks: {
         authorityAdmission: this.authorityEngine.createAdmissionHook(),
         resourceConfinement: this.authorityEngine.createConfinementHook(),
@@ -580,13 +599,32 @@ export class AutonomousAgent {
         },
       },
     });
+    // HK-1: command hooks, on the two spine stages that can only refuse (pre-tool) or observe (post-tool). The spine
+    // is reached after the dispatcher's gates approved a call, and its authority stage still runs after the hooks.
+    const commandHooks = new HookRegistry({
+      workspace: () => this.config.workspace,
+      readOnly: () => this.isReadOnly(),
+      permissionMode: () => this.getApprovalMode(),
+      sessionId: () => this.currentTaskId,
+      notify: (text) => {
+        if (this.depth !== 0) return;
+        if (this.observer?.onNotice) this.observer.onNotice(text);
+        else console.warn(pc.yellow(text));
+      },
+      record: (step, callId, tool, run) => this.flightRecorder?.recordHookRun(step, callId, tool, run),
+      redact: (value) => InformationFlowBoundary.getGlobalInstance().redactForTelemetry(value),
+      policy: () => this.bridge.getSecurityManager().getEffectivePolicy(),
+    });
+    this.spine.setHook("contextAdmission", commandHooks.preToolAdmission);
+    this.spine.setHook("evidenceEmission", commandHooks.postToolEmission);
     if (depth === 0 || this.role === "implementer" || this.role === "tester") {
-      this.capabilityRegistry.register(REQUIREMENTS_CAPABILITY);
-      this.capabilityRegistry.register(READ_OBJECTIVE_CAPABILITY);
+      this.toolRegistry.register({ spec: REQUIREMENTS_CAPABILITY, binding: { kind: "native" }, offer: "requirements" });
+      this.toolRegistry.register({ spec: READ_OBJECTIVE_CAPABILITY, binding: { kind: "native" }, offer: "objective" });
     }
-    this.capabilityRegistry.register(READ_FINDINGS_CAPABILITY);
-    this.capabilityRegistry.register(READ_ARCHIVE_CAPABILITY);
-    this.capabilityRegistry.register(ENABLE_TOOLS_CAPABILITY);
+    this.toolRegistry.register({ spec: READ_FINDINGS_CAPABILITY, binding: { kind: "native" }, offer: "always" });
+    this.toolRegistry.register({ spec: READ_ARCHIVE_CAPABILITY, binding: { kind: "native" }, offer: "always" });
+    if (this.toolOutputMaskThreshold) this.toolRegistry.register({ spec: READ_TOOL_OUTPUT_CAPABILITY, binding: { kind: "native" }, offer: "mask" });
+    this.toolRegistry.register({ spec: ENABLE_TOOLS_CAPABILITY, binding: { kind: "native" }, offer: "until-all-groups" });
     this.setupSpineHandlers();
     this.loadCommandRules();
     this.stateManager = new DurableStateManager({ workspacePaths: [this.primaryWorkspacePathIdentity] });
@@ -628,7 +666,7 @@ export class AutonomousAgent {
     const reported = new Set(redTests.map(rel));
     if (reported.size === 0) return { ok: false, reason: "RED reported no test files" };
     const currentTests = snapshotTests(workspace);
-    if (!currentTests) return { ok: false, reason: "the current test set is too large to capture" };
+    if (!currentTests) return { ok: false, reason: "the current test set could not be captured completely" };
     const priorRedTests = baseline.tddRedTests ?? new Map<string, string>();
     const allowedRedTests = new Set([...priorRedTests.keys(), ...reported]);
     for (const [file, content] of baseline.tests) {
@@ -740,6 +778,14 @@ export class AutonomousAgent {
   }
 
   public setApprovalMode(mode: ApprovalMode): void {
+    // GV-1: a mode that managed policy disables is not entered at runtime (`/mode auto`, an "always" answer). The mode
+    // stays as it is and the operator is told which policy decided; the call being approved is not affected.
+    const clamp = clampRuntimeApprovalMode(this.bridge?.getSecurityManager().getEffectivePolicy() ?? managedPolicy(), this.config.approvalMode ?? "review", mode, "A request for approval mode 'auto'");
+    if (clamp.notice) {
+      if (this.observer?.onNotice) this.observer.onNotice(`[nexus] ${clamp.notice}`);
+      else console.warn(`[nexus] ${clamp.notice}`);
+      return;
+    }
     // Read-only selected at runtime is a mode choice, not an explicit launch invariant: record that so a later
     // /mode auto or /mode review can deliberately leave it, exactly like --mode read-only.
     if (mode === "read-only" && !this.config.readOnly && !this.config.readOnlyModeSelected) {
@@ -1080,12 +1126,10 @@ export class AutonomousAgent {
    * posture change may have removed tools. A name that already belongs to a built-in capability is never replaced.
    */
   private syncExtensionCapabilities(): void {
-    for (const capability of this.capabilityRegistry.listCapabilities()) {
-      if (isExtensionCapability(capability)) this.capabilityRegistry.unregister(capability.modelToolName);
-    }
+    this.toolRegistry.unregisterExtensions();
     const add = (definition: ToolDefinition, origin: Parameters<typeof extensionCapability>[1]): void => {
       if (this.capabilityRegistry.getByToolName(definition.function.name)) return;
-      this.capabilityRegistry.register(extensionCapability(definition, origin));
+      this.toolRegistry.register({ spec: extensionCapability(definition, origin), binding: { kind: "extension" }, offer: "always" });
     };
     for (const definition of this.mcpManager.getToolDefinitions()) {
       const server = this.mcpManager.getToolServer(definition.function.name);
@@ -1315,32 +1359,21 @@ export class AutonomousAgent {
 
   /** The tools for a given enabled-group set (the estimate uses the set the prompt will enable). */
   private effectiveTools(enabled: ReadonlySet<string>): ToolDefinition[] {
-    const hasSkills = (this.skillManager?.listSkills().length ?? 0) > 0;
-    const offered = HARNESS_TOOLS.filter((tool) => {
-      const name = tool.function.name;
-      if (name === "activate_skill") return hasSkills;
-      const group = toolGroupOf(name);
-      return !group || enabled.has(group);
-    });
-    const allEnabled = Object.keys(TOOL_GROUPS).every((group) => enabled.has(group));
-    let tools = [
-      ...offered,
-      ...(allEnabled ? [] : [ENABLE_TOOLS_CAPABILITY.toolDefinition as ToolDefinition]),
+    const allowed = roleToolAllowList(this.role);
+    const denied = roleToolDenyList(this.role);
+    const owner = this.depth === 0 || this.role === "implementer" || this.role === "tester";
+    return this.toolRegistry.modelTools({
+      enabledGroups: enabled,
+      hasSkills: (this.skillManager?.listSkills().length ?? 0) > 0,
       // Only with an objective ledger: without one update_requirements returns nothing and read_objective has nothing to
       // read, but offered anyway the model spent a step on each (eval debug-logs trace).
-      ...((this.depth === 0 || this.role === "implementer" || this.role === "tester") && this.objective ? [READ_OBJECTIVE_CAPABILITY.toolDefinition as ToolDefinition] : []),
-      ...(this.offersRequirements() ? [REQUIREMENTS_CAPABILITY.toolDefinition as ToolDefinition] : []),
-      READ_FINDINGS_CAPABILITY.toolDefinition as ToolDefinition,
-      READ_ARCHIVE_CAPABILITY.toolDefinition as ToolDefinition,
-      ...this.mcpManager.getToolDefinitions(),
-      ...this.pluginManager.getCustomToolDefinitions(),
-    ];
-    const allowed = roleToolAllowList(this.role);
-    if (allowed) tools = tools.filter((t) => allowed.has(t.function.name));
-    const denied = roleToolDenyList(this.role);
-    if (denied) tools = tools.filter((t) => !denied.has(t.function.name));
-    if (this.delegatedToolAllowList) tools = tools.filter((t) => this.delegatedToolAllowList!.has(t.function.name));
-    return tools;
+      offerObjective: owner && Boolean(this.objective),
+      offerRequirements: this.offersRequirements(),
+      // Keep the retrieval capability out of normal requests unless masking is enabled.
+      maskOutput: Boolean(this.toolOutputMaskThreshold),
+      extensions: [...this.mcpManager.getToolDefinitions(), ...this.pluginManager.getCustomToolDefinitions()],
+      admits: (name) => (!allowed || allowed.has(name)) && !denied?.has(name) && (!this.delegatedToolAllowList || this.delegatedToolAllowList.has(name)),
+    });
   }
 
   public getMessages(): ChatMessage[] {
@@ -2012,6 +2045,36 @@ export class AutonomousAgent {
     return this.objective;
   }
 
+  /**
+   * Seeds a fresh durable role task with its parent goal's acceptance ledger before its first turn. This preserves the
+   * normal constructor-captured workspace baseline; restoring a session here would deliberately invalidate it.
+   */
+  public initializeFreshObjectiveLedger(ledger: ObjectiveLedger): void {
+    if (!this.durable || this.objective || this.messages.length !== 1 || this.messages[0]?.role !== "system") {
+      throw new Error("an objective ledger can only seed a fresh durable task before its first turn");
+    }
+    if (
+      ledger.version !== LEDGER_VERSION ||
+      typeof ledger.objective !== "string" || !ledger.objective.trim() ||
+      !Array.isArray(ledger.requirements) ||
+      createLedger(ledger.objective, ledger.startedAt).objectiveSha256 !== ledger.objectiveSha256
+    ) {
+      throw new Error("cannot seed a task with an invalid objective ledger");
+    }
+    const seeded = structuredClone(ledger);
+    this.objective = seeded;
+    try {
+      this.checkpointDurableState("parent objective ledger seeded before first turn");
+      const persisted = this.stateManager.loadTaskState(this.currentTaskId).objective;
+      if (!persisted || JSON.stringify(persisted) !== JSON.stringify(seeded)) {
+        throw new Error("the seeded objective ledger was not durably persisted");
+      }
+    } catch (error) {
+      this.objective = undefined;
+      throw error;
+    }
+  }
+
   /** What `prompt` would do to the tracked objective if submitted now (for the host's notice before the turn). */
   public objectiveDecision(prompt: string): { kind: "new" | "amend"; unresolved: number } {
     const ledger = this.objective;
@@ -2287,7 +2350,7 @@ export class AutonomousAgent {
    */
   private requestMessages(source: ChatMessage[] = this.messages): ChatMessage[] {
     // CX-4: old tool results the model already acted on are masked last, so presence checks above see the stored ones.
-    return maskToolOutputs(this.requestMessagesUnmasked(source), maskThresholdFromEnv());
+    return maskToolOutputs(this.requestMessagesUnmasked(source), this.toolOutputMaskThreshold);
   }
 
   private requestMessagesUnmasked(source: ChatMessage[]): ChatMessage[] {
@@ -3207,8 +3270,8 @@ export class AutonomousAgent {
       if (message.role !== "tool" || unseen.has(index) || typeof message.tool_call_id !== "string") return;
       const key = callKeys.get(message.tool_call_id);
       const text = normalizeMessageContent(message.content).text.join("");
-      // What read_findings and read_objective return is already in this memory, in full.
-      if (!key || !wanted.has(key) || key.startsWith("read_findings ") || key.startsWith("read_objective ") || key.startsWith("read_archive ") || pending.some((item) => item.key === key) || !text || text.startsWith("Error executing ")) return;
+      // Retrieval tools return source material that remains available in the conversation or archive.
+      if (!key || !wanted.has(key) || key.startsWith("read_findings ") || key.startsWith("read_objective ") || key.startsWith("read_archive ") || key.startsWith("read_tool_output ") || pending.some((item) => item.key === key) || !text || text.startsWith("Error executing ")) return;
       const partial = isTruncatedObservation(message);
       const output = withoutStepNotices(text);
       pending.push({ key, text: output, partial, digest: partial ? undefined : outputDigest(output) });

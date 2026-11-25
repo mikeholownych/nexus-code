@@ -4,6 +4,7 @@
 import type {
   AppliedDecision,
   Assignment,
+  BlockCause,
   BlockSpec,
   Decision,
   DecisionAction,
@@ -26,6 +27,23 @@ import { effectiveConcurrency } from "./operation_schema.js";
 
 /** Separates a unit's original task from operator revisions appended to it. */
 export const REVISION_MARKER = "\n\nOperator revision: ";
+
+function failureFingerprint(cause: BlockCause, reason: string, failedRun?: WorkUnit["failedRun"]): string {
+  const v = failedRun?.verification as any;
+  if (v) {
+    const tests = v.failingTests;
+    if (Array.isArray(tests) && tests.length) {
+      const total = v.failingTotal;
+      const truncated = v.failingTruncated;
+      const key = `tests:${[...tests].sort().join("\n")}|total:${total ?? ""}|truncated:${truncated ? "1" : "0"}`;
+      return `${cause}|${key}`;
+    }
+    const failedCheck = v.failedCheck;
+    if (typeof failedCheck === "string" && failedCheck) return `${cause}|check:${failedCheck}|exit:${v.exitCode ?? ""}`;
+  }
+  const norm = reason.toLowerCase().replace(/\s+/g, " ").replace(/\b[0-9a-f]{8,}\b/g, "<hex>").replace(/\b\d{2,}\b/g, "<n>").trim().slice(0, 240);
+  return `${cause}|reason:${norm}`;
+}
 const MAX_EVENTS = 300;
 const TERMINAL: WorkUnitStatus[] = ["COMPLETE", "BLOCKED"];
 
@@ -464,6 +482,7 @@ export class ConvergenceScheduler {
           const r = this.registry.get(id);
           if (r) this.registry.clearOperatorConditions(r);
         }
+        // Do not clear failureStalls: same fingerprint across retries is a stall signal.
         u.runsBase = u.runs;
         u.unknownResumes = 0;
         u.status = "RUNNABLE";
@@ -474,11 +493,13 @@ export class ConvergenceScheduler {
         break;
       case "assign":
         u.override = { resourceId: action.resourceId, overriding: action.overriding, decisionId };
+        delete u.failureStalls;
         u.runsBase = u.runs;
         u.status = "RUNNABLE";
         break;
       case "revise":
         u.prompt = `${u.prompt}${REVISION_MARKER}${text}`;
+        delete u.failureStalls;
         u.runsBase = u.runs;
         u.status = "RUNNABLE";
         break;
@@ -486,17 +507,20 @@ export class ConvergenceScheduler {
         // The earlier operator revisions stay: only the base task is replaced.
         u.prompt = `${text}${u.prompt.slice(unitBaseTask(u.prompt).length)}`;
         delete u.context;
+        delete u.failureStalls;
         u.runsBase = u.runs;
         u.status = "RUNNABLE";
         break;
       case "set_inputs":
         u.inputs = redactForPersistence({ ...(u.inputs ?? {}), ...suppliedInputs });
+        delete u.failureStalls;
         u.runsBase = u.runs;
         u.status = "RUNNABLE";
         break;
       case "lift_context_budget":
         delete u.contextBudget;
         delete u.context;
+        delete u.failureStalls;
         u.runsBase = u.runs;
         u.status = "RUNNABLE";
         break;
@@ -611,7 +635,7 @@ export class ConvergenceScheduler {
           options: [{ label: "replay the step", action: { kind: "retry" } }],
         });
         return;
-      case "failed":
+      case "failed": {
         if (result.rejectedOutput) {
           const { raw, reason } = result.rejectedOutput;
           const kept = raw.length > MAX_REJECTED_OUTPUT_CHARS;
@@ -620,10 +644,35 @@ export class ConvergenceScheduler {
             { at, reason, raw: kept ? raw.slice(0, MAX_REJECTED_OUTPUT_CHARS) : raw, ...(kept ? { truncated: true } : {}) },
           ].slice(-MAX_REJECTED_OUTPUTS);
         }
+        const failedRun = result.failedRun ? { at, reason: result.reason, ...result.failedRun } : u.failedRun;
+        // Persistence redacts the stored key; compare in that same form or a secret-shaped reason never repeats.
+        const fp = redactForPersistence(failureFingerprint(result.cause, redactForPersistence(result.reason), failedRun));
+        const prev = u.failureStalls ?? {};
+        const cur = prev[fp]?.count ?? 0;
+        const next = cur + 1;
+        u.failureStalls = { [fp]: { count: next, lastAt: at, reason: result.reason.slice(0, 300) } };
+        const limit = this.state.policy.maxStallsPerFingerprint ?? 3;
+        if (next >= limit) {
+          this.block(u, {
+            cause: "NOT_CONVERGING",
+            reason: `stall detected: same failure fingerprint repeated ${next} times (${result.reason})`.slice(0, 300),
+            question: `${u.title} has failed the same way ${next} times (fingerprint stall). Nothing is verified. Revise the unit, or stop?`,
+            options: [...result.options.filter((o) => o.action.kind !== "retry"), { label: "revise the unit (note required)", action: { kind: "revise" } }],
+          });
+          return;
+        }
         this.block(u, { ...result, options: [...result.options, ...(result.offerReassign ? this.assignable(u, [resourceId]) : [])] });
         return;
+      }
       case "cancelled":
-        u.status = "RUNNABLE";
+        // A cancelled run says nothing about what it changed. Returning it to RUNNABLE let decide() resubmit it
+        // without a limit or an operator, so an effect could be repeated. Hold it for explicit reconciliation.
+        this.block(u, {
+          cause: "EXECUTION_UNKNOWN",
+          reason: `run on ${resourceId} was cancelled; its effects are unknown and it will not be replayed without a decision`,
+          question: `${u.title}: its run was cancelled and Nexus cannot tell whether it changed anything. Replay the step, or stop?`,
+          options: [{ label: "replay the step", action: { kind: "retry" } }],
+        });
         return;
     }
   }

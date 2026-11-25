@@ -53,7 +53,7 @@ test("an LSP diagnostic becomes a structured record with tool, location and conf
     assert.match(rec.tool, /^lsp/);
     assert.deepEqual(rec.config, { path: "tsconfig.json", sha256: hashContent("{}") });
   } finally {
-    mgr.shutdownAll();
+    await mgr.shutdownAll();
   }
 });
 
@@ -258,8 +258,8 @@ test("lsp_diagnostics through the real handler returns the fenced structured rec
     assert.match(res.output, /"severity": "error"/);
     assert.match(res.output, /"file": "a\.ts"/);
   } finally {
-    bridge.shutdown();
-    mgr.shutdownAll();
+    await bridge.shutdown();
+    await mgr.shutdownAll();
   }
 });
 

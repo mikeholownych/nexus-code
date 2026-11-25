@@ -60,7 +60,9 @@ const readOnlyTurn = (n: number): Reply => n === 1
 describe("SidecarServer: session and turns", () => {
   test("start announces the protocol and an idle session", async () => {
     await withSidecar(readOnlyTurn, "auto", async ({ events, repo }) => {
-      assert.deepEqual(events[0], { v: 1, type: "hello", protocol: 1, pid: process.pid, commands: slashCatalog() });
+      // The negotiation fields are covered in sidecar_initialize.test.ts; the fields a first-published client reads are these.
+      const { protocol_min: _min, protocol_max: _max, capabilities: _capabilities, experimental: _experimental, ...hello } = events[0];
+      assert.deepEqual(hello, { v: 1, type: "hello", protocol: 1, pid: process.pid, commands: slashCatalog() });
       const state = events[1];
       assert.equal(state.type, "session.state");
       assert.equal(state.workspace, repo);
@@ -858,6 +860,45 @@ describe("SidecarServer: sessions and slash commands", () => {
         messages: [{ role: "system", content: "s" }, { role: "user", content: "earlier question" }] as any,
       });
       return { resume: "old-session" };
+    });
+  });
+
+  test("ACP full-history replay includes entries older than the terminal history window", async () => {
+    const messages = [{ role: "system", content: "s" }, ...Array.from({ length: 75 }, (_, i) => ({ role: "user", content: `question ${i + 1} ${"x".repeat(600)}` }))] as any;
+    await withSidecar(readOnlyTurn, "auto", async ({ events }) => {
+      const history = events.filter((event) => event.type === "history");
+      assert.equal(history.length, 2);
+      assert.ok(history.every((page) => page.total === 75 && page.pages === 2));
+      assert.deepEqual(history.map((page) => page.page), [0, 1]);
+      const entries = history.flatMap((page) => page.messages);
+      assert.equal(entries.length, 75);
+      assert.match(entries[0].text, /^question 1 /);
+      assert.match(entries.at(-1).text, /^question 75 /);
+    }, undefined, (app) => {
+      const now = new Date().toISOString();
+      app.getSessionManager().saveSession({
+        id: "old-session", title: "earlier", createdAt: now, updatedAt: now,
+        workspace: app.getConfig().workspace, model: "m", messages,
+      });
+      return { resume: "old-session", fullHistoryReplay: true };
+    });
+  });
+
+  test("ACP full-history replay reports an incomplete committed archive instead of exposing partial history", async () => {
+    await withSidecar(readOnlyTurn, "auto", async ({ events }) => {
+      const history = events.find((event) => event.type === "history");
+      assert.equal(history.pages, 0);
+      assert.deepEqual(history.messages, []);
+      assert.match(history.error, /incomplete|integrity/);
+    }, undefined, (app) => {
+      const now = new Date().toISOString();
+      app.getSessionManager().saveSession({
+        id: "old-session", title: "earlier", createdAt: now, updatedAt: now,
+        workspace: app.getConfig().workspace, model: "m",
+        messages: [{ role: "system", content: "s" }, { role: "user", content: "current compacted summary" }] as any,
+        history: { complete: false, compactions: 1, archivedMessages: 1, committedCompactions: ["compaction-1"] } as any,
+      });
+      return { resume: "old-session", fullHistoryReplay: true };
     });
   });
 

@@ -322,7 +322,7 @@ test("a conflicting unit stops the operation with a MERGE_CONFLICT decision", as
   assert.equal(git(state.git!.integrationWorktree, ["status", "--porcelain"]), "", "the conflicting merge is aborted");
 });
 
-test("a passing verifier that writes an artifact does not block the next integration", async () => {
+test("a passing verifier that leaves an untracked artifact is rejected and restores the integration worktree", async () => {
   const root = repo();
   const p = plan(root);
   const state = newOperationGitState(p);
@@ -335,14 +335,16 @@ test("a passing verifier that writes an artifact does not block the next integra
     unit("u1"),
     completed({ verification: { command: "touch generated.txt && test -f u1.txt", status: "PASSED", hasExecutedTests: true } }),
   );
-  assert.equal(first.kind, "integrated");
-  assert.equal(git(p.integrationWorktree, ["status", "--porcelain"]), "", "verifier artifacts are cleaned after the check");
+  assert.equal(first.kind, "failed");
+  if (first.kind === "failed") assert.match(first.reason, /integration verification changed the integration worktree/);
+  assert.equal(state.units.u1.integratedCommit, undefined, "a verifier that changed its input tree cannot be accepted");
+  assert.equal(git(p.integrationWorktree, ["status", "--porcelain"]), "", "the failed integration is restored cleanly");
+  assert.equal(fs.existsSync(path.join(p.integrationWorktree, "generated.txt")), false);
 
   const b = ops.prepareUnit(unit("u2"));
   fs.writeFileSync(path.join(b.workspace, "u2.txt"), "two\n");
   const second = await ops.integrate(unit("u2"), completed());
   assert.equal(second.kind, "integrated");
-  assert.equal(fs.existsSync(path.join(p.integrationWorktree, "generated.txt")), false);
 });
 
 function runnableExecutor(
@@ -474,7 +476,7 @@ test("a failed post-hoc check does not mark the unit integrated; a retry re-chec
   assert.equal(fs.existsSync(path.join(p.integrationWorktree, "retry-work.txt")), true);
 });
 
-test("a post-hoc check cleans its own artifacts", async () => {
+test("a post-hoc check that dirties the merged tree is rejected and cleaned", async () => {
   const root = repo();
   const p = plan(root);
   const state = newOperationGitState(p);
@@ -490,8 +492,8 @@ test("a post-hoc check cleans its own artifacts", async () => {
     unit("u1"),
     completed({ verification: { command: "touch posthoc-artifact.txt && test -f u1.txt", status: "PASSED", hasExecutedTests: true } }),
   );
-  assert.equal(result.kind, "nothing");
-  if (result.kind === "nothing") assert.equal(result.receipt.verification, "PASSED_POSTHOC");
+  assert.equal(result.kind, "failed");
+  if (result.kind === "failed") assert.match(result.reason, /integration verification changed the integration worktree/);
   assert.equal(git(p.integrationWorktree, ["status", "--porcelain"]), "");
   assert.equal(fs.existsSync(path.join(p.integrationWorktree, "posthoc-artifact.txt")), false);
 });
@@ -1231,4 +1233,51 @@ test("an unbound verifier pass is carried into the integration receipt and not r
     assert.equal(integrated.receipt.verification, "PASSED_UNBOUND");
     assert.equal(integrated.receipt.tests?.definitionBound, false);
   }
+});
+
+test("PA-2: a mechanically clean merge that breaks an already-integrated unit's verifier is rejected", async () => {
+  const root = repo();
+  fs.writeFileSync(path.join(root, "check.sh"), "#!/bin/sh\ntest \"$(cat value.txt)\" = \"ok\"\n");
+  git(root, ["add", "check.sh"]);
+  git(root, ["commit", "-qm", "add verifier"]);
+  fs.writeFileSync(path.join(root, "value.txt"), "ok\n");
+  git(root, ["add", "value.txt"]);
+  git(root, ["commit", "-qm", "base value"]);
+
+  const p = plan(root);
+  const s = newOperationGitState(p);
+  ensureIntegrationWorktree(p, s);
+  const ops = new OperationGit(p, s, { verifyTimeoutSecs: 30, integrations: () => s.integrations ?? [] });
+  (s as any).integrations = [];
+
+  const a = ops.prepareUnit(unit("u1"));
+  fs.writeFileSync(path.join(a.workspace, "a.txt"), "a\n");
+  const v1 = { command: "sh ./check.sh", status: "PASSED", hasExecutedTests: true };
+  const first = await ops.integrate(unit("u1"), completed({ verification: v1 }), { tests: v1 });
+  assert.equal(first.kind, "integrated");
+  if (first.kind === "integrated") (s as any).integrations.push(first.receipt);
+  const tipAfterFirst = ops.currentTip();
+
+  const b = ops.prepareUnit(unit("u2"));
+  fs.writeFileSync(path.join(b.workspace, "value.txt"), "broken\n");
+  const second = await ops.integrate(unit("u2"), completed({ verification: { command: "true", status: "PASSED", hasExecutedTests: true } }), { tests: { command: "true", status: "PASSED", hasExecutedTests: true } });
+  assert.equal(second.kind, "failed");
+  if (second.kind === "failed") assert.match(second.reason, /merging u2 breaks the verifier of u1 .* on the merged tree/);
+  assert.equal(ops.currentTip(), tipAfterFirst, "semantic conflict must not move integration tip");
+  assert.equal(fs.readFileSync(path.join(p.integrationWorktree, "value.txt"), "utf8"), "ok\n");
+});
+
+test("prepareUnit stamps durable ownerId and integration receipts carry it (PA-1 follow-up)", async () => {
+  const root = repo();
+  const p = plan(root);
+  const s = newOperationGitState(p);
+  ensureIntegrationWorktree(p, s);
+  const ops = new OperationGit(p, s, { verifyTimeoutSecs: 30 });
+  const prepared = ops.prepareUnit(unit("u1"), { ownerId: "op-owner:u1:999" });
+  assert.equal(prepared.ownerId ?? ops.unitState("u1")?.ownerId, "op-owner:u1:999");
+  assert.equal(ops.unitState("u1")?.ownerId, "op-owner:u1:999");
+  fs.writeFileSync(path.join(s.units.u1.worktree, "u1.txt"), "one\n");
+  const integrated = await ops.integrate(unit("u1"), completed({ verification: { command: "true", status: "PASSED", hasExecutedTests: true } }), { tests: { command: "true", status: "PASSED", hasExecutedTests: true } });
+  assert.equal(integrated.kind, "integrated");
+  if (integrated.kind === "integrated") assert.equal(integrated.receipt.ownerId, "op-owner:u1:999");
 });

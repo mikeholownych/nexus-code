@@ -3,8 +3,14 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { ToolDefinition, ExecutionResult } from "./types.js";
-import { HARNESS_TOOLS, RustCoreBridge } from "./tools.js";
-import { isWorkspaceTrusted, WORKSPACE_MCP_FILES } from "./workspace_trust.js";
+import { RustCoreBridge } from "./tools.js";
+import { baselineTools } from "./core/tool_registry.js";
+import { isWorkspaceFile, isWorkspaceTrusted, WORKSPACE_MCP_FILES } from "./workspace_trust.js";
+import { permitsMcpServer, type EffectivePolicy, type McpServerDescriptor } from "./core/managed_policy.js";
+import { ManagedPolicyError } from "./core/managed_policy_load.js";
+import { emitPolicyNotice, managedPolicy, printableRefusal } from "./core/policy_runtime.js";
+import { VERIFY_RESULT_SCHEMA_VERSION, verifyExitCode, type VerifyJsonError } from "./verify_contract.js";
+import { pinBase, VerifyService, VERIFY_KILL_GRACE_MS, VERIFY_RECEIPT_URI_PREFIX, type PinnedBase, type VerifyServiceDeps } from "./core/verify_service.js";
 import pc from "picocolors";
 
 export interface McpServerConfig {
@@ -116,6 +122,17 @@ export class McpConnection {
     } else {
       this.transport = "stdio";
     }
+  }
+
+  /**
+   * GV-5: what managed policy decides on, before anything is started. It names what `connect` would reach: the URL
+   * only when the transport uses it, else the program. A program given as a bare name is found through PATH at spawn,
+   * so it has no path a `command:` entry could pin, and can be admitted by name only.
+   */
+  public policyDescriptor(fromWorkspace: boolean): McpServerDescriptor {
+    const { command, url } = this.config;
+    if (url && (this.transport === "websocket" || this.transport === "sse" || this.transport === "http")) return { name: this.serverName, url: String(url), fromWorkspace };
+    return { name: this.serverName, ...(typeof command === "string" && path.isAbsolute(command) ? { command } : {}), fromWorkspace };
   }
 
   public async connect(): Promise<boolean> {
@@ -574,12 +591,42 @@ export class McpClientManager {
   private trusted: boolean;
   private connections: Map<string, McpConnection> = new Map();
   private toolToServerMap: Map<string, { server: McpConnection; originalName: string; serverName: string }> = new Map();
+  private readonly policy: () => EffectivePolicy;
+  private readonly notify: (notice: string) => void;
+  private policyRefusals: string[] = [];
 
-  constructor(workspace: string, options: { readOnly?: boolean; trusted?: boolean } = {}) {
+  constructor(workspace: string, options: { readOnly?: boolean; trusted?: boolean; policy?: () => EffectivePolicy; notify?: (notice: string) => void } = {}) {
     this.workspace = path.resolve(workspace);
     this.readOnly = options.readOnly ?? false;
     this.trusted = options.trusted ?? isWorkspaceTrusted(this.workspace, this.readOnly);
+    this.policy = options.policy ?? managedPolicy;
+    this.notify = options.notify ?? emitPolicyNotice;
     McpClientManager.activeManagers.add(this);
+  }
+
+  /**
+   * GV-5: the managed policy's refusal of a server, decided before it is started; undefined when it may start. The
+   * refusal names the policy source and is told to the operator. A policy that cannot be read admits no server.
+   */
+  private refusedByPolicy(conn: McpConnection, fromWorkspace: boolean): string | undefined {
+    let message: string | undefined;
+    try {
+      const decision = permitsMcpServer(this.policy(), conn.policyDescriptor(fromWorkspace));
+      if (!decision.allowed) message = decision.message;
+    } catch (error) {
+      if (!(error instanceof ManagedPolicyError)) throw error;
+      message = `MCP server '${conn.serverName}' is not started: the managed policy cannot be read (${error.tier} tier, ${error.file}).`;
+    }
+    if (message === undefined) return undefined;
+    message = printableRefusal(message);
+    this.policyRefusals.push(message);
+    this.notify(`nexus: ${message}`);
+    return message;
+  }
+
+  /** The servers managed policy refused since the last load, each with the policy source. */
+  public getPolicyRefusals(): string[] {
+    return [...this.policyRefusals];
   }
 
   public static shutdownAllGlobal(): void {
@@ -591,16 +638,19 @@ export class McpClientManager {
 
   public async loadAndConnect(): Promise<void> {
     this.shutdownAll();
+    this.policyRefusals = [];
 
     for (const file of mcpConfigFiles(this.workspace, this.trusted, this.readOnly)) {
       if (fs.existsSync(file)) {
         try {
           const content = fs.readFileSync(file, "utf-8");
           const config = JSON.parse(content) as McpConfigFile;
+          const fromWorkspace = isWorkspaceFile(this.workspace, file);
           if (config.mcpServers && typeof config.mcpServers === "object") {
             for (const [name, serverCfg] of Object.entries(config.mcpServers)) {
               if ((serverCfg.command || serverCfg.url) && !this.connections.has(name)) {
                 const conn = new McpConnection(name, serverCfg);
+                if (this.refusedByPolicy(conn, fromWorkspace)) continue;
                 const ok = await conn.connect();
                 if (ok) {
                   this.connections.set(name, conn);
@@ -618,6 +668,7 @@ export class McpClientManager {
   }
 
   public addConnection(name: string, connection: McpConnection): void {
+    if (this.refusedByPolicy(connection, false)) return;
     this.connections.set(name, connection);
     this.rebuildToolMap();
   }
@@ -640,6 +691,8 @@ export class McpClientManager {
     persistError?: string;
   }> {
     const conn = new McpConnection(name, config);
+    const refusal = this.refusedByPolicy(conn, false);
+    if (refusal) return { success: false, error: refusal, toolCount: 0, resourceCount: 0, promptCount: 0 };
     const connected = await conn.connect();
     if (!connected) {
       return {
@@ -909,14 +962,36 @@ export class McpClientManager {
   }
 }
 
+export const MCP_VERIFY_TOOL = "nexus_verify";
+
+/** What the operator who starts `serve-mcp` decides about `nexus_verify`; a caller of the tool decides nothing. */
+export interface McpVerifyOptions {
+  /** The operator's verifier (`--authoritative-verifier`). Absent: the tool runs nothing. */
+  verifierCommand?: string;
+  /** Validated `--deliverable-file` paths. */
+  deliverables?: readonly string[];
+  readOnly?: boolean;
+  deps?: VerifyServiceDeps;
+}
+
 export class McpServer {
   private bridge: RustCoreBridge;
   private workspace: string;
   private running: boolean = false;
+  private verifyService: VerifyService;
+  /** Pinned here, before any request: a commit the caller makes later is part of the change, not the base it is judged by. */
+  private verifyBase: PinnedBase | { error: string };
+  /** The `nexus_verify` call in flight, so `notifications/cancelled` can find it. */
+  private verifyCall: { id: unknown; abort: AbortController; cancelled: boolean } | undefined;
 
-  constructor(workspace: string, defaultShell: string = "bash") {
+  constructor(workspace: string, defaultShell: string = "bash", verify: McpVerifyOptions = {}) {
     this.workspace = path.resolve(workspace);
     this.bridge = new RustCoreBridge(this.workspace, defaultShell);
+    this.verifyBase = pinBase(this.workspace);
+    this.verifyService = new VerifyService(
+      { worktree: this.workspace, verifierCommand: verify.verifierCommand, deliverables: verify.deliverables ?? [], readOnly: Boolean(verify.readOnly), surface: "mcp" },
+      verify.deps,
+    );
   }
 
   public async startStdio(): Promise<void> {
@@ -937,6 +1012,17 @@ export class McpServer {
         if (!trimmed) continue;
         try {
           const req = JSON.parse(trimmed);
+          // A verification runs for minutes in another process. Its reply is not awaited here, so a cancellation or a
+          // ping that follows it on this stream is still read.
+          if (req?.method === "tools/call" && req.params?.name === MCP_VERIFY_TOOL) {
+            void this.handleMessage(req).then((res) => {
+              if (res) stdout.write(JSON.stringify(res) + "\n");
+            }).catch((err: any) => {
+              // Nothing awaits this call, so a throw here would otherwise end the server as an unhandled rejection.
+              stdout.write(JSON.stringify({ jsonrpc: "2.0", id: req.id ?? null, error: { code: -32603, message: `Internal error: ${err?.message ?? err}` } }) + "\n");
+            });
+            continue;
+          }
           const res = await this.handleMessage(req);
           if (res) {
             stdout.write(JSON.stringify(res) + "\n");
@@ -957,6 +1043,23 @@ export class McpServer {
         this.shutdown();
       }, 200);
     });
+
+    // A signal's default action would end this process at once and leave a running verifier and its scratch trees
+    // behind. Stop the verification first, wait until nothing of it is left, then exit as the signal would have.
+    let stopping = false;
+    const stop = (code: number) => {
+      if (stopping) return;
+      stopping = true;
+      // Not unref'd: it must fire even if nothing else keeps the process alive. Exiting kills what is still running.
+      const hardExit = setTimeout(() => process.exit(code), VERIFY_KILL_GRACE_MS + 5_000);
+      void this.verifyService.stop().catch(() => {}).then(() => {
+        clearTimeout(hardExit);
+        this.shutdown();
+        process.exit(code);
+      });
+    };
+    process.on("SIGINT", () => stop(130));
+    process.on("SIGTERM", () => stop(143));
   }
 
   public async handleMessage(req: any): Promise<any | null> {
@@ -966,6 +1069,16 @@ export class McpServer {
     const method = req.method;
 
     if (method === "notifications/initialized") {
+      return null;
+    }
+
+    if (method === "notifications/cancelled") {
+      const call = this.verifyCall;
+      if (call && req.params?.requestId === call.id) {
+        // MCP: a cancelled request gets no response.
+        call.cancelled = true;
+        call.abort.abort();
+      }
       return null;
     }
 
@@ -997,13 +1110,19 @@ export class McpServer {
     }
 
     if (method === "tools/list") {
-      const tools = HARNESS_TOOLS
-        .filter((t) => t.function.name !== "spawn_subagent" && t.function.name !== "activate_skill")
+      const tools = baselineTools.serveMcpDefinitions()
         .map((t) => ({
           name: t.function.name,
           description: t.function.description,
           inputSchema: t.function.parameters,
         }));
+      tools.push({
+        name: MCP_VERIFY_TOOL,
+        description: "Verify the workspace's working tree against the commit pinned when this server started, without a model. "
+          + "Takes no arguments: the verifier, deliverables, base and sandbox are the server operator's. "
+          + "Returns a verdict (VERIFIED, REGRESSION_FREE, UNVERIFIED or BLOCKED) and a receipt id; read the receipt at nexus://verify-receipt/<id>.",
+        inputSchema: { type: "object", properties: {}, additionalProperties: false } as any,
+      });
 
       return {
         jsonrpc: "2.0",
@@ -1032,6 +1151,12 @@ export class McpServer {
               description: "Content of AGENTS.md project rules and conventions",
               mimeType: "text/markdown",
             },
+            ...this.verifyService.list().map((receipt) => ({
+              uri: `${VERIFY_RECEIPT_URI_PREFIX}${receipt.receipt_id}`,
+              name: `Verify receipt ${receipt.receipt_id}`,
+              description: `${receipt.verdict}, issued ${receipt.issued_at}`,
+              mimeType: "application/json",
+            })),
           ],
         },
       };
@@ -1039,6 +1164,13 @@ export class McpServer {
 
     if (method === "resources/read") {
       const uri = req.params?.uri;
+      if (typeof uri === "string" && uri.startsWith(VERIFY_RECEIPT_URI_PREFIX)) {
+        const receiptId = uri.slice(VERIFY_RECEIPT_URI_PREFIX.length);
+        const text = this.verifyService.receiptText(receiptId);
+        // The requested id is not repeated: it is the caller's text and may be any length.
+        if (text === undefined) return { jsonrpc: "2.0", id, error: { code: -32602, message: "Verify receipt not available" } };
+        return { jsonrpc: "2.0", id, result: { contents: [{ uri: `${VERIFY_RECEIPT_URI_PREFIX}${receiptId}`, mimeType: "application/json", text }] } };
+      }
       if (uri === "nexus://workspace-info") {
         return {
           jsonrpc: "2.0",
@@ -1156,6 +1288,8 @@ export class McpServer {
         };
       }
 
+      if (toolName === MCP_VERIFY_TOOL) return this.callVerify(id, req.params);
+
       // MCP clients have no operator to decide: an edit to verification configuration (tests, CI, build files) is refused.
       const execResult = await this.bridge.executeTool(toolName, args, { operator: false });
 
@@ -1197,8 +1331,46 @@ export class McpServer {
     };
   }
 
+  /**
+   * `nexus_verify`: the caller is untrusted and supplies nothing. A request with any argument is refused rather than
+   * run with the argument ignored, so a caller that sent a verifier, a base or an outcome is told it had no effect.
+   */
+  private async callVerify(id: unknown, params: Record<string, unknown>): Promise<any | null> {
+    const args = params.arguments;
+    const extra = Object.keys(params).some((key) => key !== "name" && key !== "arguments" && key !== "_meta");
+    const empty = args === undefined || (args !== null && typeof args === "object" && !Array.isArray(args) && Object.keys(args).length === 0);
+    if (extra || !empty) {
+      return { jsonrpc: "2.0", id, error: { code: -32602, message: `${MCP_VERIFY_TOOL} takes no arguments; the verifier, deliverables, base and sandbox are the operator's` } };
+    }
+    // No verdict: the text is an error document and no receipt exists.
+    const failed = (name: "usage" | "interrupted", message: string) => ({
+      jsonrpc: "2.0",
+      id,
+      result: {
+        content: [{ type: "text", text: JSON.stringify({ schema_version: VERIFY_RESULT_SCHEMA_VERSION, error: message, exitCode: verifyExitCode(name) } satisfies VerifyJsonError) }],
+        isError: true,
+      },
+    });
+    if ("error" in this.verifyBase) return failed("usage", this.verifyBase.error);
+
+    const call = { id, abort: new AbortController(), cancelled: false };
+    // A second call while one runs is refused by the service; it must not take over the running call's cancellation.
+    const tracked = this.verifyCall === undefined;
+    if (tracked) this.verifyCall = call;
+    try {
+      const outcome = await this.verifyService.verify({ base: this.verifyBase }, call.abort.signal);
+      if (call.cancelled) return null;
+      if ("error" in outcome) return failed(outcome.error.kind === "interrupted" || outcome.error.kind === "timeout" ? "interrupted" : "usage", outcome.error.message);
+      // A verdict was reached, so this is a result whatever the verdict: BLOCKED and UNVERIFIED are answers, not errors.
+      return { jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(outcome.summary) }], isError: false } };
+    } finally {
+      if (tracked) this.verifyCall = undefined;
+    }
+  }
+
   public shutdown(): void {
     this.running = false;
+    this.verifyService.abort();
     this.bridge.shutdown();
   }
 }

@@ -1,14 +1,24 @@
 {
   "name": "local-code-harness",
-  "version": "1.2.2",
+  "version": "1.3.0-rc.1",
+  "private": true,
   "type": "module",
   "description": "Autonomous local AI coding harness (Codex / Claude-Code style) for LM Studio and vLLM",
-  "main": "dist/index.js",
+  "main": "dist/lib.js",
+  "types": "dist/types/lib.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/lib.d.ts",
+      "import": "./dist/lib.js"
+    },
+    "./package.json": "./package.json"
+  },
   "bin": {
     "harness": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc && node scripts/copy_data.mjs && node scripts/write_build_info.mjs",
+    "build": "tsc && tsc -p tsconfig.lib.json && node scripts/copy_data.mjs && node scripts/write_build_info.mjs",
+    "prepublishOnly": "echo 'local-code-harness is not published (docs/v1.3.0/PLAN.md, D13)' >&2; exit 1",
     "test": "npm run test:cli && npm run test:scope",
     "test:cli": "node scripts/test_shards.mjs",
     "test:unit": "node scripts/test_tiers.mjs --tier=unit",
@@ -40,6 +50,7 @@
     "picocolors": "^1.1.1"
   },
   "devDependencies": {
+    "@babel/parser": "7.29.15",
     "@types/node": "^26.6.6",
     "tsx": "^4.19.0",
     "typescript": "^7.0.2"

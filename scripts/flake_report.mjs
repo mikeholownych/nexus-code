@@ -97,6 +97,8 @@ export function renderMarkdown(report) {
   return `${lines.join("\n")}\n`;
 }
 
+const AGGREGATE_JOB = /^test-matrix \(\d+\)$/;
+
 /** The only place that talks to GitHub; `gh` is injectable so the logic above is testable offline. */
 async function defaultGh(args) {
   const { stdout } = await execFileAsync("gh", args, { maxBuffer: 256 * 1024 * 1024 });
@@ -111,7 +113,11 @@ export async function fetchRuns({ repo, workflow, runs, gh = defaultGh }) {
     const attempts = [];
     for (let n = 1; n <= (run.run_attempt ?? 1); n++) {
       const jobs = JSON.parse(await api(`repos/${repo}/actions/runs/${run.id}/attempts/${n}/jobs?per_page=100`)).jobs ?? [];
-      const failed = jobs.filter((j) => j.conclusion && j.conclusion !== "success" && j.conclusion !== "skipped");
+      const unsuccessful = jobs.filter((j) => j.conclusion && j.conclusion !== "success" && j.conclusion !== "skipped");
+      // `test-matrix (N)` only aggregates the gate and shard jobs: it fails because one of them did, and that job is
+      // already in the list with the test's name. Counted too, every flake would add a second, nameless event.
+      const causes = unsuccessful.filter((j) => !AGGREGATE_JOB.test(j.name));
+      const failed = causes.length ? causes : unsuccessful;
       const failures = [];
       // Logs are only worth reading for an attempt that a later one superseded.
       const superseded = n < (run.run_attempt ?? 1);

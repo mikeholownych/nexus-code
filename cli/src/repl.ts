@@ -14,6 +14,8 @@ import { LocalLlmClient } from "./client.js";
 import { HarnessConfig, ApprovalMode } from "./types.js";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
 import { isNexusDirPermissive } from "./doctor.js";
+import { sandboxPostureText } from "./sandbox_profile.js";
+import { sandboxNetworkEnabled } from "./sandbox.js";
 import { surfaceFacts } from "./surface_facts.js";
 import { getGitInfo, scaffoldProjectRules, generateConventionalCommit, commitChanges, trustedGitArgs, workspaceStatus } from "./git.js";
 import { SessionManager, SessionData } from "./session.js";
@@ -27,6 +29,7 @@ import {
 import { renderTokenGauge } from "./tokens.js";
 import { scanAndOnboardWorkspace } from "./onboard.js";
 import { PolicyContext } from "./core/approval_policy.js";
+import { clampAlwaysApproval, clampRuntimeApprovalMode } from "./core/managed_policy.js";
 import { runTestSuiteWithExecutor, discoverVerifier, describeVerifier, verifierTimeoutSecs } from "./tester.js";
 import { copyToClipboard, readFromClipboard } from "./clipboard.js";
 import { encodeImageFile, formatVisionContent } from "./image.js";
@@ -39,6 +42,8 @@ import { buildSessionExport } from "./session_export.js";
 import { SensitivePersistenceError } from "./core/persistence_protection.js";
 import { persistableEndpoint } from "./core/endpoint_identity.js";
 import { executeBatchCommand } from "./batch_command.js";
+import { executeGoalCommand } from "./goal_command.js";
+import { executeLoopCommand } from "./loop_command.js";
 
 interface PatchHunk {
   header: string;
@@ -105,6 +110,11 @@ export function replReadOnlyAllowed(command: string, args: string): boolean {
   if (name === "skill") return !value || !/^init(?:\s|$)/.test(value);
   if (name === "theme") return !value;
   if (name === "batch") return /^(?:status|list|validate|results)(?:\s|$)/.test(value);
+  if (name === "goal") {
+    if (/^requirements\s+(?:accept|descope)(?:\s|$)/.test(value)) return false;
+    return /^(?:status(?:\s|$)|list$|show\s+\S|requirements(?:\s|$)|evidence(?:\s|$))/.test(value);
+  }
+  if (name === "loop") return /^(?:status(?:\s|$)|list$)/.test(value);
   if (name === "doctor") return !/(^|\s)--fix(?:=|\s|$)/.test(value);
   return false;
 }
@@ -122,7 +132,7 @@ export class InteractiveRepl {
   private currentSessionId: string;
   private themeManager: ThemeManager = new ThemeManager();
   private exitResolve?: () => void;
-  /** Cancels a running durable /team or /batch operation (Ctrl-C). */
+  /** Cancels a running durable /team, /batch, or /goal operation (Ctrl-C). */
   private operationAbort?: AbortController;
   /** Set while `/worktree merge --ai-message` awaits the model: Ctrl-C cancels it instead of ending the session. */
   private worktreeAbort?: AbortController;
@@ -149,6 +159,7 @@ export class InteractiveRepl {
     this.config.surface = "repl";
     this.agent.setSurface("repl");
     this.agent.setApprovalMode(this.approvalMode);
+    if (this.approvalMode === "auto" && this.autoModeRefusal("Approval mode 'auto'")) this.approvalMode = "review";
     // Compaction archives the originals beside the current session before the session names it as committed.
     this.agent.setArchiveSink((compactionId, messages, record) => this.sessionManager.appendArchivedHistory(this.currentSessionId, messages, compactionId, record));
     this.historyFile = path.join(os.homedir(), ".nexus_history");
@@ -192,8 +203,20 @@ export class InteractiveRepl {
   }
 
   public setApprovalMode(mode: ApprovalMode): void {
-    this.approvalMode = mode;
     this.agent.setApprovalMode(mode);
+    if (mode === "auto" && this.autoModeRefusal("Approval mode 'auto'")) return;
+    this.approvalMode = mode;
+  }
+
+  /**
+   * GV-1: why this session may not enter approval mode `auto`, when managed policy disables it (the text names the
+   * policy source). The REPL answers approvals from its own copy of the mode, so everything that would set that copy
+   * to `auto` asks here first; the agent refuses the same request by itself.
+   */
+  private autoModeRefusal(origin: string): string | undefined {
+    const policy = this.agent.getBridge().getSecurityManager().getEffectivePolicy();
+    if (origin === "'always'") return clampAlwaysApproval(policy).notice;
+    return clampRuntimeApprovalMode(policy, this.approvalMode === "auto" ? "review" : this.approvalMode, "auto", origin).notice;
   }
 
   /** Runs one agent turn with the operator's stop authority wired to it, then records the structured result. */
@@ -370,7 +393,8 @@ export class InteractiveRepl {
 
     const facts = surfaceFacts(this.app, this.currentSessionId);
     const trusted = isWorkspaceTrusted(this.config.workspace, Boolean(this.config.readOnly));
-    const sandboxStatus = this.config.sandbox ? (typeof this.config.sandbox === "string" ? this.config.sandbox : "on") : "off";
+    // SB-1: the one describer; the source is derived from the settings in force, never assumed to be managed policy.
+    const sandboxStatus = sandboxPostureText({ sandbox: this.config.sandbox, readOnly: this.config.approvalMode === "read-only", network: sandboxNetworkEnabled(), profile: this.config.sandboxProfile });
     const trustStatus = trusted ? "trusted" : "untrusted (nexus trust .)";
     console.log(pc.dim(`mode: ${facts.mode} · sandbox: ${sandboxStatus} · workspace: ${trustStatus}`));
 
@@ -410,6 +434,8 @@ export class InteractiveRepl {
     console.log(`  ${pc.bold(pc.yellow("/plugins"))}            List loaded custom plugins and lifecycle hooks`);
     console.log(`  ${pc.bold(pc.yellow("/team <role|full> <task>"))} Multi-agent collaborative team orchestration`);
     console.log(`  ${pc.bold(pc.yellow("/batch <spec-file> | run|validate|status|list|pause|resume|cancel|results"))} Bounded durable work batches`);
+    console.log(`  ${pc.bold(pc.yellow("/goal <objective> | status|list|show|pause|resume|cancel|requirements|evidence"))} Durable objective with verification and independent review`);
+    console.log(`  ${pc.bold(pc.yellow("/loop [--until <condition>] [--max-iterations <n>] [--max-duration <duration>] <objective> | status|list|pause|resume|stop|reconcile"))} Bounded durable iteration loop with deterministic verification`);
     console.log(`  ${pc.bold(pc.yellow("/image <path> [prompt]"))} Ingest multi-modal image into vision model`);
     console.log(`  ${pc.bold(pc.yellow("/theme [name]"))}       View or switch terminal color theme`);
     console.log(`  ${pc.bold(pc.yellow("/tui"))}                Launch full-screen interactive TUI dashboard`);
@@ -615,6 +641,11 @@ export class InteractiveRepl {
           pc.bold(pc.yellow(`  Type 'all' to confirm auto-approving all actions for this session: `)),
           { graceMs: REPL_APPROVAL_GRACE_MS }
         );
+        const notRemembered = confirmAll?.trim().toLowerCase() === "all" ? this.autoModeRefusal("'always'") : undefined;
+        if (notRemembered) {
+          console.log(pc.yellow(`  ${notRemembered}\n`));
+          return true;
+        }
         if (confirmAll?.trim().toLowerCase() === "all") {
           this.approvalMode = "auto";
           this.agent.setApprovalMode("auto");
@@ -676,7 +707,7 @@ export class InteractiveRepl {
           "/checkpoints", "/undo", "/audit", "/export", "/tokens", "/init",
           "/onboard", "/test",
           "/model", "/shell", "/cd", "/history", "/copy", "/paste",
-          "/image", "/theme", "/team", "/batch", "/upgrade",
+          "/image", "/theme", "/team", "/batch", "/goal", "/loop", "/upgrade",
           "/exit", "/quit"
         ];
         const trimmed = line.trim();
@@ -1026,7 +1057,10 @@ export class InteractiveRepl {
             this.printStatus(true);
             continue;
           } else if (cmd === "mode") {
-            if (arg === "auto" || arg === "autonomous") {
+            const autoRefused = arg === "auto" || arg === "autonomous" ? this.autoModeRefusal("/mode auto") : undefined;
+            if (autoRefused) {
+              console.log(pc.yellow(`${autoRefused}\n`));
+            } else if (arg === "auto" || arg === "autonomous") {
               this.approvalMode = "auto";
               this.agent.setApprovalMode("auto");
               console.log(pc.green("✔ Mode switched to: auto (autonomous tool execution)\n"));
@@ -1732,6 +1766,42 @@ export class InteractiveRepl {
               const result = await executeBatchCommand(arg, this.config, this.operationAbort.signal, (event) => {
                 if (events.length < 200) events.push(event);
               });
+              for (const event of events) {
+                const color = event.type.startsWith("RESOURCE_") ? pc.dim : pc.cyan;
+                console.log(color(`◆ ${formatDiagnosticForOutput(event.message)}`));
+              }
+              console.log((result.success ? pc.green : pc.yellow)(`\n${formatDiagnosticForOutput(result.output)}\n`));
+            } catch (error) {
+              console.log(pc.red(`\n${formatDiagnosticForOutput(error)}\n`));
+            } finally {
+              this.operationAbort = undefined;
+            }
+            continue;
+          } else if (cmd === "goal") {
+            this.operationAbort = new AbortController();
+            try {
+              const events: Array<{ type: string; message: string }> = [];
+              const result = await executeGoalCommand(arg, this.config, this.operationAbort.signal, (event) => {
+                if (events.length < 200) events.push(event);
+              });
+              for (const event of events) {
+                const color = event.type.startsWith("RESOURCE_") ? pc.dim : pc.cyan;
+                console.log(color(`◆ ${formatDiagnosticForOutput(event.message)}`));
+              }
+              console.log((result.success ? pc.green : pc.yellow)(`\n${formatDiagnosticForOutput(result.output)}\n`));
+            } catch (error) {
+              console.log(pc.red(`\n${formatDiagnosticForOutput(error)}\n`));
+            } finally {
+              this.operationAbort = undefined;
+            }
+            continue;
+          } else if (cmd === "loop") {
+            this.operationAbort = new AbortController();
+            try {
+              const events: Array<{ type: string; message: string }> = [];
+              const result = await executeLoopCommand(arg, this.config, this.operationAbort.signal, (event) => {
+                if (events.length < 200) events.push(event);
+              }, (tool, values, approvalSignal) => this.confirmAction(tool, values, approvalSignal, { requireOperatorDecision: true }));
               for (const event of events) {
                 const color = event.type.startsWith("RESOURCE_") ? pc.dim : pc.cyan;
                 console.log(color(`◆ ${formatDiagnosticForOutput(event.message)}`));

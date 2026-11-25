@@ -1,0 +1,1899 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "nexus run --json output v1",
+  "description": "Generated from RunJsonOutput in cli/src/run_contract.ts by cli/scripts/gen_run_result_schema.mjs. Do not edit by hand. The one JSON document `nexus run --json` writes to stdout; `schema_version` is its first member.",
+  "$ref": "#/$defs/RunJsonOutput",
+  "$defs": {
+    "CandidateFileStatus": {
+      "enum": [
+        "added",
+        "deleted",
+        "modified",
+        "typechange",
+        "untracked"
+      ]
+    },
+    "CandidateIdentity": {
+      "type": "object",
+      "properties": {
+        "candidateId": {
+          "type": "string"
+        },
+        "isGit": {
+          "type": "boolean"
+        },
+        "manifestHash": {
+          "type": "string"
+        },
+        "rootBaseSha": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "string"
+        },
+        "trackedChanges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FileCandidateEntry"
+          }
+        },
+        "untrackedFiles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FileCandidateEntry"
+          }
+        },
+        "workspacePath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidateId",
+        "isGit",
+        "manifestHash",
+        "rootBaseSha",
+        "timestamp",
+        "trackedChanges",
+        "untrackedFiles",
+        "workspacePath"
+      ]
+    },
+    "CapacityRecord": {
+      "description": "Evidence for a context-admission refusal (the request was rejected before any inference call, fail-closed).\n`modelCalled` says whether an earlier step of the same turn already reached the model; `pendingMessageRetained`\nsays whether the operator's submission is part of the conversation history after the refusal.",
+      "type": "object",
+      "properties": {
+        "completionReserveTokens": {
+          "type": "number"
+        },
+        "contextLimit": {
+          "type": "number"
+        },
+        "estimatedPromptTokens": {
+          "type": "number"
+        },
+        "missingRequirements": {
+          "description": "Gating requirements the request would not have carried (CX-5): the turn stopped rather than send without them.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "modelCalled": {
+          "type": "boolean"
+        },
+        "pendingMessageChars": {
+          "type": "number"
+        },
+        "pendingMessageRetained": {
+          "type": "boolean"
+        },
+        "promptCountSource": {
+          "description": "How the refused prompt was counted (provider_capabilities.ts CountSource); absent on records from earlier versions.",
+          "type": "string"
+        },
+        "step": {
+          "type": "number"
+        },
+        "toolResponseReserveTokens": {
+          "type": "number"
+        },
+        "unmeasured": {
+          "description": "Strict counting refused a request it could not measure: why.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "completionReserveTokens",
+        "contextLimit",
+        "estimatedPromptTokens",
+        "modelCalled",
+        "pendingMessageChars",
+        "pendingMessageRetained",
+        "step",
+        "toolResponseReserveTokens"
+      ]
+    },
+    "DurableMilestoneRecord": {
+      "type": "object",
+      "properties": {
+        "candidateId": {
+          "type": "string"
+        },
+        "evidenceSummary": {
+          "type": "string"
+        },
+        "milestoneId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "phaseIndex": {
+          "type": "number"
+        },
+        "reachedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "milestoneId",
+        "name",
+        "reachedAt"
+      ]
+    },
+    "DurablePlanPhase": {
+      "type": "object",
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "status"
+      ]
+    },
+    "DurableWorktreeBinding": {
+      "type": "object",
+      "properties": {
+        "bindingVersion": {
+          "type": "number"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "kind": {
+          "description": "\"task\": the ephemeral `nexus/<taskId>` worktree of `--worktree`. \"named\": a user-named worktree from\n`--worktree-branch`, validated against Git's worktree list and the registry. Absent in records written before\nthis field existed; loading migrates those to \"task\".",
+          "enum": [
+            "named",
+            "task"
+          ]
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "worktreePath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "branch",
+        "createdAt",
+        "taskId",
+        "worktreePath"
+      ]
+    },
+    "EngineeringOutcome": {
+      "description": "VERIFIED        - the verifier selected for this workspace ran and passed against the current changes\nUNVERIFIED      - work ended with a result that was not (or could not be) verified; see reason. Either changes\n                  no passing verifier covers, or an answer resting on tool output that context compaction removed\n                  during the turn and the model did not re-read (CONTEXT_EVIDENCE_NOT_RETAINED)\nNOT_ESTABLISHED - no engineering result was established (turn did not complete, or verifier failed)\nNOT_REQUIRED    - the turn made no workspace change and every tool output it relied on was still in context",
+      "enum": [
+        "NOT_ESTABLISHED",
+        "NOT_REQUIRED",
+        "REGRESSION_FREE",
+        "UNVERIFIED",
+        "VERIFIED"
+      ]
+    },
+    "EvaluationToolReceipt": {
+      "description": "Sanitized, opt-in evaluator receipt for a real run_command invocation.",
+      "type": "object",
+      "properties": {
+        "commandSha256": {
+          "type": "string"
+        },
+        "exitCode": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "invocationId": {
+          "type": "string"
+        },
+        "timedOut": {
+          "type": "boolean"
+        },
+        "timeoutSecs": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tool": {
+          "const": "run_command"
+        },
+        "workspaceAvailableAfterBytes": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspaceAvailableBeforeBytes": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "commandSha256",
+        "exitCode",
+        "invocationId",
+        "timedOut",
+        "timeoutSecs",
+        "tool",
+        "workspaceAvailableAfterBytes",
+        "workspaceAvailableBeforeBytes"
+      ]
+    },
+    "EvaluatorBinding": {
+      "type": "object",
+      "properties": {
+        "evaluatorId": {
+          "type": "string"
+        },
+        "evaluatorType": {
+          "type": "string"
+        },
+        "evaluatorVersion": {
+          "type": "string"
+        },
+        "instanceId": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "testSuite": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "evaluatorId",
+        "evaluatorType"
+      ]
+    },
+    "ExecutionState": {
+      "enum": [
+        "BLOCKED",
+        "COMPLETED",
+        "FAILED",
+        "INTERRUPTED",
+        "LIMIT_REACHED"
+      ]
+    },
+    "ExecutionStatus": {
+      "description": "What is known about whether the provider executed the failed request.\nNOT_EXECUTED: proven not run (never sent, refused, or answered with a rejection status).\nUNKNOWN: it may have been admitted and generated; nothing complete reached Nexus.\nCOMPLETED: the provider finished it (terminal evidence was received).",
+      "enum": [
+        "COMPLETED",
+        "NOT_EXECUTED",
+        "UNKNOWN"
+      ]
+    },
+    "FileCandidateEntry": {
+      "type": "object",
+      "properties": {
+        "contentHash": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "size": {
+          "type": "number"
+        },
+        "status": {
+          "$ref": "#/$defs/CandidateFileStatus"
+        }
+      },
+      "required": [
+        "contentHash",
+        "mode",
+        "path",
+        "size",
+        "status"
+      ]
+    },
+    "InferenceFailure": {
+      "type": "object",
+      "properties": {
+        "condition": {
+          "$ref": "#/$defs/ProviderCondition"
+        },
+        "execution": {
+          "$ref": "#/$defs/ExecutionStatus"
+        },
+        "hints": {
+          "$ref": "#/$defs/ProviderHints"
+        },
+        "httpStatus": {
+          "type": "number"
+        },
+        "kind": {
+          "$ref": "#/$defs/InferenceFailureKind"
+        },
+        "message": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/InferenceFailureOrigin"
+        },
+        "partialTextChars": {
+          "description": "Text received before the failure. Diagnostic only - never a complete answer.",
+          "type": "number"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "transportCause": {
+          "description": "Lower-level transport errors, outermost first.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TransportCause"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "message",
+        "origin"
+      ]
+    },
+    "InferenceFailureKind": {
+      "enum": [
+        "aborted",
+        "configuration_error",
+        "http_error",
+        "malformed_event",
+        "network_error",
+        "output_truncated",
+        "policy_denied",
+        "protocol_error",
+        "provider_error_frame",
+        "stream_incomplete",
+        "stream_interrupted",
+        "timeout"
+      ]
+    },
+    "InferenceFailureOrigin": {
+      "enum": [
+        "client",
+        "operator",
+        "provider",
+        "transport"
+      ]
+    },
+    "InterruptionRecord": {
+      "type": "object",
+      "properties": {
+        "outstandingTool": {
+          "description": "A tool that was already executing when cancellation was requested. It cannot be force-stopped; it is awaited.",
+          "type": "string"
+        },
+        "outstandingToolSettled": {
+          "type": "boolean"
+        },
+        "phase": {
+          "description": "Where the turn was when cancellation was observed.",
+          "enum": [
+            "between_steps",
+            "confirmation",
+            "inference",
+            "provider_wait",
+            "tool_dispatch",
+            "tool_settling"
+          ]
+        },
+        "providerEligibleAt": {
+          "description": "phase `provider_wait` only: when the provider may be asked again (the planned next attempt, which honours its\nRetry-After). A resumed turn waits until then before its first request (bounded by the recovery deadline).",
+          "type": "string"
+        },
+        "requestedAt": {
+          "type": "string"
+        },
+        "undispatchedToolCalls": {
+          "description": "Tool calls the model asked for that were never dispatched.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "phase",
+        "requestedAt",
+        "undispatchedToolCalls"
+      ]
+    },
+    "MaterialValidationDependency": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "versionOrHash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "versionOrHash"
+      ]
+    },
+    "ModelStop": {
+      "description": "What made the model/agent loop stop issuing actions. Not itself evidence of success.",
+      "enum": [
+        "FINAL_TEXT",
+        "NONE",
+        "TASK_COMPLETED_TOOL"
+      ]
+    },
+    "NeedsInputKind": {
+      "description": "VC-9: a headless run that needs an operator decision ends BLOCKED with reason NEEDS_INPUT and one of these, and\nresumes with `nexus run --resume <task> --answer <id>=<option>`.\n\nThe id is a digest of what is being decided, so the same decision gets the same id when the resumed run reaches it\nagain, and an answer for one decision never approves another (a different tool, argument or verifier script has a\ndifferent id).",
+      "enum": [
+        "blocked_requirement",
+        "steering_conflict",
+        "tool_approval",
+        "verification_edit",
+        "verifier_approval"
+      ]
+    },
+    "NeedsInputQuestion": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/NeedsInputKind"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "enum": [
+                  "approve",
+                  "decline",
+                  "reply"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label"
+            ]
+          }
+        },
+        "prompt": {
+          "description": "One sentence the operator can answer.",
+          "type": "string"
+        },
+        "subagent": {
+          "description": "Present when a delegated subagent raised the question: how deep it ran and what it was asked to do. The id is unchanged, so `--answer` works as for any other question.",
+          "type": "object",
+          "properties": {
+            "depth": {
+              "type": "number"
+            },
+            "objective": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "depth",
+            "objective"
+          ]
+        },
+        "subject": {
+          "description": "What is being decided, as short strings (never secrets: arguments are clipped and redacted by the caller).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "options",
+        "prompt",
+        "subject"
+      ]
+    },
+    "OperatorAcceptance": {
+      "enum": [
+        "ACCEPTED",
+        "NOT_ACCEPTED",
+        "NOT_REQUESTED"
+      ]
+    },
+    "ProviderCondition": {
+      "description": "What a failed inference request says about the provider. The first four are temporary: the agent loop may wait\nfor them. The rest need a different request, configuration, or the operator.",
+      "enum": [
+        "AUTH_FAILURE",
+        "AVAILABLE",
+        "CAPACITY_REJECTED",
+        "DRAINING",
+        "OVERLOADED",
+        "PERMANENT_FAILURE",
+        "QUOTA_EXHAUSTED",
+        "RATE_LIMITED",
+        "REQUEST_REJECTED",
+        "TEMPORARILY_UNAVAILABLE"
+      ]
+    },
+    "ProviderHints": {
+      "description": "Retry metadata a provider advertised with a failure. All optional: plain OpenAI-compatible servers send none.",
+      "type": "object",
+      "properties": {
+        "errorCode": {
+          "description": "Provider error code, e.g. `context_length_exceeded`, `gateway_restarting`, `pre_generation`.",
+          "type": "string"
+        },
+        "errorType": {
+          "type": "string"
+        },
+        "rateLimitResetMs": {
+          "type": "number"
+        },
+        "remainingRequests": {
+          "type": "number"
+        },
+        "remainingTokens": {
+          "type": "number"
+        },
+        "retryAfterMs": {
+          "type": "number"
+        }
+      }
+    },
+    "ProviderRecoveryRecord": {
+      "description": "Provider recovery for one inference step. WAITING/PROBING are live states (also checkpointed durably);\nthe rest are final. Created only when a submission fails.",
+      "type": "object",
+      "properties": {
+        "condition": {
+          "description": "Latest provider condition observed by a submission or probe.",
+          "$ref": "#/$defs/ProviderCondition"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "everSucceeded": {
+          "type": "boolean"
+        },
+        "nextAttemptAt": {
+          "type": "string"
+        },
+        "policy": {
+          "type": "object",
+          "properties": {
+            "deadlineMs": {
+              "type": "number"
+            },
+            "maxDelayMs": {
+              "type": "number"
+            },
+            "maxUnknownReplays": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "deadlineMs",
+            "maxDelayMs",
+            "maxUnknownReplays"
+          ]
+        },
+        "probes": {
+          "type": "number"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "resumedAt": {
+          "type": "string"
+        },
+        "resumedRequestId": {
+          "description": "X-Request-ID of the submission that completed; it replaces the last entry of `submissions`.",
+          "type": "string"
+        },
+        "startedAt": {
+          "type": "string"
+        },
+        "state": {
+          "description": "YIELDED: the operation scheduler took the step back (NOT_EXECUTED only) to reroute or park the work.",
+          "enum": [
+            "CANCELLED",
+            "EXHAUSTED",
+            "NOT_RECOVERABLE",
+            "PROBING",
+            "RESUMED",
+            "WAITING",
+            "YIELDED"
+          ]
+        },
+        "step": {
+          "type": "number"
+        },
+        "submissions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RecoverySubmissionRecord"
+          }
+        },
+        "unknownReplays": {
+          "type": "number"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "waitedMs": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "condition",
+        "policy",
+        "probes",
+        "startedAt",
+        "state",
+        "step",
+        "submissions",
+        "unknownReplays",
+        "updatedAt",
+        "waitedMs"
+      ]
+    },
+    "RecoverySubmissionRecord": {
+      "description": "One submission of an inference request that failed while the agent loop was recovering the provider.",
+      "type": "object",
+      "properties": {
+        "attempt": {
+          "type": "number"
+        },
+        "condition": {
+          "$ref": "#/$defs/ProviderCondition"
+        },
+        "execution": {
+          "$ref": "#/$defs/ExecutionStatus"
+        },
+        "failedAt": {
+          "type": "string"
+        },
+        "httpStatus": {
+          "type": "number"
+        },
+        "kind": {
+          "$ref": "#/$defs/InferenceFailureKind"
+        },
+        "message": {
+          "type": "string"
+        },
+        "previousRequestId": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "retryAfterMs": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "attempt",
+        "condition",
+        "execution",
+        "failedAt",
+        "kind",
+        "message",
+        "requestId"
+      ]
+    },
+    "RunJsonError": {
+      "description": "Printed instead of a result when the run threw before producing one (for example `--resume` of a task that does not\nexist). It has no `turn` and no `exitCode`: read the process exit code.",
+      "type": "object",
+      "properties": {
+        "durationMs": {
+          "type": "number"
+        },
+        "error": {
+          "description": "Why the run failed (redacted).",
+          "type": "string"
+        },
+        "milestones": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DurableMilestoneRecord"
+          }
+        },
+        "output": {
+          "type": "string"
+        },
+        "plan": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DurablePlanPhase"
+          }
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "schema_version": {
+          "description": "Version of this document's schema. Always the first member.",
+          "const": 1
+        },
+        "status": {
+          "const": "failed"
+        },
+        "success": {
+          "const": false
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "tokenStats": {
+          "type": "object",
+          "properties": {
+            "completion": {
+              "type": "number"
+            },
+            "prompt": {
+              "type": "number"
+            },
+            "total": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "completion",
+            "prompt",
+            "total"
+          ]
+        },
+        "validationReceipts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ValidationReceipt"
+          }
+        }
+      },
+      "required": [
+        "durationMs",
+        "error",
+        "milestones",
+        "output",
+        "plan",
+        "prompt",
+        "schema_version",
+        "status",
+        "success",
+        "taskId",
+        "tokenStats",
+        "validationReceipts"
+      ]
+    },
+    "RunJsonOutput": {
+      "description": "The one JSON document `nexus run --json` writes to stdout. A result has `turn`; an error document does not.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RunJsonError"
+        },
+        {
+          "$ref": "#/$defs/RunJsonResult"
+        }
+      ]
+    },
+    "RunJsonResult": {
+      "description": "Printed when the task ran to an ending (whatever the ending): the task result with the contract version first.",
+      "type": "object",
+      "properties": {
+        "candidateId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "candidateIdentity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidateIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cloudUsage": {
+          "description": "Cloud provider usage of this process; present only when at least one cloud request was made.",
+          "$ref": "#/$defs/UsageTotals"
+        },
+        "durationMs": {
+          "type": "number"
+        },
+        "error": {
+          "type": "string"
+        },
+        "evaluationToolReceipts": {
+          "description": "Present only when the evaluator explicitly opts in; contains no command or output text.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvaluationToolReceipt"
+          }
+        },
+        "exitCode": {
+          "description": "Process exit code contract: 0 verified/nothing to verify, 2 completed-unverified, 130 interrupted, 1 otherwise.",
+          "type": "number"
+        },
+        "logs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "milestones": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DurableMilestoneRecord"
+          }
+        },
+        "output": {
+          "type": "string"
+        },
+        "plan": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DurablePlanPhase"
+          }
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "schema_version": {
+          "description": "Version of this document's schema. Always the first member.",
+          "const": 1
+        },
+        "status": {
+          "$ref": "#/$defs/TaskLifecycleStatus"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "tokenStats": {
+          "type": "object",
+          "properties": {
+            "completion": {
+              "type": "number"
+            },
+            "prompt": {
+              "type": "number"
+            },
+            "total": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "completion",
+            "prompt",
+            "total"
+          ]
+        },
+        "turn": {
+          "description": "Authoritative turn semantics; `success`/`status` are projections of this.",
+          "$ref": "#/$defs/TurnResult"
+        },
+        "validationReceipts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ValidationReceipt"
+          }
+        },
+        "worktreeBinding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DurableWorktreeBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "durationMs",
+        "exitCode",
+        "milestones",
+        "output",
+        "plan",
+        "prompt",
+        "schema_version",
+        "status",
+        "success",
+        "taskId",
+        "tokenStats",
+        "turn",
+        "validationReceipts"
+      ]
+    },
+    "TaskLifecycleStatus": {
+      "enum": [
+        "completed",
+        "failed",
+        "in_progress",
+        "interrupted",
+        "pending"
+      ]
+    },
+    "ToolCallSyntaxCounts": {
+      "description": "Tool-call argument syntax, counted once per call the parser recognizes, on every path that can produce one: native\n`tool_calls`, `<tool_call>` tags, a reply that is solely one fenced JSON call, and, under\n`NEXUS_TEXT_TOOL_PARSING=legacy`, fenced code blocks and balanced JSON objects in prose. Each is `native` (valid JSON\nas sent), `trailing` (parsed after a trailing-class repair, which includes removing a wrapping Markdown fence),\n`structural` (parsed only after closing truncated brackets or strings), `schema` (valid JSON, but an argument value\nwas converted to the type the tool's schema declares) or `invalid` (did not parse). A call counts once, under its worst\nclass; only a call that needed nothing is `native`. Calls rejected\nfor needing structural repair are still counted under `structural`. Not counted: tool names that are not offered,\nmalformed native entries dropped for lacking a function name, and responses cut off at the output-token limit.",
+      "type": "object",
+      "properties": {
+        "invalid": {
+          "type": "number"
+        },
+        "native": {
+          "type": "number"
+        },
+        "schema": {
+          "description": "Parsed as sent, but an argument value was converted to the type the tool's schema declares (WM-1).",
+          "type": "number"
+        },
+        "structural": {
+          "type": "number"
+        },
+        "trailing": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "invalid",
+        "native",
+        "schema",
+        "structural",
+        "trailing"
+      ]
+    },
+    "TransportCause": {
+      "description": "One level of a transport error's cause chain (socket, TLS, or parser error beneath `fetch failed`).",
+      "type": "object",
+      "properties": {
+        "address": {
+          "type": "string"
+        },
+        "bytesRead": {
+          "type": "number"
+        },
+        "bytesWritten": {
+          "description": "Bytes the socket had written/read when it failed; 0 written means the request never left this host.",
+          "type": "number"
+        },
+        "code": {
+          "type": "string"
+        },
+        "errno": {
+          "type": "number"
+        },
+        "message": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "port": {
+          "type": "number"
+        },
+        "syscall": {
+          "type": "string"
+        }
+      }
+    },
+    "TurnEvidence": {
+      "type": "object",
+      "properties": {
+        "carriedChanges": {
+          "description": "Unverified changes from earlier turns were pending when this turn began.",
+          "type": "boolean"
+        },
+        "denied": {
+          "description": "Tool calls the operator denied during this turn.",
+          "type": "number"
+        },
+        "verifierRuns": {
+          "description": "Verifier runs during this turn, in order: the pre-change baseline or the completion check.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "passed": {
+                "type": "boolean"
+              },
+              "phase": {
+                "enum": [
+                  "before_change",
+                  "completion"
+                ]
+              }
+            },
+            "required": [
+              "command",
+              "passed",
+              "phase"
+            ]
+          }
+        },
+        "workspaceChanged": {
+          "description": "Whether workspace content differs from how this turn found it; \"unknown\" when the state could not be established.",
+          "enum": [
+            "no",
+            "unknown",
+            "yes"
+          ]
+        }
+      },
+      "required": [
+        "carriedChanges",
+        "denied",
+        "verifierRuns",
+        "workspaceChanged"
+      ]
+    },
+    "TurnReason": {
+      "enum": [
+        "CONTEXT_CAPACITY_EXCEEDED",
+        "CONTEXT_EVIDENCE_NOT_RETAINED",
+        "INFERENCE_FAILED",
+        "INFERENCE_SUBMISSION_BUDGET_EXHAUSTED",
+        "NEEDS_INPUT",
+        "NO_APPLICABLE_VERIFIER",
+        "NO_TESTS_EXECUTED",
+        "OPERATOR_INTERRUPT",
+        "PERSISTENCE_FAILED",
+        "REGRESSION_FREE",
+        "REPOSITORY_STATE_CHANGED",
+        "REQUIREMENTS_INCOMPLETE",
+        "STAGNATION_DETECTED",
+        "STEP_BUDGET_EXHAUSTED",
+        "STEP_LIMIT_REACHED",
+        "STEP_PAUSED",
+        "TIME_BUDGET_EXHAUSTED",
+        "TOOL_CALL_LOOP",
+        "TOOL_INVOCATION_BUDGET_EXHAUSTED",
+        "UNHANDLED_ERROR",
+        "VERIFICATION_NOT_RUN",
+        "VERIFIER_FAILED",
+        "VERIFIER_NOT_CONVERGING",
+        "VERIFIER_TIMED_OUT"
+      ]
+    },
+    "TurnResult": {
+      "type": "object",
+      "properties": {
+        "acceptance": {
+          "$ref": "#/$defs/OperatorAcceptance"
+        },
+        "capacity": {
+          "description": "Present only when execution is BLOCKED by context admission.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CapacityRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "contextNotRetained": {
+          "description": "Tool outputs that left the context during the turn and were not read again, when the turn still ended VERIFIED or\nREGRESSION_FREE: the verifier's result stands, but the work may rest on observations the model no longer had.",
+          "type": "number"
+        },
+        "continuation": {
+          "type": "object",
+          "properties": {
+            "cumulativeSteps": {
+              "description": "Steps run on this objective across all its turns (observability; never a limit).",
+              "type": "number"
+            },
+            "inferenceSubmissionHistoryComplete": {
+              "description": "False means earlier requests predate this counter or the persisted counter was malformed.",
+              "type": "boolean"
+            },
+            "inferenceSubmissions": {
+              "description": "Inference requests admitted for this objective, including provider retries.",
+              "type": "number"
+            },
+            "maxInferenceSubmissions": {
+              "type": "number"
+            },
+            "maxTaskElapsedMs": {
+              "description": "Fixed objective-wide wall-clock age ceiling.",
+              "type": "number"
+            },
+            "maxToolInvocations": {
+              "type": "number"
+            },
+            "repeated": {
+              "description": "Demonstrated loops: the same action and result on an unchanged workspace, at least REPEAT_THRESHOLD times.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string"
+                  },
+                  "count": {
+                    "type": "number"
+                  },
+                  "firstStep": {
+                    "type": "number"
+                  },
+                  "lastStep": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "action",
+                  "count",
+                  "firstStep",
+                  "lastStep"
+                ]
+              }
+            },
+            "segmentSteps": {
+              "type": "number"
+            },
+            "segments": {
+              "type": "number"
+            },
+            "stateUncertainty": {
+              "description": "Why repetition could not be judged against workspace state this turn, when it could not.",
+              "type": "string"
+            },
+            "stepsWithoutProgress": {
+              "type": "number"
+            },
+            "stopReason": {
+              "type": "string"
+            },
+            "taskElapsedHistoryComplete": {
+              "description": "False when the legacy objective start time was missing or malformed and prior elapsed time is unknown.",
+              "type": "boolean"
+            },
+            "taskElapsedMs": {
+              "description": "Objective wall-clock age charged across turns, resumes, and persisted in-flight intervals.",
+              "type": "number"
+            },
+            "toolInvocationHistoryComplete": {
+              "description": "False means earlier dispatches predate this counter or the persisted counter was malformed.",
+              "type": "boolean"
+            },
+            "toolInvocations": {
+              "description": "Tool dispatches charged to this objective and the fixed ceiling.",
+              "type": "number"
+            }
+          },
+          "required": [
+            "segmentSteps",
+            "segments",
+            "stepsWithoutProgress"
+          ]
+        },
+        "convergence": {
+          "description": "Present when the turn stopped because verifier attempts were not converging: the signal and the attempts behind it.",
+          "type": "object",
+          "properties": {
+            "attempts": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "candidate": {
+                    "type": "string"
+                  },
+                  "classification": {
+                    "type": "string"
+                  },
+                  "command": {
+                    "type": "string"
+                  },
+                  "failedCheck": {
+                    "type": "string"
+                  },
+                  "failingTests": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "n": {
+                    "type": "number"
+                  },
+                  "status": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "candidate",
+                  "command",
+                  "n",
+                  "status"
+                ]
+              }
+            },
+            "evidence": {
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "diverging",
+                "oscillating",
+                "stalled"
+              ]
+            }
+          },
+          "required": [
+            "attempts",
+            "evidence",
+            "state"
+          ]
+        },
+        "detail": {
+          "type": "string"
+        },
+        "execution": {
+          "$ref": "#/$defs/ExecutionState"
+        },
+        "finalOutputComplete": {
+          "description": "True only if the final model response was received completely (positive protocol evidence).",
+          "type": "boolean"
+        },
+        "finishedAt": {
+          "type": "string"
+        },
+        "furtherNeedsInput": {
+          "description": "VC-9: further questions recorded in the same turn (delegated subagents), in the order raised; `needsInput` is the first.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NeedsInputQuestion"
+          }
+        },
+        "inferenceFailure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InferenceFailure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "interruption": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InterruptionRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "modelStop": {
+          "$ref": "#/$defs/ModelStop"
+        },
+        "needsInput": {
+          "description": "Present when the turn stopped as NEEDS_INPUT: the decision wanted. Resume with `--answer <id>=approve|decline`, or `<id>=reply:<text>` for a question whose only option is `reply`.",
+          "$ref": "#/$defs/NeedsInputQuestion"
+        },
+        "objective": {
+          "description": "Where the operator's objective stands: open requirements, the failed check and the next action.",
+          "type": "object",
+          "properties": {
+            "failedCheck": {
+              "type": "string"
+            },
+            "implementedOnly": {
+              "description": "Requirements counted done on the model's report alone (implemented, not verified by a bound verifier run).",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "nextAction": {
+              "type": "string"
+            },
+            "remaining": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "status": {
+              "enum": [
+                "blocked",
+                "completed",
+                "incomplete"
+              ]
+            }
+          },
+          "required": [
+            "remaining",
+            "status"
+          ]
+        },
+        "outcome": {
+          "$ref": "#/$defs/EngineeringOutcome"
+        },
+        "pendingProviderWindows": {
+          "description": "Provider windows restored by a resume that this turn did not wait out (it ran on another endpoint, or was cancelled\nwhile waiting) and a later turn on those endpoints still owes. Persisted with the turn, so a restart keeps them.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "eligibleAt": {
+                "type": "string"
+              },
+              "endpoint": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "eligibleAt"
+            ]
+          }
+        },
+        "persistence": {
+          "description": "Durable writes that failed during the turn (absent when every write succeeded). Never hidden behind a success.",
+          "type": "object",
+          "properties": {
+            "durable": {
+              "const": false
+            },
+            "failures": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "durable",
+            "failures"
+          ]
+        },
+        "providerRecovery": {
+          "description": "Steps of this turn whose inference had to recover the provider (resumed or not).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProviderRecoveryRecord"
+          }
+        },
+        "reason": {
+          "$ref": "#/$defs/TurnReason"
+        },
+        "repeatedCall": {
+          "description": "Present when the turn stopped as TOOL_CALL_LOOP: the repeated call (arguments redacted) and the recent calls with their counts.",
+          "type": "object",
+          "properties": {
+            "arguments": {
+              "type": "string"
+            },
+            "count": {
+              "type": "number"
+            },
+            "history": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "arguments": {
+                    "type": "string"
+                  },
+                  "count": {
+                    "type": "number"
+                  },
+                  "tool": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "arguments",
+                  "count",
+                  "tool"
+                ]
+              }
+            },
+            "tool": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "arguments",
+            "count",
+            "history",
+            "tool"
+          ]
+        },
+        "stepPaused": {
+          "description": "True when the turn paused deterministically after one model/tool cycle under step mode.",
+          "type": "boolean"
+        },
+        "steps": {
+          "type": "object",
+          "properties": {
+            "limitReached": {
+              "type": "boolean"
+            },
+            "max": {
+              "type": "number"
+            },
+            "used": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "limitReached",
+            "max",
+            "used"
+          ]
+        },
+        "tokenAccounting": {
+          "description": "Context sizing and request counting: the limits in effect and where each came from (advertised, operator, client\ndefault), the tool-output headroom policy, capability availability, and how the last request was counted (source:\nexact_admitted, exact_sampled_worker, gateway_conservative, client_estimate), including worker differences.",
+          "type": "object",
+          "properties": {
+            "contextLimit": {
+              "type": "number"
+            },
+            "contextSource": {
+              "type": "string"
+            },
+            "discovery": {
+              "type": "string"
+            },
+            "lastRequest": {
+              "type": "object",
+              "properties": {
+                "admittedSource": {
+                  "type": "string"
+                },
+                "admittedTokens": {
+                  "type": "number"
+                },
+                "admittedWorker": {
+                  "type": "string"
+                },
+                "clientEstimate": {
+                  "type": "number"
+                },
+                "countedWorker": {
+                  "type": "string"
+                },
+                "promptTokens": {
+                  "type": "number"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "step": {
+                  "type": "number"
+                },
+                "uncertainty": {
+                  "type": "string"
+                },
+                "workerDiffers": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "clientEstimate",
+                "promptTokens",
+                "source",
+                "step"
+              ]
+            },
+            "limitsVersion": {
+              "type": "string"
+            },
+            "outputAllowance": {
+              "type": "number"
+            },
+            "outputSource": {
+              "type": "string"
+            },
+            "tokenCounting": {
+              "type": "string"
+            },
+            "toolHeadroomPolicy": {
+              "type": "number"
+            },
+            "workers": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "contextLimit",
+            "contextSource",
+            "discovery",
+            "outputAllowance",
+            "outputSource",
+            "tokenCounting",
+            "toolHeadroomPolicy"
+          ]
+        },
+        "toolCallSyntax": {
+          "description": "Argument syntax of the tool calls the model issued this turn (native, repaired or invalid JSON); absent when none.",
+          "$ref": "#/$defs/ToolCallSyntaxCounts"
+        },
+        "turnEvidence": {
+          "description": "What this turn itself did, so a verdict never reports earlier turns' changes or a pre-change verifier run as this\nturn's (TUI-AUDIT D-04). Absent on results built outside a turn.",
+          "$ref": "#/$defs/TurnEvidence"
+        },
+        "unverifiedChangesPending": {
+          "description": "Workspace has changes that no passing verifier run covers (may predate this turn).",
+          "type": "boolean"
+        },
+        "verification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VerificationEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "acceptance",
+        "execution",
+        "finalOutputComplete",
+        "finishedAt",
+        "inferenceFailure",
+        "interruption",
+        "modelStop",
+        "outcome",
+        "steps",
+        "unverifiedChangesPending",
+        "verification"
+      ]
+    },
+    "TypecheckEvidence": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "baselineErrorCount": {
+          "description": "Errors the baseline run (before the change) already had.",
+          "type": "number"
+        },
+        "candidateId": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        },
+        "configPath": {
+          "type": "string"
+        },
+        "configSha256": {
+          "type": "string"
+        },
+        "enforced": {
+          "description": "False when the result is recorded only (operator-configured verifier, or NEXUS_TYPECHECK mode \"record\").",
+          "type": "boolean"
+        },
+        "errorCount": {
+          "type": "number"
+        },
+        "excerpt": {
+          "description": "Redacted, control characters made visible, capped, and fenced as untrusted compiler output.",
+          "type": "string"
+        },
+        "exitCode": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "firstDiagnostics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "introducedCount": {
+          "description": "Errors in the run that the pre-change baseline run did not have (present only when a baseline was captured).",
+          "type": "number"
+        },
+        "projects": {
+          "description": "Per-project evidence when a workspace contains multiple configured type-check projects.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TypecheckEvidence"
+          }
+        },
+        "scope": {
+          "description": "What the result holds for: \"under <configPath>\", never universal.",
+          "type": "string"
+        },
+        "shellChangedFiles": {
+          "description": "Files counted as modified that no edit tool touched (changed through the shell), when any.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "status": {
+          "description": "ENVIRONMENT: the check could not run or be attributed here (not a candidate failure). PREEXISTING: errors exist, but\nnone in a file the candidate modified; it is not a pass and does not block.",
+          "enum": [
+            "ENVIRONMENT",
+            "FAILED",
+            "NOT_APPLICABLE",
+            "PASSED",
+            "PREEXISTING",
+            "TIMED_OUT",
+            "UNAVAILABLE"
+          ]
+        },
+        "tool": {
+          "type": "string"
+        },
+        "toolSha256": {
+          "description": "Hash of the resolved tool launcher.",
+          "type": "string"
+        },
+        "toolVersion": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "at",
+        "status"
+      ]
+    },
+    "UsageTotals": {
+      "type": "object",
+      "properties": {
+        "cacheReportedPromptTokens": {
+          "type": "number"
+        },
+        "cachedTokens": {
+          "description": "Prompt tokens served from the provider cache, and the prompt tokens of requests that reported cache usage (the share's denominator).",
+          "type": "number"
+        },
+        "costUsd": {
+          "type": "number"
+        },
+        "estimatedRequests": {
+          "description": "Requests priced from the models snapshot instead of by the provider (per-provider totals only).",
+          "type": "number"
+        },
+        "inputTokens": {
+          "type": "number"
+        },
+        "outputTokens": {
+          "type": "number"
+        },
+        "requests": {
+          "type": "number"
+        },
+        "uncertainRequests": {
+          "description": "Requests that may have been billed without reported usage (failed mid-stream, timed out).",
+          "type": "number"
+        },
+        "unpricedRequests": {
+          "description": "Requests whose cost the provider did not report.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "cacheReportedPromptTokens",
+        "cachedTokens",
+        "costUsd",
+        "estimatedRequests",
+        "inputTokens",
+        "outputTokens",
+        "requests",
+        "uncertainRequests",
+        "unpricedRequests"
+      ]
+    },
+    "ValidationReceipt": {
+      "type": "object",
+      "properties": {
+        "candidateId": {
+          "type": "string"
+        },
+        "evaluatorBinding": {
+          "$ref": "#/$defs/EvaluatorBinding"
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "exitCode": {
+          "type": "number"
+        },
+        "invalidatedAt": {
+          "type": "string"
+        },
+        "invalidationReason": {
+          "type": "string"
+        },
+        "materialDependencies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MaterialValidationDependency"
+          }
+        },
+        "receiptId": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "FAILED",
+            "INVALIDATED",
+            "PASSED"
+          ]
+        },
+        "stdoutHash": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "string"
+        },
+        "verifierCommand": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidateId",
+        "exitCode",
+        "materialDependencies",
+        "receiptId",
+        "status",
+        "stdoutHash",
+        "timestamp",
+        "verifierCommand"
+      ]
+    },
+    "VerificationEvidence": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "candidateId": {
+          "type": "string"
+        },
+        "command": {
+          "description": "The verifier actually selected: configured override or one discovered from repository files.",
+          "type": "string"
+        },
+        "deadlineSecs": {
+          "description": "Deadline the verifier was given, recorded when it timed out.",
+          "type": "number"
+        },
+        "definitionBound": {
+          "description": "False when the verifier's inputs could not be bound to the tree that was committed: either its workspace-resolved\ndefinition was unbindable (for example a node_modules tree under `npm test`) or test files changed while it ran\n(including a test that restored itself before exit). No such pass can be independent evidence; the turn is then at\nmost REGRESSION_FREE, and independenceDetail names which binding failed.",
+          "const": false
+        },
+        "exitSuccess": {
+          "type": "boolean"
+        },
+        "filtered": {
+          "description": "True when the selected test command includes a filter and therefore cannot stand for the full suite.",
+          "type": "boolean"
+        },
+        "hasExecutedTests": {
+          "type": "boolean"
+        },
+        "independenceDetail": {
+          "type": "string"
+        },
+        "independent": {
+          "description": "A discovered verifier's pass is independent evidence of the change: tests that existed before it, unmodified,\nfailed before and pass after. False (with independenceDetail) when only the agent's own tests, or tests that also\npassed before, check it — the turn is then REGRESSION_FREE, not VERIFIED.",
+          "type": "boolean"
+        },
+        "isDeliverableBound": {
+          "type": "boolean"
+        },
+        "outputSha256": {
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "configured",
+            "discovered"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/VerificationStatus"
+        },
+        "typecheck": {
+          "description": "Type-check run beside the verifier. A scoped fact about the named configuration, never about the code in general.",
+          "$ref": "#/$defs/TypecheckEvidence"
+        }
+      },
+      "required": [
+        "at",
+        "status"
+      ]
+    },
+    "VerificationStatus": {
+      "enum": [
+        "FAILED",
+        "NO_APPLICABLE_VERIFIER",
+        "PASSED",
+        "TIMED_OUT"
+      ]
+    }
+  }
+}

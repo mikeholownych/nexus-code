@@ -498,7 +498,7 @@ describe("C. persistence failures are truthful", () => {
       const turn = await agent2.runTurn("Write big1..big6.");
       assert.equal(turn.execution, "FAILED", JSON.stringify({ reason: turn.reason, detail: turn.detail }));
       assert.equal(turn.reason, "PERSISTENCE_FAILED");
-      assert.match(turn.detail ?? "", /session record could not be saved/);
+      assert.match(turn.detail ?? "", /(?:session record could not be saved|Task elapsed-time budget could not be saved before execution)/);
       assert.equal(gw2.requests.length, 0, "no inference is submitted after the session checkpoint fails");
       assert.equal(fs.readdirSync(repo2).filter((name) => /^big\d+\.txt$/.test(name)).length, 0, "no requested files are written after the session checkpoint fails");
       assert.ok(turn.persistence?.failures.length, "the result lists the failed writes");

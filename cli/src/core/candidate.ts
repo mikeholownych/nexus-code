@@ -683,7 +683,7 @@ function computeGitCandidateIdentity(
     // `git status` does not report an edit to a tracked file marked assume-unchanged or skip-worktree (a sparse
     // checkout marks everything outside its cone). Those files are hashed by path, so an edit behind git's back changes
     // the identity. `ls-files -v` tags assume-unchanged entries with a lowercase letter and skip-worktree with `S`.
-    const flaggedTokens = decodeGitTokens(execFileSync("git", ["ls-files", "-v", "-z"], {
+    const flaggedTokens = decodeGitTokens(execFileSync("git", ["-c", "core.fsmonitor=false", "ls-files", "-v", "-z"], {
       cwd: workspacePath,
       stdio: ["ignore", "pipe", "ignore"],
       maxBuffer: 256 * 1024 * 1024,

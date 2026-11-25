@@ -55,9 +55,19 @@ describe("workspace trust", () => {
       assert.deepEqual(listTrustedWorkspaces(), [real]);
       assert.equal(isWorkspaceTrusted(ws), true);
       assert.deepEqual(untrustedWorkspaceExtensions(ws), []);
+      // HK-3/D18: workspace trust alone no longer executes workspace plugin code; per-plugin approval is required.
+      const trustedUnapproved = new PluginManager(ws);
+      await trustedUnapproved.loadPlugins();
+      assert.ok(!trustedUnapproved.listPlugins().some((p) => p.name === "ws-plugin"), "not loaded until per-plugin approved");
+
+      const pluginPath = path.join(ws, ".nexus", "plugins", "p.mjs");
+      const { approveExtension } = await import("../src/core/content_trust.js");
+      const { pluginFileSha256, workspacePluginTrustId } = await import("../src/plugins.js");
+      const id = workspacePluginTrustId(ws, pluginPath);
+      approveExtension({ kind: "workspace-plugin", scope: id.scope, key: id.key, sha256: pluginFileSha256(pluginPath), approvedAt: new Date().toISOString(), summary: "p.mjs" });
       const trusted = new PluginManager(ws);
       await trusted.loadPlugins();
-      assert.ok(trusted.listPlugins().some((p) => p.name === "ws-plugin"), "loaded once trusted");
+      assert.ok(trusted.listPlugins().some((p) => p.name === "ws-plugin"), "loaded once per-plugin approved");
 
       const readOnly = new PluginManager(ws, { readOnly: true });
       await readOnly.loadPlugins();

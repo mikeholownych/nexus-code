@@ -13,6 +13,7 @@ import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./op
 import { acquireFileGuard, releaseFileGuard, type FileGuard } from "./file_guard.js";
 import { withStateStoreGuard } from "./state_store_guard.js";
 import { redactTaskStateForPersistence } from "./persistence_protection.js";
+import { processRunning, processStartTicks } from "./process_identity.js";
 
 // ---------------------------------------------------------------- persistence
 
@@ -79,6 +80,9 @@ export class OperationStore {
       status: LIFECYCLE[op.status],
       activePlan: op.units.map((u) => ({ name: u.title, status: u.status === "COMPLETE" ? "completed" : u.status === "RUNNING" ? "in_progress" : "pending", detail: u.status })),
       milestones: existing?.milestones ?? [],
+      // Goals keep their immutable objective and requirement ledger in this same durable task record.
+      // Operation transitions must not erase it when the operation snapshot is rewritten.
+      objective: existing?.objective ?? null,
       validationReceipts: [],
       messages: [],
       currentOperation: null,
@@ -198,7 +202,8 @@ export class OperationStore {
    */
   acquire(id: string): () => void {
     const lockPath = path.join(this.manager.getBaseDir(), `${id}.lock`);
-    const create = () => fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, host: os.hostname(), at: new Date().toISOString() }), { flag: "wx" });
+    // The start time tells this holder from a later process that was given the same pid.
+    const create = () => fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, host: os.hostname(), at: new Date().toISOString(), startTicks: processStartTicks(process.pid) }), { flag: "wx" });
     const locked = (holder: { pid?: number; host?: string }) =>
       new OperationLockedError(`Operation ${id} is already being driven by pid ${holder.pid ?? "?"} on ${holder.host ?? "?"} (lock ${lockPath}).`);
     try {
@@ -238,14 +243,14 @@ export class OperationStore {
     };
   }
 
-  private judgeLock(lockPath: string, report = true): { stale: boolean; holder: { pid?: number; host?: string; at?: string }; ino?: bigint; mtimeNs?: bigint } {
+  private judgeLock(lockPath: string, report = true): { stale: boolean; holder: { pid?: number; host?: string; at?: string; startTicks?: string }; ino?: bigint; mtimeNs?: bigint } {
     let stat: fs.BigIntStats;
     try {
       stat = fs.lstatSync(lockPath, { bigint: true });
     } catch {
       return { stale: false, holder: {} };
     }
-    let holder: { pid?: number; host?: string; at?: string } | undefined;
+    let holder: { pid?: number; host?: string; at?: string; startTicks?: string } | undefined;
     try {
       const parsed = JSON.parse(fs.readFileSync(lockPath, "utf-8"));
       if (parsed && typeof parsed === "object") holder = parsed;
@@ -256,8 +261,21 @@ export class OperationStore {
     if (!holder) return { stale: Date.now() - Number(stat.mtimeNs / 1_000_000n) > OPERATION_LOCK_UNREADABLE_GRACE_MS, holder: {}, ...identity };
     // A lock written before this host last booted is stale even if its pid has since been reused.
     const beforeBoot = holder.at !== undefined && Date.parse(holder.at) < Date.now() - os.uptime() * 1000;
-    const stale = holder.host === os.hostname() && (beforeBoot || holder.pid === undefined || !processAlive(holder.pid));
+    // A live pid whose start time differs from the recorded one is another process: the holder is gone. A lock
+    // without a start time (an older build wrote it), or a host where it cannot be read, is judged on the pid alone.
+    const startedNow = holder.pid !== undefined && typeof holder.startTicks === "string" ? processStartTicks(holder.pid) : undefined;
+    const reused = startedNow !== undefined && startedNow !== holder.startTicks;
+    const stale = holder.host === os.hostname() && (beforeBoot || holder.pid === undefined || !processAlive(holder.pid) || reused);
     return { stale, holder, ...identity };
+  }
+
+  /** Returns the live lock holder for an operation, or undefined when there is no readable live lock by another process. */
+  activeLock(id: string): { pid?: number; host?: string; at?: string } | undefined {
+    const lockPath = path.join(this.manager.getBaseDir(), `${id}.lock`);
+    const judged = this.judgeLock(lockPath, false);
+    if (judged.stale || judged.holder.pid === undefined) return undefined;
+    if (judged.holder.pid === process.pid) return undefined;
+    return judged.holder;
   }
 
   /** Most recently updated operation in this workspace that can resume after restart. */
@@ -350,11 +368,4 @@ export function migrateLegacyAccountIdentities(
   return operation;
 }
 
-function processAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err: any) {
-    return err?.code === "EPERM";
-  }
-}
+const processAlive = processRunning;

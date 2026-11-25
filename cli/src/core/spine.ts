@@ -12,7 +12,10 @@ import {
   CapabilityHandler,
   changesWorkspace,
 } from "./capabilities.js";
+import type { ToolRegistry } from "./tool_registry.js";
 import type { SkillAttribution } from "./skill_activation.js";
+import { sandboxDenialEvent, sandboxEngineLabel, type SandboxDenialEvent } from "../sandbox_events.js";
+import type { HookRunSummary } from "./hooks.js";
 
 export interface InvocationRequest {
   /** Unique invocation identity (assigned if omitted) (EXEC-002) */
@@ -92,6 +95,8 @@ export interface CandidateMutationEvent {
 export interface ContextAdmissionDecision {
   admitted: boolean;
   reason?: string;
+  /** Typed reason of a refusal, copied to the receipt's `denialReason`. */
+  denialReason?: string;
   tokenCount?: number;
 }
 
@@ -116,6 +121,8 @@ export interface ExecutionReceipt {
   output: string;
   /** Error message if failed or denied */
   error?: string;
+  /** VR-3: typed sandbox refusal behind this outcome, when one happened. Evidence only; never an approval. */
+  sandboxEvents?: SandboxDenialEvent[];
   /** The call may have taken effect, but its executor outcome could not be established. */
   outcomeUnknown?: boolean;
   /** Execution duration in milliseconds */
@@ -136,6 +143,14 @@ export interface ExecutionReceipt {
   skillName?: string;
   /** SHA-256 of the skill body that was activated (WP-GS-02) */
   skillContentDigest?: string;
+  /** HK-1: the command hooks that ran for this invocation, in order. Evidence only; never an approval. */
+  hooks?: HookRunSummary[];
+}
+
+/** The hook runs the context admission and evidence stages left in `context.metadata.hookRuns`, on a copy of the receipt. */
+function withHookRuns(receipt: ExecutionReceipt, context: InvocationContext): ExecutionReceipt {
+  const runs = context.metadata?.hookRuns;
+  return Array.isArray(runs) && runs.length ? { ...receipt, hooks: [...runs] } : receipt;
 }
 
 function withSkillAttribution(receipt: ExecutionReceipt, request: InvocationRequest): ExecutionReceipt {
@@ -198,6 +213,8 @@ export interface SpineHooks {
 
 export interface SpineOptions {
   registry?: CapabilityRegistry;
+  /** The tool registry whose bindings say how a call of each tool runs (the agent's; its capabilities() is `registry`). */
+  tools?: ToolRegistry;
   hooks?: SpineHooks;
 }
 
@@ -275,11 +292,13 @@ export function dryRunMustSimulate(capability: Pick<CanonicalCapability, "mutati
 
 export class ExecutionSpine {
   private readonly registry: CapabilityRegistry;
+  private readonly tools?: ToolRegistry;
   private readonly hooks: Required<SpineHooks>;
   private readonly handlers = new Map<string, CapabilityHandler>();
 
   constructor(options: SpineOptions = {}) {
-    this.registry = options.registry || defaultRegistry;
+    this.tools = options.tools;
+    this.registry = options.registry || options.tools?.capabilities() || defaultRegistry;
     this.hooks = {
       authorityAdmission:
         options.hooks?.authorityAdmission || DEFAULT_SPINE_HOOKS.authorityAdmission,
@@ -321,6 +340,17 @@ export class ExecutionSpine {
   }
 
   /**
+   * The handler for a tool: the one registered on this spine, else the one its registered binding carries, else the one
+   * set on its capability (the bridge-backed tools, `registerBridgeCapabilities`). A tool with none runs through the
+   * context's default handler (extension tools) or the bridge, in `execute`.
+   */
+  private resolveHandler(toolName: string): CapabilityHandler | undefined {
+    const binding = this.tools?.resolve(toolName)?.binding;
+    const bound = binding?.kind === "native" ? binding.handler : undefined;
+    return this.handlers.get(toolName) || bound || this.registry.getHandler(toolName);
+  }
+
+  /**
    * Execute an invocation request through the unified 6-stage execution spine.
    * Every execution path dispatches through this pipeline, emitting an execution receipt.
    */
@@ -335,13 +365,14 @@ export class ExecutionSpine {
     const toolName = request.toolName;
     const targetResources = extractTargetResources(toolName, request.args || {});
     const finish = async (receipt: ExecutionReceipt): Promise<ExecutionReceipt> => {
-      const attributed = withSkillAttribution(receipt, request);
+      const attributed = withHookRuns(withSkillAttribution(receipt, request), context);
       try {
         await this.hooks.evidenceEmission(attributed);
       } catch {
         // Degraded-mode per FAIL-003
       }
-      return attributed;
+      // Again, for the runs the evidence stage added (post-tool hooks).
+      return withHookRuns(attributed, context);
     };
 
     // Stage 1: Request Ingestion & Normalization
@@ -406,6 +437,7 @@ export class ExecutionSpine {
           durationMs: 0,
           candidateMutated: false,
           status: "DENIED",
+          ...(contextDecision.denialReason ? { denialReason: contextDecision.denialReason } : {}),
           timestamp: new Date().toISOString(),
           simulated: Boolean(context.dryRun),
         };
@@ -560,10 +592,7 @@ export class ExecutionSpine {
     const t0 = Date.now();
     let result: ExecutionResult;
     try {
-      const handler =
-        this.handlers.get(toolName) ||
-        this.registry.getHandler(toolName) ||
-        capability.handler;
+      const handler = this.resolveHandler(toolName);
 
       if (context.dryRun && dryRunMustSimulate(capability)) {
         // These handlers may write persistent state or cause external effects. The workspace bridge cannot
@@ -645,6 +674,16 @@ export class ExecutionSpine {
       }
     }
 
+    const sandboxDenial = result.sandboxDenial
+      ? sandboxDenialEvent({
+          kind: result.sandboxDenial.kind,
+          engine: sandboxEngineLabel((context.metadata as any)?.sandbox ?? (context as any)?.config?.sandbox),
+          profile: (context.metadata as any)?.sandboxProfile,
+          operation: toolName,
+          category: result.sandboxDenial.category,
+          reason: result.sandboxDenial.reason,
+        })
+      : undefined;
     const receipt: ExecutionReceipt = {
       invocationId,
       taskId,
@@ -656,6 +695,7 @@ export class ExecutionSpine {
       success: result.success,
       output: result.output || "",
       error: reportedError,
+      ...(sandboxDenial ? { sandboxEvents: [sandboxDenial] } : {}),
       ...(outcomeUnknown ? { outcomeUnknown: true } : {}),
       durationMs,
       candidateMutated,

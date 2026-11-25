@@ -20,6 +20,13 @@ TypeScript CLI (`cli/`), Rust core (`core/`), eval harness (`eval/`). Current pl
 - Take the `GATEWAY` claim for any inference run; the key comes from the environment (`~/.config/nexus/config.env`) and is never printed. The gateway is the only live provider.
 - Push, tag and publish only on an explicit owner instruction; release authority is the owner's.
 
+## Release branches (from v1.3.0)
+- All development work lands on the release branch, `release/v<major>.<minor>.<patch>` (now `release/v1.3.0`). Branch each slice from `origin/release/v1.3.0` and open its PR against that branch.
+- Nothing is merged into `main` until the release is ready to be tagged. `main` then receives the release branch through one merge-commit PR, because `release.yml` requires the tagged commit to be an ancestor of `main`.
+- When a PR targets `main` by mistake: retarget it (`gh pr edit <n> --base release/v1.3.0`), do not merge it.
+- When a slice needs newer release-branch content: merge the release branch into it. Never rebase or force-push a pushed branch.
+- The merge rules below apply to the release branch as they did to `main`: the same three required checks, one PR at a time per subsystem, then the CI run on the release branch.
+
 ## Merging and releasing
 Bias to correct: a green PR is not a green `main`, and a pushed tag cannot be taken back.
 - When merging: required checks are `test-matrix (22)`, `test-matrix (24)`, `linux-x86_64`; read each check's conclusion (empty or in-progress is not success). Merge with a merge commit, `gh pr merge <n> --merge --match-head-commit <full-sha>`. PRs that touch one subsystem merge one at a time, each followed by the CI run on `main`: two PRs green alone can break `main` together.

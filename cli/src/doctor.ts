@@ -28,7 +28,10 @@ import { allProviders, providerSource } from "./providers.js";
 import { effortLevels } from "./core/models_snapshot.js";
 import { mcpConfigFiles } from "./mcp.js";
 import { isBwrapAvailable, sandboxHomeMounts, sandboxNetworkEnabled, sandboxWorkspaceOverlays } from "./sandbox.js";
-import { pluginDirs } from "./plugins.js";
+import { describeSandboxPosture, parseSandboxValue, sandboxPostureText } from "./sandbox_profile.js";
+import { pluginDirs, skippedOperatorDirs } from "./plugins.js";
+import { policyFindings, processPolicyReport } from "./policy_cli.js";
+import { USER_POLICY_FILE_NAME } from "./core/managed_policy_load.js";
 import { untrustedWorkspaceExtensions, WORKSPACE_MCP_FILES, isWorkspaceTrusted } from "./workspace_trust.js";
 import { BuildIdentity, getBuildIdentity } from "./build_identity.js";
 import { defaultSessionsDir } from "./session.js";
@@ -40,9 +43,15 @@ import { classifyLocality } from "./core/egress.js";
 import { redactSecrets } from "./ui.js";
 import { SafePathError, ancestryProblem, chmodVerified, identityOf, mkdirVerified, readVerified, unlinkVerified, writeExclusiveVerified, type Identity } from "./safe_fs.js";
 import { isNexusDirPermissive } from "./core/durable_file.js";
+import { diagnoseHooks } from "./doctor_hooks.js";
+import { printable } from "./core/printable.js";
+import { diagnoseWorkspacePlugins } from "./doctor_plugins.js";
 export { isNexusDirPermissive };
 import { DEFAULT_REPEATED_CALL_HARD, DEFAULT_REPEATED_CALL_SOFT } from "./core/repeated_calls.js";
-import { DEFAULT_CONVERGENCE_ATTEMPTS, type HarnessConfig } from "./types.js";
+import { DEFAULT_CONVERGENCE_ATTEMPTS, DEFAULT_MAX_INFERENCE_SUBMISSIONS, type HarnessConfig } from "./types.js";
+import { acquireFileGuard, releaseFileGuard } from "./core/file_guard.js";
+import { readRunnerInfo, runnerAlive } from "./core/job_runner.js";
+import { isTerminal, listJobs, runnerPaths } from "./core/runner_store.js";
 
 export const DOCTOR_SCHEMA_VERSION = 2;
 export type DoctorStatus = "pass" | "warn" | "fail" | "skip";
@@ -82,6 +91,9 @@ export interface DoctorReport {
     mode: "auto" | "review" | "read-only";
     sandbox: string;
     trusted: boolean;
+    /** The effective sandbox profile (`:workspace`, `:read-only`, `:network` or `unconfined`) and what decided it (SB-1). */
+    profile?: string;
+    profileSource?: string;
   };
   /** `cli`: a fresh configuration built from flags and environment. `session`: the running session's configuration. */
   context: "cli" | "session";
@@ -284,7 +296,9 @@ const CONFIG_KEYS: Array<{ key: string; flag?: string; field: keyof HarnessConfi
   { key: "workspace", flag: "workspace", field: "workspace" },
   { key: "max steps per segment", flag: "maxSteps", field: (c) => (c.continuation ? `${c.maxSteps} (checkpoint interval, not a limit)` : `${c.maxSteps} (turn limit: continuation off)`), fallback: "30" },
   { key: "NEXUS_MAX_TOTAL_STEPS", flag: "maxTotalSteps", field: (c) => (c.continuation ? (Number.isFinite(c.continuation.maxTotalSteps) ? String(c.continuation.maxTotalSteps) : "none") : "continuation off"), fallback: "none" },
+  { key: "NEXUS_MAX_INFERENCE_SUBMISSIONS", field: (c) => String(c.maxInferenceSubmissions ?? DEFAULT_MAX_INFERENCE_SUBMISSIONS), fallback: String(DEFAULT_MAX_INFERENCE_SUBMISSIONS) },
   { key: "NEXUS_MAX_TURN_MINUTES", flag: "maxTurnMinutes", field: (c) => (c.continuation ? (Number.isFinite(c.continuation.maxTurnMinutes) ? String(c.continuation.maxTurnMinutes) : "none") : "continuation off"), fallback: "none" },
+  { key: "NEXUS_MAX_TASK_MINUTES", flag: "maxTaskMinutes", field: (c) => (c.continuation ? String(c.continuation.maxTaskMinutes) : "continuation off"), fallback: "4320" },
   { key: "NEXUS_STAGNATION_STEPS", flag: "stagnationSteps", field: (c) => (c.continuation ? String(c.continuation.stagnationSteps) : "continuation off"), fallback: "12" },
   { key: "NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS", field: (c) => String(c.continuation?.verifierConvergenceAttempts ?? DEFAULT_CONVERGENCE_ATTEMPTS), fallback: "3" },
   { key: "NEXUS_REPEATED_CALL_SOFT", field: (c) => String(c.repeatedCalls?.soft ?? DEFAULT_REPEATED_CALL_SOFT), fallback: "3" },
@@ -584,46 +598,73 @@ const shellCheck: Check = async (ctx, signal) => {
   return f("shell.executable", "runtime", "fail", `The shell ${shell} did not run a test command.`, [resolved, res.timedOut ? "timed out" : `exit ${res.code} ${res.error ?? res.stderr.trim()}`.trim()], "Check the shell installation and its startup files.");
 };
 
-/** What a write-mode `--sandbox` command can reach: the masked HOME, the read-only toolchain mounts, the network. */
+/** Effective confinement posture and the residual holes it does not close (SB-1). */
+/** The engine word of a raw `--sandbox` value (`bwrap:network` gives `bwrap`, `:read-only` gives none); a value that does not parse gives none. */
+function flagEngine(raw: unknown): string | boolean | undefined {
+  if (raw === undefined || raw === null || raw === false) return undefined;
+  if (raw === true) return true;
+  try { return parseSandboxValue(String(raw)).engine; } catch { return undefined; }
+}
+
 const sandboxCheck: Check = async (ctx) => {
-  const sandbox = ctx.config?.sandbox ?? ctx.flags.sandbox;
-  if (!sandbox || sandbox === "none") {
+  // The resolved configuration decides: its `sandbox` is what the tools launch from, and undefined means no engine (a bare
+  // profile such as :read-only names none). The raw flag is read only when there is no configuration, and then without its profile.
+  const sandbox = ctx.config ? ctx.config.sandbox : flagEngine(ctx.flags.sandbox);
+  const posture = describeSandboxPosture({
+    sandbox,
+    readOnly: Boolean(ctx.config?.approvalMode === "read-only" || ctx.flags.readOnly),
+    network: sandboxNetworkEnabled(),
+    profile: ctx.config?.sandboxProfile,
+    source: "configured setting",
+  });
+  if (posture.profile === "unconfined") {
     const available = isBwrapAvailable();
     return f(
       "sandbox.confinement",
       "runtime",
       "skip",
-      "Effective containment: none. No --sandbox is configured; run_command runs on the host with the scrubbed environment only.",
-      [`bubblewrap (bwrap): ${available ? "available" : "not available"}`, `workspace: ${ctx.config?.workspace ?? "(none)"}`],
-      available ? "Run with --sandbox bwrap to confine commands and the native worker (HOME masked, no network unless --sandbox-network)." : "Install bubblewrap and run with --sandbox bwrap to confine commands and the native worker.",
+      `Effective sandbox profile: unconfined (${posture.source}). run_command runs on the host with the scrubbed environment only.`,
+      [`bubblewrap (bwrap): ${available ? "available" : "not available"}`, `workspace: ${ctx.config?.workspace ?? "(none)"}`, "residual holes:", ...posture.residual.map((r) => `  - ${r}`)],
+      available ? "Run with --sandbox :workspace (or --sandbox bwrap) to confine commands and the native worker; use :read-only or :network for other named profiles." : "Install bubblewrap and run with --sandbox :workspace to confine commands and the native worker.",
     );
   }
-  if (sandbox !== "docker" && !isBwrapAvailable()) {
-    return f("sandbox.confinement", "runtime", "warn", "--sandbox is configured but bubblewrap (bwrap) is not available.", [], "Install bubblewrap, or run without --sandbox.");
+  if (posture.engine === "docker" && !posture.readOnly && process.platform !== "linux") {
+    // docker confines commands on non-Linux hosts but the worker is not inside the container there.
+  }
+  if (posture.engine !== "none" && posture.engine !== "docker" && !isBwrapAvailable()) {
+    return f("sandbox.confinement", "runtime", "warn", `Effective sandbox profile: ${posture.profile}, but bubblewrap (bwrap) is not available.`, [`source: ${posture.source}`], "Install bubblewrap, or run without --sandbox.");
   }
   const m = sandboxHomeMounts();
-  // A containerised worker needs a Linux host (the worker is a Linux binary); elsewhere Docker confines commands only.
-  const workerInBox = sandbox !== "docker" || process.platform === "linux";
+  // Read-only mode confines each command in Bubblewrap whether or not --sandbox names an engine; the native worker and
+  // the HOME mounts below belong to --sandbox itself, so with no engine set they are not in force.
+  const engineSet = Boolean(sandbox) && String(sandbox).trim().toLowerCase() !== "none";
+  const workerInBox = engineSet && (posture.engine !== "docker" || process.platform === "linux");
   const evidence = [
+    `profile: ${posture.profile} (${posture.source})`,
+    `engine: ${posture.engine} · network: ${posture.network ? "on" : "off"} · read-only: ${posture.readOnly ? "yes" : "no"}`,
     workerInBox
       ? "native worker (harness-core): runs inside this sandbox, so a compromised worker has the same limits as a command (CS-10)"
-      : "native worker (harness-core): runs outside Docker on this host (a container can only run it on Linux), so Docker confines commands only here",
+      : engineSet
+        ? "native worker (harness-core): runs outside Docker on this host (a container can only run it on Linux), so Docker confines commands only here"
+        : "native worker (harness-core): runs outside any sandbox (read-only mode confines each command only; add --sandbox to confine the worker)",
     ...(workerInBox ? ["file tools use a separate files-only worker: it refuses to run commands and has no network even with --sandbox-network (CS-10 phase 2)"] : []),
-    `network: ${sandboxNetworkEnabled() ? "ON (--sandbox-network / NEXUS_SANDBOX_NETWORK; covers the worker and its commands)" : "off (default)"}`,
-    `HOME ${m.home} is masked with an empty tmpfs; read-only mounts back under it:`,
-    ...(m.mounts.length ? m.mounts.map((x) => `  ${x.path}  (${x.source})`) : ["  (none)"]),
-    ...m.masked.map((x) => `  hidden file: ${x}`),
-    ...m.refused.map((x) => `  refused: ${x.path} (${x.reason})`),
+    ...(engineSet ? [
+      `HOME ${m.home} is masked with an empty tmpfs; read-only mounts back under it:`,
+      ...(m.mounts.length ? m.mounts.map((x) => `  ${x.path}  (${x.source})`) : ["  (none)"]),
+      ...m.masked.map((x) => `  hidden file: ${x}`),
+      ...m.refused.map((x) => `  refused: ${x.path} (${x.reason})`),
+    ] : ["each command sees a synthetic read-only root holding the workspace and the runtime only; HOME is not mounted"]),
+    "residual holes (not closed by this profile):",
+    ...posture.residual.map((r) => `  - ${r}`),
   ];
   const workspace = ctx.config?.workspace;
-  if (workspace) {
+  if (workspace && engineSet) {
     const o = sandboxWorkspaceOverlays(workspace);
-    // Non-empty only when the workspace is, contains or sits above HOME.
     if (o.dirs.length || o.files.length) {
       evidence.push("the workspace holds credential paths; they are emptied inside the sandbox:", ...o.dirs.map((x) => `  masked dir: ${x}`), ...o.files.map((x) => `  masked file: ${x}`));
     }
   }
-  return f("sandbox.confinement", "runtime", "pass", "Write-mode --sandbox masks HOME, binds only the listed toolchain directories read-only, and has no network unless opted in.", evidence, "Extend the mounts with NEXUS_SANDBOX_HOME_READONLY (comma-separated paths; operator environment or config.env only).");
+  return f("sandbox.confinement", "runtime", "pass", `Effective sandbox profile: ${posture.profile}.`, evidence, "Profiles are confinement bundles only; they cannot disable verification-path protection, grant allow-always, or bypass managed policy. Extend read-only HOME mounts with NEXUS_SANDBOX_HOME_READONLY (operator environment or config.env only).");
 };
 
 const engineCheck: Check = async (ctx, signal) => {
@@ -788,7 +829,19 @@ const stateDirCheck: Check = async (ctx) => {
   return out;
 };
 
-const statePermissionsCheck: Check = async (ctx) => {
+/** Entries one permissions scan of ~/.nexus examines before it stops and reports the rest as unchecked. */
+export const STATE_SCAN_MAX_ENTRIES = 200_000;
+/** The operator's own entry limit (NEXUS_DOCTOR_STATE_SCAN_ENTRIES, a positive whole number), else the default. */
+function stateScanMaxEntries(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = (env.NEXUS_DOCTOR_STATE_SCAN_ENTRIES ?? "").trim();
+  return /^[1-9]\d{0,8}$/.test(raw) ? Number(raw) : STATE_SCAN_MAX_ENTRIES;
+}
+/** The scan gives the event loop a turn this often, so the other checks keep running beside it. */
+const STATE_SCAN_YIELD_EVERY = 500;
+/** Share of the check's own time limit the scan may use, so it reports a partial result instead of timing out. */
+const STATE_SCAN_TIME_SHARE = 0.6;
+
+const statePermissionsCheck: Check = async (ctx, signal) => {
   const nexusDir = path.join(ctx.home, ".nexus");
   const historyFile = path.join(ctx.home, ".nexus_history");
   const out: Array<Omit<DoctorFinding, "durationMs">> = [];
@@ -804,32 +857,51 @@ const statePermissionsCheck: Check = async (ctx) => {
       }
     }
 
-    const scanDir = (dir: string, depth = 0) => {
-      if (depth > 6) return;
+    // The state tree can be very large (old upgrade backups under ~/.nexus/backups have been seen at 1.5 million
+    // files). Walking it in one synchronous pass held the event loop for minutes, so every other check's timer
+    // expired and a reachable endpoint was reported as not answering. The walk therefore yields to the event loop,
+    // stops at a budget and says what it did not look at; it never reports a tree it only partly read as private.
+    const started = Date.now();
+    const budgetMs = Math.max(250, Math.floor(ctx.timeoutMs * STATE_SCAN_TIME_SHARE));
+    const maxEntries = stateScanMaxEntries();
+    let examined = 0;
+    let stoppedIn: string | undefined;
+    // Depth-first with an explicit stack. Live state first, backups last: if the budget runs out, it runs out in copies.
+    const stack: Array<{ dir: string; depth: number }> = [{ dir: nexusDir, depth: 0 }];
+    scan: while (stack.length > 0) {
+      const { dir, depth } = stack.pop()!;
+      if (depth > 6) continue;
       let entries: fs.Dirent[];
       try {
         entries = fs.readdirSync(dir, { withFileTypes: true });
       } catch {
-        return;
+        continue;
       }
+      const later: Array<{ dir: string; depth: number }> = [];
       for (const entry of entries) {
+        if (examined >= maxEntries || Date.now() - started >= budgetMs || signal.aborted) {
+          stoppedIn = dir;
+          break scan;
+        }
+        if (++examined % STATE_SCAN_YIELD_EVERY === 0) await new Promise<void>((resolve) => setImmediate(resolve));
         const full = path.join(dir, entry.name);
-        const itemUnsafe = ancestryProblem(ctx.home, full);
         if (entry.isDirectory()) {
           if (entry.isSymbolicLink()) continue;
           const dirMode = modeOf(full);
           if (dirMode !== undefined && (dirMode & 0o077) !== 0) {
+            const itemUnsafe = ancestryProblem(ctx.home, full);
             if (itemUnsafe) {
               out.push(f("state.permissions", "state", "warn", `The ${path.relative(ctx.home, full)} directory is readable by other users (mode ${dirMode.toString(8)}), and its path is not safe to change automatically (${itemUnsafe}).`, [full], "Review the path and restrict the real directory yourself."));
             } else {
               out.push(f("state.permissions", "state", "warn", `The ${path.relative(ctx.home, full)} directory is readable by other users (mode ${dirMode.toString(8)}).`, [full], undefined, { id: "state.permissions", description: `chmod ${full} from ${dirMode.toString(8)} to 700`, expect: identityOf(full) }));
             }
           }
-          scanDir(full, depth + 1);
+          later.push({ dir: full, depth: depth + 1 });
         } else if (entry.isFile()) {
           if (entry.isSymbolicLink()) continue;
           const fileMode = modeOf(full);
           if (fileMode !== undefined && ((fileMode & 0o077) !== 0 || (fileMode & 0o111) !== 0)) {
+            const itemUnsafe = ancestryProblem(ctx.home, full);
             if (itemUnsafe) {
               out.push(f("state.permissions", "state", "warn", `The ${path.relative(ctx.home, full)} file is readable by other users (mode ${fileMode.toString(8)}), and its path is not safe to change automatically (${itemUnsafe}).`, [full], "Review the path and restrict the real file yourself."));
             } else {
@@ -838,8 +910,19 @@ const statePermissionsCheck: Check = async (ctx) => {
           }
         }
       }
-    };
-    scanDir(nexusDir);
+      // Pushed in reverse so the directories are taken in name order, except `backups`, which is taken after its siblings.
+      later.sort((x, y) => Number(path.basename(x.dir) === "backups") - Number(path.basename(y.dir) === "backups") || (x.dir < y.dir ? -1 : 1));
+      for (let i = later.length - 1; i >= 0; i--) stack.push(later[i]);
+    }
+    if (stoppedIn !== undefined) {
+      const why = signal.aborted ? "the check was cancelled" : examined >= maxEntries ? `the limit of ${maxEntries} entries was reached` : `its time budget of ${budgetMs} ms ran out`;
+      out.push(f(
+        "state.permissions", "state", "warn",
+        `Only part of ~/.nexus was checked for permissions: ${examined} entries were examined before ${why}. The rest was not checked.`,
+        [nexusDir, `stopped in ${path.relative(ctx.home, stoppedIn) || "."}`],
+        "A state directory this large is usually old upgrade backups under ~/.nexus/backups; remove the ones you no longer need. To look further, raise NEXUS_DOCTOR_STATE_SCAN_ENTRIES or pass a longer --timeout.",
+      ));
+    }
   }
 
   if (fs.existsSync(historyFile)) {
@@ -1177,7 +1260,11 @@ const pluginCheck: Check = async (ctx) => {
   const found: string[] = [];
   const risky: string[] = [];
   for (const file of untrustedWorkspaceExtensions(workspace).filter((f) => !WORKSPACE_MCP_FILES.includes(path.basename(f)))) {
-    risky.push(`${file}: not loaded — this workspace is not trusted. Trust it with \`nexus trust ${workspace}\` to load its plugins.`);
+    risky.push(`${printable(file)}: not loaded — this workspace is not trusted. Trust it with \`nexus trust ${printable(workspace)}\`, then approve the file itself with \`nexus plugins trust\`.`);
+  }
+  // The operator's own directories that are not used because the workspace contains them.
+  for (const dir of skippedOperatorDirs(workspace)) {
+    risky.push(`${printable(dir)}: your plugins here are not loaded — the directory lies inside the workspace (${printable(workspace)}), where the agent's tools can write it. Start Nexus in a project directory, not in your home directory.`);
   }
   for (const dir of pluginDirs(workspace, true)) {
     let names: string[];
@@ -1188,14 +1275,87 @@ const pluginCheck: Check = async (ctx) => {
     }
     for (const name of names.filter((n) => n.endsWith(".js") || n.endsWith(".mjs"))) {
       const file = path.join(dir, name);
-      found.push(file);
+      // A file name is the repository's (or anyone's who can write the directory): it is shown, never sent raw.
+      found.push(printable(file));
       const mode = modeOf(file) ?? 0;
-      if (mode & 0o002) risky.push(`${file} is world-writable (mode ${mode.toString(8)}); anyone could change code Nexus runs`);
+      if (mode & 0o002) risky.push(`${printable(file)} is world-writable (mode ${mode.toString(8)}); anyone could change code Nexus runs`);
     }
   }
   const note = "Plugin modules were listed, not loaded (loading runs their code).";
-  if (risky.length) return f("plugins.config", "extensions", "warn", `${risky.length} plugin problem(s): untrusted workspace plugins are not loaded; world-writable plugin files could be changed by anyone. ${note}`, [...risky, ...found.slice(0, 10)], "Trust the workspace (`nexus trust`) or remove its plugins; restrict writable files with `chmod o-w <file>`.");
+  if (risky.length) return f("plugins.config", "extensions", "warn", `${risky.length} plugin problem(s): untrusted workspace plugins are not loaded; world-writable plugin files could be changed by anyone. ${note}`, [...risky, ...found.slice(0, 10)], "Trust the workspace (`nexus trust`) for its MCP servers; each of its plugin files also needs its own approval (`nexus plugins trust <file>`, see plugins.workspace). Restrict writable files with `chmod o-w <file>`.");
   return f("plugins.config", "extensions", found.length ? "pass" : "skip", found.length ? `${found.length} plugin module(s) found. ${note}` : "No plugins are installed (optional).", found.slice(0, 10));
+};
+
+/** HK-3: workspace plugin files that are declared and not in force (see doctor_plugins.ts). */
+const workspacePluginsCheck: Check = async (ctx) => {
+  const { status, explanation, evidence, action } = diagnoseWorkspacePlugins(ctx.config?.workspace ?? process.cwd());
+  return f("plugins.workspace", "extensions", status, explanation, evidence, action);
+};
+
+/** HK-1: command hooks that are declared and not in force (see doctor_hooks.ts). */
+const hooksCheck: Check = async (ctx) => {
+  const { status, explanation, evidence, action } = diagnoseHooks(ctx.config?.workspace ?? process.cwd(), ctx.home);
+  return f("hooks.config", "extensions", status, explanation, evidence, action);
+};
+
+/**
+ * GV-1: the managed policy as this process would apply it: one finding per tier and one for the result. A broken
+ * managed file is a failure here and never a reason for doctor not to run. No finding carries a repair: a policy file
+ * is the administrator's or the operator's statement, and doctor does not change it.
+ */
+const policyCheck: Check = async (ctx) =>
+  policyFindings(processPolicyReport(ctx.config?.workspace ?? process.cwd())).map((finding) => f(finding.id, "config", finding.status, finding.explanation, finding.evidence, finding.action));
+
+const backgroundRunnerCheck: Check = async (ctx) => {
+  const stateDir = process.env.NEXUS_STATE_DIR || path.join(ctx.home, ".nexus");
+  const paths = runnerPaths(path.join(stateDir, "runner"));
+  const alive = runnerAlive(paths);
+  const unit = path.join(process.env.XDG_CONFIG_HOME || path.join(ctx.home, ".config"), "systemd", "user", "nexus-runner.service");
+  const findings: Array<Omit<DoctorFinding, "durationMs">> = [];
+  let info: ReturnType<typeof readRunnerInfo>;
+  let infoProblem: string | undefined;
+  try { info = readRunnerInfo(paths); } catch (error) { infoProblem = error instanceof Error ? error.message : String(error); }
+
+  findings.push(f("runner.alive", "state", alive ? "pass" : "skip", alive ? "The detached job runner holds its state-directory lock." : "The detached job runner is not running (optional).", [paths.guard]));
+  if (infoProblem) findings.push(f("runner.version", "state", alive ? "warn" : "skip", `The runner status record is unreadable: ${infoProblem}`, [paths.runnerJson]));
+  else if (info && alive) {
+    const version = getBuildIdentity().version;
+    const matches = version === "unknown" || info.nexusVersion === version;
+    findings.push(f("runner.version", "state", matches ? "pass" : "warn", matches ? `The runner uses Nexus ${info.nexusVersion}.` : `The runner uses Nexus ${info.nexusVersion}, while this CLI is ${version}. Stop and restart the runner after upgrades.`, [paths.runnerJson, `CLI ${version}`]));
+  } else findings.push(f("runner.version", "state", "skip", "No live runner version is available to compare.", [paths.runnerJson]));
+
+  try {
+    const stat = fs.lstatSync(unit);
+    const bad = stat.isSymbolicLink() || !stat.isFile() || stat.uid !== process.getuid?.() || (stat.mode & 0o400) === 0 || (stat.mode & 0o022) !== 0;
+    findings.push(f("runner.unit", "state", bad ? "fail" : "pass", bad ? "The systemd runner unit is not an owner-readable regular file owned by this user, or it is writable by other users." : "The systemd user runner unit is present and not group/world writable.", [unit], bad ? "Replace the unit with an owner-readable regular file and remove group/world write permissions." : undefined));
+  } catch (error: any) {
+    findings.push(f("runner.unit", "state", error?.code === "ENOENT" ? "skip" : "warn", error?.code === "ENOENT" ? "No systemd user unit is installed (optional; a runner may use another supervisor)." : `The systemd runner unit could not be inspected: ${String(error?.message ?? error)}`, [unit]));
+  }
+
+  try {
+    const listing = listJobs(paths);
+    const stuck: string[] = [];
+    for (const job of listing.jobs) {
+      if (isTerminal(job.state)) continue;
+      let workerAlive = false;
+      const guardFile = paths.workerGuard(job.id);
+      if (fs.existsSync(guardFile)) {
+        try {
+          const probe = acquireFileGuard(guardFile, { label: "Worker guard", mode: "shared" });
+          releaseFileGuard(probe);
+          workerAlive = probe === null;
+        } catch { /* an untrusted guard is not evidence of a live worker */ }
+      }
+      if (!alive && !workerAlive) stuck.push(`${job.id} (${job.state})`);
+    }
+    for (const invalid of listing.invalid) stuck.push(`${invalid.id} (unreadable: ${invalid.error})`);
+    findings.push(stuck.length
+      ? f("runner.stuck", "state", "warn", `${stuck.length} non-terminal or unreadable job record(s) have no live runner/worker and need operator inspection.`, stuck.slice(0, 20), "Start the runner to recover valid jobs; inspect or back up unreadable records before changing them.")
+      : f("runner.stuck", "state", "pass", "No non-terminal job is stranded without a runner or worker."));
+  } catch (error) {
+    findings.push(f("runner.stuck", "state", "warn", `Runner jobs could not be inspected: ${error instanceof Error ? error.message : String(error)}`, [paths.jobs]));
+  }
+  return findings;
 };
 
 const CHECKS: Array<[string, Check]> = [
@@ -1222,6 +1382,10 @@ const CHECKS: Array<[string, Check]> = [
   ["custom_ca", customCaCheck],
   ["mcp", mcpCheck],
   ["plugins", pluginCheck],
+  ["plugins_workspace", workspacePluginsCheck],
+  ["hooks", hooksCheck],
+  ["policy", policyCheck],
+  ["background_runner", backgroundRunnerCheck],
 ];
 
 /** Runs `check` with its own deadline; a throw or timeout becomes a finding, so other checks are unaffected. */
@@ -1312,14 +1476,23 @@ export async function runDoctor(optionsOrConfig: DoctorOptions | HarnessConfig |
   const summary: Record<DoctorStatus, number> = { pass: 0, warn: 0, fail: 0, skip: 0 };
   for (const finding of findings) summary[finding.status]++;
   const config = options.config;
-  let posture: { mode: "auto" | "review" | "read-only"; sandbox: string; trusted: boolean } | undefined;
+  let posture: DoctorReport["posture"];
   if (config) {
     const trusted = isWorkspaceTrusted(config.workspace, Boolean(config.readOnly));
-    const sandboxStatus = config.sandbox ? (typeof config.sandbox === "string" ? config.sandbox : "on") : "off";
+    const sandboxInput = {
+      sandbox: config.sandbox,
+      readOnly: Boolean(config.approvalMode === "read-only" || ctx.flags.readOnly),
+      network: sandboxNetworkEnabled(),
+      profile: config.sandboxProfile,
+      source: "configured setting",
+    };
+    const sandboxPosture = describeSandboxPosture(sandboxInput);
     posture = {
       mode: config.approvalMode ?? (config.readOnly ? "read-only" : config.fullAccess ? "auto" : "review"),
-      sandbox: sandboxStatus,
+      sandbox: sandboxPostureText(sandboxInput),
       trusted,
+      profile: sandboxPosture.profile,
+      profileSource: sandboxPosture.source,
     };
   }
   const report: DoctorReport = {
@@ -1375,6 +1548,8 @@ function planRepairs(report: DoctorReport): PlannedRepair[] {
     const target = finding.evidence[0];
     if (!target) continue;
     if (seenTargets.has(target)) continue;
+    // GV-1: `--fix` never changes a managed policy file, whatever finding names it.
+    if (path.basename(target) === USER_POLICY_FILE_NAME) continue;
     seenTargets.add(target);
     if (finding.repair.id === "state.create") {
       plans.push({

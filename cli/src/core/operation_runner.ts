@@ -5,9 +5,10 @@
  */
 import { credentialStorageHome, storedCredentialFor } from "../client.js";
 import { execFileSync } from "node:child_process";
+import * as fs from "node:fs";
 import type { HarnessConfig } from "../types.js";
 import { realRecoveryClock, type RecoveryClock } from "./provider_recovery.js";
-import { ConvergenceScheduler, type Assignment, type Decision, type DurableOperationState, type OperationEvent, type OperationMessage, type UnitRunResult, type WorkUnit } from "./operation.js";
+import { ConvergenceScheduler, type Assignment, type Decision, type DurableOperationState, type MergedCheck, type OperationEvent, type OperationMessage, type UnitRunResult, type WorkUnit } from "./operation.js";
 import { markDelivered, publishMessage, undeliveredFor } from "./operation_messages.js";
 import { OperationGit, ensureIntegrationWorktree, type OperationGitPlan } from "./operation_git.js";
 import { REQUIREMENTS_CAPABILITY, READ_OBJECTIVE_CAPABILITY } from "./objective.js";
@@ -23,8 +24,10 @@ import { computeCandidateIdentitySync } from "./candidate.js";
 import type { InferenceFailure } from "./turn.js";
 import { OperationRevalidator } from "./operation_runner_revalidation.js";
 import { reportOperationDiagnostic, type OperationDiagnosticHandler } from "./operation_runner_diagnostics.js";
-import type { OperationStore } from "./operation_runner_persistence.js";
+import { OperationLockedError, type OperationStore } from "./operation_runner_persistence.js";
+import { STALE_PAUSE_PREFIX, clearDriver, liveForeignDriver, stampDriver, staleDriver } from "./driver_identity.js";
 import type { BoundaryRules } from "./boundary_rules.js";
+import { MAX_OPERATION_ACTIVE_MS } from "./operation_schema.js";
 
 export { OperationStore, OperationLockedError, migrateLegacyAccountIdentities } from "./operation_runner_persistence.js";
 export { AgentWorkUnitExecutor } from "./operation_runner_execution.js";
@@ -65,6 +68,11 @@ export interface UnitRunContext {
 
 export interface WorkUnitExecutor {
   run(unit: WorkUnit, resource: ResourceDescriptor, ctx: UnitRunContext): Promise<UnitRunResult>;
+  /**
+   * Isolated operations (PA-2): the operator's verifier, pinned for the operation and run on every merged tree, and
+   * the session's sandbox setting, which confines those runs as it confines the units' own commands.
+   */
+  integrationPolicy?(): { verifier?: string; sandbox?: boolean | string };
   /** Side-effect-free reachability check used to revalidate endpoint-scope conditions on wake. */
   probe?(resource: ResourceDescriptor, signal?: AbortSignal): Promise<{ available: boolean; failure?: InferenceFailure }>;
   /** Re-reads provider catalogs, if enabled. */
@@ -88,6 +96,8 @@ export interface OperationRunnerOptions {
    */
   maxInProcessWaitMs?: number;
   maxIterations?: number;
+  /** Used for token-budget cap enforcement; when omitted, budget caps are not enforced. */
+  store?: OperationStore;
 }
 
 function planFromState(state: DurableOperationState): OperationGitPlan {
@@ -104,6 +114,11 @@ function planFromState(state: DurableOperationState): OperationGitPlan {
   };
 }
 
+/** PA-2: how many verifiers held on the merged tree, for the operator's event line. */
+function mergedChecksNote(checks: readonly MergedCheck[] | undefined): string {
+  return checks?.length ? ` (${checks.length} merged-tree ${checks.length === 1 ? "check" : "checks"} passed)` : "";
+}
+
 export class OperationRunner {
   readonly registry: ResourceRegistry;
   readonly scheduler: ConvergenceScheduler;
@@ -112,6 +127,9 @@ export class OperationRunner {
   private readonly git: OperationGit | undefined;
   /** One merge at a time: all units share the operation's integration worktree. */
   private integrationChain: Promise<void> = Promise.resolve();
+  private activeElapsedSinceMs?: number;
+  private activeBudgetController?: AbortController;
+  private activeBudgetExpired = false;
 
   constructor(
     readonly state: DurableOperationState,
@@ -121,21 +139,146 @@ export class OperationRunner {
     this.registry = new ResourceRegistry(state.resources, state.conditions, this.clock, (e) => this.onRegistryEvent(e));
     this.revalidator = new OperationRevalidator(opts.executor, this.registry, opts.onDiagnostic);
     this.scheduler = new ConvergenceScheduler(state, this.registry, () => this.clock.now(), opts.onEvent, opts.onDiagnostic);
-    this.git = state.git?.isolate ? new OperationGit(planFromState(state), state.git) : undefined;
+    this.git = state.git?.isolate
+      ? new OperationGit(planFromState(state), state.git, {
+          integrations: () => this.state.integrations ?? [],
+          sandbox: opts.executor.integrationPolicy?.().sandbox,
+        })
+      : undefined;
   }
 
   async run(signal?: AbortSignal): Promise<DurableOperationState> {
+    if (this.state.status === "PAUSED" || this.state.status === "COMPLETE" || this.state.status === "CANCELLED") {
+      return this.runOperation(signal);
+    }
+    const budgetController = new AbortController();
+    this.activeBudgetController = budgetController;
+    this.activeBudgetExpired = false;
+    const remainingMs = this.beginActiveElapsedBudget();
+    if (remainingMs === undefined) {
+      this.activeBudgetController = undefined;
+      return this.state;
+    }
+    const combinedSignal = signal ? AbortSignal.any([signal, budgetController.signal]) : budgetController.signal;
+    const timer = setTimeout(() => {
+      this.activeBudgetExpired = true;
+      budgetController.abort(new Error("operation active-time budget exhausted"));
+    }, remainingMs);
+    // The budget timer must not keep a process alive after an operation runner is abandoned.
+    // Active work (inference, subprocesses, waits) owns its own handles; the timer only bounds it.
+    timer.unref();
     const onAbort = () => {
+      if (this.activeBudgetExpired) return;
+      clearTimeout(timer);
       this.scheduler.cancel();
       this.save();
     };
-    if (signal?.aborted) onAbort();
-    else signal?.addEventListener("abort", onAbort, { once: true });
+    if (combinedSignal.aborted) onAbort();
+    else combinedSignal.addEventListener("abort", onAbort, { once: true });
     try {
-      return await this.runOperation(signal);
+      return await this.runOperation(combinedSignal);
     } finally {
-      signal?.removeEventListener("abort", onAbort);
+      clearTimeout(timer);
+      combinedSignal.removeEventListener("abort", onAbort);
+      this.finishActiveElapsedBudget();
+      const finalStatus: string = this.state.status;
+      if (this.activeBudgetExpired && !["COMPLETE", "CANCELLED", "PAUSED"].includes(finalStatus)) {
+        this.pauseForActiveBudget(this.state.policy.maxTotalActiveMs);
+      }
+      this.activeBudgetController = undefined;
     }
+  }
+
+  /** Starts or conservatively recovers the operation's active wall-time interval. */
+  private beginActiveElapsedBudget(): number | undefined {
+    const cap = this.state.policy.maxTotalActiveMs;
+    const now = this.clock.now();
+    if (!Number.isSafeInteger(now) || now < 0 || !Number.isSafeInteger(cap) || cap < 1) {
+      this.pauseForUnmeasuredActiveBudget();
+      return undefined;
+    }
+    let elapsed = this.state.activeElapsedMs;
+    if (!Number.isSafeInteger(elapsed) || elapsed < 0) {
+      this.pauseForUnmeasuredActiveBudget();
+      return undefined;
+    }
+    if (!this.state.activeElapsedHistoryComplete) {
+      const createdAt = Date.parse(this.state.createdAt);
+      // Legacy records lack interval checkpoints. Charge their full age rather than silently starting at zero.
+      elapsed = Math.max(elapsed, Number.isFinite(createdAt) && createdAt <= now ? now - createdAt : cap);
+    } else if (this.state.activeSinceMs !== undefined) {
+      if (!Number.isSafeInteger(this.state.activeSinceMs) || now < this.state.activeSinceMs) elapsed = cap;
+      else elapsed += now - this.state.activeSinceMs;
+    }
+    if (!Number.isSafeInteger(elapsed) || elapsed < 0) elapsed = cap;
+    this.state.activeElapsedMs = Math.min(MAX_OPERATION_ACTIVE_MS, elapsed);
+    delete this.state.activeSinceMs;
+    if (elapsed >= cap) {
+      this.pauseForActiveBudget(cap, this.state.activeElapsedHistoryComplete ? undefined : "conservative elapsed-time history estimate");
+      return undefined;
+    }
+    this.activeElapsedSinceMs = now;
+    this.state.activeSinceMs = now;
+    this.save();
+    return cap - elapsed;
+  }
+
+  /** Checkpoints the live interval and conservatively exhausts the cap after a clock rollback. */
+  private checkpointActiveElapsed(now: number): void {
+    if (this.activeElapsedSinceMs === undefined) return;
+    const cap = this.state.policy.maxTotalActiveMs;
+    let elapsed = this.state.activeElapsedMs;
+    if (!Number.isSafeInteger(now) || now < this.activeElapsedSinceMs) elapsed = cap;
+    else elapsed += now - this.activeElapsedSinceMs;
+    if (!Number.isSafeInteger(elapsed) || elapsed < 0) elapsed = cap;
+    this.state.activeElapsedMs = Math.min(MAX_OPERATION_ACTIVE_MS, elapsed);
+    this.activeElapsedSinceMs = now;
+    this.state.activeSinceMs = now;
+    if (elapsed >= cap) {
+      this.activeBudgetExpired = true;
+      this.activeBudgetController?.abort(new Error("operation active-time budget exhausted"));
+    }
+  }
+
+  /** Closes the active interval on every normal return; a persisted open interval is charged on crash recovery. */
+  private finishActiveElapsedBudget(): void {
+    if (this.activeElapsedSinceMs === undefined) return;
+    this.checkpointActiveElapsed(this.clock.now());
+    delete this.state.activeSinceMs;
+    this.activeElapsedSinceMs = undefined;
+    this.state.updatedAt = new Date(this.clock.now()).toISOString();
+    this.opts.persist(this.state);
+  }
+
+  private stopForAbort(): DurableOperationState {
+    if (this.activeBudgetExpired) {
+      this.pauseForActiveBudget(this.state.policy.maxTotalActiveMs);
+      return this.state;
+    }
+    return this.cancelled();
+  }
+
+  private pauseForUnmeasuredActiveBudget(): void {
+    const cap = this.state.policy.maxTotalActiveMs;
+    this.state.activeElapsedMs = cap;
+    this.pauseForActiveBudget(cap, "cannot establish a trustworthy elapsed-time history");
+  }
+
+  private pauseForActiveBudget(cap: number, detail?: string): boolean {
+    if (this.state.status === "COMPLETE" || this.state.status === "CANCELLED" || this.state.status === "PAUSED") return false;
+    const elapsed = Math.min(cap, this.state.activeElapsedMs);
+    const reason = `Paused: operation active-time budget exhausted (${elapsed} of ${cap} ms${detail ? `; ${detail}` : ""}). Raise the cap with 'nexus operation budget ${this.state.id} --max-total-active-minutes <n>', then resume, or cancel the operation.`;
+    this.state.status = "PAUSED";
+    this.state.pauseReason = reason;
+    delete this.state.wait;
+    delete this.state.blocked;
+    this.scheduler.emit("OPERATION_PAUSED", reason, { detail: { reason: "active_time_budget", activeElapsedMs: elapsed, maxTotalActiveMs: cap, ...(detail ? { measurement: detail } : {}) } });
+    this.save();
+    return true;
+  }
+
+  private checkpointActiveBudgetOnSave(): void {
+    if (this.activeElapsedSinceMs !== undefined) this.checkpointActiveElapsed(this.clock.now());
   }
 
   private async runOperation(signal?: AbortSignal): Promise<DurableOperationState> {
@@ -144,6 +287,7 @@ export class OperationRunner {
       this.git?.disposeAllUnits();
       return this.state;
     }
+    this.pinIntegrationVerifier();
     if (this.git) {
       try {
         ensureIntegrationWorktree(planFromState(this.state), this.state.git!, {
@@ -173,7 +317,7 @@ export class OperationRunner {
     this.save();
     const maxIterations = this.opts.maxIterations ?? 10_000;
     for (let i = 0; i < maxIterations; i++) {
-      if (signal?.aborted) return this.cancelled();
+      if (signal?.aborted) return this.stopForAbort();
       let d: Decision;
       try {
         d = this.scheduler.decide();
@@ -221,6 +365,18 @@ export class OperationRunner {
           ready.push(assignment);
         }
         if (!ready.length) continue;
+        const cap = this.state.policy.maxTotalTokens;
+        if (cap !== undefined) {
+          const total = this.rolledUpTokens();
+          if (total === undefined) {
+            this.pauseForUnmeasuredTokenBudget(cap);
+            return this.state;
+          }
+          if (total >= cap) {
+            this.pauseForTokenBudget(total, cap);
+            return this.state;
+          }
+        }
         const owed = new Map<string, OperationMessage[]>();
         for (const assignment of ready) {
           const messages = undeliveredFor(this.state, assignment.unit.id);
@@ -229,7 +385,7 @@ export class OperationRunner {
         for (const assignment of ready) this.scheduler.start(assignment);
         this.save();
         await this.executeBatch(ready, owed, signal);
-        if (signal?.aborted) return this.cancelled();
+        if (signal?.aborted) return this.stopForAbort();
         continue;
       }
       if (d.kind === "wait") {
@@ -239,7 +395,7 @@ export class OperationRunner {
         try {
           await this.clock.sleep(Math.max(0, d.wakeAt - this.clock.now()), signal);
         } catch {
-          return this.cancelled();
+          return this.stopForAbort();
         }
         await this.revalidator.revalidate(signal);
         continue;
@@ -293,7 +449,15 @@ export class OperationRunner {
           options: [{ label: "retry", action: { kind: "retry" } }],
         };
       }
-      if (signal?.aborted || this.state.status === "CANCELLED") return;
+      if (signal?.aborted || this.state.status === "CANCELLED") {
+        if (this.activeBudgetExpired && this.state.status !== "CANCELLED") {
+          // A budget expiry is a durable pause, not an operator cancellation. Preserve the unknown side-effect
+          // boundary before pausing so resume cannot silently replay this unit.
+          this.scheduler.apply(assignment.unit.id, { kind: "cancelled" });
+          this.save();
+        }
+        return;
+      }
       this.scheduler.apply(assignment.unit.id, result);
       if (result.kind === "completed") this.publishCompletion(assignment.unit);
       this.save();
@@ -328,8 +492,9 @@ export class OperationRunner {
           }
           const snapshotOf = failedDeps[0];
           const snapshotRun = snapshotOf ? this.scheduler.unit(snapshotOf).failedRun!.at : undefined;
+          const ownerId = this.git.unitState(unit.id)?.ownerId ?? `${this.state.id}:${unit.id}:${process.pid}`;
           const prepared = this.git.prepareUnit(unit, {
-            restart: Boolean(unit.pendingDecision?.restart), ...(snapshotOf ? { snapshotOf, snapshotRun } : {}),
+            restart: Boolean(unit.pendingDecision?.restart), ...(snapshotOf ? { snapshotOf, snapshotRun } : {}), ownerId,
           });
           workspace = prepared.workspace;
           // The conversation (observations, tool results) is about the discarded candidate: start a new one.
@@ -429,6 +594,66 @@ export class OperationRunner {
     }
   }
 
+  private rolledUpTokens(): number | undefined {
+    const cap = this.state.policy.maxTotalTokens;
+    if (cap === undefined) return undefined;
+    const store = this.opts.store;
+    const workspace = this.opts.workspace ?? this.state.git?.repoRoot;
+    const hasPriorRun = this.state.units.some((unit) => Boolean(unit.agentTaskId) || unit.runs > 0);
+    if (!store || !workspace) return hasPriorRun ? undefined : 0;
+    let total = 0;
+    for (const unit of this.state.units) {
+      if (!unit.agentTaskId) {
+        if (unit.runs > 0) return undefined;
+        continue;
+      }
+      try {
+        const stats = store.manager.loadTaskState(unit.agentTaskId, workspace).tokenStats;
+        if (!stats || !Number.isSafeInteger(stats.total) || stats.total < 0) return undefined;
+        total += stats.total;
+        if (!Number.isSafeInteger(total)) return undefined;
+      } catch {
+        return undefined;
+      }
+    }
+    return total;
+  }
+
+  private pauseForUnmeasuredTokenBudget(cap: number): boolean {
+    if (this.state.status === "COMPLETE" || this.state.status === "CANCELLED" || this.state.status === "PAUSED") return false;
+    const reason = `Paused: goal token budget cannot be enforced because child token usage is unavailable; inspect or repair the accounting before resuming (cap ${cap}).`;
+    this.state.status = "PAUSED";
+    this.state.pauseReason = reason;
+    delete this.state.wait;
+    delete this.state.blocked;
+    for (const unit of this.state.units) {
+      if (unit.status === "RUNNING") unit.status = "RUNNABLE";
+    }
+    this.state.updatedAt = new Date(this.clock.now()).toISOString();
+    this.scheduler.emit("OPERATION_PAUSED", reason, { detail: { reason: "token_budget_unmeasured", maxTotalTokens: cap } });
+    this.save();
+    return true;
+  }
+
+  private pauseForTokenBudget(total: number, cap: number): boolean {
+    if (this.state.status === "COMPLETE" || this.state.status === "CANCELLED" || this.state.status === "PAUSED") return false;
+    const reason = `Paused: goal token budget exhausted (${total} of ${cap} tokens consumed across agent runs). Raise the cap with 'nexus operation budget ${this.state.id} --max-total-tokens <n|none>', then resume, or cancel the goal.`;
+    this.state.status = "PAUSED";
+    this.state.pauseReason = reason;
+    delete this.state.wait;
+    delete this.state.blocked;
+    for (const unit of this.state.units) {
+      if (unit.status === "RUNNING") unit.status = "RUNNABLE";
+      if (unit.status === "BLOCKED" && unit.blocked) {
+        // Keep blocked decisions? No, pausing at safe boundary; blocked units remain blocked but operation paused.
+      }
+    }
+    this.state.updatedAt = new Date(this.clock.now()).toISOString();
+    this.scheduler.emit("OPERATION_PAUSED", reason, { detail: { reason: "token_budget", totalTokens: total, maxTotalTokens: cap } });
+    this.save();
+    return true;
+  }
+
   private recordDelivery(unitId: string, messages?: OperationMessage[]): void {
     if (!messages?.length) return;
     markDelivered(this.state, messages.map((message) => message.id), unitId, new Date(this.clock.now()).toISOString());
@@ -506,6 +731,30 @@ export class OperationRunner {
     return next;
   }
 
+  /**
+   * PA-2: the operator's verifier is pinned in the record when the operation runs and only ever added to, so a resume
+   * started without it (or with another) still checks every merged tree with the ones given before.
+   */
+  private pinIntegrationVerifier(): void {
+    const verifier = this.opts.executor.integrationPolicy?.().verifier?.trim();
+    const git = this.state.git;
+    if (!git?.isolate || !verifier || git.integrationVerifiers?.includes(verifier)) return;
+    git.integrationVerifiers = [...(git.integrationVerifiers ?? []), verifier];
+  }
+
+  /**
+   * PA-2: a refused merge is recorded as its own event, naming the integrated units it collides with and the checks
+   * the runner ran. Returns the clause that names those units in the operator's decision.
+   */
+  private recordRejection(unit: WorkUnit, reason: string, detail: { conflictWith?: string[]; checks?: MergedCheck[]; files?: string[] }): string {
+    const others = detail.conflictWith ?? [];
+    this.scheduler.emit("INTEGRATION_REJECTED", `${unit.id} was not integrated: ${reason.split("\n")[0]}`, {
+      unitId: unit.id,
+      detail: { unitId: unit.id, conflictWith: others, ...(detail.checks ? { checks: detail.checks } : {}), ...(detail.files ? { files: detail.files } : {}) },
+    });
+    return others.length ? ` (${unit.id} against integrated ${others.join(", ")})` : "";
+  }
+
   /** Merges one completed unit into the operation branch and records the receipt, or returns the blocking decision. */
   private async integrateUnit(unit: WorkUnit, result: Extract<UnitRunResult, { kind: "completed" }>): Promise<UnitRunResult> {
     const candidate = this.candidateFor(unit);
@@ -514,17 +763,20 @@ export class OperationRunner {
       : undefined;
     const integration = await this.git!.integrate(unit, result, {
       sequence: (this.state.integrations?.length ?? 0) + 1,
+      integrated: this.state.integrations ?? [],
       ...(candidate ? { candidate } : {}),
       ...(tests ? { tests } : {}),
     });
     if (integration.kind === "conflict") {
       const files = integration.files.length ? ` (${integration.files.join(", ")})` : "";
+      const reason = `merging ${unit.id} into the operation branch conflicts${files}`;
+      const units = this.recordRejection(unit, reason, { conflictWith: integration.conflictWith, files: integration.files });
       return {
         kind: "failed",
         cause: "MERGE_CONFLICT",
-        reason: `merging ${unit.id} into the operation branch conflicts${files}`,
+        reason,
         question:
-          `${unit.title} completed, but its branch conflicts with the integrated work${files}. Merge ` +
+          `${unit.title} completed, but its branch conflicts with the integrated work${files}${units}. Merge ` +
           `${this.state.git?.integrationBranch} into the unit's branch (${this.git!.unitState(unit.id)?.worktree}), ` +
           `resolve and commit it there, then retry; or revise the unit, or stop?`,
         options: [
@@ -534,12 +786,20 @@ export class OperationRunner {
       };
     }
     if (integration.kind === "failed") {
+      // A merge the checks refused (or a verification-file takeover) is a decision about two units' work, not a retry-only fault.
+      const refused = integration.checks !== undefined || integration.conflictWith !== undefined;
+      const units = refused ? this.recordRejection(unit, integration.reason, integration) : "";
       return {
         kind: "failed",
         cause: "INTEGRATION_FAILED",
         reason: integration.reason,
-        question: `${unit.title} could not be integrated: ${integration.reason}. Retry the unit, or stop?`,
-        options: [{ label: "retry", action: { kind: "retry" } }],
+        question: refused
+          ? `${unit.title} was not integrated${units}: ${integration.reason}. The operation branch is as it was before the merge. Retry the unit, revise it, or stop?`
+          : `${unit.title} could not be integrated: ${integration.reason}. Retry the unit, or stop?`,
+        options: [
+          { label: "retry", action: { kind: "retry" } },
+          ...(refused ? [{ label: "revise the unit (note required)", action: { kind: "revise" as const } }] : []),
+        ],
       };
     }
     // ALREADY_INTEGRATED means a receipt for this unit already exists; appending a second one would double-count it.
@@ -551,8 +811,8 @@ export class OperationRunner {
       integration.receipt.verification === "NOT_RUN"
         ? `${unit.id} integrated on ${integration.receipt.integratedCommit.slice(0, 12)} (not re-verified).`
         : integration.receipt.tests?.definitionBound === false
-        ? `${unit.id} integrated on ${integration.receipt.integratedCommit.slice(0, 12)} (verifier passed, but its definition could not be bound or verified unchanged: regression evidence only).`
-        : `${unit.id} integrated on ${integration.receipt.integratedCommit.slice(0, 12)}.`,
+        ? `${unit.id} integrated on ${integration.receipt.integratedCommit.slice(0, 12)} (verifier passed, but its definition or test inputs could not be bound or verified unchanged: regression evidence only).`
+        : `${unit.id} integrated on ${integration.receipt.integratedCommit.slice(0, 12)}${mergedChecksNote(integration.receipt.mergedChecks)}.`,
       { unitId: unit.id, detail: { integration: integration.receipt } },
     );
     this.save();
@@ -686,6 +946,7 @@ export class OperationRunner {
   }
 
   private save(): void {
+    this.checkpointActiveBudgetOnSave();
     this.state.conditions = this.registry.snapshot();
     this.state.updatedAt = new Date(this.clock.now()).toISOString();
     this.opts.persist(this.state);
@@ -711,21 +972,68 @@ export interface DriveOptions extends Omit<OperationRunnerOptions, "persist"> {
    *   loaded before another driver finished cannot be written back over its result. `prepare` adjusts the fresh copy.
    */
   entry?: "new" | "existing";
+  /** The CLI is immediately driving after applying an operator decision in this process. */
+  resumeAfterDecision?: boolean;
   prepare?: (fresh: DurableOperationState) => void;
 }
 
 /** Runs an operation under its driver lock, persisting every transition through the store. */
+/** Best-effort Linux boot identity. A goal/operation active in a different boot was left by an earlier process. */
+export function currentBootId(): string | undefined {
+  try { return fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() || undefined; }
+  catch { return undefined; }
+}
+
+/** Persists the stale-driver verdict (pause with its reason and an event) when the recorded driver is not provably alive. */
+function pauseForStaleDriver(state: DurableOperationState): string | undefined {
+  const verdict = staleDriver(state);
+  if (!verdict) return undefined;
+  state.status = "PAUSED";
+  state.pauseReason = state.pauseReason && !state.pauseReason.startsWith(STALE_PAUSE_PREFIX) ? `${state.pauseReason} ${verdict.reason}` : verdict.reason;
+  delete state.wait;
+  delete state.blocked;
+  state.updatedAt = new Date().toISOString();
+  state.events.push({ type: "OPERATION_PAUSED", at: state.updatedAt, message: verdict.reason, detail: { reason: "stale_driver", cause: verdict.cause, previousBootId: state.activeBootId, previousPid: state.activePid, previousHost: state.activeHost, previousStartTicks: state.activeStartTicks } });
+  if (state.events.length > 300) state.events.splice(0, state.events.length - 300);
+  return verdict.reason;
+}
+
+/** A record naming another live process as its driver is not ours to drive, even when its lock file has gone. */
+function refuseLiveForeignDriver(state: DurableOperationState): void {
+  const pid = liveForeignDriver(state);
+  if (pid !== undefined) throw new OperationLockedError(`Operation ${state.id} is recorded as driven by live pid ${pid} on ${state.activeHost} (its lock is not held); refusing a second driver.`);
+}
+
 export async function driveOperation(state: DurableOperationState, opts: DriveOptions): Promise<DurableOperationState> {
-  const { store, signal, entry, prepare, ...runnerOpts } = opts;
+  const { store, signal, entry, prepare, resumeAfterDecision, ...runnerOpts } = opts;
   const release = store.acquire(state.id);
   try {
     if (entry === "new") {
       if (store.has(state.id)) throw new OperationExistsError(state.id);
     } else if (entry === "existing") {
       state = store.load(state.id);
-      prepare?.(state);
     }
-    return await new OperationRunner(state, { ...runnerOpts, persist: (s) => store.save(s) }).run(signal);
+    if (entry === "existing") {
+      // `operation decide` records the operator's choice, then resumes under a new driver lock in this same process.
+      // Refresh the identity for that handoff so the process that presented the decision is not mistaken for a second
+      // crash. If this process dies during resumed work, its identity is stale on the next load.
+      if (resumeAfterDecision && state.status !== "COMPLETE" && state.status !== "CANCELLED") stampDriver(state);
+      refuseLiveForeignDriver(state);
+      pauseForStaleDriver(state);
+    }
+    prepare?.(state);
+    if (state.status === "PAUSED" && state.pauseReason?.startsWith(STALE_PAUSE_PREFIX)) {
+      store.save(state);
+      return state;
+    }
+    if (state.status !== "COMPLETE" && state.status !== "CANCELLED") stampDriver(state);
+    else clearDriver(state);
+    const result = await new OperationRunner(state, { ...runnerOpts, store, persist: (s) => store.save(s) }).run(signal);
+    if (result.status === "COMPLETE" || result.status === "CANCELLED" || result.status === "PAUSED") {
+      clearDriver(result);
+      store.save(result);
+    }
+    return result;
   } finally {
     release();
   }

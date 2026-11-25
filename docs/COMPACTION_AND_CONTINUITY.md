@@ -29,10 +29,21 @@ accumulated across process restarts. A turn ends for one of these reasons:
 | the model's reply is cut off at the output limit twice in a row (see below) | `INFERENCE_FAILED` (`output_truncated/client`) |
 | a compaction (or another record the next action depends on) cannot be written | `PERSISTENCE_FAILED` |
 | objective step budget is exhausted, or the invocation time budget is exhausted | `STEP_BUDGET_EXHAUSTED` / `TIME_BUDGET_EXHAUSTED` |
+| objective-wide inference request budget is exhausted, including provider retries | `INFERENCE_SUBMISSION_BUDGET_EXHAUSTED` |
 
 Use `--max-total-steps`, `NEXUS_MAX_TOTAL_STEPS`, `--max-turn-minutes` or `NEXUS_MAX_TURN_MINUTES` to choose a lower
 or higher finite limit within the hard ceiling. `--no-continuation` is your explicit choice of a turn that ends at
 `--max-steps`.
+
+`NEXUS_MAX_INFERENCE_SUBMISSIONS` sets a provider request ceiling (default 1,000; hard maximum 10,000). It can be set
+in a project `.env`, so a project may raise the default up to that hard maximum; on resume, the saved ceiling can only
+stay the same or decrease. The ceiling currently counts requests made by the primary turn's provider-recovery loop,
+including retries, before dispatch; availability probes do not count. It does **not** yet cap all provider use: context
+findings extraction, LLM compaction summaries and their requirement probes, delegated `spawn_subagent` calls, and
+durable operation work units do not share this counter. Without durable objective state, the counter is in-memory and
+resets on each turn. With durable objective state, the primary-turn count and ceiling persist with the objective.
+Older saved objectives report earlier request history as unknown; only requests made after this counter was introduced
+are counted exactly. Malformed persisted counters or ceilings stop before a counted inference dispatch.
 
 The model is never told that "steps are running out" unless you set a step limit. The live status line shows
 `step N` (and `step N of M` only under a limit you set).

@@ -11,6 +11,55 @@ import type { EvidenceStatus, ReceiptSection } from "./evidence.js";
 import type { Catalog } from "./model_catalog.js";
 
 export const PROTOCOL_VERSION = 1;
+/** Maximum ACP history pages emitted for one session/load replay. */
+export const SIDECAR_MAX_HISTORY_PAGES = 1024;
+/**
+ * The inclusive range of protocol versions this sidecar can speak: `hello` announces it, `initialize` negotiates
+ * inside it, and `parseCommand` accepts a message whose `v` lies in it. A version bump changes this pair (and
+ * `PROTOCOL_VERSION`, the version the sidecar speaks by default) and nothing else in the negotiation.
+ */
+export const PROTOCOL_MIN = 1;
+export const PROTOCOL_MAX = PROTOCOL_VERSION;
+/** Largest protocol version number `initialize` accepts in a client's range (a bound on the field, not a version that exists). */
+export const MAX_PROTOCOL_NUMBER = 65_535;
+/** Longest `client.name` and `client.version` that `initialize` accepts. */
+export const MAX_CLIENT_FIELD = 100;
+
+/**
+ * Stable features of this sidecar, announced in `hello` and `initialized`. Each name is the `type` of a command a
+ * client may send beyond the minimal set every sidecar handles (`prompt.submit`, `cancel`, `approve`, `deny`,
+ * `shutdown`), so a client checks `capabilities.includes(type)` before it sends that command. Sorted; a name is
+ * never removed or given a new meaning within a protocol version.
+ */
+export const SIDECAR_CAPABILITIES = [
+  /** `answer`: the operator's decision on a question a turn ended BLOCKED / NEEDS_INPUT with. */
+  "answer",
+  /** `checkpoint.choice`: the answer to a `checkpoint.choice.request` event. */
+  "checkpoint.choice",
+  /** `model.select`: switch model between turns; answered with `model.result`. */
+  "model.select",
+  /** `models.list`: providers and models; answered with `models.catalog`. */
+  "models.list",
+  /** `provider.connect`, with `provider.cancel` and `provider.local-cancel` for the same request; answered with `provider.auth` and `provider.result`. */
+  "provider.connect",
+  /** `provider.disconnect`: answered with `provider.result`. */
+  "provider.disconnect",
+  /** `receipt`: the evidence receipt of the last turn; answered with the `receipt` event. */
+  "receipt",
+  /** `slash`: run a command of the catalogue `hello` carries; answered with `slash.result`. */
+  "slash",
+  /** `steer`: guidance for the work in progress; answered with `steer.ack`. */
+  "steer",
+  /** `tool.detail`: the full record of one tool call; answered with the `tool.detail` event. */
+  "tool.detail",
+] as const;
+
+/**
+ * Experimental features this sidecar offers (none today). A new method sits here, refused with
+ * `EXPERIMENTAL_DISABLED` unless the client sent `initialize` with `experimental: true`, until a conformance suite
+ * has run against two real clients (docs/v1.3.0/PLAN.md, principle 8); then its name moves to SIDECAR_CAPABILITIES.
+ */
+export const EXPERIMENTAL_FEATURES: readonly string[] = [];
 export const MAX_TEXT_FIELD = 8000;
 /**
  * Longest clipboard text `/paste` puts into the composer, and the limit of the `slash.result` composer field. It keeps
@@ -20,7 +69,13 @@ export const MAX_PASTE = 100_000;
 export const MAX_SUMMARY = 160;
 export const MAX_SLASH_OUTPUT = 32_000;
 
-export type ErrorCode = "BAD_REQUEST" | "BUSY" | "NO_PENDING_APPROVAL" | "NOT_FOUND" | "INTERNAL" | "NO_PROVIDER";
+/**
+ * `UNSUPPORTED_PROTOCOL`: `initialize` named a version range that shares no version with the sidecar's.
+ * `EXPERIMENTAL_DISABLED`: an experimental feature was used on a connection that did not enable it at `initialize`.
+ * Socket transport only (docs/PROTOCOL.md, "Socket transport"): `UNAUTHORIZED`: the attach was refused (the reason is never given);
+ * `NOT_CONTROLLER`: an observer sent a command; `NOT_PERMITTED`: the controller sent a command a socket client may not send.
+ */
+export type ErrorCode = "BAD_REQUEST" | "BUSY" | "NO_PENDING_APPROVAL" | "NOT_FOUND" | "INTERNAL" | "NO_PROVIDER" | "UNSUPPORTED_PROTOCOL" | "EXPERIMENTAL_DISABLED" | "UNAUTHORIZED" | "NOT_CONTROLLER" | "NOT_PERMITTED";
 
 /** Lines of a file diff shown in the transcript; the full diff is in the tool call's detail record. */
 export const DIFF_PREVIEW_LINES = 40;
@@ -37,9 +92,11 @@ export type SteerStatus = "held" | "queued" | "applied" | "deferred" | "cancelle
 
 /** One entry of a resumed conversation: a message, a tool the agent called, or the last turn's outcome. */
 export interface HistoryEntry {
-  role: "user" | "assistant" | "steering" | "tool" | "outcome";
+  role: "user" | "assistant" | "steering" | "tool" | "tool_result" | "outcome";
   text: string;
   tool?: string;
+  toolCallId?: string;
+  status?: "pending" | "completed" | "failed";
   heading?: string;
   turn?: TurnResult;
 }
@@ -50,7 +107,25 @@ export interface ModelSummary {
 }
 
 export type SidecarEvent =
-  | { type: "hello"; protocol: number; pid: number; commands: Array<Pick<SlashSpec, "name" | "usage" | "summary">> }
+  | {
+      type: "hello";
+      /** The version the sidecar speaks by default. */
+      protocol: number;
+      pid: number;
+      commands: Array<Pick<SlashSpec, "name" | "usage" | "summary">>;
+      /** The inclusive range of protocol versions this sidecar can speak. Absent from a sidecar older than capability negotiation: it speaks exactly `protocol`. */
+      protocol_min?: number;
+      protocol_max?: number;
+      /** Stable features the sidecar supports (SIDECAR_CAPABILITIES), sorted. */
+      capabilities?: string[];
+      /** Experimental features the sidecar offers; each stays off until `initialize` asks with `experimental: true`. */
+      experimental?: string[];
+    }
+  /**
+   * Answer to `initialize`. `protocol`: the highest version both ranges contain. `experimental`: the experimental
+   * features now enabled for this connection (empty unless the client asked for them).
+   */
+  | { type: "initialized"; id: string; protocol: number; capabilities: string[]; experimental: string[] }
   | {
       type: "session.state";
       workspace: string;
@@ -70,6 +145,8 @@ export type SidecarEvent =
         mode: "auto" | "review" | "read-only";
         sandbox: string;
         trusted: boolean;
+        /** The effective sandbox profile (`:workspace`, `:read-only`, `:network` or `unconfined`); additive (SB-1). */
+        profile?: string;
       };
     }
   | { type: "assistant.delta"; turn_id: string; text: string }
@@ -151,8 +228,8 @@ export type SidecarEvent =
    * client shows `text` as it always did.
    */
   | { type: "notice"; text: string; key?: string; detail?: string }
-  /** A resumed session's recent conversation (user and assistant text only), oldest first; `total` counts all of it. */
-  | { type: "history"; session: string; total: number; messages: HistoryEntry[] }
+  /** A resumed session's retained transcript, oldest first. ACP requests use bounded pages; terminal clients retain one window. */
+  | { type: "history"; session: string; total: number; page?: number; pages?: number; messages: HistoryEntry[]; error?: string }
   | {
       type: "tool.detail";
       id: string;
@@ -182,6 +259,13 @@ export type SidecarEvent =
   | { type: "model.result"; id: string; success: boolean; message: string };
 
 export type SidecarCommand =
+  /**
+   * Optional negotiation, answered with `initialized` (or `error` / `UNSUPPORTED_PROTOCOL` when the ranges share no
+   * version). A client that never sends it gets the behaviour of protocol 1 as first published. `protocol_min` and
+   * `protocol_max` (inclusive, given together) are the versions the client can speak; omitted, they are this
+   * message's `v`. `experimental: true` enables the experimental features `hello` listed.
+   */
+  | { type: "initialize"; id: string; client: { name: string; version: string }; protocol_min?: number; protocol_max?: number; experimental?: boolean }
   | { type: "prompt.submit"; id: string; text: string }
   /** Operator guidance for the work in progress (see SteerStatus). */
   | { type: "steer"; id: string; text: string }
@@ -232,12 +316,43 @@ export function parseCommand(line: string): SidecarCommand {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new ProtocolError("message must be a JSON object");
   const msg = raw as Record<string, unknown>;
   const id = typeof msg.id === "string" && msg.id ? msg.id : undefined;
-  if (msg.v !== PROTOCOL_VERSION) throw new ProtocolError(`unsupported protocol version: ${String(msg.v)}`, id);
+  const version = msg.v;
+  if (typeof version !== "number" || !Number.isInteger(version) || version < PROTOCOL_MIN || version > PROTOCOL_MAX) {
+    throw new ProtocolError(`unsupported protocol version: ${String(msg.v)}`, id);
+  }
   const requireId = (type: string): string => {
     if (!id) throw new ProtocolError(`${type} requires id`);
     return id;
   };
   switch (msg.type) {
+    case "initialize": {
+      const requestId = requireId("initialize");
+      const client = msg.client;
+      if (!client || typeof client !== "object" || Array.isArray(client)) throw new ProtocolError("initialize requires client: { name, version }", requestId);
+      const { name, version: clientVersion } = client as Record<string, unknown>;
+      for (const [field, value] of [["name", name], ["version", clientVersion]] as const) {
+        if (typeof value !== "string" || !value.trim()) throw new ProtocolError(`initialize requires client.${field}: a non-empty string`, requestId);
+        if (value.length > MAX_CLIENT_FIELD) throw new ProtocolError(`initialize client.${field} is longer than ${MAX_CLIENT_FIELD} characters`, requestId);
+      }
+      const bound = (field: "protocol_min" | "protocol_max"): number | undefined => {
+        const value = msg[field];
+        if (value === undefined) return undefined;
+        if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > MAX_PROTOCOL_NUMBER) {
+          throw new ProtocolError(`initialize ${field} must be an integer from 1 to ${MAX_PROTOCOL_NUMBER}`, requestId);
+        }
+        return value;
+      };
+      const min = bound("protocol_min");
+      const max = bound("protocol_max");
+      if ((min === undefined) !== (max === undefined)) throw new ProtocolError("initialize requires protocol_min and protocol_max together", requestId);
+      if (min !== undefined && max !== undefined && min > max) throw new ProtocolError(`initialize protocol_min (${min}) is greater than protocol_max (${max})`, requestId);
+      if (msg.experimental !== undefined && typeof msg.experimental !== "boolean") throw new ProtocolError("initialize experimental must be a boolean", requestId);
+      // A client that names no range speaks the version it wrote this message in.
+      return {
+        type: "initialize", id: requestId, client: { name: name as string, version: clientVersion as string },
+        protocol_min: min ?? version, protocol_max: max ?? version, experimental: msg.experimental === true,
+      };
+    }
     case "prompt.submit": {
       const requestId = requireId("prompt.submit");
       const text = msg.text;

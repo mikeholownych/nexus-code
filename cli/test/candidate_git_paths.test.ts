@@ -249,3 +249,16 @@ describe("core.filemode=false does not hide a change of the executable bit", () 
     }
   });
 });
+
+test("candidate identity disables a repository-configured file-system monitor", () => {
+  const repo = repoWith(["base.txt"]);
+  const marker = path.join(os.tmpdir(), `nexus-fsmonitor-${process.pid}-${Date.now()}`);
+  try {
+    git(repo, "config", "core.fsmonitor", `sh -c 'echo ran > ${marker}'`);
+    assert.doesNotThrow(() => computeCandidateIdentitySync(repo));
+    assert.equal(fs.existsSync(marker), false, "candidate inspection must not execute the repository's fsmonitor command");
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(marker, { force: true });
+  }
+});

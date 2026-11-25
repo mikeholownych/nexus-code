@@ -5,14 +5,12 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { optionValue } from "./script_args.mjs";
 
-function arg(name, fallback) {
-  const at = process.argv.indexOf(`--${name}`);
-  return at >= 0 && process.argv[at + 1] ? process.argv[at + 1] : fallback;
-}
+const arg = (name, fallback) => optionValue(process.argv, name, fallback);
 const has = (name) => process.argv.includes(`--${name}`);
 
-const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const lcovPath = path.resolve(root, arg("lcov", "cli/coverage/lcov.info"));
 const base = arg("base", "HEAD~1");
 const min = Number(arg("min", "0"));
@@ -40,11 +38,14 @@ function changedFiles() {
 export function parseAddedLines(diffText) {
   const lines = [];
   let current = 0;
+  let inHunk = false;
   for (const line of diffText.split(/\r?\n/)) {
-    if (line.startsWith("+++") || line.startsWith("---")) continue;
+    // File headers are only headers before a hunk; an added source line can itself start with `++`.
+    if (!inHunk && (line.startsWith("+++") || line.startsWith("---"))) continue;
     const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
     if (hunk) {
       current = Number(hunk[1]);
+      inHunk = true;
       continue;
     }
     if (line.startsWith("+")) { lines.push(current); current += 1; }

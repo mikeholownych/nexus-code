@@ -22,6 +22,7 @@
         "status",
         "createdAt",
         "updatedAt",
+        "activeBudget",
         "terminal",
         "counts",
         "units",
@@ -32,7 +33,7 @@
       ],
       "properties": {
         "schemaVersion": {
-          "const": 2
+          "const": 3
         },
         "id": {
           "type": "string"
@@ -45,6 +46,7 @@
             "RUNNING",
             "WAITING",
             "BLOCKED",
+            "PAUSED",
             "COMPLETE",
             "CANCELLED"
           ]
@@ -53,6 +55,27 @@
           "type": "string"
         },
         "updatedAt": {
+          "type": "string"
+        },
+        "activeBudget": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "elapsedMs",
+            "limitMs",
+            "remainingMs",
+            "historyComplete",
+            "intervalOpen"
+          ],
+          "properties": {
+            "elapsedMs": { "type": "integer", "minimum": 0 },
+            "limitMs": { "type": "integer", "minimum": 1 },
+            "remainingMs": { "type": "integer", "minimum": 0 },
+            "historyComplete": { "type": "boolean" },
+            "intervalOpen": { "type": "boolean" }
+          }
+        },
+        "pauseReason": {
           "type": "string"
         },
         "terminal": {
@@ -242,6 +265,9 @@
                   },
                   "verification": {
                     "type": "string"
+                  },
+                  "ownerId": {
+                    "type": "string"
                   }
                 }
               },
@@ -275,8 +301,28 @@
                     "type": "string",
                     "enum": [
                       "agent-estimate",
-                      "operator-budget"
+                      "operator-budget",
+                      "role-ceiling"
                     ]
+                  }
+                }
+              },
+              "worktree": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "path",
+                  "branch"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "branch": {
+                    "type": "string"
+                  },
+                  "ownerId": {
+                    "type": "string"
                   }
                 }
               }

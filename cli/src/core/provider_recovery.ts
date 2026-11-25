@@ -268,6 +268,8 @@ export interface Submission {
 }
 
 export interface RecoveryHooks<T> {
+  /** Persist task-level admission before any provider side effect. */
+  beforeSubmit?(s: Submission): void;
   submit(s: Submission): Promise<T>;
   /**
    * Side-effect-free reachability check (e.g. GET /models). Never resubmits the operation. `preferAlternate` asks
@@ -285,6 +287,14 @@ export interface RecoveryHooks<T> {
    * and rethrows, so a scheduler can reroute or park the work instead of this step waiting on one resource.
    */
   shouldYield?(failure: InferenceFailure, plannedDelayMs: number): boolean;
+}
+
+/** Admission stopped a resubmission after provider recovery had already entered WAITING. */
+export class SubmissionAdmissionDenied extends Error {
+  constructor(readonly originalError: unknown) {
+    super("provider resubmission denied by task-level admission");
+    this.name = "SubmissionAdmissionDenied";
+  }
 }
 
 export interface RecoveryControllerOptions {
@@ -388,10 +398,15 @@ export class ProviderRecoveryController {
     for (let iteration = 0; ; iteration++) {
       let failure: InferenceFailure | null;
       try {
+        hooks.beforeSubmit?.(submission);
         const result = await hooks.submit(submission);
         if (this.record) this.transition("RESUMED", { resumedAt: this.iso(), resumedRequestId: submission.requestId }, hooks);
         return result;
       } catch (err) {
+        if (err instanceof SubmissionAdmissionDenied) {
+          if (this.record) this.transition("EXHAUSTED", { reason: "task-level admission denied the provider submission" }, hooks);
+          throw err.originalError;
+        }
         failure = hooks.classify(err);
         if (!failure) throw err;
         if (failure.kind === "aborted") {

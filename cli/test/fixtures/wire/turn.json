@@ -1,0 +1,41 @@
+{
+  "description": "A complete turn: a prompt, one tool call, the answer and the turn result; then the tool call's record and the turn's receipt.",
+  "gateway": [
+    {"kind":"tools","calls":[{"name":"list_dir","args":{"path":"."},"id":"call_1"}]},
+    {"kind":"text","content":"There is one file."}
+  ],
+  "steps": [
+    {
+      "expect": [
+        {"v":1,"type":"hello","protocol":1,"pid":"<any:number>","commands":"<any:array>","protocol_min":1,"protocol_max":1,"capabilities":["answer","checkpoint.choice","model.select","models.list","provider.connect","provider.disconnect","receipt","slash","steer","tool.detail"],"experimental":[]},
+        {"v":1,"type":"session.state","workspace":"<workspace>","workspace_name":"<workspace-name>","model":"m","mode":"auto","git":{"branch":"main","dirty":0},"busy":false,"session":"<id:session>","read_only":false,"context_tokens":"<any:number>","context_limit":65536,"endpoint_kind":"local","posture":{"mode":"auto","sandbox":"off","trusted":false,"profile":"unconfined"}}
+      ]
+    },
+    {
+      "send": {"v":1,"type":"prompt.submit","id":"t1","text":"what is here?"},
+      "expect": [
+        {"v":1,"type":"session.state","workspace":"<workspace>","workspace_name":"<workspace-name>","model":"m","mode":"auto","git":{"branch":"main","dirty":0},"busy":true,"session":"<id:session>","read_only":false,"context_tokens":"<any:number>","context_limit":65536,"endpoint_kind":"local","posture":{"mode":"auto","sandbox":"off","trusted":false,"profile":"unconfined"}},
+        {"v":1,"type":"activity","turn_id":"t1","phase":"inference","step":1,"segment":1,"max_steps":6},
+        {"v":1,"type":"tool.start","turn_id":"t1","call_id":"call_1","tool":"list_dir","subject":".","evidence":"e1"},
+        {"v":1,"type":"activity","turn_id":"t1","phase":"tool","step":1,"segment":1,"max_steps":6,"tool":"list_dir","subject":"."},
+        {"v":1,"type":"tool.end","turn_id":"t1","call_id":"call_1","tool":"list_dir","success":true,"evidence":"e1","summary":"{","lines":11},
+        {"v":1,"type":"activity","turn_id":"t1","phase":"inference","step":2,"segment":1,"max_steps":6},
+        {"v":1,"type":"assistant.delta","turn_id":"t1","text":"There is one file."},
+        {"v":1,"type":"turn.result","turn_id":"t1","heading":"TURN ENDED - NO CHANGES TO VERIFY","line":"execution=COMPLETED outcome=NOT_REQUIRED modelStop=FINAL_TEXT","turn":{"acceptance":"NOT_REQUESTED","modelStop":"FINAL_TEXT","finalOutputComplete":true,"verification":null,"interruption":null,"inferenceFailure":null,"steps":{"used":2,"max":6,"limitReached":false},"unverifiedChangesPending":false,"finishedAt":"<id:finished>","tokenAccounting":{"contextLimit":65536,"contextSource":"client_default","outputAllowance":8192,"outputSource":"client_default","toolHeadroomPolicy":4096,"discovery":"unsupported","tokenCounting":"unsupported","lastRequest":{"step":2,"promptTokens":"<any:number>","source":"client_estimate","clientEstimate":"<any:number>","uncertainty":"the connection advertises no request counting"}},"toolCallSyntax":{"native":1,"trailing":0,"structural":0,"invalid":0,"schema":0},"turnEvidence":{"workspaceChanged":"no","carriedChanges":false,"denied":0,"verifierRuns":[]},"execution":"COMPLETED","outcome":"NOT_REQUIRED"},"model_summary":null,"saved":true},
+        {"v":1,"type":"session.state","workspace":"<workspace>","workspace_name":"<workspace-name>","model":"m","mode":"auto","git":{"branch":"main","dirty":0},"busy":false,"session":"<id:session>","read_only":false,"context_tokens":"<any:number>","context_limit":65536,"endpoint_kind":"local","posture":{"mode":"auto","sandbox":"off","trusted":false,"profile":"unconfined"}}
+      ]
+    },
+    {
+      "send": {"v":1,"type":"tool.detail","id":"d1","evidence":"e1"},
+      "expect": [
+        {"v":1,"type":"tool.detail","id":"d1","evidence":"e1","tool":"list_dir","subject":".","status":"succeeded","args":"{\n  \"path\": \".\"\n}","output":"{\n  \"base_path\": \".\",\n  \"entries\": [\n    {\n      \"is_dir\": false,\n      \"path\": \"base.txt\",\n      \"size_bytes\": 5\n    }\n  ],\n  \"total_entries\": 1\n}","duration_ms":"<any:number>"}
+      ]
+    },
+    {
+      "send": {"v":1,"type":"receipt","id":"r1"},
+      "expect": [
+        {"v":1,"type":"receipt","id":"r1","sections":[{"title":"Last turn","rows":[["result","TURN ENDED - NO CHANGES TO VERIFY"],["execution","COMPLETED"],["outcome","NOT_REQUIRED"],["steps","2 of 6"],["model stop","FINAL_TEXT"],["finished","<id:finished>"]]},{"title":"Requirements","rows":[["objective","COMPLETED"]]},{"title":"Verifier","rows":[],"note":"No verifier ran for this turn."},{"title":"Validation receipt","rows":[],"note":"No validation receipt is active. Authoritative verifier runs (--authoritative-verifier) record one."}]}
+      ]
+    }
+  ]
+}

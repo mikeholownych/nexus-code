@@ -12,10 +12,13 @@ import { providerApiKey } from "./credentials.js";
 import { validateBranchName } from "./worktrunk/paths.js";
 import { validateBaseUrl } from "./provider_safety.js";
 import { DEFAULT_OPERATION_POLICY } from "./core/operation.js";
-import { setSandboxNetworkFlag } from "./sandbox_network.js";
+import { setSandboxNetworkFlag, setSandboxNetworkProfile } from "./sandbox_network.js";
+import { clampApprovalRequest, clampSandbox, clampSandboxNetwork, type EffectivePolicy } from "./core/managed_policy.js";
+import { managedPolicy } from "./core/policy_runtime.js";
 import { readSmallFile } from "./core/checkout_trust.js";
 import { resolveRepeatedCallSettings } from "./core/repeated_calls.js";
-import { ContinuationBudget, DEFAULT_CONTINUATION, DEFAULT_CONVERGENCE_ATTEMPTS, DEFAULT_MAX_TOOL_INVOCATIONS, MAX_CONTINUATION_MINUTES, MAX_CONTINUATION_STEPS, MAX_TOOL_INVOCATIONS, HarnessConfig, ApprovalMode } from "./types.js";
+import { expandSandboxProfile } from "./sandbox_profile.js";
+import { ContinuationBudget, DEFAULT_CONTINUATION, DEFAULT_CONVERGENCE_ATTEMPTS, DEFAULT_MAX_INFERENCE_SUBMISSIONS, DEFAULT_MAX_TOOL_INVOCATIONS, MAX_CONTINUATION_MINUTES, MAX_CONTINUATION_STEPS, MAX_INFERENCE_SUBMISSIONS, MAX_TOOL_INVOCATIONS, HarnessConfig, ApprovalMode } from "./types.js";
 
 /** A project `.env` larger than this is ignored (it is repository-controlled). */
 const MAX_PROJECT_ENV_BYTES = 256 * 1024;
@@ -183,7 +186,9 @@ const PROJECT_ENV_KEYS = new Set([
   "NEXUS_CONTINUATION",
   "NEXUS_MAX_TOTAL_STEPS",
   "NEXUS_MAX_TOOL_INVOCATIONS",
+  "NEXUS_MAX_INFERENCE_SUBMISSIONS",
   "NEXUS_MAX_TURN_MINUTES",
+  "NEXUS_MAX_TASK_MINUTES",
   "NEXUS_STAGNATION_STEPS",
   "NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS",
   "NEXUS_REPEATED_CALL_SOFT",
@@ -367,7 +372,7 @@ function operatorChose(key: string): boolean {
 }
 
 /** Operator-declared workspace-relative task outputs; project files cannot populate this authority. */
-function normalizeTrustedDeliverableFiles(workspace: string, value: unknown): string[] {
+export function normalizeTrustedDeliverableFiles(workspace: string, value: unknown): string[] {
   if (value === undefined) return [];
   const entries = Array.isArray(value) ? value : [value];
   if (Array.isArray(value) && entries.length === 0) return [];
@@ -409,7 +414,23 @@ function normalizeTrustedDeliverableFiles(workspace: string, value: unknown): st
   return [...new Set(normalized)].sort();
 }
 
+/**
+ * The configuration for these options, under the managed policy of this process (GV-1). A managed policy file that
+ * exists and cannot be used throws `ManagedPolicyError`: nothing is configured without it.
+ */
 export function buildConfig(options: any): HarnessConfig {
+  return buildConfigWithPolicy(options, managedPolicy());
+}
+
+/**
+ * `buildConfig` with the effective policy as an explicit argument. The policy is applied after the operator's own
+ * precedence (flags, environment, settings files), so nothing the operator or a project sets outranks it: what the
+ * policy disables is refused when it was asked for explicitly, and what it requires is switched on.
+ */
+export function buildConfigWithPolicy(options: any, policy: EffectivePolicy): HarnessConfig {
+  // A build that is refused part-way must not leave the network choice of an earlier build in force.
+  setSandboxNetworkFlag(false);
+  setSandboxNetworkProfile(undefined);
   if (operatorJsonOperationPolicyError) throw operatorJsonOperationPolicyError;
   // `appliance: true` resolves the appliance connection regardless of any provider selection (the model picker's
   // appliance entry).
@@ -433,11 +454,12 @@ export function buildConfig(options: any): HarnessConfig {
   const maxSteps = options.maxSteps ? parseInt(options.maxSteps, 10) : 30;
   const continuation = continuationBudget(options);
   const maxToolInvocations = toolInvocationLimit(options);
+  const maxInferenceSubmissions = inferenceSubmissionLimit(options);
   const repeatedCalls = repeatedCallSettings();
   const temperature = options.temperature ? parseFloat(options.temperature) : 0.2;
   const shell = options.shell || operatorSetting("LOCAL_HARNESS_SHELL") || process.env.LOCAL_HARNESS_SHELL || "bash";
   const dryRun = Boolean(options.dryRun);
-  const readOnly = Boolean(options.readOnly);
+  let readOnly = Boolean(options.readOnly);
   const yes = Boolean(options.yes);
   const approve = Boolean(options.approve);
   const modeOption = options.mode ? String(options.mode).trim().toLowerCase() : undefined;
@@ -445,6 +467,9 @@ export function buildConfig(options: any): HarnessConfig {
 
   let approvalMode: ApprovalMode;
   let fullAccess = Boolean(options.fullAccess);
+  // What asked for the mode and for full access, as the operator wrote it: a refusal by managed policy names it.
+  let modeOrigin = "the full-access setting";
+  let fullAccessOrigin = "the full-access setting";
 
   if (readOnly || modeOption === "read-only") {
     // An explicit read-only request wins over --yes, --approve and --full-access on the same command line.
@@ -457,22 +482,62 @@ export function buildConfig(options: any): HarnessConfig {
     approvalMode = "review";
   } else if (modeOption === "auto" || modeOption === "review" || modeOption === "read-only") {
     approvalMode = modeOption as ApprovalMode;
+    modeOrigin = `--mode ${modeOption}`;
     if (approvalMode === "auto" && options.yes) fullAccess = true;
   } else if (envMode === "auto" || envMode === "review" || envMode === "read-only") {
     approvalMode = envMode as ApprovalMode;
-    if (approvalMode === "auto") fullAccess = true;
+    modeOrigin = `NEXUS_APPROVAL_MODE=${envMode}`;
+    if (approvalMode === "auto") {
+      fullAccess = true;
+      fullAccessOrigin = modeOrigin;
+    }
   } else {
     // Folder trust controls project instructions and integrations, not tool authority.
     // Use an explicit full-access setting when present; otherwise default to review.
     approvalMode = fullAccess ? "auto" : "review";
   }
 
-  const sandbox = options.sandbox ? (typeof options.sandbox === "string" ? options.sandbox : true) : undefined;
-  // Network inside --sandbox is an explicit operator choice; --yes never implies it.
-  if (options.sandboxNetwork) {
-    if (sandbox) setSandboxNetworkFlag(true);
-    else warnOnce("--sandbox-network has no effect without --sandbox.");
+  // GV-1: managed policy is applied to the result of the precedence above. An explicit --yes is refused even when
+  // --read-only would have overridden it: the flag itself is what the policy disables.
+  const approval = clampApprovalRequest(policy, { mode: approvalMode, modeOrigin, yes, ...(fullAccess && !yes ? { fullAccessOrigin } : {}) });
+  if (!approval.allowed) throw new Error(approval.message);
+
+  // SB-1: expand a named permission profile into the existing sandbox/read-only flags before the sandbox and network clamps
+  // (the approval clamp above has already run; a profile only tightens it).
+  const networkEnv = /^(1|true|yes|on)$/i.test((operatorSetting("NEXUS_SANDBOX_NETWORK") ?? "").trim());
+  const expanded = expandSandboxProfile(options, networkEnv);
+  for (const notice of expanded.notices) warnOnce(notice);
+  if (expanded.profile === ":read-only") {
+    // :read-only is the read-only profile; it wins like --read-only and must not be weakened by --yes/--approve.
+    readOnly = true;
+    approvalMode = "read-only";
+    fullAccess = false;
   }
+  let sandbox = expanded.options.sandbox ? (typeof expanded.options.sandbox === "string" ? expanded.options.sandbox : true) : undefined;
+  // GV-1: under `sandbox.required` an explicit opt-out is refused and an unset sandbox becomes `auto`, which the tool
+  // executor treats as a configured sandbox: a command is refused when no sandbox engine can run it.
+  const sandboxAsked = typeof sandbox === "string" ? (sandbox.trim().toLowerCase() === "none" ? "none" : sandbox) : sandbox ? "auto" : undefined;
+  const sandboxOrigin = expanded.profile ? `--sandbox ${String(options.sandbox)}` : `--sandbox ${String(sandbox)}`;
+  const sandboxDecision = clampSandbox(policy, { mode: sandboxAsked, origin: sandboxOrigin });
+  if (!sandboxDecision.allowed) throw new Error(sandboxDecision.message);
+  if (sandboxDecision.notice) warnOnce(sandboxDecision.notice);
+  if (sandbox === undefined && sandboxDecision.value.mode !== undefined) sandbox = sandboxDecision.value.mode;
+  // A named profile is an explicit effective setting: :network asks for network, while :workspace and :read-only
+  // override an environment opt-in. Without a profile preserve the legacy flag/environment behavior.
+  const profileNetwork = expanded.profile === undefined ? undefined : expanded.profile === ":network";
+  const networkRequests = profileNetwork === undefined
+    ? [[Boolean(expanded.options.sandboxNetwork), "--sandbox-network"], [networkEnv, "NEXUS_SANDBOX_NETWORK"]] as const
+    : profileNetwork ? [[true, "--sandbox :network"]] as const : [];
+  // GV-1: managed policy refuses every effective request for network access.
+  for (const [asked, origin] of networkRequests) {
+    const network = clampSandboxNetwork(policy, asked, origin);
+    if (!network.allowed) throw new Error(network.message);
+  }
+  // Network inside --sandbox is an explicit operator choice; --yes never implies it. Reset module state on every
+  // configuration build so repeated config construction cannot retain an earlier run's choice.
+  setSandboxNetworkFlag(Boolean(expanded.options.sandboxNetwork));
+  setSandboxNetworkProfile(profileNetwork);
+  if (expanded.options.sandboxNetwork && !sandbox) warnOnce("--sandbox-network has no effect without --sandbox.");
   if (provider && options.fallback) warnOnce(`--fallback is ignored for provider '${provider}': a provider connection is pinned to its own endpoint.`);
   const fallbackEndpoints = options.fallback && !provider ? options.fallback.split(",").map((s: string) => s.trim()) : undefined;
   const contextLimit = options.contextLimit ? parseInt(options.contextLimit, 10) : (effectiveSetting("NEXUS_CONTEXT_LIMIT") ? parseInt(effectiveSetting("NEXUS_CONTEXT_LIMIT")!, 10) : undefined);
@@ -529,6 +594,7 @@ export function buildConfig(options: any): HarnessConfig {
     workspace,
     maxSteps,
     maxToolInvocations,
+    maxInferenceSubmissions,
     ...(continuation ? { continuation } : {}),
     repeatedCalls: { soft: repeatedCalls.soft, hard: repeatedCalls.hard },
     temperature,
@@ -539,6 +605,7 @@ export function buildConfig(options: any): HarnessConfig {
     yes,
     fullAccess,
     sandbox,
+    ...(expanded.profile ? { sandboxProfile: expanded.profile } : {}),
     fallbackEndpoints,
     contextLimit,
     ...(strictTokenCount ? { strictTokenCount } : {}),
@@ -579,6 +646,7 @@ export function configuredOperationPolicy(setting: (key: string) => string | und
     ["NEXUS_OPERATION_UNKNOWN_RESUME_BUDGET", "unknownResumeBudget", 0],
     ["NEXUS_OPERATION_MAX_RUNS_PER_UNIT", "maxRunsPerUnit", 1],
     ["NEXUS_OPERATION_MIN_WAIT_MS", "minWaitMs", 1],
+    ["NEXUS_OPERATION_MAX_TOTAL_TOKENS", "maxTotalTokens", 1],
   ] as const;
   const policy: NonNullable<HarnessConfig["operationPolicy"]> = {};
   for (const [key, property, minimum] of fields) {
@@ -604,6 +672,9 @@ export function configuredOperationPolicy(setting: (key: string) => string | und
     }
     if ((property === "maxWaitMs" || property === "minWaitMs") && value > maxTimerDelayMs) {
       throw new Error(`Invalid ${key}='${raw}': must not exceed Node's timer limit (${maxTimerDelayMs} ms).`);
+    }
+    if (property === "maxTotalTokens" && value > 10_000_000_000) {
+      throw new Error(`Invalid ${key}='${raw}': expected a safe integer from 1 to 10000000000.`);
     }
     policy[property] = value;
   }
@@ -693,6 +764,7 @@ function parseOperationPolicy(raw: unknown): HarnessConfig["operationPolicy"] {
     ["unknownResumeBudget", 0],
     ["maxRunsPerUnit", 1],
     ["minWaitMs", 1],
+    ["maxTotalTokens", 1],
   ] as const;
   for (const key of Object.keys(rawPolicy)) {
     if (!fields.some(([field]) => field === key)) throw new Error(`Unsupported Nexus config.json operationPolicy field '${key}'.`);
@@ -705,6 +777,9 @@ function parseOperationPolicy(raw: unknown): HarnessConfig["operationPolicy"] {
     }
     if ((field === "maxWaitMs" || field === "minWaitMs") && value > 2_147_483_647) {
       throw new Error(`Invalid Nexus config.json operationPolicy.${field}: must not exceed Node's timer limit (2147483647 ms).`);
+    }
+    if (field === "maxTotalTokens" && value > 10_000_000_000) {
+      throw new Error(`Invalid Nexus config.json operationPolicy.${field}: expected a safe integer from 1 to 10000000000.`);
     }
     policy[field] = value;
   }
@@ -733,6 +808,12 @@ export function mergeOperationPolicy(
       throw new Error(`Invalid operation policy ${field}: must not exceed Node's timer limit (${maxTimerDelayMs} ms).`);
     }
   }
+  if (effective.maxTotalTokens !== undefined) {
+    const value = effective.maxTotalTokens;
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > 10_000_000_000) {
+      throw new Error("Invalid operation policy maxTotalTokens: expected a safe integer from 1 to 10000000000.");
+    }
+  }
   const { maxWaitMs, minWaitMs } = effective;
   if (minWaitMs > maxWaitMs) {
     throw new Error(`Invalid operation wait settings: minWaitMs (${minWaitMs}) must not exceed maxWaitMs (${maxWaitMs}).`);
@@ -741,7 +822,7 @@ export function mergeOperationPolicy(
 }
 
 /**
- * Continuation budgets: flags, then NEXUS_MAX_TOTAL_STEPS / NEXUS_MAX_TURN_MINUTES / NEXUS_STAGNATION_STEPS, then
+ * Continuation budgets: flags, then NEXUS_MAX_TOTAL_STEPS / NEXUS_MAX_TURN_MINUTES / NEXUS_MAX_TASK_MINUTES / NEXUS_STAGNATION_STEPS, then
  * finite defaults. Total steps are charged to the durable objective ledger, so resume does not reset them.
  * `--no-continuation` (or NEXUS_CONTINUATION=0) is the operator's explicit choice of the single-segment turn that
  * ends at --max-steps.
@@ -763,7 +844,9 @@ export function continuationBudget(options: any): ContinuationBudget | undefined
     ...DEFAULT_CONTINUATION,
     maxTotalSteps: Number.isFinite(steps) ? Math.floor(steps) : steps,
     maxToolInvocations: toolInvocationLimit(options),
+    maxInferenceSubmissions: inferenceSubmissionLimit(options),
     maxTurnMinutes: positive(options.maxTurnMinutes, effectiveSetting("NEXUS_MAX_TURN_MINUTES"), DEFAULT_CONTINUATION.maxTurnMinutes, MAX_CONTINUATION_MINUTES),
+    maxTaskMinutes: Math.floor(positive(options.maxTaskMinutes, effectiveSetting("NEXUS_MAX_TASK_MINUTES"), DEFAULT_CONTINUATION.maxTaskMinutes, MAX_CONTINUATION_MINUTES)),
     stagnationSteps: Math.floor(positive(options.stagnationSteps, effectiveSetting("NEXUS_STAGNATION_STEPS"), DEFAULT_CONTINUATION.stagnationSteps)),
     verifierConvergenceAttempts: Math.floor(positive(undefined, effectiveSetting("NEXUS_VERIFIER_CONVERGENCE_ATTEMPTS"), DEFAULT_CONVERGENCE_ATTEMPTS)),
   };
@@ -776,6 +859,16 @@ export function toolInvocationLimit(options: any): number {
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value < 1) throw new Error(`Invalid tool invocation budget '${String(raw)}': expected a positive integer.`);
   if (value > MAX_TOOL_INVOCATIONS) throw new Error(`Invalid tool invocation budget '${String(raw)}': maximum is ${MAX_TOOL_INVOCATIONS}.`);
+  return value;
+}
+
+/** Objective-wide inference request ceiling. Retries count as submissions; availability probes do not. */
+export function inferenceSubmissionLimit(options: any): number {
+  const raw = options.maxInferenceSubmissions ?? effectiveSetting("NEXUS_MAX_INFERENCE_SUBMISSIONS");
+  if (raw === undefined || raw === null || raw === "") return DEFAULT_MAX_INFERENCE_SUBMISSIONS;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1) throw new Error(`Invalid inference submission budget '${String(raw)}': expected a positive integer.`);
+  if (value > MAX_INFERENCE_SUBMISSIONS) throw new Error(`Invalid inference submission budget '${String(raw)}': maximum is ${MAX_INFERENCE_SUBMISSIONS}.`);
   return value;
 }
 

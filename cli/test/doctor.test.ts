@@ -101,6 +101,7 @@ async function mock(behaviour: { models?: string[]; status?: number; hang?: bool
   } as Mock;
 }
 
+import { setSandboxNetworkProfile } from "../src/sandbox_network.js";
 const tmp = (prefix: string) => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 let home: string;
 let workspace: string;
@@ -126,9 +127,76 @@ describe("doctor findings name the actual failure", () => {
   test("sandbox.confinement states the effective containment when no sandbox is configured (CS-1)", async () => {
     const finding = find(await doctor({ config: cfg() }), "sandbox.confinement")!;
     assert.equal(finding.status, "skip");
-    assert.match(finding.explanation, /Effective containment: none/);
+    assert.match(finding.explanation, /Effective sandbox profile: unconfined/);
     assert.ok(finding.evidence.some((e) => /^bubblewrap \(bwrap\): (available|not available)$/.test(e)));
     assert.match(finding.action ?? "", /--sandbox bwrap/);
+  });
+
+  test("sandbox.confinement follows the resolved configuration, not the raw flag, for every way to ask for a sandbox (#795)", async () => {
+    const linux = process.platform === "linux";
+    const cases: Array<{ name: string; flag?: string; config: Partial<HarnessConfig>; boxed: boolean; profile: string }> = [
+      { name: "no sandbox", config: {}, boxed: false, profile: "unconfined" },
+      { name: "--sandbox bwrap", flag: "bwrap", config: { sandbox: "bwrap" }, boxed: true, profile: ":workspace" },
+      { name: "--sandbox :workspace", flag: ":workspace", config: { sandbox: true, sandboxProfile: ":workspace" }, boxed: true, profile: ":workspace" },
+      { name: "--sandbox :read-only", flag: ":read-only", config: { approvalMode: "read-only", sandboxProfile: ":read-only" }, boxed: false, profile: ":read-only" },
+      { name: "--sandbox :network", flag: ":network", config: { sandbox: true, sandboxProfile: ":network" }, boxed: true, profile: ":network" },
+      { name: "--sandbox docker", flag: "docker", config: { sandbox: "docker" }, boxed: linux, profile: ":workspace" },
+    ];
+    for (const c of cases) {
+      // buildConfig records a profile's network posture in module state; doctor reads it from there.
+      setSandboxNetworkProfile(c.config.sandboxProfile === undefined ? undefined : c.config.sandboxProfile === ":network");
+      // Both a configuration and the flags that produced it, as the CLI passes them.
+      const finding = find(await doctor({ config: cfg(c.config), flags: c.flag ? { sandbox: c.flag } : {} } as any), "sandbox.confinement")!;
+      const text = `${finding.explanation}\n${finding.evidence.join("\n")}`;
+      assert.match(finding.explanation, new RegExp(`Effective sandbox profile: ${c.profile}`), c.name);
+      if (c.profile === "unconfined") continue;
+      assert.equal(/runs inside this sandbox/.test(text), c.boxed, `${c.name}: worker claim`);
+      assert.equal(/masked with an empty tmpfs/.test(text), c.config.sandbox !== undefined, `${c.name}: HOME masking claim`);
+      if (c.name.endsWith(":read-only")) assert.match(text, /runs outside any sandbox/);
+    }
+    setSandboxNetworkProfile(undefined);
+  });
+
+  describe("sandbox.confinement for read-only mode with no --sandbox engine (SB-1)", () => {
+    /** Runs the doctor with `bwrap` either a stub that succeeds or absent from PATH, whatever the host has installed. */
+    async function withBwrap<T>(available: boolean, run: () => Promise<T>): Promise<T> {
+      const bin = tmp("nexus-doctor-bin-");
+      const previous = process.env.PATH;
+      if (available) {
+        fs.writeFileSync(path.join(bin, "bwrap"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      }
+      process.env.PATH = bin;
+      try {
+        return await run();
+      } finally {
+        process.env.PATH = previous;
+        fs.rmSync(bin, { recursive: true, force: true });
+      }
+    }
+    const readOnly = (o: Partial<HarnessConfig> = {}) => cfg({ approvalMode: "read-only", readOnly: true, ...o });
+
+    test("bare read-only without bwrap warns instead of passing", async () => {
+      const finding = find(await withBwrap(false, () => doctor({ config: readOnly() })), "sandbox.confinement")!;
+      assert.equal(finding.status, "warn");
+      assert.match(finding.explanation, /:read-only/);
+      assert.match(finding.explanation, /bubblewrap \(bwrap\) is not available/);
+    });
+
+    test("bare :read-only profile without bwrap warns too", async () => {
+      const finding = find(await withBwrap(false, () => doctor({ config: readOnly({ sandboxProfile: ":read-only" }) })), "sandbox.confinement")!;
+      assert.equal(finding.status, "warn");
+    });
+  });
+
+  test("the report posture carries the effective profile from the describer", async () => {
+    const plain = await doctor({ config: cfg() });
+    assert.equal(plain.posture?.profile, "unconfined");
+    assert.equal(plain.posture?.profileSource, "default (no sandbox requested)");
+    assert.equal(plain.posture?.sandbox, "off");
+    const named = await doctor({ config: cfg({ sandbox: "bwrap", sandboxProfile: ":workspace" }) });
+    assert.equal(named.posture?.profile, ":workspace");
+    assert.equal(named.posture?.sandbox, ":workspace (bwrap, network off, --sandbox :workspace)");
+    assert.equal(named.schemaVersion, 2);
   });
 
   test("sandbox.confinement says where the worker runs under Docker and names the files-only worker (CS-10)", async () => {

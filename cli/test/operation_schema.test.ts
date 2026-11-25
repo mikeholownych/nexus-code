@@ -77,6 +77,20 @@ test("a v1 operation document migrates by adding the schema version and nothing 
   assert.equal(migrated.policy.maxConcurrentUnits, undefined, "an unset limit must stay unset so v1 schedules as before");
 });
 
+test("a v6 operation migrates to v7 without inventing stall state", () => {
+  const v6 = JSON.parse(JSON.stringify(state())) as any;
+  v6.schemaVersion = 6;
+  delete v6.policy.maxStallsPerFingerprint;
+  for (const unit of v6.units) delete unit.failureStalls;
+  const before = JSON.parse(JSON.stringify(v6));
+
+  const migrated = migrateOperationState(v6);
+
+  assert.equal(migrated.schemaVersion, CURRENT_OPERATION_SCHEMA_VERSION);
+  assert.deepEqual({ ...migrated, schemaVersion: 6 }, before, "v6 migration must preserve fields and add only the new schema version");
+  assert.ok(migrated.units.every((unit) => unit.failureStalls === undefined), "migration must not invent prior failures");
+});
+
 test("the migrated state schedules exactly as the v1 state did", () => {
   const v1 = asV1Document(state());
   const migrated = migrateOperationState(v1);
@@ -135,6 +149,9 @@ test("structural invariants name the field and the unit", () => {
     ["unknown dependency", (op) => { op.units[1].dependsOn = ["nope"]; }, /depends on unknown unit 'nope'/],
     ["zero budget", (op) => { op.units[0].contextBudget = 0; }, /unit 'impl' has an invalid contextBudget/],
     ["bad policy limit", (op) => { op.policy.maxConcurrentUnits = 0; }, /policy.maxConcurrentUnits must be an integer from 1 to 64/],
+    ["bad stall policy", (op) => { op.policy.maxStallsPerFingerprint = 0; }, /policy.maxStallsPerFingerprint must be a safe integer/],
+    ["malformed persisted stall counter", (op) => { (op.units[0] as any).failureStalls = { "cause|reason:x": { count: "bad", lastAt: "2026-10-31T12:00:00.000Z", reason: "failure" } }; }, /failureStalls\['cause\|reason:x'\] is invalid/],
+    ["persisted stall counter beyond policy", (op) => { (op.units[0] as any).failureStalls = { "cause|reason:x": { count: 4, lastAt: "2026-10-31T12:00:00.000Z", reason: "failure" } }; }, /failureStalls\['cause\|reason:x'\] is invalid/],
     ["bad resource slot", (op) => { op.resources[0].maxConcurrentUnits = 99; }, /resource 'primary'.maxConcurrentUnits/],
     ["bad receipt", (op) => { op.integrations = [{ unitId: "impl" } as any]; }, /missing its unitId or integratedCommit/],
   ];

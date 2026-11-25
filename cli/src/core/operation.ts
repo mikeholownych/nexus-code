@@ -50,6 +50,7 @@ import type { ResourceConditionRecord, ResourceDescriptor, ResourceRegistry, Wor
 import type { InferenceFailure } from "./turn.js";
 import { REVISION_MARKER } from "./scheduler.js";
 import { CURRENT_OPERATION_SCHEMA_VERSION, validateOperationPolicy, validateResourceSlots } from "./operation_schema.js";
+import { MAX_OPERATION_ACTIVE_MS } from "./operation_budget_constants.js";
 import type { BoundaryRules } from "./boundary_rules.js";
 export { ConvergenceScheduler, DecisionRejected, isRequired } from "./scheduler.js";
 export {
@@ -196,6 +197,8 @@ export interface WorkUnit {
   renderedInputsHash?: string;
   /** Results the executor refused (for example a specialist output that failed its contract), most recent last. */
   rejectedOutputs?: StoredRejectedOutput[];
+  /** Consecutive failures by stable fingerprint. Used for PA-3 stall detection; not turn count. */
+  failureStalls?: Record<string, { count: number; lastAt: string; reason: string }>;
   /** What the unit's start prompt was estimated to need, and the budget it was checked against. */
   context?: {
     estimatedPromptTokens: number;
@@ -222,6 +225,7 @@ export type OperationEventType =
   | "OPERATION_BLOCKED"
   | "OPERATION_COMPLETED"
   | "OPERATION_PAUSED"
+  | "OPERATION_BUDGET_CHANGED"
   | "OPERATION_CANCELLED"
   | "DECISION_APPLIED"
   | "CONCURRENCY_LIMIT"
@@ -231,6 +235,7 @@ export type OperationEventType =
   | "OPERATION_MESSAGE_DROPPED"
   | "CHECKPOINT_RESTORED"
   | "WORK_INTEGRATED"
+  | "INTEGRATION_REJECTED"
   | "WORKTREE_RETAINED";
 
 export interface OperationEvent {
@@ -250,6 +255,8 @@ export interface OperationPolicy {
   unknownResumeBudget: number;
   /** Runs of one unit before the scheduler stops retrying it. */
   maxRunsPerUnit: number;
+  /** Consecutive failures with the same fingerprint before the scheduler treats the unit as stalled (not turn count). */
+  maxStallsPerFingerprint?: number;
   /** Floor between WAITING wake-ups. */
   minWaitMs: number;
   /**
@@ -259,6 +266,13 @@ export interface OperationPolicy {
   maxConcurrentUnits?: number;
   /** Operator-declared aggregate reservations for parallel work; these are admission weights, not OS-enforced quotas. */
   executionBudget?: ExecutionResourceRequest;
+  /**
+   * Optional cap on rolled-up tokens consumed by agent sub-operations (reported + estimated). When reached, the
+   * operation pauses before starting new work so the operator can inspect, raise the cap, or cancel.
+   */
+  maxTotalTokens?: number;
+  /** Maximum active wall time across this operation's durable runs, including all concurrently executing units. */
+  maxTotalActiveMs: number;
 }
 
 /** Explicit execution reservation. Missing values are unknown, never inferred from provider or model identity. */
@@ -273,7 +287,9 @@ export const DEFAULT_OPERATION_POLICY: OperationPolicy = {
   maxWaitMs: 12 * 60 * 60_000,
   unknownResumeBudget: 2,
   maxRunsPerUnit: 25,
+  maxStallsPerFingerprint: 3,
   minWaitMs: 1_000,
+  maxTotalActiveMs: MAX_OPERATION_ACTIVE_MS,
 };
 
 /** One unit's worktree/branch in an isolated operation. */
@@ -291,6 +307,8 @@ export interface OperationGitUnit {
   snapshotOf?: string;
   /** The `failedRun.at` of the dependency run this snapshot was taken from; a newer failure takes a fresh snapshot. */
   snapshotRun?: string;
+  /** Durable owner identity for the worktree/unit while it is active or retained. */
+  ownerId?: string;
 }
 
 /** Opt-in Git isolation for an operation (`spec.git.isolate`). */
@@ -303,6 +321,8 @@ export interface OperationGitState {
   integrationWorktree: string;
   baseDir: string;
   units: Record<string, OperationGitUnit>;
+  /** Operator verifiers pinned for the operation: each runs on every merged tree. Only ever added to (PA-2). */
+  integrationVerifiers?: string[];
 }
 
 /** A durable snapshot of a unit's conversation, restorable by the operator. */
@@ -347,6 +367,22 @@ export interface OperationMessage {
   deliveredTo?: string[];
 }
 
+/**
+ * One verifier command run on a merged tree at integration (PA-2). Written by the runner from the processes it ran
+ * itself; nothing a unit says or writes sets one.
+ */
+export interface MergedCheck {
+  command: string;
+  /** Whose verifier this is: unit ids, or `operator` for a verifier pinned for the operation. */
+  owners: string[];
+  /** ENVIRONMENT: the command could not be started (exit 126/127), or the session's sandbox could not be built. */
+  status: "PASSED" | "FAILED" | "ENVIRONMENT" | "TIMED_OUT";
+  /** The same command on the tree before the merge, run only after a failure to decide whether the merge caused it. */
+  baseline?: "PASSED" | "FAILED";
+  /** The engine that confined the run; absent when the session has no sandbox configured. */
+  sandbox?: "bwrap" | "docker";
+}
+
 /** What was integrated, and the evidence the merge was accepted with. */
 export interface IntegrationReceipt {
   unitId: string;
@@ -364,6 +400,10 @@ export interface IntegrationReceipt {
   tests?: { command: string; status: string; hasExecutedTests: boolean; definitionBound?: false };
   /** 1-based merge order within the operation, assigned by the runner. */
   sequence?: number;
+  /** Durable owner identity for the unit/worktree that produced this integration. */
+  ownerId?: string;
+  /** Every verifier run on the merged tree before this receipt was written, in the order run (PA-2). */
+  mergedChecks?: MergedCheck[];
 }
 
 export interface DurableOperationState {
@@ -399,6 +439,34 @@ export interface DurableOperationState {
   messages?: OperationMessage[];
   /** Highest message id ever issued. Kept so a pruned id is never reused (events cite message ids). */
   messageSeq?: number;
+  /** Host boot identity of the process last driving this operation; a different boot means an earlier process left it active. */
+  activeBootId?: string;
+  /** PID of the process last driving this operation on activeHost; used to detect same-boot process restarts. */
+  activePid?: number;
+  /** Hostname of the process last driving this operation. */
+  activeHost?: string;
+  /** Kernel start time (`/proc/<pid>/stat` field 22) of that process: tells it from a later process given the same pid. Absent in records from builds before PA-3 identity; those read as unknown identity. */
+  activeStartTicks?: string;
+  /** Active wall time already charged to this operation, checkpointed during each durable save. */
+  activeElapsedMs: number;
+  /** False for migrated records whose prior active intervals cannot be reconstructed exactly. */
+  activeElapsedHistoryComplete: boolean;
+  /** Timestamp of the current driver interval; retained so a crash is conservatively charged on resume. */
+  activeSinceMs?: number;
+  /** Operator-visible reason the operation was paused (stale recovery, explicit pause, etc.). */
+  pauseReason?: string;
+  /**
+   * Present when a detached job drives the operation (BG-1): no operator was at a front end, so no call was approved
+   * by a person. Set when the operation is created and never removed. Absent on every attended operation.
+   */
+  origin?: OperationOrigin;
+}
+
+export interface OperationOrigin {
+  kind: "job";
+  jobId: string;
+  scheduleId?: string;
+  unattended: true;
 }
 
 /** An option before it is numbered into a decision. */
@@ -521,6 +589,7 @@ export function newOperation(
   resources: ResourceDescriptor[],
   now: number,
   policy: Partial<OperationPolicy> = {},
+  bootId?: string,
 ): DurableOperationState {
   const ids = new Set<string>();
   for (const u of units) {
@@ -561,6 +630,9 @@ export function newOperation(
     status: "RUNNING",
     createdAt: at,
     updatedAt: at,
+    ...(bootId ? { activeBootId: bootId } : {}),
+    activeElapsedMs: 0,
+    activeElapsedHistoryComplete: true,
     units: units.map((u) => ({
       id: u.id,
       title: u.title ?? u.id,

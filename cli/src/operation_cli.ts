@@ -21,6 +21,8 @@ import { UnsupportedOperationSchemaError, clampUnisolatedConcurrency, concurrenc
 import { MessageRejected, publishMessage } from "./core/operation_messages.js";
 import { ROLE_PROFILES, specialistInputsProblem } from "./core/roles.js";
 import { AgentWorkUnitExecutor, applyOperatorDecision, driveOperation, OperationExistsError, type DriveOptions, OperationLockedError, OperationStore, resourcesFromConfig } from "./core/operation_runner.js";
+import { parseActiveMinutesCap, parseTokenCap, setOperationBudget } from "./core/operation_budget.js";
+import { withDerivedPause } from "./core/driver_identity.js";
 import { buildOperationView, renderOperationView, renderReplay, watchOperation } from "./operation_view.js";
 import { ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "./core/operation_git.js";
 import { ContextCheckpointError, createContextCheckpoint, listContextCheckpoints, restoreContextCheckpoint } from "./core/operation_checkpoints.js";
@@ -246,6 +248,7 @@ function printStatus(op: DurableOperationState): void {
       u.assignment ? ` — ${u.assignment.resourceId}` : "";
     console.log(`  ${safeTerminal(u.status).padEnd(22)} ${safeTerminal(u.title)}${pc.dim(safeTerminal(extra))}`);
   }
+  if (op.status === "PAUSED" && op.pauseReason) console.log(pc.yellow(`Paused: ${safeTerminal(op.pauseReason)}`));
   if (op.wait) console.log(pc.yellow(`Waiting until ${safeTerminal(op.wait.wakeAt)}: ${safeTerminal(op.wait.reason)}`));
   for (const d of op.blocked?.decisions ?? []) {
     console.log(pc.red(`Decision ${safeTerminal(d.id)} needed: ${safeTerminal(d.question)}`));
@@ -260,7 +263,7 @@ async function drive(
   store: OperationStore,
   discoverCatalog: boolean,
   json: boolean,
-  entry: Pick<DriveOptions, "entry" | "prepare"> = {},
+  entry: Pick<DriveOptions, "entry" | "prepare" | "resumeAfterDecision"> = {},
 ): Promise<void> {
   const clamped = clampUnisolatedConcurrency(op);
   if (clamped && !json) console.error(pc.yellow(`warning: ${safeTerminal(clamped)}`));
@@ -297,7 +300,7 @@ function operationAction<T extends unknown[]>(action: (...args: T) => void | Pro
 }
 
 export function registerOperationCommands(program: Command): void {
-  const op = program.command("operation").description("[experimental] Convergence-scheduled multi-unit operations (reroute, park, wait, resume)");
+  const op = program.command("operation").description("Convergence-scheduled multi-unit operations (reroute, park, wait, resume)");
   const common = (c: Command) =>
     c
       .option("-e, --endpoint <url>", "Default endpoint (for resources not listed in the spec)")
@@ -310,6 +313,23 @@ export function registerOperationCommands(program: Command): void {
       .option("--context-limit <tokens>", "Context admission limit (default: 65536)")
       .option("--discover", "Read provider /v1/models metadata (capabilities, context, serving capacity)")
       .option("-j, --json", "Print the final operation state as JSON");
+
+  common(op.command("validate").argument("<spec>", "Operation spec JSON file"))
+    .description("Validate an operation spec without starting work")
+    .action(operationAction(async (specPath: string, options: any) => {
+      let spec: OperationSpec;
+      try {
+        spec = JSON.parse(fs.readFileSync(path.resolve(specPath), "utf-8")) as OperationSpec;
+      } catch (error: any) {
+        throw new OperationSpecError(`cannot read operation spec ${specPath}: ${String(error?.message ?? error)}`);
+      }
+      validateOperationSpec(spec);
+      if (options.json) console.log(JSON.stringify({ valid: true, objective: spec.objective, units: spec.units.map((u) => ({ id: u.id, dependsOn: u.dependsOn ?? [] })) }, null, 2));
+      else {
+        console.log(pc.green(`Operation spec is valid: ${safeTerminal(spec.objective)}`));
+        for (const unit of spec.units) console.log(`  ${safeTerminal(unit.id)}${unit.dependsOn?.length ? pc.dim(` ← ${safeTerminal(unit.dependsOn.join(", "))}`) : ""}`);
+      }
+    }));
 
   common(op.command("run").argument("<spec>", "Operation spec JSON file"))
     .description("Start an operation from a work-unit spec")
@@ -388,7 +408,7 @@ export function registerOperationCommands(program: Command): void {
         return;
       }
       if (options.resume === false) return void printStatus(state);
-      await drive(state, config, store, Boolean(options.discover), Boolean(options.json), { entry: "existing" });
+      await drive(state, config, store, Boolean(options.discover), Boolean(options.json), { entry: "existing", resumeAfterDecision: true });
     }));
 
   op.command("status")
@@ -418,8 +438,8 @@ export function registerOperationCommands(program: Command): void {
         let ops: DurableOperationState[];
         try {
           ops = options.replay
-            ? (id ? [store.loadForReplay(id)] : store.listForReplay())
-            : (id ? [store.load(id)] : store.list());
+            ? (id ? [store.loadForReplay(id)] : store.listForReplay()).map((state) => withDerivedPause(state))
+            : (id ? [store.load(id)] : store.list()).map((state) => withDerivedPause(state));
         } catch (error: any) {
           console.error(pc.red(`Cannot read operation ${safeTerminal(id ?? "(all)")}: ${safeTerminal(String(error?.message ?? error))}`));
           process.exitCode = 2;
@@ -434,10 +454,28 @@ export function registerOperationCommands(program: Command): void {
         );
         return;
       }
-      const ops = id ? [store.loadForInspection(id)] : store.listForInspection();
+      // A record whose driver is not provably alive is shown as drive would leave it: PAUSED, with the reason.
+      const ops = (id ? [store.loadForInspection(id)] : store.listForInspection()).map((state) => withDerivedPause(state));
       if (options.json) return void console.log(JSON.stringify(ops, null, 2));
       if (!ops.length) return void console.log("No operations in this workspace.");
       ops.forEach(printStatus);
+    }));
+
+  op.command("budget")
+    .argument("<id>", "Operation id")
+    .option("--max-total-tokens <n|none>", "New token cap for the operation's agent runs, or 'none' to remove it")
+    .option("--max-total-active-minutes <n>", "New finite active-time cap for the operation (1–4320 minutes)")
+    .option("-w, --workspace <path>", "Workspace directory (default: current directory)")
+    .description("Operator command: change operation budgets (audited in its journal; applies to the next active interval)")
+    .action(operationAction((id: string, options: any) => {
+      const changes: { maxTotalTokens?: number | undefined; maxTotalActiveMs?: number } = {};
+      if (options.maxTotalTokens !== undefined) changes.maxTotalTokens = parseTokenCap(String(options.maxTotalTokens));
+      if (options.maxTotalActiveMinutes !== undefined) changes.maxTotalActiveMs = parseActiveMinutesCap(String(options.maxTotalActiveMinutes));
+      if (!Object.keys(changes).length) throw new Error("Supply --max-total-tokens and/or --max-total-active-minutes.");
+      const state = setOperationBudget(new OperationStore(path.resolve(options.workspace ?? process.cwd())), id, changes);
+      console.log(
+        `Operation ${safeTerminal(id)}: token cap ${state.policy.maxTotalTokens ?? "none"}; active-time cap ${Math.floor(state.policy.maxTotalActiveMs / 60_000)} minutes (recorded in its journal). ${state.status === "PAUSED" ? "It stays paused; run 'nexus operation resume' to continue." : ""}`.trim(),
+      );
     }));
 
   op.command("message")
@@ -627,7 +665,7 @@ export function registerOperationCommands(program: Command): void {
         // A pipe is not a live view; render the current snapshot once so scripts get an answer instead of a hang.
         let state: DurableOperationState;
         try {
-          state = store.load(watchId);
+          state = withDerivedPause(store.load(watchId));
         } catch (error: any) {
           console.error(pc.red(`Cannot read operation ${safeTerminal(watchId)}: ${safeTerminal(String(error?.message ?? error))}`));
           process.exitCode = 2;
@@ -643,7 +681,7 @@ export function registerOperationCommands(program: Command): void {
       process.once("SIGINT", onSignal);
       try {
         const result = await watchOperation({
-          load: () => store.load(watchId),
+          load: () => withDerivedPause(store.load(watchId)),
           render: (state) =>
             renderOperationView(buildOperationView(state, { events: Math.floor(eventLimit) }), {
               width: process.stdout.columns ?? 0,

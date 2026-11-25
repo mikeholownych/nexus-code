@@ -1,0 +1,12 @@
+[
+  {
+    "schema_version": 1,
+    "schemaSha256": "c3a65e9087a50ca6a446db6140a6f4d83f12f301c372020867bc62d9adbc7026",
+    "note": "First published schema of the detached runner's other files (BG-1), generated from RunnerFileDocument in cli/src/core/runner_store.ts on release/v1.3.0: a client's request in the inbox (start, stop, resume), the runner record, and a job's worker record, worker result and frozen operation spec, each with its own format name and version 1. The files carry their version in the member 'version'; this ledger keys it as schema_version. Nothing was published before it. The readers refuse any other version and any unknown key, so every added, removed or changed member bumps RUNNER_FILE_VERSION."
+  },
+  {
+    "schema_version": 1,
+    "schemaSha256": "68df9c09a0330158079330987ed4b6912150f896c9fe938a8b2fa74d144aeda1",
+    "note": "BG-3: a start request's job `origin` gains the trigger variant (see JOB_VERSIONS.json). Version stays 1 for the same reason."
+  }
+]

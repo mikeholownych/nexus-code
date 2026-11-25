@@ -1,0 +1,27 @@
+[
+  {
+    "schema_version": 1,
+    "schemaSha256": "178eaba3c51574e25f72e22a41f79a64ca8e1ed98417df2c8a7fcbfd69c789b6",
+    "note": "First published schema of the messages of the ACP adapter (AC-1), generated from AcpAdapterDocument in cli/src/acp/types.ts on release/v1.3.0: what a client may send that Nexus acts on (initialize, session/new, session/load, session/prompt, session/cancel, $/cancel_request, _nexus/receipt/get, and the reply to session/request_permission) and what Nexus sends (results, errors, session/update with agent_message_chunk, user_message_chunk, tool_call, tool_call_update and session_info_update, and session/request_permission). It describes Nexus's subset of the Agent Client Protocol version 1 plus Nexus's own extension method and _meta members, not ACP itself. Nothing was published before it. Types and pure functions only in this change: no command speaks these messages yet. Experimental: names and fields may change, each change with an entry here."
+  },
+  {
+    "schema_version": 2,
+    "schemaSha256": "16536bda0748f5749d0ec63b579b602f5dfc550301c78fa77e0ea92c814a9b29",
+    "note": "Add the ACP `_nexus/verify` request and result contract, plus retrieval of its session-bound verification receipt through `_nexus/receipt/get`. The caller supplies only an active session id; verifier settings are fixed by the operator. This is an additive adapter-schema version; the previous published schema remains unchanged."
+  },
+  {
+    "schema_version": 3,
+    "schemaSha256": "c36c6a1cdc3a09d7e7b9a5de9885b6d14f5f9a97c82753bbe81f20e1c89e471a",
+    "note": "Add the objective inference-submission budget stop reason and continuation usage fields to the ACP turn-result contract. Additive adapter-schema version; v1 and v2 remain unchanged."
+  },
+  {
+    "schema_version": 4,
+    "schemaSha256": "bafcd99e7a1d7d958b700f0e9c8cff0cebdc6f4a3b8113f8767e55cdca095de8",
+    "note": "The `_nexus/verify` result names what it covered: three new required members, `workspace` (the canonical path of the session's directory, as in the receipt), `base_pinned_commit` and `base_pinned_at` (the commit the change was measured from and when this process pinned it for that workspace). Requests are unchanged. Additive for a client that reads results; v1, v2 and v3 remain unchanged."
+  },
+  {
+    "schema_version": 4,
+    "schemaSha256": "83cde247b7904d0e1e52b873c483bf848fa377af33445859c379f80d6c4b56bc",
+    "note": "Description-only update: clarify that sandbox denial profile labels reflect SB-1 named profiles when present and default otherwise. The schema structure and validation contract are unchanged; schema_version remains 4."
+  }
+]

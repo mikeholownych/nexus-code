@@ -89,6 +89,25 @@ test("fetchRuns reads superseded attempts' logs through the API and nothing else
   assert.equal(report.events[0].job, "test-matrix (22)");
 });
 
+test("a failed shard leg is counted once: the test-matrix job that only aggregates it adds no event of its own", async () => {
+  const log = fs.readFileSync(path.join(here, "fixtures/flake/ci-failing-tests.txt"), "utf8");
+  const gh = async (args: string[]) => {
+    const target = args.at(-1)!;
+    if (target.includes("/workflows/ci.yml/runs")) return JSON.stringify({ workflow_runs: [{ id: 9, head_sha: "abc", run_attempt: 2, conclusion: "success" }, { id: 10, head_sha: "def", run_attempt: 2, conclusion: "success" }] });
+    if (target.includes("/runs/9/attempts/1/jobs")) return JSON.stringify({ jobs: [{ id: 90, name: "test-shard (22, 3)", conclusion: "failure" }, { id: 91, name: "test-matrix (22)", conclusion: "failure" }, { id: 92, name: "test-matrix (24)", conclusion: "success" }] });
+    // Nothing but the aggregate failed (a cancelled leg, say): it is still recorded, by job.
+    if (target.includes("/runs/10/attempts/1/jobs")) return JSON.stringify({ jobs: [{ id: 100, name: "test-shard (22, 3)", conclusion: "skipped" }, { id: 101, name: "test-matrix (22)", conclusion: "failure" }] });
+    if (target.includes("/attempts/2/jobs")) return JSON.stringify({ jobs: [] });
+    if (target.endsWith("/jobs/90/logs")) return log;
+    if (target.endsWith("/jobs/101/logs")) return "";
+    throw new Error(`unexpected request ${target}`);
+  };
+  const report = analyze(await fetchRuns({ repo: "o/r", workflow: "ci.yml", runs: 20, gh }), { limit: 2, window: 20 });
+  assert.deepEqual([...new Set(report.events.map((e: any) => e.job))], ["test-shard (22, 3)", "test-matrix (22)"]);
+  assert.equal(report.events.filter((e: any) => e.runId === 9).every((e: any) => e.job === "test-shard (22, 3)"), true);
+  assert.deepEqual(report.events.filter((e: any) => e.runId === 10).map((e: any) => e.test), ["job: test-matrix (22) (no test named)"]);
+});
+
 test("the command refuses bad arguments with exit 2 and never reports a budget it could not compute", () => {
   const bad = spawnSync(process.execPath, [SCRIPT, "--repo", "not a repo"], { encoding: "utf8" });
   assert.equal(bad.status, 2);

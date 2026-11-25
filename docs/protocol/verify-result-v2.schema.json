@@ -1,0 +1,816 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "nexus verify --json output v2",
+  "description": "Generated from VerifyJsonOutput in cli/src/verify_contract.ts by cli/scripts/gen_verify_result_schema.mjs. Do not edit by hand. The one JSON document `nexus verify --json` writes to stdout and `--receipt` writes to a file; `schema_version` is its first member.",
+  "$ref": "#/$defs/VerifyJsonOutput",
+  "$defs": {
+    "TypecheckBaselineRecord": {
+      "type": "object",
+      "properties": {
+        "configPath": {
+          "type": "string"
+        },
+        "errorCount": {
+          "description": "Located errors on the base; present when the base run can serve as a baseline.",
+          "type": "number"
+        },
+        "status": {
+          "description": "NOT_RUN: discovery already ruled the project out (skipped, or its tool is missing).",
+          "enum": [
+            "ENVIRONMENT",
+            "FAILED",
+            "NOT_RUN",
+            "PASSED",
+            "PREEXISTING",
+            "TIMED_OUT",
+            "UNAVAILABLE"
+          ]
+        },
+        "tool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "configPath",
+        "status",
+        "tool"
+      ]
+    },
+    "TypecheckEvidence": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "baselineErrorCount": {
+          "description": "Errors the baseline run (before the change) already had.",
+          "type": "number"
+        },
+        "candidateId": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        },
+        "configPath": {
+          "type": "string"
+        },
+        "configSha256": {
+          "type": "string"
+        },
+        "enforced": {
+          "description": "False when the result is recorded only (operator-configured verifier, or NEXUS_TYPECHECK mode \"record\").",
+          "type": "boolean"
+        },
+        "errorCount": {
+          "type": "number"
+        },
+        "excerpt": {
+          "description": "Redacted, control characters made visible, capped, and fenced as untrusted compiler output.",
+          "type": "string"
+        },
+        "exitCode": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "firstDiagnostics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "introducedCount": {
+          "description": "Errors in the run that the pre-change baseline run did not have (present only when a baseline was captured).",
+          "type": "number"
+        },
+        "projects": {
+          "description": "Per-project evidence when a workspace contains multiple configured type-check projects.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TypecheckEvidence"
+          }
+        },
+        "scope": {
+          "description": "What the result holds for: \"under <configPath>\", never universal.",
+          "type": "string"
+        },
+        "shellChangedFiles": {
+          "description": "Files counted as modified that no edit tool touched (changed through the shell), when any.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "status": {
+          "description": "ENVIRONMENT: the check could not run or be attributed here (not a candidate failure). PREEXISTING: errors exist, but\nnone in a file the candidate modified; it is not a pass and does not block.",
+          "enum": [
+            "ENVIRONMENT",
+            "FAILED",
+            "NOT_APPLICABLE",
+            "PASSED",
+            "PREEXISTING",
+            "TIMED_OUT",
+            "UNAVAILABLE"
+          ]
+        },
+        "tool": {
+          "type": "string"
+        },
+        "toolSha256": {
+          "description": "Hash of the resolved tool launcher.",
+          "type": "string"
+        },
+        "toolVersion": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "at",
+        "status"
+      ]
+    },
+    "TypecheckMode": {
+      "enum": [
+        "enforce",
+        "off",
+        "record"
+      ]
+    },
+    "VerificationClass": {
+      "enum": [
+        "build",
+        "ci",
+        "package_scripts",
+        "policy",
+        "test_config",
+        "test_file",
+        "verifier_script"
+      ]
+    },
+    "VerificationEvidence": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "candidateId": {
+          "type": "string"
+        },
+        "command": {
+          "description": "The verifier actually selected: configured override or one discovered from repository files.",
+          "type": "string"
+        },
+        "deadlineSecs": {
+          "description": "Deadline the verifier was given, recorded when it timed out.",
+          "type": "number"
+        },
+        "definitionBound": {
+          "description": "False when the workspace-resolved verifier definition could not be bound before the work (for example a\nnode_modules tree under `npm test`), so no pass can be independent evidence. The turn is then at most REGRESSION_FREE.",
+          "const": false
+        },
+        "exitSuccess": {
+          "type": "boolean"
+        },
+        "filtered": {
+          "description": "True when the selected test command includes a filter and therefore cannot stand for the full suite.",
+          "type": "boolean"
+        },
+        "hasExecutedTests": {
+          "type": "boolean"
+        },
+        "independenceDetail": {
+          "type": "string"
+        },
+        "independent": {
+          "description": "A discovered verifier's pass is independent evidence of the change: tests that existed before it, unmodified,\nfailed before and pass after. False (with independenceDetail) when only the agent's own tests, or tests that also\npassed before, check it — the turn is then REGRESSION_FREE, not VERIFIED.",
+          "type": "boolean"
+        },
+        "isDeliverableBound": {
+          "type": "boolean"
+        },
+        "outputSha256": {
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "configured",
+            "discovered"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/VerificationStatus"
+        },
+        "typecheck": {
+          "description": "Type-check run beside the verifier. A scoped fact about the named configuration, never about the code in general.",
+          "$ref": "#/$defs/TypecheckEvidence"
+        }
+      },
+      "required": [
+        "at",
+        "status"
+      ]
+    },
+    "VerificationMode": {
+      "enum": [
+        "approve",
+        "block",
+        "off",
+        "record"
+      ]
+    },
+    "VerificationStatus": {
+      "enum": [
+        "FAILED",
+        "NO_APPLICABLE_VERIFIER",
+        "PASSED",
+        "TIMED_OUT"
+      ]
+    },
+    "VerifyBaselineSummary": {
+      "type": "object",
+      "properties": {
+        "failed": {
+          "description": "The verifier failed on the base tree.",
+          "type": "boolean"
+        },
+        "testFiles": {
+          "description": "Test files captured from the base tree; null when one was too large to capture.",
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "usable": {
+          "description": "The base run can serve as the \"failed before\" half: it failed, by itself, with tests that ran.",
+          "type": "boolean"
+        },
+        "verifierDefinitionBound": {
+          "description": "The files that define the verifier were captured from the base tree.",
+          "type": "boolean"
+        },
+        "verifierUnbindableReason": {
+          "description": "Why they could not be captured.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "failed",
+        "testFiles",
+        "usable",
+        "verifierDefinitionBound"
+      ]
+    },
+    "VerifyGuard": {
+      "description": "The verification-file guard: which changed files define or weaken the verification, under the BASE tree's policy.",
+      "type": "object",
+      "properties": {
+        "complete": {
+          "description": "False when a changed file could not be classified (unreadable, too large, or too many findings).",
+          "type": "boolean"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VerifyGuardFinding"
+          }
+        },
+        "mode": {
+          "description": "`approve`: a finding that requires approval blocks until approved. `block`: it blocks, and approval is not accepted.",
+          "$ref": "#/$defs/VerificationMode"
+        },
+        "policySource": {
+          "description": "`base_tree`: the base tree's `.nexus-security.json` (it can only tighten). `default`: the base tree has none. The head's is never read.",
+          "enum": [
+            "base_tree",
+            "default"
+          ]
+        },
+        "status": {
+          "description": "NOT_RUN: verification stopped before the change was read. CLEAR: nothing waits for a decision. BLOCKED: a finding does, or the scan is incomplete.",
+          "enum": [
+            "BLOCKED",
+            "CLEAR",
+            "NOT_RUN"
+          ]
+        }
+      },
+      "required": [
+        "complete",
+        "findings",
+        "status"
+      ]
+    },
+    "VerifyGuardFinding": {
+      "description": "One changed file that decides how the change is verified.",
+      "type": "object",
+      "properties": {
+        "approved": {
+          "description": "The operator approved this path. Approval lets the verdict be reported; it never makes the change VERIFIED.",
+          "type": "boolean"
+        },
+        "class": {
+          "$ref": "#/$defs/VerificationClass"
+        },
+        "kind": {
+          "enum": [
+            "added",
+            "deleted",
+            "modified"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "requiresApproval": {
+          "description": "The edit needs `--approve-verification-edit <path>`: a verification configuration file, or a weakened test.",
+          "type": "boolean"
+        },
+        "weakening": {
+          "description": "For a test file: what the edit removed (a heuristic over the text). Absent when nothing was detected.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "approved",
+        "class",
+        "kind",
+        "path",
+        "requiresApproval"
+      ]
+    },
+    "VerifyIngredient": {
+      "description": "An ingredient of the verdict that this version does not run. Later versions add statuses and members.",
+      "type": "object",
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "status": {
+          "const": "NOT_RUN"
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "VerifyJsonError": {
+      "description": "Printed instead of a result when no verdict was reached: a usage error or an interruption.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "exitCode": {
+          "description": "The process exit code.",
+          "type": "number"
+        },
+        "schema_version": {
+          "description": "Version of this document's schema. Always the first member.",
+          "const": 2
+        }
+      },
+      "required": [
+        "error",
+        "exitCode",
+        "schema_version"
+      ]
+    },
+    "VerifyJsonOutput": {
+      "description": "The one JSON document `nexus verify --json` writes to stdout. A result has `verdict`; an error document does not.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/VerifyJsonError"
+        },
+        {
+          "$ref": "#/$defs/VerifyJsonResult"
+        }
+      ]
+    },
+    "VerifyJsonResult": {
+      "description": "Printed when verification reached a verdict, whatever the verdict. It is also the receipt.",
+      "type": "object",
+      "properties": {
+        "approvedVerificationEdits": {
+          "description": "The paths given with `--approve-verification-edit`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "base": {
+          "description": "Absent when the checkout was refused before anything was resolved.",
+          "$ref": "#/$defs/VerifyTreeRef"
+        },
+        "baseline": {
+          "$ref": "#/$defs/VerifyBaselineSummary"
+        },
+        "changedFileCount": {
+          "type": "number"
+        },
+        "changedFiles": {
+          "description": "Paths that differ between base and head (at most 200 are listed).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "deliverables": {
+          "description": "The operator-declared deliverable files.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "detail": {
+          "type": "string"
+        },
+        "durationMs": {
+          "type": "number"
+        },
+        "environment": {
+          "description": "Names (never values) of verdict-affecting environment variables that were set.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "exitCode": {
+          "description": "The process exit code.",
+          "type": "number"
+        },
+        "guard": {
+          "$ref": "#/$defs/VerifyGuard"
+        },
+        "head": {
+          "$ref": "#/$defs/VerifyTreeRef"
+        },
+        "limits": {
+          "$ref": "#/$defs/VerifyLimits"
+        },
+        "linkedDependencyDirs": {
+          "description": "Dependency directories of the caller's checkout that were linked into both scratch trees.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "nexusVersion": {
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "NOT_ESTABLISHED",
+            "REGRESSION_FREE",
+            "UNVERIFIED",
+            "VERIFIED"
+          ]
+        },
+        "reason": {
+          "description": "Absent only when the verdict is VERIFIED.",
+          "$ref": "#/$defs/VerifyReason"
+        },
+        "review": {
+          "$ref": "#/$defs/VerifyIngredient"
+        },
+        "runs": {
+          "description": "Every verifier process that ran, in order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VerifyRunRecord"
+          }
+        },
+        "sandbox": {
+          "description": "Always written; absent only in a document from before `--sandbox` existed (nothing was sandboxed).",
+          "$ref": "#/$defs/VerifySandbox"
+        },
+        "schema_version": {
+          "description": "Version of this document's schema. Always the first member.",
+          "const": 2
+        },
+        "startedAt": {
+          "type": "string"
+        },
+        "typecheck": {
+          "$ref": "#/$defs/VerifyTypecheck"
+        },
+        "verdict": {
+          "$ref": "#/$defs/VerifyVerdict"
+        },
+        "verification": {
+          "description": "The evidence the outcome was derived from.",
+          "$ref": "#/$defs/VerificationEvidence"
+        },
+        "verifier": {
+          "description": "Absent when no verifier applies.",
+          "$ref": "#/$defs/VerifyVerifierRecord"
+        }
+      },
+      "required": [
+        "approvedVerificationEdits",
+        "changedFileCount",
+        "changedFiles",
+        "deliverables",
+        "durationMs",
+        "environment",
+        "exitCode",
+        "guard",
+        "limits",
+        "linkedDependencyDirs",
+        "nexusVersion",
+        "outcome",
+        "review",
+        "runs",
+        "schema_version",
+        "startedAt",
+        "typecheck",
+        "verdict"
+      ]
+    },
+    "VerifyLimits": {
+      "type": "object",
+      "properties": {
+        "maxTreeBytes": {
+          "type": "number"
+        },
+        "maxTreeFiles": {
+          "type": "number"
+        },
+        "timeoutSecs": {
+          "description": "Deadline of each verifier run, and of the type-checks of each side, in seconds.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "maxTreeBytes",
+        "maxTreeFiles",
+        "timeoutSecs"
+      ]
+    },
+    "VerifyReason": {
+      "description": "Why the verdict is not VERIFIED: the outcome ladder's reasons, and the ones only `nexus verify` gives.",
+      "enum": [
+        "GUARD_INCOMPLETE",
+        "INTERNAL_ERROR",
+        "NOTHING_TO_VERIFY",
+        "NO_APPLICABLE_VERIFIER",
+        "NO_TESTS_EXECUTED",
+        "REGRESSION_FREE",
+        "SANDBOX_UNAVAILABLE",
+        "TREE_LIMIT_EXCEEDED",
+        "TYPECHECK_FAILED",
+        "TYPECHECK_NOT_RUN",
+        "TYPECHECK_TIMED_OUT",
+        "TYPECHECK_UNAVAILABLE",
+        "UNSUPPORTED_TREE",
+        "UNTRUSTED_CHECKOUT",
+        "VERIFICATION_EDIT_BLOCKED",
+        "VERIFICATION_NOT_RUN",
+        "VERIFIER_DEFINITION_CHANGED",
+        "VERIFIER_DEFINITION_NOT_CAPTURED",
+        "VERIFIER_FAILED",
+        "VERIFIER_NOT_APPROVED",
+        "VERIFIER_TIMED_OUT"
+      ]
+    },
+    "VerifyRunRecord": {
+      "type": "object",
+      "properties": {
+        "durationMs": {
+          "type": "number"
+        },
+        "executedTests": {
+          "description": "The output shows at least one test that ran.",
+          "type": "boolean"
+        },
+        "exitCode": {
+          "description": "Null when the process was killed or never started.",
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outputSha256": {
+          "type": "string"
+        },
+        "outputTail": {
+          "description": "The end of the output of a run that did not pass: repository-controlled text, redacted and capped.",
+          "type": "string"
+        },
+        "outputTruncated": {
+          "type": "boolean"
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "phase": {
+          "description": "`base_tests_on_head`: the test files as they were on the base, run against the head's code.",
+          "enum": [
+            "base",
+            "base_tests_on_head",
+            "head"
+          ]
+        },
+        "sandboxed": {
+          "description": "The process ran inside the sandbox named in `sandbox.engine`. Always written; absent only in a document from before `--sandbox` existed (the run was not sandboxed).",
+          "type": "boolean"
+        },
+        "testFixtureReads": {
+          "description": "Test-oracle files or candidate-only workspace paths opened/observed more often than by the base run. Such a pass is not independent; paths can include test-support data, not only test files.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "timedOut": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "durationMs",
+        "executedTests",
+        "exitCode",
+        "outputSha256",
+        "outputTruncated",
+        "passed",
+        "phase",
+        "timedOut"
+      ]
+    },
+    "VerifySandbox": {
+      "description": "How the processes `nexus verify` started on repository content were confined: the verifier on each side, the base's\ntests against the head, and the type-checks. One answer for all of them: a run is never started outside a sandbox\nthat was requested.",
+      "type": "object",
+      "properties": {
+        "engine": {
+          "description": "The engine every process ran in. `none`: no sandbox (not requested, or requested and unavailable, in which case nothing ran).",
+          "enum": [
+            "bwrap",
+            "docker",
+            "none"
+          ]
+        },
+        "network": {
+          "description": "The confined processes could use the network (`--sandbox-network`). Always false when `engine` is `none`: an unconfined process has the caller's network, which this member does not describe.",
+          "type": "boolean"
+        },
+        "requested": {
+          "description": "The operator explicitly selected a sandbox; the effective engine and run records also show default confinement.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "engine",
+        "network",
+        "requested"
+      ]
+    },
+    "VerifyTreeRef": {
+      "description": "One side of the comparison.",
+      "type": "object",
+      "properties": {
+        "commit": {
+          "description": "The commit; null for the working tree, which has none.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ref": {
+          "description": "What the operator named: a ref, or \"(working tree)\".",
+          "type": "string"
+        },
+        "tree": {
+          "description": "The Git tree that was materialised and verified. For the working tree: tracked and untracked files that are not ignored, as `git add -A` would stage them (Nexus's own `.nexus` state left out).",
+          "type": "string"
+        },
+        "workingTree": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "commit",
+        "ref",
+        "tree",
+        "workingTree"
+      ]
+    },
+    "VerifyTypecheck": {
+      "description": "The project type-checks. The evidence of every project (tool, configuration, status, counts, tool hash) is in\n`verification.typecheck.projects`; this is the summary and the base side.",
+      "type": "object",
+      "properties": {
+        "baseline": {
+          "description": "The same projects on the base tree: what a \"new\" error on the head is measured against.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TypecheckBaselineRecord"
+          }
+        },
+        "detail": {
+          "type": "string"
+        },
+        "missingFromHead": {
+          "description": "Projects of the base tree that the head no longer has (tool and configuration path).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mode": {
+          "description": "`enforce`: a failing check lowers the verdict. `record`: recorded only (your own `--verifier`). `off`: disabled by NEXUS_TYPECHECK.",
+          "$ref": "#/$defs/TypecheckMode"
+        },
+        "status": {
+          "description": "NOT_RUN: the verifier did not pass on the head (or verification stopped earlier), so no type-check was run.\nOtherwise the combined status of the head's projects, as in `verification.typecheck.status`.",
+          "enum": [
+            "ENVIRONMENT",
+            "FAILED",
+            "NOT_APPLICABLE",
+            "NOT_RUN",
+            "PASSED",
+            "PREEXISTING",
+            "TIMED_OUT",
+            "UNAVAILABLE"
+          ]
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "VerifyVerdict": {
+      "description": "VERIFIED: evidence independent of the change shows it. REGRESSION_FREE: the tests pass, which shows only that nothing\nthey cover broke. UNVERIFIED: nothing was established (see `outcome` and `reason`). BLOCKED: a person must decide\nbefore anything is run or concluded.",
+      "enum": [
+        "BLOCKED",
+        "REGRESSION_FREE",
+        "UNVERIFIED",
+        "VERIFIED"
+      ]
+    },
+    "VerifyVerifierRecord": {
+      "type": "object",
+      "properties": {
+        "approval": {
+          "description": "How it was approved: it is the operator's own command, `--yes`, a matching `--approve-verifier` digest, or not at all.",
+          "enum": [
+            "digest",
+            "none",
+            "operator_command",
+            "yes"
+          ]
+        },
+        "command": {
+          "type": "string"
+        },
+        "digest": {
+          "description": "sha256 of the command and the script body it resolves to in the base tree.",
+          "type": "string"
+        },
+        "evidence": {
+          "description": "The base-tree file that justifies a discovered verifier, or \"configured\".",
+          "type": "string"
+        },
+        "script": {
+          "description": "The script body the command resolves to in the base tree (capped), when there is one.",
+          "type": "string"
+        },
+        "source": {
+          "description": "`configured`: the operator's `--verifier`. `discovered`: selected from the files of the base tree.",
+          "enum": [
+            "configured",
+            "discovered"
+          ]
+        }
+      },
+      "required": [
+        "approval",
+        "command",
+        "digest",
+        "evidence",
+        "source"
+      ]
+    }
+  }
+}

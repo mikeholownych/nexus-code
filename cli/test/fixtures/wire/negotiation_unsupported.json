@@ -1,0 +1,30 @@
+{
+  "description": "A fresh connection whose client speaks no version the sidecar speaks: initialize is refused with UNSUPPORTED_PROTOCOL, commands stay refused, and a compatible initialize then succeeds.",
+  "gateway": [],
+  "steps": [
+    {
+      "expect": [
+        {"v":1,"type":"hello","protocol":1,"pid":"<any:number>","commands":"<any:array>","protocol_min":1,"protocol_max":1,"capabilities":["answer","checkpoint.choice","model.select","models.list","provider.connect","provider.disconnect","receipt","slash","steer","tool.detail"],"experimental":[]},
+        {"v":1,"type":"session.state","workspace":"<workspace>","workspace_name":"<workspace-name>","model":"m","mode":"auto","git":{"branch":"main","dirty":0},"busy":false,"session":"<id:session>","read_only":false,"context_tokens":"<any:number>","context_limit":65536,"endpoint_kind":"local","posture":{"mode":"auto","sandbox":"off","trusted":false,"profile":"unconfined"}}
+      ]
+    },
+    {
+      "send": {"v":1,"type":"initialize","id":"i1","client":{"name":"example-client","version":"9.0.0"},"protocol_min":2,"protocol_max":3},
+      "expect": [
+        {"v":1,"type":"error","id":"i1","code":"UNSUPPORTED_PROTOCOL","message":"No common protocol version: the client speaks 2 to 3, this sidecar speaks 1 to 1."}
+      ]
+    },
+    {
+      "send": {"v":1,"type":"receipt","id":"r1"},
+      "expect": [
+        {"v":1,"type":"error","id":"r1","code":"UNSUPPORTED_PROTOCOL","message":"No common protocol version: the client speaks 2 to 3, this sidecar speaks 1 to 1."}
+      ]
+    },
+    {
+      "send": {"v":1,"type":"initialize","id":"i2","client":{"name":"example-client","version":"9.0.0"},"protocol_min":1,"protocol_max":3},
+      "expect": [
+        {"v":1,"type":"initialized","id":"i2","protocol":1,"capabilities":["answer","checkpoint.choice","model.select","models.list","provider.connect","provider.disconnect","receipt","slash","steer","tool.detail"],"experimental":[]}
+      ]
+    }
+  ]
+}

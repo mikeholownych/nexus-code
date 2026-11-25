@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { buildCommandEnvironment } from "./command_env.js";
 import { operatorSetting } from "./client.js";
-import { sandboxNetworkFlagSet, setSandboxNetworkFlag } from "./sandbox_network.js";
+import { sandboxNetworkFlagSet, sandboxNetworkProfileValue, setSandboxNetworkFlag } from "./sandbox_network.js";
 
 export type SandboxMode = "auto" | "bwrap" | "docker" | "none";
 
@@ -16,6 +16,108 @@ export interface SandboxOptions {
   network?: boolean;
   shell?: string;
   customBwrapArgs?: string[];
+  /** Directories to hide from the command in addition to those registered with `hideDirectoryFromSandbox`. */
+  hideDirectories?: readonly string[];
+}
+
+const hiddenDirectories = new Set<string>();
+
+/**
+ * Hides `dir` (resolved through symlinks) from every Bubblewrap command and worker this process builds from now on.
+ * The sidecar's control socket directory is registered here: its descriptor holds the attach token, so no sandboxed
+ * command may read it, wherever `XDG_RUNTIME_DIR` points. Docker masks it too when it lies inside the workspace mount.
+ */
+export function hideDirectoryFromSandbox(dir: string): void {
+  hiddenDirectories.add(fs.realpathSync(dir));
+}
+
+/** What the sandbox does about the state root for one workspace: refuse, or mask `root` and pin the `pins` above it. */
+interface StateRootPlan {
+  /** Why no sandboxed command may be built; the command is refused rather than run with the root exposed. */
+  refusal?: string;
+  /** The real state root, created 0700 when absent, to be masked with a tmpfs. */
+  root?: string;
+  /** Directories between the workspace and the root, to bind onto themselves: a mount point cannot be renamed or removed. */
+  pins: string[];
+}
+
+/**
+ * The state root (`NEXUS_STATE_DIR`, else `~/.nexus`) is masked whole, not just `tasks/`, and created owner-only when
+ * absent, so a sandboxed command can neither read it, nor be the one to create it on the host. A tmpfs mount point
+ * cannot be renamed, but a directory above it inside the writable workspace could, so those ancestors are pinned too.
+ * Refused outright: a state path that reaches the root through a symlink inside the workspace (the link itself could be
+ * renamed or replaced), and a workspace that is the root or inside its tasks directory.
+ */
+function stateRootPlan(absWorkspace: string): StateRootPlan {
+  const configured = path.resolve(process.env.NEXUS_STATE_DIR || path.join(os.homedir(), ".nexus"));
+  let workspaceReal = absWorkspace;
+  try { workspaceReal = fs.realpathSync(absWorkspace); } catch { /* absent: lexical */ }
+  const parts = configured.split(path.sep).filter(Boolean);
+  for (let i = 1; i <= parts.length; i++) {
+    const prefix = path.sep + parts.slice(0, i).join(path.sep);
+    if (prefix === absWorkspace || !isPathWithin(prefix, absWorkspace)) continue;
+    try {
+      if (fs.lstatSync(prefix).isSymbolicLink()) {
+        return { pins: [], refusal: `The state directory is reached through a symlink inside the workspace (${prefix}); a sandboxed command could rename or replace it. Set NEXUS_STATE_DIR to its real path.` };
+      }
+    } catch { /* absent: created below */ }
+  }
+  let root: string;
+  try {
+    fs.mkdirSync(configured, { recursive: true, mode: 0o700 });
+    root = fs.realpathSync(configured);
+  } catch (error: any) {
+    const reason = String(error?.message ?? error).replace(/[\r\n\x00-\x1f\x7f]/g, " ").slice(0, 240);
+    return { pins: [], refusal: `The Nexus state directory (${configured}) could not be created or resolved for sandbox protection: ${reason}. Fix the path or permissions before running a sandboxed command.` };
+  }
+  const inside = (dir: string) => isPathWithin(workspaceReal, dir) || isPathWithin(absWorkspace, dir);
+  if (inside(root) && (workspaceReal === root || inside(path.join(root, "tasks")))) {
+    return { pins: [], refusal: `The workspace (${absWorkspace}) is the Nexus state directory (${root}) or inside its tasks directory, which hold goal state and which the sandbox must hide. Start Nexus outside the state directory, or point NEXUS_STATE_DIR elsewhere.` };
+  }
+  // A workspace elsewhere below the root (a worktree under <repo>/.nexus/worktrees, or any workspace inside an external
+  // NEXUS_STATE_DIR) cannot have the root masked, because the mask would hide the workspace. Mask what holds goal
+  // state, `<root>/tasks`, instead: a tmpfs mount point cannot be read through, written or renamed. The root's other
+  // contents that lie outside the workspace are read-only to the sandbox (write profile) or absent (read-only profile).
+  if (inside(root)) {
+    try {
+      const tasks = path.join(root, "tasks");
+      fs.mkdirSync(tasks, { recursive: true, mode: 0o700 });
+      return { pins: [], root: fs.realpathSync(tasks) };
+    } catch (error: any) {
+      const reason = String(error?.message ?? error).replace(/[\r\n\x00-\x1f\x7f]/g, " ").slice(0, 240);
+      return { pins: [], refusal: `The Nexus tasks directory under ${root} could not be created for sandbox protection: ${reason}.` };
+    }
+  }
+  const pins: string[] = [];
+  if (isPathWithin(root, workspaceReal)) {
+    for (let dir = path.dirname(root); dir !== workspaceReal && isPathWithin(dir, workspaceReal); dir = path.dirname(dir)) pins.unshift(dir);
+  }
+  return { root, pins };
+}
+
+const refuseStateRoot = (cmd: string, reason: string): SandboxedCommandResult => ({
+  command: cmd,
+  sandboxed: false,
+  engine: "none",
+  warning: reason,
+  denial: { kind: "denied", category: "policy", reason },
+});
+
+/** The masks for one bwrap command: those registered and those passed, each resolved. One that no longer exists hides nothing, and bwrap cannot mount over it. */
+function directoriesToHide(root: string | undefined, extra: readonly string[] = []): string[] {
+  const resolved = new Set<string>();
+  for (const dir of [...hiddenDirectories, root, ...extra]) {
+    if (dir === undefined) continue;
+    try { resolved.add(fs.realpathSync(dir)); } catch { /* gone */ }
+  }
+  return [...resolved];
+}
+
+/** Structured reason a sandbox refused to confine a command. Evidence only; never an approval or verdict. */
+export interface SandboxDenialReason {
+  kind: "denied" | "unavailable" | "violation";
+  category: "filesystem" | "network" | "engine" | "policy";
+  reason: string;
 }
 
 export interface SandboxedCommandResult {
@@ -24,6 +126,8 @@ export interface SandboxedCommandResult {
   sandboxed: boolean;
   engine: "bwrap" | "docker" | "none";
   warning?: string;
+  /** Set when sandboxed is false because confinement was refused or unavailable. */
+  denial?: SandboxDenialReason;
 }
 
 /**
@@ -77,7 +181,8 @@ export interface SandboxHomeMounts {
   refused: Array<{ path: string; reason: string }>;
 }
 
-function deniedReason(candidate: string, home: string): string | undefined {
+function deniedReason(candidate: string, home: string, stateRoots: readonly string[] = []): string | undefined {
+  if (stateRoots.some((root) => isPathWithin(candidate, root) || isPathWithin(root, candidate))) return "overlaps the Nexus state directory";
   for (const entry of HOME_DENIED) {
     const denied = path.join(home, entry);
     if (BROAD_DENIED.has(entry)) {
@@ -94,6 +199,10 @@ function deniedReason(candidate: string, home: string): string | undefined {
 /** The directories under HOME a write-mode sandbox binds back read-only. Pure function of HOME, PATH and the operator setting. */
 export function sandboxHomeMounts(env: NodeJS.ProcessEnv = process.env): SandboxHomeMounts {
   const home = path.resolve(env.HOME || os.homedir());
+  const stateRoots = new Set([path.resolve(env.NEXUS_STATE_DIR || path.join(home, ".nexus"))]);
+  for (const configured of [...stateRoots]) {
+    try { stateRoots.add(fs.realpathSync(configured)); } catch { /* absent: retain lexical path */ }
+  }
   const result: SandboxHomeMounts = { home, mounts: [], masked: [], refused: [] };
   if (home === "/") return result;
   const seen = new Set<string>();
@@ -101,7 +210,7 @@ export function sandboxHomeMounts(env: NodeJS.ProcessEnv = process.env): Sandbox
     const candidate = path.resolve(raw.startsWith("~/") ? path.join(home, raw.slice(2)) : raw);
     if (!isPathWithin(candidate, home) || candidate === home || seen.has(candidate)) return;
     seen.add(candidate);
-    const refusal = deniedReason(candidate, home);
+    const refusal = deniedReason(candidate, home, [...stateRoots]);
     if (refusal) {
       if (source !== "default") result.refused.push({ path: candidate, reason: refusal });
       return;
@@ -116,7 +225,7 @@ export function sandboxHomeMounts(env: NodeJS.ProcessEnv = process.env): Sandbox
     // A symlink must not lead into a credential directory.
     const realHome = (() => { try { return fs.realpathSync(home); } catch { return home; } })();
     if (isPathWithin(real, realHome)) {
-      const viaLink = deniedReason(real, realHome);
+      const viaLink = deniedReason(real, realHome, [...stateRoots]);
       if (viaLink) {
         result.refused.push({ path: candidate, reason: `resolves to a path ${viaLink}` });
         return;
@@ -130,7 +239,7 @@ export function sandboxHomeMounts(env: NodeJS.ProcessEnv = process.env): Sandbox
     if (!isPathWithin(resolved, home)) continue;
     // `<prefix>/bin` needs its prefix for lib/ (npm, node_modules); prefix must itself be a safe directory.
     const prefix = path.basename(resolved) === "bin" ? path.dirname(resolved) : resolved;
-    if (prefix !== resolved && prefix !== home && !deniedReason(prefix, home)) consider(prefix, "PATH");
+    if (prefix !== resolved && prefix !== home && !deniedReason(prefix, home, [...stateRoots])) consider(prefix, "PATH");
     else consider(resolved, "PATH");
   }
   for (const raw of (operatorSetting(SANDBOX_HOME_READONLY_SETTING) ?? "").split(",").map((v) => v.trim()).filter(Boolean)) {
@@ -187,6 +296,8 @@ export function sandboxWorkspaceOverlays(workspace: string, env: NodeJS.ProcessE
 export { setSandboxNetworkFlag };
 /** Whether write-mode sandboxed commands may use the network: only on an explicit operator opt-in. */
 export function sandboxNetworkEnabled(): boolean {
+  const profile = sandboxNetworkProfileValue();
+  if (profile !== undefined) return profile;
   if (sandboxNetworkFlagSet()) return true;
   return /^(1|true|yes|on)$/i.test((operatorSetting(SANDBOX_NETWORK_SETTING) ?? "").trim());
 }
@@ -241,9 +352,10 @@ export function isSandboxAvailable(mode: SandboxMode = "auto"): boolean {
   return probeBwrapSandbox() || probeDockerSandbox();
 }
 
-function isPathWithin(candidate: string, root: string): boolean {
+/** `candidate` is `root` or below it. A first segment that merely starts with two dots (`..hid`) is inside. */
+export function isPathWithin(candidate: string, root: string): boolean {
   const relative = path.relative(root, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return relative === "" || !(relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative));
 }
 
 function appendDirectoryTree(args: string[], target: string, known: Set<string>): void {
@@ -403,6 +515,7 @@ export interface SandboxedWorkerLaunch {
   sandboxed: boolean;
   engine: SandboxedCommandResult["engine"];
   warning?: string;
+  denial?: SandboxDenialReason;
 }
 
 export interface SandboxedWorkerOptions extends Pick<SandboxOptions, "network"> {
@@ -433,13 +546,15 @@ export function wrapSandboxedWorker(
     if (launch.sandboxed) return launch;
     if (launch.warning) warnings.push(launch.warning);
   }
-  return { sandboxed: false, engine: "none", warning: warnings.join(" ") || "No sandbox engine was requested for the worker." };
+  const warning = warnings.join(" ") || "No sandbox engine was requested for the worker.";
+  return { sandboxed: false, engine: "none", warning, denial: { kind: "unavailable", category: "engine", reason: warning } };
 }
 
 /** The worker's own directory is bound read-only because it may live under the masked $HOME (a checkout or a per-user install). */
 function wrapBwrapWorker(workerPath: string, workerArgs: readonly string[], workspace: string, options: SandboxedWorkerOptions): SandboxedWorkerLaunch {
   if (!isBwrapAvailable()) {
-    return { sandboxed: false, engine: "none", warning: "Bubblewrap (bwrap) is not available, so the worker cannot be isolated." };
+    const warning = "Bubblewrap (bwrap) is not available, so the worker cannot be isolated.";
+    return { sandboxed: false, engine: "none", warning, denial: { kind: "unavailable", category: "engine", reason: warning } };
   }
   const exec = `exec ${[workerPath, ...workerArgs].map(quoteForShell).join(" ")}`;
   const wrapped = wrapSandboxedCommand(exec, workspace, {
@@ -449,7 +564,8 @@ function wrapBwrapWorker(workerPath: string, workerArgs: readonly string[], work
     customBwrapArgs: ["--ro-bind", path.dirname(workerPath), path.dirname(workerPath)],
   });
   if (!wrapped.sandboxed || wrapped.engine !== "bwrap" || !wrapped.argv?.length) {
-    return { sandboxed: false, engine: wrapped.engine, warning: wrapped.warning ?? "The Bubblewrap profile could not be built for the worker." };
+    const warning = wrapped.warning ?? "The Bubblewrap profile could not be built for the worker.";
+    return { sandboxed: false, engine: wrapped.engine, warning, denial: wrapped.denial ?? { kind: "unavailable", category: "engine", reason: warning } };
   }
   return { command: wrapped.argv[0], args: wrapped.argv.slice(1), sandboxed: true, engine: "bwrap" };
 }
@@ -620,7 +736,7 @@ export function workerRuntimeFiles(workerPath: string): { loader?: string; libra
  * worker starts and forwards signals; the container ends when the worker does (its client closing stdin ends the worker).
  */
 function wrapDockerWorker(workerPath: string, workerArgs: readonly string[], workspace: string, options: SandboxedWorkerOptions): SandboxedWorkerLaunch {
-  const refuse = (warning: string): SandboxedWorkerLaunch => ({ sandboxed: false, engine: "none", warning });
+  const refuse = (warning: string, denial?: SandboxDenialReason): SandboxedWorkerLaunch => ({ sandboxed: false, engine: "none", warning, denial: denial ?? { kind: "unavailable", category: "engine", reason: warning } });
   if (process.platform !== "linux") return refuse("The worker can only run in a Docker container on a Linux host.");
   // The CLI being installed is not enough for a long-lived worker: with the daemon down the container would never start
   // and every tool would fail. Ask the daemon, so `auto` can fall back and an explicit `docker` refuses with the reason.
@@ -632,7 +748,7 @@ function wrapDockerWorker(workerPath: string, workerArgs: readonly string[], wor
   const placeholder = "true";
   const wrapped = wrapSandboxedCommand(placeholder, workspace, { mode: "docker", network: options.network });
   if (!wrapped.sandboxed || wrapped.engine !== "docker" || !wrapped.argv?.length) {
-    return refuse(wrapped.warning ?? "The Docker sandbox could not be built for the worker.");
+    return refuse(wrapped.warning ?? "The Docker sandbox could not be built for the worker.", wrapped.denial);
   }
   // The command form ends `-w <workspace> <image> sh -c <cmd>`; everything before the image is the hardened profile.
   const tail = wrapped.argv.slice(-6);
@@ -689,6 +805,8 @@ export function wrapSandboxedCommand(
       engine: "none",
     };
   }
+  const state = stateRootPlan(absWorkspace);
+  if (state.refusal) return refuseStateRoot(cmd, state.refusal);
 
   // 1. Try Bubblewrap (bwrap)
   if (mode === "bwrap" || (mode === "auto" && isBwrapAvailable())) {
@@ -698,6 +816,7 @@ export function wrapSandboxedCommand(
         sandboxed: false,
         engine: "none",
         warning: "Bubblewrap (bwrap) is requested but not found in PATH.",
+        denial: { kind: "unavailable", category: "engine", reason: "Bubblewrap (bwrap) is requested but not found in PATH." },
       };
     }
 
@@ -712,6 +831,7 @@ export function wrapSandboxedCommand(
           sandboxed: false,
           engine: "none",
           warning: "Read-only Bubblewrap requires a pinned workspace directory descriptor.",
+          denial: { kind: "unavailable", category: "policy", reason: "Read-only Bubblewrap requires a pinned workspace directory descriptor." },
         };
       }
       // Do not expose the host root to read-only commands. A path admitted by the
@@ -724,6 +844,7 @@ export function wrapSandboxedCommand(
           sandboxed: false,
           engine: "none",
           warning: "Custom Bubblewrap mounts are incompatible with read-only host confinement.",
+          denial: { kind: "denied", category: "policy", reason: "Custom Bubblewrap mounts are incompatible with read-only host confinement." },
         };
       }
 
@@ -763,6 +884,11 @@ export function wrapSandboxedCommand(
       // Bind through inherited fd 3 so a rename or replacement of the source
       // pathname cannot redirect Bubblewrap to a different directory.
       bwrapArgs.push("--ro-bind", "/proc/self/fd/3", absWorkspace);
+      // This synthetic root holds only /tmp (a fresh tmpfs), $HOME (masked) and the workspace, so a hidden directory
+      // elsewhere is absent already. Mask it where it could be visible: under $HOME, or inside the workspace.
+      for (const dir of directoriesToHide(state.root, options.hideDirectories)) {
+        if (isPathWithin(dir, absWorkspace) || (homeIsUsable && isPathWithin(dir, userHome))) bwrapArgs.push("--tmpfs", dir);
+      }
       bwrapArgs.push("--clearenv");
       bwrapArgs.push("--setenv", "PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
       bwrapArgs.push("--setenv", "HOME", "/tmp");
@@ -797,10 +923,14 @@ export function wrapSandboxedCommand(
         }
       }
       bwrapArgs.push("--bind", absWorkspace, absWorkspace);
+      // The state root's ancestors inside the workspace become mount points: they cannot be renamed away and replaced.
+      for (const dir of state.pins) bwrapArgs.push("--bind", dir, dir);
       // The workspace bind above would re-expose credential paths when the workspace is, or contains, $HOME.
       const overlays = sandboxWorkspaceOverlays(absWorkspace);
       for (const dir of overlays.dirs) bwrapArgs.push("--tmpfs", dir);
       for (const file of overlays.files) bwrapArgs.push("--ro-bind", "/dev/null", file);
+      // Directories that hold a credential for another Nexus client (the control socket's token), wherever they are.
+      for (const dir of directoriesToHide(state.root, options.hideDirectories)) bwrapArgs.push("--tmpfs", dir);
       // bwrap passes its own environment to the command. Start empty and set back only the scrubbed command
       // environment, so a sandboxed command cannot see the operator's credentials either (read-only branch above
       // already starts from --clearenv with a fixed PATH/HOME).
@@ -847,6 +977,7 @@ export function wrapSandboxedCommand(
         sandboxed: false,
         engine: "none",
         warning: "Read-only host confinement requires Bubblewrap with a pinned workspace descriptor; Docker path mounts are not supported.",
+        denial: { kind: "unavailable", category: "engine", reason: "Read-only host confinement requires Bubblewrap with a pinned workspace descriptor; Docker path mounts are not supported." },
       };
     }
     if (!isDockerAvailable() && mode === "docker") {
@@ -855,6 +986,7 @@ export function wrapSandboxedCommand(
         sandboxed: false,
         engine: "none",
         warning: "Docker is requested but not available or daemon is not running.",
+        denial: { kind: "unavailable", category: "engine", reason: "Docker is requested but not available or daemon is not running." },
       };
     }
 
@@ -865,6 +997,7 @@ export function wrapSandboxedCommand(
         sandboxed: false,
         engine: "none",
         warning: `${DOCKER_SANDBOX_IMAGE_SETTING} must name an image pinned by digest (name@sha256:<64 hex>); refusing to run an unpinned image.`,
+        denial: { kind: "unavailable", category: "policy", reason: `${DOCKER_SANDBOX_IMAGE_SETTING} must name an image pinned by digest (name@sha256:<64 hex>); refusing to run an unpinned image.` },
       };
     }
 
@@ -888,6 +1021,8 @@ export function wrapSandboxedCommand(
     const containerEnv = { ...buildCommandEnvironment(), HOME: "/tmp", PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", TMPDIR: "/tmp" };
     for (const [name, value] of Object.entries(containerEnv)) dockerArgs.push("--env", `${name}=${value}`);
     dockerArgs.push("-v", `${absWorkspace}:${absWorkspace}`);
+    // Ancestors of the state root inside the workspace are nested bind mounts, so they cannot be renamed or removed.
+    for (const dir of state.pins) dockerArgs.push("-v", `${dir}:${dir}`);
     // When the workspace is HOME or above it, the bind would bring credential paths back (same hole as bwrap's
     // workspace bind, see sandboxWorkspaceOverlays). Docker mounts by destination depth, so these nested mounts sit
     // on top of the workspace mount. The docker socket and /run/user cannot lie inside a workspace bind, so they
@@ -895,6 +1030,10 @@ export function wrapSandboxedCommand(
     const overlays = sandboxWorkspaceOverlays(absWorkspace);
     for (const dir of overlays.dirs) dockerArgs.push("--tmpfs", `${dir}:ro,nosuid,nodev,size=1m`);
     for (const file of overlays.files) dockerArgs.push("-v", `/dev/null:${file}:ro`);
+    // PA-3: same task-state / socket hides as bwrap (nested tmpfs over the workspace bind).
+    for (const dir of directoriesToHide(state.root, options.hideDirectories)) {
+      dockerArgs.push("--tmpfs", `${dir}:ro,nosuid,nodev,size=1m`);
+    }
     dockerArgs.push("-w", absWorkspace, image, "sh", "-c", cmd);
 
     return {
@@ -910,5 +1049,6 @@ export function wrapSandboxedCommand(
     sandboxed: false,
     engine: "none",
     warning: "No sandboxing engine (bwrap or docker) available. Running directly on host.",
+    denial: { kind: "unavailable", category: "engine", reason: "No sandboxing engine (bwrap or docker) available. Running directly on host." },
   };
 }

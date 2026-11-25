@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import { ChatMessage, DEFAULT_MAX_TOOL_INVOCATIONS, MAX_TOOL_INVOCATIONS, ToolCall } from "../types.js";
+import { ChatMessage, DEFAULT_MAX_INFERENCE_SUBMISSIONS, DEFAULT_MAX_TOOL_INVOCATIONS, MAX_INFERENCE_SUBMISSIONS, MAX_TOOL_INVOCATIONS, ToolCall } from "../types.js";
 import { ExecutionSpine, ExecutionReceipt } from "./spine.js";
 import { ExecutionTracker, REPEAT_THRESHOLD, actionKind, backoffMs, type ObservationVerdict } from "./execution_tracking.js";
 import { fileSignature, readCoverage, readRequests } from "./observation_identity.js";
@@ -14,7 +14,7 @@ import { snapshotTests } from "./independent_check.js";
 import { InferenceError } from "../client.js";
 import { TurnResult, InterruptionRecord, InferenceFailure, CapacityRecord, ModelStop, ProviderRecoveryRecord, assertTurnResultInvariants, deepFreezeTurn, summarizeTurn } from "./turn.js";
 import { withDurableSync } from "./durable_file.js";
-import { ProviderRecoveryController, RecoveryCancelled, recoveryPolicyFromEnv } from "./provider_recovery.js";
+import { ProviderRecoveryController, RecoveryCancelled, SubmissionAdmissionDenied, recoveryPolicyFromEnv } from "./provider_recovery.js";
 import { amendObjective, blockedRequirements, carryUnresolvedConflicts, createLedger, gatingRequirements, isNewObjective, openRequirements, supersededBy, trackingOf } from "./objective.js";
 import { snapshot } from "../file_diff.js";
 import { buildBlockedRequirementQuestion, buildSteeringConflictQuestion } from "./needs_input.js";
@@ -24,6 +24,57 @@ import { DEFAULT_REPEATED_CALL_HARD, DEFAULT_REPEATED_CALL_SOFT, judgeRepeatedCa
 import pc from "picocolors";
 import { ConfirmHandler, CompactionCommitError, ContextBudgetError, LedgerNotRetainedError, observationKey, recoveryDenialMessage, notExecutedMessage, observationPresence, unreacquiredRemovals, STEP_NOTICE, CUT_NOTICE, truncatedReplyNotice, harnessNoteMessage, READ_ONLY_TOOLS, foldVoluminousOutput, stepPosition, triggerNotification } from "./agent_support.js";
 import type { AutonomousAgent } from "../agent.js";
+
+class InferenceSubmissionBudgetExhausted extends Error {}
+class InferenceSubmissionPersistenceFailed extends Error {}
+
+interface TaskElapsedTurnState {
+  remainingMs: number | undefined;
+  historyComplete: boolean;
+  reservationFailed: boolean;
+  isDeadline: boolean;
+}
+
+function beginTaskElapsedTurn(tracker: ExecutionTracker, budget: any, objective: any, durable: boolean, persist: () => boolean): TaskElapsedTurnState {
+  const remainingMs = budget
+    ? tracker.beginTaskElapsedBudget(budget.maxTaskMinutes * 60_000, Date.now(), objective?.startedAt)
+    : undefined;
+  return {
+    remainingMs,
+    historyComplete: tracker.data.taskElapsedHistoryComplete,
+    reservationFailed: Boolean(objective && durable && !persist()),
+    isDeadline: remainingMs !== undefined && budget !== undefined && remainingMs <= budget.maxTurnMinutes * 60_000,
+  };
+}
+
+function taskTimeLimitDetail(budget: any, state: TaskElapsedTurnState): string {
+  return state.isDeadline
+    ? `objective elapsed-time limit ${budget.maxTaskMinutes} min exhausted; elapsed history ${state.historyComplete ? "is complete" : "was conservatively estimated from the objective start time"}`
+    : `operator time limit ${budget.maxTurnMinutes} min`;
+}
+
+function initialTaskTimeStopReason(state: TaskElapsedTurnState, persistenceFailure?: string): TurnReason | undefined {
+  return state.remainingMs === 0 && !persistenceFailure ? "TIME_BUDGET_EXHAUSTED" : undefined;
+}
+
+function activeTurnDeadline(startedAt: number, budget: any, taskRemainingMs: number | undefined): number {
+  const limitMs = budget
+    ? Math.min(budget.maxTurnMinutes * 60_000, taskRemainingMs ?? Number.POSITIVE_INFINITY)
+    : Number.POSITIVE_INFINITY;
+  return Number.isFinite(limitMs) ? startedAt + limitMs : Number.POSITIVE_INFINITY;
+}
+
+function shouldArmTurnDeadline(budget: any, activeTurnLimitMs: number, deadline: number): boolean {
+  return Boolean(budget && activeTurnLimitMs > 0 && Number.isFinite(deadline));
+}
+
+function queuedCompactionBudgetReason(budget: any, tracker: ExecutionTracker): string | undefined {
+  return budget && tracker.remainingTaskElapsedBudget(Date.now()) === 0 ? "the objective elapsed-time budget is exhausted" : undefined;
+}
+
+function shouldOverrideStopAfterDeadline(timeBudgetExpired: boolean, modelStop: ModelStop): boolean {
+  return timeBudgetExpired && modelStop === "NONE";
+}
 
 export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean; tddRed?: boolean; step?: boolean }): Promise<TurnResult> {
   // The REPL calls runTurn directly. Route worktree-enabled turns through the
@@ -79,6 +130,7 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
     if (options.signal.aborted) this.requestCancel("external signal");
     else options.signal.addEventListener("abort", () => this.requestCancel("external signal"), { once: true });
   }
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   this.completionSummary = undefined;
   this.turnPersistenceFailures = this.initialStatePersistenceFailure ? [this.initialStatePersistenceFailure] : [];
   this.objectiveBudgetPersistenceFailure = undefined;
@@ -155,6 +207,9 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
   const maxTotalSteps = budget ? budget.maxTotalSteps : segmentSteps;
   let segment = 1;
   const tracker = this.objective && this.durable ? trackingOf(this.objective) : ExecutionTracker.fresh();
+  if (!Number.isSafeInteger(tracker.data.inferenceSubmissions) || tracker.data.inferenceSubmissions < 0) {
+    throw new Error("Persisted objective inference submission count is invalid; refusing to send inference requests.");
+  }
   const configuredToolLimit = this.config.maxToolInvocations ?? budget?.maxToolInvocations ?? DEFAULT_MAX_TOOL_INVOCATIONS;
   if (!Number.isSafeInteger(configuredToolLimit) || configuredToolLimit < 1 || configuredToolLimit > MAX_TOOL_INVOCATIONS) {
     throw new Error(`Invalid tool invocation budget: expected an integer from 1 to ${MAX_TOOL_INVOCATIONS}.`);
@@ -175,6 +230,19 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
     maximum: maxToolInvocations,
     persist: () => this.persistProgress({ messages: true }),
   };
+  const configuredInferenceLimit = this.config.maxInferenceSubmissions ?? budget?.maxInferenceSubmissions ?? DEFAULT_MAX_INFERENCE_SUBMISSIONS;
+  if (!Number.isSafeInteger(configuredInferenceLimit) || configuredInferenceLimit < 1 || configuredInferenceLimit > MAX_INFERENCE_SUBMISSIONS) {
+    throw new Error(`Invalid inference submission budget: expected an integer from 1 to ${MAX_INFERENCE_SUBMISSIONS}.`);
+  }
+  let maxInferenceSubmissions = configuredInferenceLimit;
+  const savedInferenceLimit = tracker.data.maxInferenceSubmissions ?? 0;
+  if (savedInferenceLimit !== 0 && (!Number.isSafeInteger(savedInferenceLimit) || savedInferenceLimit < 1 || savedInferenceLimit > MAX_INFERENCE_SUBMISSIONS)) {
+      throw new Error("Persisted objective inference submission budget is invalid; refusing to submit inference requests.");
+  }
+  maxInferenceSubmissions = savedInferenceLimit === 0 ? configuredInferenceLimit : Math.min(savedInferenceLimit, configuredInferenceLimit);
+  tracker.data.maxInferenceSubmissions = maxInferenceSubmissions;
+  const taskElapsedState = beginTaskElapsedTurn(tracker, budget, this.objective, this.durable, () => this.persistProgress({ messages: true }));
+  const taskElapsedRemainingMs = taskElapsedState.remainingMs;
 
   try {
     if (this.flightRecorder) {
@@ -233,7 +301,9 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
     let inferenceFailure: InferenceFailure | null = null;
     let interruption: InterruptionRecord | null = null;
     let undispatched = 0;
-    let persistenceFailure: string | undefined;
+    let persistenceFailure: string | undefined = taskElapsedState.reservationFailed
+      ? "Task elapsed-time budget could not be saved before execution; no model or tool action was started."
+      : undefined;
 
     const reserveToolInvocations = (requested: number): { admitted: number; exhausted: boolean } => {
       const admitted = tracker.admitToolInvocations(requested, maxToolInvocations);
@@ -242,6 +312,14 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
         return { admitted: 0, exhausted: false };
       }
       return { admitted, exhausted: admitted < requested };
+    };
+    const reserveInferenceSubmission = () => {
+      const admitted = tracker.admitInferenceSubmissions(1, maxInferenceSubmissions);
+      if (admitted !== 1) throw new InferenceSubmissionBudgetExhausted("Objective inference submission budget exhausted before request dispatch.");
+      if (!this.persistProgress({ messages: true })) {
+        persistenceFailure = "Inference submission budget could not be saved before dispatch; no request was sent.";
+        throw new InferenceSubmissionPersistenceFailed(persistenceFailure);
+      }
     };
     const stopForToolBudget = () => {
       stopReason = "TOOL_INVOCATION_BUDGET_EXHAUSTED";
@@ -257,7 +335,20 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
       content: `Not executed: ${stopDetail ?? persistenceFailure ?? "tool invocation budget unavailable"}.`,
     });
 
+    let stopReason: TurnReason | undefined = initialTaskTimeStopReason(taskElapsedState, persistenceFailure);
+    let stopDetail: string | undefined;
+    let timeBudgetExpired = false;
+    const taskTimeDeadline = taskElapsedState.isDeadline;
+    if (stopReason === "TIME_BUDGET_EXHAUSTED") {
+      stopDetail = taskTimeLimitDetail(budget, taskElapsedState);
+    }
     const markInterrupted = (phase: InterruptionRecord["phase"], extra: Partial<InterruptionRecord> = {}) => {
+      if (timeBudgetExpired) {
+        stopReason = "TIME_BUDGET_EXHAUSTED";
+        stopDetail = taskTimeLimitDetail(budget, taskElapsedState);
+        interruption = null;
+        return;
+      }
       interruption = {
         requestedAt: turn.cancelRequestedAt || new Date().toISOString(),
         phase,
@@ -275,9 +366,14 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
     // Continuation: `maxSteps` is a segment, a durable checkpoint. The total-step budget is objective-scoped and
     // survives resumes; the active invocation also has a finite wall-clock limit. Without continuation
     // (`--no-continuation`), the first segment boundary ends the turn (LIMIT_REACHED, legacy).
-    const turnDeadline = budget && Number.isFinite(budget.maxTurnMinutes) ? Date.now() + budget.maxTurnMinutes * 60_000 : Number.POSITIVE_INFINITY;
-    let stopReason: TurnReason | undefined;
-    let stopDetail: string | undefined;
+    const turnStartedAt = Date.now();
+    const turnDeadline = activeTurnDeadline(turnStartedAt, budget, taskElapsedRemainingMs);
+    const activeTurnLimitMs = turnDeadline - turnStartedAt;
+    if (shouldArmTurnDeadline(budget, activeTurnLimitMs, turnDeadline)) {
+      deadlineTimer = setTimeout(() => {
+        if (this.requestCancel(taskTimeDeadline ? "task time budget" : "time budget")) timeBudgetExpired = true;
+      }, Math.max(0, turnDeadline - Date.now()));
+    }
     let completionNudges = 0;
     // Recovery state (notes, stage, refusals) lives in the tracker: in the ledger when durable, so compaction cannot
     // remove it and resume restores it.
@@ -322,7 +418,7 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
       }
       if (Date.now() > turnDeadline) {
         stopReason = "TIME_BUDGET_EXHAUSTED";
-        stopDetail = `operator time limit ${budget!.maxTurnMinutes} min`;
+        stopDetail = taskTimeLimitDetail(budget, taskElapsedState);
         break;
       }
       if (budget && tracker.data.stepsWithoutProgress >= budget.stagnationSteps) {
@@ -667,8 +763,15 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
       };
       try {
         assistantMessage = await recovery.run(requestId, {
+          beforeSubmit: () => {
+            try {
+              reserveInferenceSubmission();
+            } catch (err) {
+              throw new SubmissionAdmissionDenied(err);
+            }
+          },
           submit: (s) => this.submitGenAiRequest(activeClient, () =>
-            this.submitGuardingLength(lengthGuard, this.requestMessages(this.messages), (request: any) =>
+              this.submitGuardingLength(lengthGuard, this.requestMessages(this.messages), (request: any) =>
                 activeClient.chatCompletionStream(
                   request,
                   this.getEffectiveTools(),
@@ -684,7 +787,7 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
                   s.requestId,
                   signal,
                 )),
-          ),
+            ),
           probe: (probeSignal, opts) =>
             typeof activeClient.probeAvailability === "function"
               ? activeClient.probeAvailability(probeSignal, { timeoutMs: policy.probeTimeoutMs, ...opts })
@@ -712,6 +815,23 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
           this.ui.stopSpinner(true);
         }
       } catch (err: any) {
+        if (err instanceof InferenceSubmissionBudgetExhausted) {
+          this.ui.stopSpinner(false, "Objective inference submission budget exhausted; no additional provider request was sent");
+          stopReason = "INFERENCE_SUBMISSION_BUDGET_EXHAUSTED";
+          const count = tracker.data.inferenceSubmissionHistoryComplete
+            ? `${tracker.data.inferenceSubmissions}/${maxInferenceSubmissions}`
+            : `at least ${tracker.data.inferenceSubmissions}/${maxInferenceSubmissions}; earlier request history is unknown`;
+          stopDetail = `inference submission budget exhausted (${count} inference submissions)`;
+          stepsUsed = currentStep;
+          endStep();
+          break;
+        }
+        if (err instanceof InferenceSubmissionPersistenceFailed) {
+          this.ui.stopSpinner(false, "Inference submission budget could not be saved; no provider request was sent");
+          stepsUsed = currentStep;
+          endStep();
+          break;
+        }
         if (err instanceof ContextBudgetError) {
           this.ui.stopSpinner(false, `Inference error: ${err.message}`);
           throw err;
@@ -1076,11 +1196,22 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
     // Queued /compact: run now that the last step has settled, or cancelled with the turn.
     if (this.compactionQueue.length) {
       try {
-        await this.drainCompactionQueue(currentStep, undefined, interruption ? "the turn was cancelled" : persistenceFailure ? "the turn stopped on a persistence failure" : undefined, true);
+        const taskBudgetReason = queuedCompactionBudgetReason(budget, tracker);
+        await this.drainCompactionQueue(
+          currentStep,
+          signal,
+          interruption ? "the turn was cancelled" : persistenceFailure ? "the turn stopped on a persistence failure" : taskBudgetReason,
+          true,
+        );
       } catch (err) {
         if (!(err instanceof CompactionCommitError)) throw err;
         persistenceFailure ??= err.outcome.message;
       }
+    }
+    if (deadlineTimer) clearTimeout(deadlineTimer);
+    if (shouldOverrideStopAfterDeadline(timeBudgetExpired, modelStop)) {
+      stopReason = "TIME_BUDGET_EXHAUSTED";
+      stopDetail = taskTimeLimitDetail(budget, taskElapsedState);
     }
     if (this.hasQueuedSteering()) {
       this.cancelQueuedSteering(
@@ -1094,6 +1225,7 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
       this.knowledge.autoExtract(promptText, "");
     } catch {}
 
+    tracker.finishTaskElapsedBudget(Date.now());
     const limitReached = !interruption && !inferenceFailure && !capacityBlock && !persistenceFailure && modelStop === "NONE" && stopReason !== undefined;
     const resultInput = {
       persistenceFailure,
@@ -1119,6 +1251,12 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
               toolInvocations: tracker.data.toolInvocations,
               maxToolInvocations,
               toolInvocationHistoryComplete: tracker.data.toolInvocationHistoryComplete,
+              inferenceSubmissions: tracker.data.inferenceSubmissions,
+              maxInferenceSubmissions,
+              inferenceSubmissionHistoryComplete: tracker.data.inferenceSubmissionHistoryComplete,
+              taskElapsedMs: tracker.data.taskElapsedMs,
+              maxTaskElapsedMs: tracker.data.maxTaskElapsedMs,
+              taskElapsedHistoryComplete: tracker.data.taskElapsedHistoryComplete,
               ...(tracker.loops().length ? { repeated: tracker.loops().slice(0, 5).map((r) => ({ action: r.action, count: r.count, firstStep: r.firstStep, lastStep: r.lastStep })) } : {}),
               ...(this.stateIdentityUncertainty ? { stateUncertainty: this.stateIdentityUncertainty } : {}),
             },
@@ -1155,6 +1293,8 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
     this.ui.turnSummary(result, this.completionSummary);
     return result;
   } catch (err: any) {
+    if (deadlineTimer) clearTimeout(deadlineTimer);
+    tracker.finishTaskElapsedBudget(Date.now());
     turn.closing = true;
     this.closeSteeringConflicts();
     if (this.compactionQueue.length) {
@@ -1188,6 +1328,9 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
               stopReason: "UNHANDLED_ERROR",
               stepsWithoutProgress: tracker.data.stepsWithoutProgress,
               cumulativeSteps: tracker.data.cumulativeSteps,
+              taskElapsedMs: tracker.data.taskElapsedMs,
+              maxTaskElapsedMs: tracker.data.maxTaskElapsedMs,
+              taskElapsedHistoryComplete: tracker.data.taskElapsedHistoryComplete,
               ...(tracker.loops().length ? { repeated: tracker.loops().slice(0, 5).map((r) => ({ action: r.action, count: r.count, firstStep: r.firstStep, lastStep: r.lastStep })) } : {}),
               ...(this.stateIdentityUncertainty ? { stateUncertainty: this.stateIdentityUncertainty } : {}),
             },

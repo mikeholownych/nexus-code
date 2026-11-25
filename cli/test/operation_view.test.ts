@@ -105,6 +105,38 @@ test("projects units, depth, durable state and the open decision", () => {
   assert.equal(view.decisions[0].command, "nexus operation decide op-view d1 <option> [--note <text>]");
 });
 
+test("projects active-time consumption, open intervals and conservative legacy estimates", () => {
+  const op = state();
+  op.policy.maxTotalActiveMs = 5 * 60_000;
+  op.activeElapsedMs = 60_000;
+  op.activeElapsedHistoryComplete = true;
+  op.activeSinceMs = NOW - 2 * 60_000;
+  op.pauseReason = "Paused at the operation time limit.";
+  const view = buildOperationView(op, { now: NOW });
+
+  assert.deepEqual(view.activeBudget, {
+    elapsedMs: 3 * 60_000,
+    limitMs: 5 * 60_000,
+    remainingMs: 2 * 60_000,
+    historyComplete: true,
+    intervalOpen: true,
+  });
+  assert.equal(view.pauseReason, op.pauseReason);
+  const rendered = renderOperationView(view);
+  assert.match(rendered, /active time 3m 0s \/ 5m 0s/);
+  assert.match(rendered, /pause reason: Paused at the operation time limit\./);
+
+  const legacy = state();
+  legacy.policy.maxTotalActiveMs = 5 * 60_000;
+  legacy.createdAt = new Date(NOW - 4 * 60_000).toISOString();
+  legacy.activeElapsedMs = 0;
+  legacy.activeElapsedHistoryComplete = false;
+  const legacyView = buildOperationView(legacy, { now: NOW });
+  assert.equal(legacyView.activeBudget.elapsedMs, 4 * 60_000);
+  assert.equal(legacyView.activeBudget.historyComplete, false);
+  assert.match(renderOperationView(legacyView), /conservative history estimate/);
+});
+
 test("reports resource eligibility with the scheduler's own rules", () => {
   const op = state();
   const key = scopeKey(op.resources[0], "model");
@@ -708,7 +740,14 @@ test("the --json document satisfies the checked-in JSON schema", () => {
     integrationBranch: "nexus/op-op-view/integration",
     integrationWorktree: "/repo/.nexus/worktrees/op-op-view/integration",
     baseDir: "/repo/.nexus/worktrees/op-op-view",
-    units: {},
+    units: {
+      u1: {
+        branch: "nexus/op-op-view/u1",
+        worktree: "/repo/.nexus/worktrees/op-op-view/units/u1",
+        baseCommit: "a".repeat(40),
+        ownerId: "op-view:u1:42",
+      },
+    },
   };
   op.integrations = [
     {
@@ -721,6 +760,7 @@ test("the --json document satisfies the checked-in JSON schema", () => {
       outcome: "VERIFIED",
       summary: "done",
       verification: "PASSED",
+      ownerId: "op-view:u1:42",
     },
   ];
   const key = scopeKey(op.resources[0], "model");
@@ -764,7 +804,7 @@ test("a corrupt record is reported cleanly and quarantined by the shared loader"
   assert.equal(fs.readdirSync(path.dirname(file)).some((name) => name.startsWith("op-cli-corrupt.json.corrupt-")), true);
 });
 
-test("projects the operation's git isolation and unit integration receipts", () => {
+test("projects the operation's git isolation, worktree owners, and unit integration receipts", () => {
   const op = state();
   op.git = {
     isolate: true,
@@ -774,7 +814,14 @@ test("projects the operation's git isolation and unit integration receipts", () 
     integrationBranch: "nexus/op-op-view-123456/integration",
     integrationWorktree: "/repo/.nexus/worktrees/op-op-view-123456/integration",
     baseDir: "/repo/.nexus/worktrees/op-op-view-123456",
-    units: {},
+    units: {
+      u1: {
+        branch: "nexus/op-op-view-123456/u1-abcdef",
+        worktree: "/repo/.nexus/worktrees/op-op-view-123456/units/u1",
+        baseCommit: "a".repeat(40),
+        ownerId: "op-view:u1:42",
+      },
+    },
   };
   op.integrations = [
     {
@@ -787,6 +834,7 @@ test("projects the operation's git isolation and unit integration receipts", () 
       outcome: "VERIFIED",
       summary: "done",
       verification: "PASSED",
+      ownerId: "op-view:u1:42",
     },
   ];
   const view = buildOperationView(op, { now: NOW });
@@ -794,12 +842,18 @@ test("projects the operation's git isolation and unit integration receipts", () 
     integrationBranch: "nexus/op-op-view-123456/integration",
     integrationWorktree: "/repo/.nexus/worktrees/op-op-view-123456/integration",
   });
+  assert.deepEqual(view.units[0].worktree, {
+    path: "/repo/.nexus/worktrees/op-op-view-123456/units/u1",
+    branch: "nexus/op-op-view-123456/u1-abcdef",
+    ownerId: "op-view:u1:42",
+  });
   assert.deepEqual(view.units[0].integration, {
     commit: "b".repeat(40),
     integratedCommit: "c".repeat(40),
     mergedAt: "2026-10-28T11:20:00.000Z",
     files: ["src/value.ts"],
     verification: "PASSED",
+    ownerId: "op-view:u1:42",
   });
   assert.equal(view.units[1].integration, undefined);
 
@@ -813,7 +867,10 @@ test("projects the operation's git isolation and unit integration receipts", () 
     contextLimit: 200_000,
     at: "2026-10-28T11:30:00.000Z",
   });
-  assert.match(renderOperationView(withContext, { width: 120 }), /context 42000 tokens \(effective cap 120000\)/);
+  const rendered = renderOperationView(withContext, { width: 120 });
+  assert.match(rendered, /context 42000 tokens \(effective cap 120000\)/);
+  assert.match(rendered, /worktree: \/repo\/.nexus\/worktrees\/op-op-view-123456\/units\/u1/);
+  assert.match(rendered, /owner op-view:u1:42/);
 
   // The effective cap is the smaller of the operator's budget and the resource's advertised limit.
   op.units[0].context = { estimatedPromptTokens: 42_000, budgetTokens: 500_000, contextLimit: 200_000, at: "2026-10-28T11:30:00.000Z" };
@@ -827,9 +884,9 @@ test("projects the operation's git isolation and unit integration receipts", () 
     { unitId: "u1", name: "before-refactor", at: "2026-10-28T11:30:00.000Z", messages: 12 },
   ]);
   assert.match(renderOperationView(withCheckpoints, { width: 120 }), /Checkpoints\n  u1\/before-refactor · 12 messages/);
-  const rendered = renderOperationView(view, { width: 120 });
-  assert.match(rendered, /isolated: nexus\/op-op-view-123456\/integration/);
-  assert.match(rendered, /u1 \[implementer\] Implement the projector\s+COMPLETE.*integrated cccccccccccc/);
+  const renderedGit = renderOperationView(view, { width: 120 });
+  assert.match(renderedGit, /isolated: nexus\/op-op-view-123456\/integration/);
+  assert.match(renderedGit, /u1 \[implementer\] Implement the projector\s+COMPLETE.*integrated cccccccccccc/);
 });
 
 test("ACC-V11-OBS-01: replay renders every event once, oldest first, with contiguous indices", () => {
@@ -864,7 +921,7 @@ test("ACC-V11-OBS-02/03: --replay --json carries the timeline and leaves the rec
   const json = runCli(["operation", "status", "--replay", "--json", "op-cli-replay"], fixture);
   assert.equal(json.status, 0, json.stderr);
   const views = JSON.parse(json.stdout);
-  assert.equal(views[0].schemaVersion, 2);
+  assert.equal(views[0].schemaVersion, OPERATION_VIEW_SCHEMA_VERSION);
   assert.equal(views[0].replay.schemaVersion, 1);
   assert.equal(views[0].replay.entries.length, 3);
   assert.deepEqual(views[0].replay.entries.map((e: any) => e.index), [1, 2, 3]);

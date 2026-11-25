@@ -1,0 +1,350 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "nexus job record v1",
+  "description": "Generated from JobRecordDocument in cli/src/core/runner_store.ts by cli/scripts/gen_job_schema.mjs. Do not edit by hand. The record of a detached job (runner/jobs/<id>/job.json). The schema describes shape only; the reader (parseJobRecord) also refuses unknown keys, repeated keys and out-of-range values.",
+  "$ref": "#/$defs/JobRecord",
+  "$defs": {
+    "JobAttempt": {
+      "type": "object",
+      "properties": {
+        "bootId": {
+          "type": "string"
+        },
+        "end": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "$ref": "#/$defs/JobAttemptEndReason"
+            },
+            "signal": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "code",
+            "reason",
+            "signal"
+          ]
+        },
+        "endedAt": {
+          "type": "string"
+        },
+        "n": {
+          "type": "number"
+        },
+        "pid": {
+          "description": "The worker's identity: signals go only to a process that still matches all three.",
+          "type": "number"
+        },
+        "startTicks": {
+          "type": "string"
+        },
+        "startedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "bootId",
+        "n",
+        "pid",
+        "startTicks",
+        "startedAt"
+      ]
+    },
+    "JobAttemptEndReason": {
+      "enum": [
+        "crashed",
+        "deadline",
+        "exited",
+        "reboot",
+        "runner_stop",
+        "stopped"
+      ]
+    },
+    "JobBudgets": {
+      "type": "object",
+      "properties": {
+        "maxInferenceSubmissions": {
+          "type": "number"
+        },
+        "maxToolInvocations": {
+          "type": "number"
+        },
+        "maxTotalSteps": {
+          "description": "Objective-wide, counted across attempts.",
+          "type": "number"
+        },
+        "maxTurnMinutes": {
+          "description": "One attempt's turn deadline.",
+          "type": "number"
+        },
+        "timeoutMinutes": {
+          "description": "The whole job, from `createdAt`; `deadlineAt` is derived from it once.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "maxInferenceSubmissions",
+        "maxToolInvocations",
+        "maxTotalSteps",
+        "maxTurnMinutes",
+        "timeoutMinutes"
+      ]
+    },
+    "JobOrigin": {
+      "description": "Who asked for the job. A trigger job (BG-3) names the trigger, the one event it stands for (`eventId` is unique per\ntrigger: a second job for the same event is never made) and the SHA-256 of the approved spec it was fired from.",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "approvedSha256": {
+              "type": "string"
+            },
+            "eventId": {
+              "type": "string"
+            },
+            "eventKind": {
+              "enum": [
+                "file-change",
+                "webhook"
+              ]
+            },
+            "kind": {
+              "const": "trigger"
+            },
+            "triggerId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "approvedSha256",
+            "eventId",
+            "eventKind",
+            "kind",
+            "triggerId"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "dueAt": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "schedule"
+            },
+            "scheduleId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "dueAt",
+            "kind",
+            "scheduleId"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "cli"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "JobOutcome": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "receipt": {
+          "description": "File name of the receipt in the job directory.",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/TerminalJobState"
+        }
+      },
+      "required": [
+        "receipt",
+        "status"
+      ]
+    },
+    "JobPolicy": {
+      "description": "What an unattended job may do to the fresh worktree it runs in. Nothing else is expressible.",
+      "enum": [
+        "read-only",
+        "worktree-write"
+      ]
+    },
+    "JobProvider": {
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      }
+    },
+    "JobRecord": {
+      "description": "`jobs/<id>/job.json`. The runner is its only writer.",
+      "type": "object",
+      "properties": {
+        "attempts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JobAttempt"
+          }
+        },
+        "autoResumes": {
+          "description": "Crash resumes used; reboots and orderly runner stops are not counted.",
+          "type": "number"
+        },
+        "baseCommit": {
+          "description": "HEAD at submit: the job never sees a later commit.",
+          "type": "string"
+        },
+        "budgets": {
+          "$ref": "#/$defs/JobBudgets"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "deadlineAt": {
+          "description": "Absolute, so it survives runner and machine restarts.",
+          "type": "string"
+        },
+        "deliverables": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "format": {
+          "const": "nexus-job"
+        },
+        "id": {
+          "type": "string"
+        },
+        "maxAutoResumes": {
+          "type": "number"
+        },
+        "operationId": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/JobOrigin"
+        },
+        "outcome": {
+          "$ref": "#/$defs/JobOutcome"
+        },
+        "policy": {
+          "$ref": "#/$defs/JobPolicy"
+        },
+        "provider": {
+          "$ref": "#/$defs/JobProvider"
+        },
+        "specSha256": {
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "BLOCKED",
+            "CANCELLED",
+            "COMPLETE",
+            "FAILED",
+            "QUEUED",
+            "RUNNING",
+            "STARTING",
+            "STOPPING",
+            "TIMED_OUT"
+          ]
+        },
+        "unattended": {
+          "description": "Constant. A record without it is invalid, so no reader can take an attended run for a job.",
+          "const": true
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "verifier": {
+          "description": "The operator's verifier command, or null.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version": {
+          "const": 1
+        },
+        "workspace": {
+          "description": "Real path of the repository at submit.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "attempts",
+        "autoResumes",
+        "baseCommit",
+        "budgets",
+        "createdAt",
+        "deadlineAt",
+        "deliverables",
+        "format",
+        "id",
+        "maxAutoResumes",
+        "operationId",
+        "origin",
+        "policy",
+        "provider",
+        "specSha256",
+        "state",
+        "unattended",
+        "updatedAt",
+        "verifier",
+        "version",
+        "workspace"
+      ]
+    },
+    "TerminalJobState": {
+      "enum": [
+        "BLOCKED",
+        "CANCELLED",
+        "COMPLETE",
+        "FAILED",
+        "TIMED_OUT"
+      ]
+    }
+  }
+}

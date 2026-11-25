@@ -1,0 +1,22 @@
+[
+  {
+    "schema_version": 1,
+    "schemaSha256": "8f5d1c5a9697802d8f9a662b7089d9573b66b36e43dbcdd579966dfffcd27429",
+    "note": "First published schema of the audit bundle verification document (GV-2), generated from AuditVerifyOutput in cli/src/audit_contract.ts on release/v1.3.0. Nothing was published before it. The signature finding kinds, the signature statuses valid, invalid and missing, the result intact_signed and public_key_sha256 are declared so the schema does not change when signing lands; nothing produces them yet."
+  },
+  {
+    "schema_version": 1,
+    "schemaSha256": "ec3cd858df6a7d023defbaca0b26c1fd4222fe74be40ea201d61feaccb609137",
+    "note": "GV-2 slice 2. Additive, so schema_version stays 1: the schema now also admits AuditExportResult, the document `nexus audit export --json` prints when a bundle was written (result \"exported\", with bundle_dir, bundle_id, manifest_sha256, signed, redaction, at_rest, file_count, file_bytes, omitted, warnings). Every document valid under the first entry is still valid, and what `nexus audit verify` prints is unchanged. The error document (AuditVerifyError) is now also what a failed export prints; only its description changed. GV-2 slice 3 now produces the predeclared intact_signed and valid/invalid/missing signature states when a caller supplies an operator-held Ed25519 public key."
+  },
+  {
+    "schema_version": 1,
+    "schemaSha256": "f5a70fc239c8687537d888567379819f44041a135930fde48549248622bd2202",
+    "note": "Additive P10-03 follow-up: audit verification now reports a log that was already broken at export as a finding; schema_version remains 1."
+  },
+  {
+    "schema_version": 1,
+    "schemaSha256": "18a4b9660a68eb5e1e486353c03778c4eb1af2fd045d0985fad7188feddebf1c",
+    "note": "Additive P10-03 follow-up: audit verification reports durable flight recording-gap markers as findings, including a marker before any chained record; schema_version remains 1."
+  }
+]
