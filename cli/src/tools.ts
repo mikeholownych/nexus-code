@@ -67,6 +67,37 @@ export function forbiddenDeletion(workspace: string, target: string): string | n
 }
 
 /**
+ * Why deleting the directory `target` is refused, or null: it holds a protected path, which deleting the directory
+ * would delete with it (the path check on `target` itself sees only the directory's own name). The walk stops at the
+ * first protected path, does not follow symbolic links, has no size limit, and gives the event loop a turn every few
+ * hundred entries so that a large tree does not hold everything else up.
+ */
+export async function protectedBelow(workspace: string, target: string, isProtected: (candidate: string) => boolean): Promise<string | null> {
+  const root = path.resolve(workspace, target.trim());
+  let seen = 0;
+  const pending = [root];
+  while (pending.length) {
+    const dir = pending.pop()!;
+    let entries: fs.Dirent[];
+    try {
+      // A symbolic link here is not followed: lstat says what `root` itself is, and entries carry their own type.
+      if (dir === root && !fs.lstatSync(dir).isDirectory()) return null;
+      entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    } catch {
+      // Not there, or unreadable: the engine will refuse or fail.
+      continue;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (isProtected(full)) return `Security Violation: '${target}' contains the protected path '${path.relative(root, full)}' and cannot be deleted as a whole`;
+      if (entry.isDirectory()) pending.push(full);
+      if (++seen % 256 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  }
+  return null;
+}
+
+/**
  * Parses and expands a standard IPv6 string into a 128-bit BigInt value.
  */
 function parseIPv6ToBigInt(ip: string): bigint | null {
@@ -1364,7 +1395,7 @@ export class RustCoreBridge {
     }
 
     if (toolName === "delete_file") {
-      const refused = forbiddenDeletion(this.workspace, String(args.path || ""));
+      const refused = forbiddenDeletion(this.workspace, String(args.path || "")) ?? await protectedBelow(this.workspace, String(args.path || ""), (candidate) => this.securityManager.isPathProtected(candidate).protected);
       if (refused) return { success: false, output: "", error: refused };
     }
 
