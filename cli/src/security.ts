@@ -219,6 +219,25 @@ function hookTrustFiles(): string[] {
   return [store, path.join(path.dirname(store), "hooks.json")];
 }
 
+/**
+ * HK-3: the operator's own plugin directories, by absolute path (and real path): a module there is imported into
+ * Nexus with no approval, so the agent's file tools must not be able to put one there, in any workspace.
+ */
+function operatorPluginPaths(): string[] {
+  const config = path.dirname(extensionTrustStorePath());
+  // The home directory as the store's own path gives it (`~/.config/nexus`).
+  const dirs = [path.join(path.resolve(config, "..", ".."), ".nexus", "plugins"), path.join(config, "plugins")];
+  const real = dirs.flatMap((dir) => {
+    try {
+      const resolved = fs.realpathSync(dir);
+      return resolved === dir ? [] : [resolved];
+    } catch {
+      return [];
+    }
+  });
+  return [...dirs, ...real];
+}
+
 const SCRIPT_NAMES = ["test", "verify", "ci", "check", "lint"];
 /** [class, globs]; a glob matches a workspace-relative path, case-insensitively, `**\/` meaning any depth (zero or more directories). */
 const DEFAULT_VERIFICATION_PATHS: Array<[VerificationClass, string[]]> = [
@@ -448,7 +467,7 @@ export class SecurityManager {
     return {
       blockedCommands: [...DEFAULT_BLOCKED_COMMANDS, ...loaded.project.blockedCommandPatterns],
       // PA-3: the task-state directory holds goal state, caps and stall counts; the agent must not edit its own limits.
-      protectedPaths: [...DEFAULT_PROTECTED_PATHS, runnerRoot(), ...taskStatePaths(), ...hookTrustFiles(), ...effective.paths.protected.values],
+      protectedPaths: [...DEFAULT_PROTECTED_PATHS, runnerRoot(), ...taskStatePaths(), ...hookTrustFiles(), ...operatorPluginPaths(), ...effective.paths.protected.values],
       allowedDomains: projectDomains ? (projectDomains.length > 0 ? [...projectDomains] : [NO_HOST]) : undefined,
       verificationPaths: {
         mode: effectiveVerificationMode(effective).value,

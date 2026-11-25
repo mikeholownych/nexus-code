@@ -18,6 +18,7 @@ import type { EffectivePolicy } from "./managed_policy.js";
 import { managedPolicy } from "./policy_runtime.js";
 import { isWorkspaceTrusted } from "../workspace_trust.js";
 import { inspectWorkspaceManifestPlugins, type WorkspaceManifestPlugin } from "./workspace_plugins.js";
+import { printable } from "./printable.js";
 import { decodeStrictUtf8, fileStamp, parseStrictJson, readHardenedFile, type KeyPositions } from "./strict_json.js";
 
 export const HOOKS_SCHEMA_VERSION = 1;
@@ -833,15 +834,21 @@ export class HookRegistry {
       return undefined;
     }
     const stamp = loaded.state === "absent" ? "" : loaded.stamp ?? "";
-    const what = state.changed?.join(", ") ?? "";
-    const why = state.status === "read_only" ? "do not run in read-only mode"
-      : state.status === "invalid" ? `are not run: ${state.problem}`
-      : `are not approved${state.status === "changed" ? ` (${what} changed since approval)` : ""}; review them and run \`nexus hooks approve\` in a terminal`;
+    const what = printable(state.changed?.join(", ") ?? "");
+    const shownFile = printable(file);
     // Once per content: a file that changes again is announced again.
     const key = `${file}|${stamp}|${state.status}|${what}|${state.problem ?? ""}`;
     if (!this.told.has(key)) {
       this.told.add(key);
-      this.options.notify?.(`nexus: project hooks in ${file} ${why}`);
+      if (state.status === "changed") {
+        // Hooks that were in force and no longer are: said so that it cannot be missed, with what changed.
+        this.options.notify?.(`nexus: WARNING: project hooks in ${shownFile} are NO LONGER IN FORCE: ${what} changed since approval. They do not run. Review the change, then run \`nexus hooks approve\` in a terminal.`);
+      } else {
+        const why = state.status === "read_only" ? "do not run in read-only mode"
+          : state.status === "invalid" ? `are not run: ${printable(state.problem, 1200)}`
+          : "are not approved; review them and run `nexus hooks approve` in a terminal";
+        this.options.notify?.(`nexus: project hooks in ${shownFile} ${why}`);
+      }
     }
     return undefined;
   }
@@ -885,15 +892,21 @@ export class HookRegistry {
     }
     for (const plugin of plugins) {
       if (plugin.status === "active") continue;
-      const why = plugin.status === "read_only" ? "does not run in read-only mode"
-        : plugin.status === "untrusted_workspace" ? "is not used because the workspace is not trusted (`nexus trust`)"
-        : plugin.status === "policy_refused" ? `is refused by managed policy: ${plugin.problem}`
-        : plugin.status === "invalid" ? `is not used: ${plugin.problem}`
-        : `is not approved${plugin.status === "changed" ? ` (${plugin.changed?.join(", ")} changed since approval)` : ""}; review it and run \`nexus plugins trust ${plugin.id.key}\` in a terminal`;
+      const name = printable(plugin.name, 80);
       const key = `plugin|${plugin.dir}|${plugin.status}|${plugin.digest ?? ""}|${plugin.problem ?? ""}`;
       if (this.told.has(key)) continue;
       this.told.add(key);
-      this.options.notify?.(`nexus: workspace plugin ${plugin.name} (${plugin.dir}) ${why}`);
+      if (plugin.status === "changed") {
+        // A guard that was in force and no longer is: said so that it cannot be missed, with what changed.
+        this.options.notify?.(`nexus: WARNING: workspace plugin ${name} is NO LONGER IN FORCE: ${printable((plugin.changed ?? []).join(", "))} changed since it was approved. Its hooks do not run. Review the change, then run \`nexus plugins trust ${printable(plugin.id.key)}\` in a terminal.`);
+        continue;
+      }
+      const why = plugin.status === "read_only" ? "does not run in read-only mode"
+        : plugin.status === "untrusted_workspace" ? "is not used because the workspace is not trusted (`nexus trust`)"
+        : plugin.status === "policy_refused" ? `is refused by managed policy: ${printable(plugin.problem, 1200)}`
+        : plugin.status === "invalid" ? `is not used: ${printable(plugin.problem, 1200)}`
+        : `is not approved; review it and run \`nexus plugins trust ${printable(plugin.id.key)}\` in a terminal`;
+      this.options.notify?.(`nexus: workspace plugin ${name} (${printable(plugin.dir)}) ${why}`);
     }
     return plugins.filter((plugin) => plugin.status === "active");
   }

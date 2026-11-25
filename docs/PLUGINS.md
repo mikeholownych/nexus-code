@@ -16,6 +16,18 @@ nexus plugins revoke .nexus/plugins/audit.js
 nexus doctor                                # finding plugins.workspace
 ```
 
+## Your own plugin directories
+
+`~/.nexus/plugins/` and `~/.config/nexus/plugins/` hold plugins that are loaded without any approval, because you put
+them there. Two things keep that true:
+
+- The agent's file tools refuse both directories (to read, write, edit or delete, including deleting a directory that
+  contains them), whatever the workspace is.
+- If you start Nexus **in your home directory** (or any directory that contains it), those directories lie inside the
+  workspace, where they cannot be told from repository content. They are then **not loaded** as yours, and a notice
+  says so: "start Nexus in a project directory". `~/.nexus/plugins/` is then treated as the workspace's own plugin
+  directory, where each file needs an approval.
+
 ## What decides whether a workspace plugin loads
 
 All of these, in this order:
@@ -112,7 +124,18 @@ Rules:
 - **Skills.** A skill directory a manifest names (`contributions.skills`, a directory with a `SKILL.md`) is recorded
   and covered by the approval, and that is all in this version: it is **not** added to the skill catalog or to any
   request. Loading plugin skills on a trigger is not built yet.
+- **Bounds.** A plugin's directory holds at most 64 files, 256 directories, 8 levels and 8 MiB (1 MiB per file);
+  past any of these it is invalid. At most 32 plugins are used, from the first 256 entries of `.nexus/plugins/`. An
+  unchanged tree is not read or hashed again: Nexus looks at each file's size and times on every tool call and reads
+  the tree only when something differs.
 - Approving needs a person at a terminal, with the same limit as above for commands that run outside the sandbox.
+- **A workspace plugin is not a control over the agent.** Its files are in the workspace, and the agent can edit
+  them like any other file. An edit takes the plugin out of force: its hooks stop running, and one notice says so
+  (`WARNING: workspace plugin guard is NO LONGER IN FORCE: <file> changed since it was approved`), once per session.
+  Nothing unapproved runs, but the guard is gone until you approve again. A guard that must hold against the agent
+  belongs in your own `~/.config/nexus/hooks.json`.
+- Names of files, plugins and hooks are shown with control and formatting characters written out (`\u001b`), so a
+  file name cannot rewrite what you are shown.
 
 ## Migrating workspace plugins
 
@@ -144,8 +167,10 @@ A hook the plugin provided (a `preToolExecution` that refuses calls, say) is **n
 1. Read each plugin file. Approve it with `nexus plugins trust <file>` in a terminal.
 2. If the plugin imports sibling files or packages, it will show as `load-failed`. Make it one file (bundle it, or
    inline the helpers), then approve the new file.
-3. Consider moving it out of the repository: a plugin in `~/.nexus/plugins/` is yours, needs no approval, and cannot be
-   changed by the repository.
+3. Consider moving it out of the repository: a plugin in `~/.nexus/plugins/` is yours and needs no approval. What
+   protects it: it lies outside the workspace, the agent's file tools refuse to read or write that directory in any
+   workspace, and under the sandbox the agent's commands cannot reach it. What does not: a shell command that runs
+   outside the sandbox with your rights can write there, as it can write any file of yours.
 4. A plugin whose job is to refuse or log tool calls is better written as a command hook, which runs as a separate
    process and can only deny: see [`HOOKS.md`](HOOKS.md). `preToolExecution` that refuses maps to a `pre-tool` hook,
    `onToolResult` logging to a `post-tool` hook. A middleware that rewrites tool arguments has no hook equivalent.

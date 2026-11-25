@@ -303,11 +303,13 @@ not run. It exits 2 when the hooks deny the call.
 ## Limits and residual risks
 
 - An approved hook runs with your authority, outside the sandbox.
-- A project's hooks are a service the repository offers, not a control over the agent: the agent can edit
-  `.nexus/hooks.json` like any other file, and a changed file stops running until you approve it again. Put a guard
-  you rely on in your own `~/.config/nexus/hooks.json`. That file is outside the workspace, where the file tools
-  cannot write; a shell command that runs without the sandbox can still change it, like any file of yours, and a
-  change that breaks the file denies every call instead of dropping the guard.
+- A project's hooks (and a workspace plugin's) are a service the repository offers, not a control over the agent:
+  the agent can edit `.nexus/hooks.json`, or a script it runs, like any other file. An edit takes the hooks out of
+  force until you approve again; one notice says so (`WARNING: project hooks ... are NO LONGER IN FORCE`), once per
+  session. Nothing unapproved runs, but the guard is gone. Put a guard you rely on in your own
+  `~/.config/nexus/hooks.json`. That file is outside the workspace, where the file tools cannot write; a shell
+  command that runs without the sandbox can still change it, like any file of yours, and a change that breaks the
+  file denies every call instead of dropping the guard.
 - The terminal check on `nexus hooks approve` stops a tool call that simply runs the command. It is not a boundary
   against a shell command that runs **outside the sandbox with your rights** (auto mode, sandbox off): such a command
   can fake a terminal (for example with `script`), or write `~/.config/nexus/extension_trust.json` directly. Nexus
