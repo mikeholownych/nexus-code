@@ -49,7 +49,7 @@ Mutation evidence and the exact commands are in the commit messages of the compl
 
 ## Gaps / not claimed
 
-- Restart-specific interrupted-effect reconciliation beyond stale-driver pause still requires separate qualification.
+- Restart-specific interrupted-effect reconciliation: deterministic tests added in `cli/test/interrupted_effect_reconciliation.test.ts` covering `reconcileInterruptedRuns` budget-gated RUNNABLE return, budget-exceeded BLOCKED with INTERRUPTED cause, and unknownResumes counter increment. Operation-level no-effect reconciliation (beyond loop-level `reconcileNoEffect`) remains a future enhancement.
 - Provider-neutral end-to-end / live-gateway qualification remains separate.
 - No merge/tag/publish performed solely from this record; tag remains owner-gated.
 
