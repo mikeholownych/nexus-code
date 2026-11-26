@@ -663,6 +663,14 @@ export class OperationRunner {
       return this.enqueueIntegration(unit, result);
     } catch (err: any) {
       if (signal?.aborted) return { kind: "cancelled" };
+      if (err instanceof OperationInferenceAdmissionError) {
+        // Admission already paused/persisted operation state; do not misclassify as unit execution failure.
+        this.scheduler.emit("OPERATION_PAUSED", err.message, {
+          unitId: unit.id,
+          detail: { reason: "inference_admission", failure: err.failure },
+        });
+        return { kind: "cancelled" };
+      }
       return {
         kind: "failed",
         cause: "EXECUTION_FAILED",
