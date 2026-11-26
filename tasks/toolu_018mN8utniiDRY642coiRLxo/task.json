@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_018mN8utniiDRY642coiRLxo",
+  "agent_id": "ad55194277b6c9731",
+  "subagent_type": "general-purpose",
+  "task_description": "Implement SB-1 permission profiles",
+  "token_usage": {
+    "input_tokens": 100,
+    "cache_creation_tokens": 190835,
+    "cache_read_tokens": 7790008,
+    "output_tokens": 55333,
+    "api_call_count": 50
+  },
+  "started_at": "2026-11-24T09:36:31.643323182Z",
+  "completed_at": "2026-11-25T20:02:55.881936235Z"
+}

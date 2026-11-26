@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01NpERLmLb59NAGkAoEeBj8p",
+  "agent_id": "a58a6bf966fb84de0",
+  "subagent_type": "reviewer",
+  "task_description": "Review MT-2 dispatch decomposition on tip",
+  "token_usage": {
+    "input_tokens": 110,
+    "cache_creation_tokens": 165206,
+    "cache_read_tokens": 6315330,
+    "output_tokens": 34797,
+    "api_call_count": 56
+  },
+  "started_at": "2026-11-25T11:16:29.704681887Z",
+  "completed_at": "2026-11-25T20:02:56.112510008Z"
+}

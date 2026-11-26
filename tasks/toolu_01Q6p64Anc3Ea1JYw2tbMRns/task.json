@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01Q6p64Anc3Ea1JYw2tbMRns",
+  "agent_id": "a7ca23fc72ad0ee6f",
+  "subagent_type": "reviewer",
+  "task_description": "Review HK-3 print-site follow-up PR",
+  "token_usage": {
+    "input_tokens": 94,
+    "cache_creation_tokens": 83822,
+    "cache_read_tokens": 2779932,
+    "output_tokens": 25722,
+    "api_call_count": 48
+  },
+  "started_at": "2026-11-25T11:32:55.288356126Z",
+  "completed_at": "2026-11-25T11:51:03.536786677Z"
+}
