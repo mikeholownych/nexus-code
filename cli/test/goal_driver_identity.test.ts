@@ -96,7 +96,7 @@ const CASES: Array<{ name: string; pick: (pid: number, ticks: string) => Partial
 ];
 
 for (const c of CASES) {
-  test(`stale driver fails closed: ${c.name} reads PAUSED, drive does not execute the unit`, { skip: !linux && "driver identity needs /proc" }, async () => {
+  test(`stale driver fails closed: ${c.name} reads PAUSED and blocks when driven`, { skip: !linux && "driver identity needs /proc" }, async () => {
     const f = fixture();
     try {
       const child = f.live();
@@ -114,18 +114,19 @@ for (const c of CASES) {
       assert.equal(withDerivedPause(f.store.load(id)).status, "PAUSED");
 
       const driven = await driveOperation(f.store.load(id), { store: f.store, executor, workspace: f.workspace, entry: "existing" });
-      assert.equal(driven.status, "PAUSED");
+      assert.equal(driven.status, "BLOCKED");
       assert.match(driven.pauseReason ?? "", c.reason);
+      assert.equal(driven.blocked?.decisions[0]?.cause, "INTERRUPTED");
       assert.deepEqual(calls, [], "no unit runs without operator action");
-      assert.equal(f.store.load(id).status, "PAUSED");
-      assert.equal(f.store.load(id).events.at(-1)?.type, "OPERATION_PAUSED");
+      assert.equal(f.store.load(id).status, "BLOCKED");
+      assert.equal(f.store.load(id).events.at(-1)?.type, "OPERATION_BLOCKED");
     } finally {
       await f.cleanup();
     }
   });
 }
 
-test("a dead driver (kill -9) then restart: reads PAUSED naming the process, drive pauses, explicit resume continues", { skip: !linux && "driver identity needs /proc" }, async () => {
+test("a dead driver (kill -9) then restart: reads PAUSED, blocks on drive, explicit resume continues", { skip: !linux && "driver identity needs /proc" }, async () => {
   const f = fixture();
   try {
     const child = f.live();
@@ -140,7 +141,8 @@ test("a dead driver (kill -9) then restart: reads PAUSED naming the process, dri
     assert.equal(listed.status, "PAUSED");
     assert.match(listed.reason ?? "", new RegExp(`pid ${identity.activePid}\\) is no longer running`));
     const driven = await driveOperation(f.store.load(id), { store: f.store, executor, workspace: f.workspace, entry: "existing" });
-    assert.equal(driven.status, "PAUSED");
+    assert.equal(driven.status, "BLOCKED");
+    assert.equal(driven.blocked?.decisions[0]?.cause, "INTERRUPTED");
     assert.deepEqual(calls, []);
     const resumed = await orchestrator.resume(id);
     assert.equal(resumed.operation.status, "COMPLETE", "the operator's resume runs it");

@@ -221,6 +221,7 @@ export class BatchOrchestrator {
       ...(this.options.onEvent ? { onEvent: this.options.onEvent } : {}),
       ...(this.options.maxInProcessWaitMs !== undefined ? { maxInProcessWaitMs: this.options.maxInProcessWaitMs } : {}),
       entry: "existing",
+      resumeAfterDecision: true,
       prepare: (fresh) => {
         if (fresh.status === "CANCELLED") fresh.status = "RUNNING";
         else if (fresh.status === "PAUSED") fresh.status = fresh.wait ? "WAITING" : "RUNNING";

@@ -1,7 +1,7 @@
 /**
  * BG-3 / G-4 for triggered runs: "no allow-always, a fresh worktree, the unattended flag in receipts, and a
- * kill-and-resume pass", through a real runner and real workers. A trigger starts a job like any other, so the job's
- * rules hold; these tests show it, and show that a kill never makes a second job for the same event.
+ * crash-recovery pass", through a real runner and real workers. A trigger starts a job like any other, so a stale
+ * driver must stop at an operator decision; an event never makes a second job while that decision is pending.
  */
 import "./helpers/leak_guard.js";
 import { test } from "node:test";
@@ -24,7 +24,7 @@ const state = (world: RunnerWorld) => readTriggerState(triggerStatePaths(world.p
 const armed = (world: RunnerWorld, id: string) => until(() => state(world)?.triggers.find((t) => t.id === id && t.armed), 90_000, () => `trigger ${id} to be armed\n${JSON.stringify(state(world))}`);
 const SECRET = "0123456789abcdef0123456789";
 
-test("kill and resume a triggered run: the worker is resumed, the runner's restart adopts it, and the event is never fired twice", { timeout: 290_000 }, async () => {
+test("a killed triggered worker blocks for operator review, and runner restart never replays the event", { timeout: 290_000 }, async () => {
   const world = runnerWorld();
   const repo = fs.realpathSync(makeRepo({ "src/a.ts": "a\n" }));
   const gw = await stalledGateway();
@@ -49,45 +49,39 @@ test("kill and resume a triggered run: the worker is resumed, the runner's resta
     await until(() => state(world)?.triggers.find((t) => t.id === "watch-src")?.dropped.overlap, 60_000, () => `the overlap drop\n${JSON.stringify(state(world))}`);
     assert.equal(triggerJobs(world, "watch-src").length, 1);
 
-    // The worker is killed with SIGKILL: the runner resumes the same job.
+    // The worker is killed with SIGKILL: one automatic recovery attempt records the stale driver and blocks.
     const first = world.job(job.id)!.attempts[0];
     world.remember(first.pid);
     assert.equal(signalProcess(first, "SIGKILL"), true);
-    const resumed = await until(() => {
-      const record = world.job(job.id);
-      return record && record.attempts.length >= 2 && !record.attempts[1].end && record.state !== "BLOCKED" ? record : undefined;
-    }, 150_000, () => `a second attempt\n${JSON.stringify(world.job(job.id))}`);
-    assert.equal(resumed.autoResumes, 1);
-    assert.deepEqual(resumed.attempts[0].end, { code: null, signal: "SIGKILL", reason: "crashed" });
+    const blocked = await world.waitJob(job.id, ["BLOCKED", "COMPLETE", "FAILED", "CANCELLED", "TIMED_OUT"], 150_000);
+    assert.equal(blocked.state, "BLOCKED", JSON.stringify(readReceipt(world.paths, job.id)));
+    assert.equal(blocked.autoResumes, 1);
+    assert.equal(blocked.attempts.length, 2);
+    assert.deepEqual(blocked.attempts[0].end, { code: null, signal: "SIGKILL", reason: "crashed" });
     assert.equal(sameProcess(first), false);
     assert.equal(triggerJobs(world, "watch-src").length, 1, "no duplicate job for the same event");
 
-    // Then the runner itself dies: a new one adopts the worker, re-arms the trigger and fires nothing.
-    await until(() => world.job(job.id)?.state === "RUNNING" && gw.requests.length >= 2, 150_000, () => "the resumed attempt to be mid-inference");
-    const second = world.job(job.id)!.attempts[1];
-    world.remember(second.pid);
+    // Restarting the runner leaves the blocked job and event untouched; there is no unattended model call.
     runner.proc.kill("SIGKILL");
     await runner.exited;
-    assert.equal(sameProcess(second), true, "the worker outlives its runner");
     runner = await world.startRunner([], env);
     await armed(world, "watch-src");
     await new Promise((resolve) => setTimeout(resolve, 8_000));
     assert.equal(triggerJobs(world, "watch-src").length, 1, "the restart fired nothing");
     assert.equal(world.job(job.id)!.attempts.length, 2);
     assert.equal(world.job(job.id)!.autoResumes, 1);
+    assert.equal(world.job(job.id)!.state, "BLOCKED");
+    assert.equal(gw.requests.length, 1, "no new inference before an operator decision");
     const status = (await world.run(["triggers", "status", "watch-src", "-w", repo])).stdout;
     assert.match(status, new RegExp(`fired: 1; last .* job ${job.id} event ${eventId}`));
 
-    const stopped = await world.run(["job", "stop", job.id]);
-    assert.equal(stopped.code, 0, stopped.stderr);
-    const ended = await world.waitJob(job.id, ["CANCELLED", "COMPLETE", "BLOCKED", "FAILED", "TIMED_OUT"], 120_000);
-    assert.equal(ended.state, "CANCELLED");
     const receipt = readReceipt(world.paths, job.id)!;
     assert.equal(receipt.trigger_id, "watch-src");
     assert.deepEqual(receipt.trigger_event, { id: eventId, kind: "file-change", approved_sha256: job.origin.kind === "trigger" ? job.origin.approvedSha256 : "" });
     assert.equal(receipt.unattended, true);
     assert.equal(receipt.approval_mode, "read-only");
     assert.equal(receipt.attempts, 2);
+    assert.equal(receipt.outcome, "BLOCKED");
     assert.equal(git(repo, "rev-parse", "HEAD"), headAtApproval);
   } finally {
     await world.cleanup();

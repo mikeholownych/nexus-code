@@ -1065,6 +1065,45 @@ function refuseLiveForeignDriver(state: DurableOperationState): void {
   if (pid !== undefined) throw new OperationLockedError(`Operation ${state.id} is recorded as driven by live pid ${pid} on ${state.activeHost} (its lock is not held); refusing a second driver.`);
 }
 
+function hasStaleDriverPause(state: DurableOperationState): boolean {
+  return state.status === "PAUSED" && state.pauseReason?.startsWith(STALE_PAUSE_PREFIX) === true;
+}
+
+/** Unattended: block before prepare. Always block after prepare if still stale. */
+function shouldBlockStalePause(state: DurableOperationState, resumeAfterDecision: boolean | undefined): boolean {
+  return hasStaleDriverPause(state) && resumeAfterDecision !== true;
+}
+
+function blockStaleDriverRecovery(
+  state: DurableOperationState,
+  store: OperationStore,
+  callbacks: Pick<OperationRunnerOptions, "onEvent" | "onDiagnostic">,
+): DurableOperationState {
+  const now = Date.now;
+  const registry = new ResourceRegistry(state.resources, state.conditions, { now, random: Math.random });
+  const scheduler = new ConvergenceScheduler(state, registry, now, callbacks.onEvent, callbacks.onDiagnostic);
+  scheduler.reconcileStaleDriverRuns();
+  state.status = "RUNNING";
+  const decisions = state.units.filter((unit) => unit.status === "BLOCKED" && unit.blocked).map((unit) => unit.blocked!.decision);
+  if (!decisions.length) {
+    decisions.push({
+      id: "operation#stale-driver",
+      unitId: "*",
+      cause: "INTERRUPTED",
+      question: "The previous driver stopped and its remaining work cannot be confirmed. Inspect the workspace, then resume or stop the operation?",
+      options: [
+        { id: "1", label: "resume after inspection", action: { kind: "keep_waiting" } },
+        { id: "2", label: "stop the operation", action: { kind: "cancel_operation" } },
+      ],
+    });
+  }
+  scheduler.finish({ kind: "blocked", decisions });
+  state.conditions = registry.snapshot();
+  state.updatedAt = new Date(now()).toISOString();
+  store.save(state);
+  return state;
+}
+
 export async function driveOperation(state: DurableOperationState, opts: DriveOptions): Promise<DurableOperationState> {
   const { store, signal, entry, prepare, resumeAfterDecision, ...runnerOpts } = opts;
   const release = store.acquire(state.id);
@@ -1075,15 +1114,15 @@ export async function driveOperation(state: DurableOperationState, opts: DriveOp
       state = store.load(state.id);
     }
     if (entry === "existing") {
-      // `operation decide` records the operator's choice, then resumes under a new driver lock in this same process.
-      // Refresh the identity for that handoff so the process that presented the decision is not mistaken for a second
-      // crash. If this process dies during resumed work, its identity is stale on the next load.
       if (resumeAfterDecision && state.status !== "COMPLETE" && state.status !== "CANCELLED") stampDriver(state);
       refuseLiveForeignDriver(state);
       pauseForStaleDriver(state);
+      if (shouldBlockStalePause(state, resumeAfterDecision)) {
+        return blockStaleDriverRecovery(state, store, runnerOpts);
+      }
     }
     prepare?.(state);
-    if (state.status === "PAUSED" && state.pauseReason?.startsWith(STALE_PAUSE_PREFIX)) {
+    if (hasStaleDriverPause(state)) {
       store.save(state);
       return state;
     }
@@ -1100,10 +1139,6 @@ export async function driveOperation(state: DurableOperationState, opts: DriveOp
   }
 }
 
-/**
- * Applies an operator decision under the driver lock: validated against the persisted decision (DecisionRejected
- * otherwise), recorded on the unit, persisted. The next run re-evaluates the operation from there.
- */
 export function applyOperatorDecision(
   store: OperationStore,
   id: string,

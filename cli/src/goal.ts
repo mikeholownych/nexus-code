@@ -311,6 +311,7 @@ export class GoalOrchestrator {
       ...(this.options.onEvent ? { onEvent: this.options.onEvent } : {}),
       ...(this.options.maxInProcessWaitMs !== undefined ? { maxInProcessWaitMs: this.options.maxInProcessWaitMs } : {}),
       entry: "existing",
+      resumeAfterDecision: true,
       prepare: (fresh) => {
         if (fresh.status === "PAUSED") {
           fresh.status = fresh.wait ? "WAITING" : "RUNNING";
