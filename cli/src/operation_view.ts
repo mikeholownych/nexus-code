@@ -5,10 +5,11 @@
  * displayed fact is never a second implementation of a scheduling decision.
  */
 import type { DurableOperationState, OperationEvent, WorkUnit } from "./core/operation.js";
+import type { OperationUsage } from "./core/operation_usage.js";
 import { ResourceRegistry, type Eligibility, type ResourceConditionRecord, type ResourceDescriptor } from "./core/resources.js";
 import { safeTerminal } from "./ui.js";
 
-export const OPERATION_VIEW_SCHEMA_VERSION = 3;
+export const OPERATION_VIEW_SCHEMA_VERSION = 4;
 
 export interface OperationViewUnit {
   id: string;
@@ -130,6 +131,8 @@ export interface OperationView {
     historyComplete: boolean;
     intervalOpen: boolean;
   };
+  /** Persisted child-task token totals, supplied by the CLI's read-only task-state projection. */
+  tokenUsage?: OperationUsage;
   pauseReason?: string;
   /** True when no further transition is expected without an operator decision. */
   terminal: boolean;
@@ -235,6 +238,8 @@ export interface OperationViewOptions {
   events?: number;
   /** Clock for eligibility; defaults to now. */
   now?: number;
+  /** Read-only aggregate of the operation's existing durable child-task token records. */
+  tokenUsage?: OperationUsage;
   /** Include the recorded timeline (read-only replay). */
   replay?: boolean;
 }
@@ -461,6 +466,7 @@ export function buildOperationView(
       historyComplete: state.activeElapsedHistoryComplete,
       intervalOpen: state.activeSinceMs !== undefined,
     },
+    ...(options.tokenUsage ? { tokenUsage: { ...options.tokenUsage } } : {}),
     ...(state.pauseReason ? { pauseReason: state.pauseReason } : {}),
     terminal: state.status === "COMPLETE" || state.status === "CANCELLED" || state.status === "PAUSED",
     counts: {
@@ -591,6 +597,13 @@ export function renderOperationView(view: OperationView, options: RenderOptions 
   lines.push(
     `  active time ${formatElapsed(view.activeBudget.elapsedMs)} / ${formatElapsed(view.activeBudget.limitMs)} · ${view.activeBudget.historyComplete ? "complete history" : "conservative history estimate"}${view.activeBudget.intervalOpen ? " · interval open" : ""}`,
   );
+  if (view.tokenUsage) {
+    const usage = view.tokenUsage;
+    const cap = usage.maxTotalTokens === undefined ? "no token cap" : `cap ${usage.maxTotalTokens}`;
+    lines.push(
+      `  tokens ${usage.totalTokens} (${usage.reportedTokens} reported, ${usage.estimatedTokens} estimated) · ${usage.inferenceRequests} requests · ${cap} · ${usage.tokenAccountingComplete ? "complete accounting" : "incomplete accounting; subtotal only"}`,
+    );
+  }
   if (view.pauseReason) lines.push(`  pause reason: ${text(view.pauseReason, width)}`);
   if (view.git) {
     lines.push(`  isolated: ${text(view.git.integrationBranch, width)} (${text(view.git.integrationWorktree, width)})`);

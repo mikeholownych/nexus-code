@@ -5,21 +5,14 @@ import { OperationRunner, AgentWorkUnitExecutor, OperationLockedError, Operation
 import { STALE_PAUSE_PREFIX, stampDriver, staleDriver, withDerivedPause } from "./core/driver_identity.js";
 import { TeamOrchestrator } from "./team.js";
 import type { DurableOperationState, OperationEvent, WorkUnit } from "./core/operation.js";
+import { collectOperationUsage, type OperationUsage } from "./core/operation_usage.js";
 import type { ResourceDescriptor } from "./core/resources.js";
 import type { HarnessConfig } from "./types.js";
 
 export const GOAL_ID_PREFIX = "goal-";
 export type GoalStatus = "RUNNING" | "WAITING" | "PAUSED" | "BLOCKED" | "COMPLETE" | "CANCELLED";
 
-export interface GoalUsage {
-  agentRuns: number;
-  reportedTokens: number;
-  estimatedTokens: number;
-  inferenceRequests: number;
-  totalTokens: number;
-  tokenAccountingComplete: boolean;
-  maxTotalTokens?: number;
-}
+export interface GoalUsage extends OperationUsage {}
 
 export interface GoalResult {
   id: string;
@@ -212,29 +205,7 @@ export class GoalOrchestrator {
   }
 
   private usage(operation: DurableOperationState): GoalUsage {
-    const usage: GoalUsage = { agentRuns: 0, reportedTokens: 0, estimatedTokens: 0, inferenceRequests: 0, totalTokens: 0, tokenAccountingComplete: true };
-    for (const unit of operation.units) {
-      usage.agentRuns += unit.runs;
-      if (!unit.agentTaskId) {
-        if (unit.runs > 0) usage.tokenAccountingComplete = false;
-        continue;
-      }
-      try {
-        const stats = this.store.manager.loadTaskState(unit.agentTaskId, this.config.workspace).tokenStats;
-        if (!stats || !Number.isSafeInteger(stats.total) || stats.total < 0) {
-          usage.tokenAccountingComplete = false;
-          continue;
-        }
-        if (typeof stats.requests === "number" && stats.requests > 0 && stats.reportedRequests === stats.requests) usage.reportedTokens += stats.total;
-        else usage.estimatedTokens += stats.total;
-        usage.totalTokens += stats.total;
-        usage.inferenceRequests += stats.requests ?? 0;
-      } catch {
-        usage.tokenAccountingComplete = false;
-      }
-    }
-    if (operation.policy.maxTotalTokens !== undefined) usage.maxTotalTokens = operation.policy.maxTotalTokens;
-    return usage;
+    return collectOperationUsage(operation, (taskId) => this.store.manager.loadTaskState(taskId, this.config.workspace).tokenStats);
   }
 
   /**

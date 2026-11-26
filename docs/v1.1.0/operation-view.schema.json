@@ -33,7 +33,7 @@
       ],
       "properties": {
         "schemaVersion": {
-          "const": 3
+          "const": 4
         },
         "id": {
           "type": "string"
@@ -73,6 +73,27 @@
             "remainingMs": { "type": "integer", "minimum": 0 },
             "historyComplete": { "type": "boolean" },
             "intervalOpen": { "type": "boolean" }
+          }
+        },
+        "tokenUsage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "agentRuns",
+            "reportedTokens",
+            "estimatedTokens",
+            "inferenceRequests",
+            "totalTokens",
+            "tokenAccountingComplete"
+          ],
+          "properties": {
+            "agentRuns": { "type": "integer", "minimum": 0 },
+            "reportedTokens": { "type": "integer", "minimum": 0 },
+            "estimatedTokens": { "type": "integer", "minimum": 0 },
+            "inferenceRequests": { "type": "integer", "minimum": 0 },
+            "totalTokens": { "type": "integer", "minimum": 0 },
+            "tokenAccountingComplete": { "type": "boolean" },
+            "maxTotalTokens": { "type": "integer", "minimum": 1 }
           }
         },
         "pauseReason": {

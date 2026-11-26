@@ -30,6 +30,7 @@ import { STALE_PAUSE_PREFIX, clearDriver, liveForeignDriver, stampDriver, staleD
 import type { BoundaryRules } from "./boundary_rules.js";
 import { MAX_CONCURRENT_UNITS, MAX_OPERATION_ACTIVE_MS } from "./operation_schema.js";
 import { SharedResourceAdmission, type ResourceSlotLease } from "./shared_resource_admission.js";
+import { collectOperationUsage } from "./operation_usage.js";
 import {
   activateInferenceSubmissionAdmissionScope,
   OperationInferenceAdmissionError,
@@ -678,24 +679,11 @@ export class OperationRunner {
     if (cap === undefined) return undefined;
     const store = this.opts.store;
     const workspace = this.opts.workspace ?? this.state.git?.repoRoot;
-    const hasPriorRun = this.state.units.some((unit) => Boolean(unit.agentTaskId) || unit.runs > 0);
-    if (!store || !workspace) return hasPriorRun ? undefined : 0;
-    let total = 0;
-    for (const unit of this.state.units) {
-      if (!unit.agentTaskId) {
-        if (unit.runs > 0) return undefined;
-        continue;
-      }
-      try {
-        const stats = store.manager.loadTaskState(unit.agentTaskId, workspace).tokenStats;
-        if (!stats || !Number.isSafeInteger(stats.total) || stats.total < 0) return undefined;
-        total += stats.total;
-        if (!Number.isSafeInteger(total)) return undefined;
-      } catch {
-        return undefined;
-      }
+    if (!store || !workspace) {
+      return this.state.units.some((unit) => Boolean(unit.agentTaskId) || unit.runs > 0) ? undefined : 0;
     }
-    return total;
+    const usage = collectOperationUsage(this.state, (taskId) => store.manager.loadTaskState(taskId, workspace).tokenStats);
+    return usage.tokenAccountingComplete ? usage.totalTokens : undefined;
   }
 
   private pauseForUnmeasuredTokenBudget(cap: number): boolean {
