@@ -4,7 +4,8 @@ import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { ensurePrivateDir } from "../durable_file.js";
-import type { HirTaskCase, ProbeResult } from "./types.js";
+import { isSandboxAvailable, wrapSandboxedCommand } from "../../sandbox.js";
+import type { ProbeResult } from "./types.js";
 import type { ProbeAdapter, ProbeInput } from "./probe_adapter.js";
 
 function copyDir(src: string, dst: string): void {
@@ -54,13 +55,24 @@ export class RealProbeAdapter implements ProbeAdapter {
 
       const cmd = input.case.expected?.verifierCommand;
       if (cmd) {
-        const r = spawnSync("bash", ["-lc", cmd], {
-          cwd: candidateWork,
-          encoding: "utf8",
-          timeout: input.timeoutMs,
-          env: scrubEnv(),
-          maxBuffer: 1024 * 1024,
-        });
+        const sandboxed = wrapSandboxedCommand(cmd, candidateWork, { mode: "auto", network: false });
+        const useSandbox = sandboxed.sandboxed && !!sandboxed.argv?.length;
+        observations.push(useSandbox ? `os_sandbox=${sandboxed.engine}` : `os_sandbox=unavailable:${sandboxed.warning ?? "none"}`);
+        const r = useSandbox
+          ? spawnSync(sandboxed.argv![0], sandboxed.argv!.slice(1), {
+              cwd: candidateWork,
+              encoding: "utf8",
+              timeout: input.timeoutMs,
+              env: scrubEnv(),
+              maxBuffer: 1024 * 1024,
+            })
+          : spawnSync("bash", ["-lc", cmd], {
+              cwd: candidateWork,
+              encoding: "utf8",
+              timeout: input.timeoutMs,
+              env: scrubEnv(),
+              maxBuffer: 1024 * 1024,
+            });
         verifierPass = r.status === 0;
         status = r.signal === "SIGTERM" ? "TIMED_OUT" : r.status === 0 ? "SUCCEEDED" : "FAILED";
         toolErrors = r.status === 0 ? 0 : 1;
