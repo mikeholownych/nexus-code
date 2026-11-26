@@ -10,7 +10,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { hookEnvironment, reduceHookOutput, runHookProcess, HOOK_STDERR_LIMIT, HOOK_STDOUT_LIMIT } from "../src/core/hook_runner.js";
+import { expandHookArgv, hookEnvironment, reduceHookOutput, runHookProcess, HOOK_STDERR_LIMIT, HOOK_STDOUT_LIMIT } from "../src/core/hook_runner.js";
 import { startedAt } from "../src/core/process_identity.js";
 
 function scratch(): string {
@@ -111,7 +111,9 @@ test("a leading ~/ in an array command is the home directory", async () => {
   assert.ok(home.startsWith(os.tmpdir()) || home.includes("tmp"), `this test writes under HOME, which must be a throwaway (${home})`);
   fs.mkdirSync(path.join(home, "bin"), { recursive: true });
   script(path.join(home, "bin"), "nexus-guard.sh", "echo from-home");
-  const result = await runHookProcess({ command: ["~/bin/nexus-guard.sh"], cwd: home, env: env(home), stdin: "", timeoutMs: 30_000 });
+  const argv = expandHookArgv(["~/bin/nexus-guard.sh"], home);
+  assert.ok(!("problem" in argv), JSON.stringify(argv));
+  const result = await runHookProcess({ command: argv, cwd: home, env: env(home), stdin: "", timeoutMs: 30_000 });
   assert.equal(result.stdout, "from-home\n");
 });
 

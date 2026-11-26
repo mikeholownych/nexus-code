@@ -1092,6 +1092,42 @@ function isSafeWorkspaceFile(root: string, relative: string): boolean {
 }
 
 /**
+ * unittest `-p` filename glob (`*`, `?`, literals only) matched without RegExp construction.
+ * Rejects patterns that are not a simple glob so command-line text cannot inject regex metacharacters.
+ */
+function matchUnittestFilenameGlob(filename: string, pattern: string): boolean {
+  if (!pattern || pattern.length > 256) return false;
+  for (const character of pattern) {
+    // Allow letters, digits, common filename punctuation, and the two glob wildcards only.
+    if (!/[A-Za-z0-9._+\-@%]/.test(character) && character !== "*" && character !== "?") return false;
+  }
+  let fi = 0;
+  let pi = 0;
+  let starFi = -1;
+  let starPi = -1;
+  while (fi < filename.length) {
+    if (pi < pattern.length && (pattern[pi] === "?" || pattern[pi] === filename[fi])) {
+      fi++;
+      pi++;
+      continue;
+    }
+    if (pi < pattern.length && pattern[pi] === "*") {
+      starPi = pi++;
+      starFi = fi;
+      continue;
+    }
+    if (starPi !== -1) {
+      pi = starPi + 1;
+      fi = ++starFi;
+      continue;
+    }
+    return false;
+  }
+  while (pi < pattern.length && pattern[pi] === "*") pi++;
+  return pi === pattern.length;
+}
+
+/**
  * Whether a Python file is reachable by the standard library unittest discovery
  * command that selected the verifier. unittest only descends into package
  * directories; the workspace snapshot is recursive and therefore also contains
@@ -1124,12 +1160,7 @@ function isPythonUnittestDiscoveryCandidate(root: string, testFile: string, comm
     }
   }
 
-  // Convert unittest's simple filename glob without interpreting shell syntax.
-  const patternExpression = new RegExp(`^${pattern.split("").map((character) => {
-    if (character === "*") return ".*";
-    if (character === "?") return ".";
-    return /[\\^$+.|{}()[\]]/.test(character) ? `\\${character}` : character;
-  }).join("")}$`);
+  // Match unittest's simple filename glob without building a RegExp from the command line (CodeQL js/regex-injection).
   const rootAbsolute = path.resolve(root);
   const startAbsolute = path.resolve(rootAbsolute, startDirectory);
   const startRelative = path.relative(rootAbsolute, startAbsolute);
@@ -1140,7 +1171,7 @@ function isPythonUnittestDiscoveryCandidate(root: string, testFile: string, comm
   const relativeToStart = path.relative(startAbsolute, testAbsolute);
   if (!relativeToStart || relativeToStart === ".." || relativeToStart.startsWith(`..${path.sep}`) || path.isAbsolute(relativeToStart)) return false;
   const components = relativeToStart.split(path.sep);
-  if (!patternExpression.test(components.at(-1) ?? "") || !isSafeWorkspaceFile(rootAbsolute, testFile)) return false;
+  if (!matchUnittestFilenameGlob(components.at(-1) ?? "", pattern) || !isSafeWorkspaceFile(rootAbsolute, testFile)) return false;
 
   // `start_dir` itself does not need to be a package. Every nested directory
   // unittest enters must contain a real, non-symlink __init__.py.

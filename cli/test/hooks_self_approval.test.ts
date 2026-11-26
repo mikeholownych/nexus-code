@@ -406,8 +406,17 @@ test("a concurrent writer swapping the approved script never gets its own bytes 
   fs.writeFileSync(path.join(scripts, "evil.sh"), `#!/bin/sh\ntouch "${evilRan}"\nexit 0\n`, { mode: 0o755 });
   writeProjectHooks(repo, { version: 1, hooks: { "pre-tool": [{ name: "guard", tools: ["read_file"], command: ["./guard.sh"] }] } });
   approveProjectHooks(repo);
-  // Copy-and-rename over the approved file, as fast as it goes: what a background command in the workspace can do.
-  const swapper = spawn("/bin/sh", ["-c", `while :; do cp "${scripts}/evil.sh" "${repo}/.swap" && mv "${repo}/.swap" "${repo}/guard.sh"; cp "${scripts}/good.sh" "${repo}/.swap" && mv "${repo}/.swap" "${repo}/guard.sh"; done`], { stdio: "ignore", detached: true });
+  // Copy-and-rename over the approved file via argv paths (CodeQL js/shell-command-injection-from-environment).
+  const swapperScript = path.join(scripts, "swapper.sh");
+  fs.writeFileSync(
+    swapperScript,
+    "#!/bin/sh\nevil=\"$1\"; good=\"$2\"; dest=\"$3\"; swap=\"$4\"\nwhile :; do cp \"$evil\" \"$swap\" && mv \"$swap\" \"$dest\"; cp \"$good\" \"$swap\" && mv \"$swap\" \"$dest\"; done\n",
+    { mode: 0o755 },
+  );
+  const swapper = spawn(swapperScript, [path.join(scripts, "evil.sh"), path.join(scripts, "good.sh"), path.join(repo, "guard.sh"), path.join(repo, ".swap")], {
+    stdio: "ignore",
+    detached: true,
+  });
   try {
     const registry = registryFor();
     let ran = 0;
