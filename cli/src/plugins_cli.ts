@@ -1,8 +1,8 @@
 /**
  * HK-2 subcommands on `nexus plugins`: install, list-installed, remove, verify.
  *
- * Install from a local path that contains `nexus-plugin.json`. Capabilities are printed at install. There is no
- * marketplace and no auto-update. A git URL pinned to a full commit hash is a follow-up slice.
+ * Install from a local path or a git URL pinned to a full commit hash. Capabilities are printed at install. There is no
+ * marketplace and no auto-update.
  */
 import type { Command } from "commander";
 import pc from "picocolors";

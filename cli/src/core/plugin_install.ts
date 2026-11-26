@@ -29,7 +29,7 @@ export interface PluginInstallReceipt {
   pluginVersion: string;
   /** Absolute path of the source at install time (local path). */
   source: string;
-  sourceKind: "local";
+  sourceKind: "local" | "git";
   /** Full commit hash when sourceKind is git (reserved). */
   commit?: string;
   installedAt: string;
@@ -126,7 +126,7 @@ export function readInstallReceipt(installDir: string): PluginInstallReceipt {
   if (typeof r.name !== "string" || typeof r.pluginVersion !== "string" || typeof r.source !== "string") {
     throw new PluginInstallError("install receipt is missing required fields");
   }
-  if (r.sourceKind !== "local") throw new PluginInstallError(`install receipt sourceKind '${String(r.sourceKind)}' is not supported`);
+  if (r.sourceKind !== "local" && r.sourceKind !== "git") throw new PluginInstallError(`install receipt sourceKind '${String(r.sourceKind)}' is not supported`);
   if (typeof r.installedAt !== "string" || typeof r.manifestSha256 !== "string" || typeof r.treeDigest !== "string") {
     throw new PluginInstallError("install receipt is missing hash fields");
   }
@@ -136,7 +136,7 @@ export function readInstallReceipt(installDir: string): PluginInstallReceipt {
     name: r.name,
     pluginVersion: r.pluginVersion,
     source: r.source,
-    sourceKind: "local",
+    sourceKind: r.sourceKind === "git" ? "git" : "local",
     installedAt: r.installedAt,
     manifestSha256: r.manifestSha256,
     treeDigest: r.treeDigest,
@@ -202,4 +202,41 @@ export function verifyInstalledPlugin(name: string, home = os.homedir()): Verify
 /** Content hash helper exported for tests. */
 export function sha256Hex(data: Buffer | string): string {
   return createHash("sha256").update(data).digest("hex");
+}
+
+/** Parses a git URL pinned to a full commit hash: `git+https://...#<40-hex>` or `git://...#<40-hex>`. */
+export function parseGitPluginSource(source: string): { url: string; commit: string } {
+  const hashIndex = source.lastIndexOf("#");
+  if (hashIndex < 0) throw new PluginInstallError("git source must be pinned to a commit hash with '#<40-hex>'");
+  const url = source.slice(0, hashIndex);
+  const commit = source.slice(hashIndex + 1);
+  if (!/^[0-9a-f]{40}$/.test(commit)) throw new PluginInstallError("git source commit must be a full 40-character hex hash");
+  if (!/^git(\+https?|:\/\/|@)/.test(url)) throw new PluginInstallError("git source URL must start with git+, git://, or git@");
+  return { url: url.replace(/^git\+/, ""), commit };
+}
+
+/**
+ * Installs a plugin from a git URL pinned to a full commit hash.
+ * Clones at the pinned commit into a temp dir, then installs from it.
+ */
+export function installPluginFromGit(
+  source: string,
+  options: { home?: string; permissionGate?: PermissionGate; now?: () => string } = {},
+): { receipt: PluginInstallReceipt; installDir: string; manifest: PluginManifest } {
+  const { url, commit } = parseGitPluginSource(source);
+  const { execFileSync } = require("node:child_process");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-plugin-git-"));
+  try {
+    execFileSync("git", ["clone", "--no-checkout", url, tmp], { stdio: "ignore" });
+    execFileSync("git", ["-C", tmp, "checkout", commit], { stdio: "ignore" });
+    const result = installPluginFromLocal(tmp, { ...options, now: options.now });
+    // Patch the receipt to record git source and commit
+    const receipt = { ...result.receipt, source, sourceKind: "git" as const, commit };
+    const receiptPath2 = path.join(result.installDir, INSTALL_RECEIPT_NAME);
+    fs.writeFileSync(receiptPath2, `${JSON.stringify(receipt, null, 2)}\n`);
+    // Update readInstallReceipt to accept git sourceKind
+    return { receipt, installDir: result.installDir, manifest: result.manifest };
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 }
