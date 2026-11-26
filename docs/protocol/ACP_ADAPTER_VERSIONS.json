@@ -28,5 +28,10 @@
     "schema_version": 4,
     "schemaSha256": "d7bd22d9d3d4e31ba661c989cd9432a32cd5a46a053c927a381478daf21d6880",
     "note": "Add OPERATION_INFERENCE_SUBMISSION_BUDGET_EXHAUSTED to ACP turn results for durable operation-wide request caps. The new result reason is additive; adapter schema version remains 4."
+  },
+  {
+    "schema_version": 4,
+    "schemaSha256": "c2adff25b3cabd59945683859df9371fc61f8fdb05065cf41444d173cc46a31f",
+    "note": "Add OPERATION_TOKEN_BUDGET_EXHAUSTED to ACP turn results for the durable operation-wide request-token estimate ceiling. The new result reason is additive; adapter schema version remains 4."
   }
 ]
