@@ -70,32 +70,26 @@ Commit `77430b996` on branch `codex/p10-04-admission-baseline` changes `UsageLed
 
 On Node 24.11.1, `cli/test/provider_limits.test.ts` passed **10/10**, including request, token, and snapshot-cost limits with receipt opt-out. `cli/test/provider_robustness.test.ts` passed **27/27**, including the existing local-receipt opt-out behavior. TypeScript check `./cli/node_modules/.bin/tsc --noEmit -p cli/tsconfig.json` exited **0**. The first robustness-test attempt could not resolve `dotenv` because the isolated worktree had no installed dependencies; it passed after the existing dependency directory was made available to the isolated worktree. No production configuration or shared source checkout was changed.
 
-### Ownership conclusion
+## Post-merge integration status (measured 2026-11-26)
 
-Nexus has useful local bounds and cleanup mechanisms: operation-local scheduling, the process-wide in-process usage ledger, ACP's per-connection cap, per-manager LSP limits, per-container Docker limits, bounded unattended-job queues/output, and state-retention GC. They do not compose into one cross-session resource budget. The receipt-opt-out bypass is fixed on this branch. Separate processes and restarts still reset provider usage limits, and operation schedulers still admit independently against the same resource identity. The next implementation step is to decide and implement which operator-configured resource identities and scopes need atomic cross-process leases. It should not claim host-wide CPU/memory or exact provider spend containment without OS isolation or authoritative provider accounting.
+The baseline finding above was reproduced at `e65439de` on 2026-11-25. The following changes are now present on `release/v1.3.1` at `03759986a7b22cfcfc3020bcc5bfcac0bf4999b6`; this supersedes the baseline's proposed next step to add cross-operation admission.
 
-No production files were changed for this baseline. The root checkout and the existing P10-03 and P10-02 worktrees were not modified.
+### Implemented and verified
 
-## Implementation direction
+- **Receipt opt-out no longer bypasses configured provider limits.** PR #829 merged the aggregate-only accounting fix as `65f7cdc9`. On the current release tree, `cli/src/usage.ts` retains private request/token/cost totals when `NEXUS_RECEIPTS=0`, while keeping detailed receipts hidden and unwritten. The totals are still process-local and are not durable across process restarts; this is not cross-process usage accounting.
+- **Inference-resource slots are admitted across operation IDs and Nexus processes on the same host/shared directory.** PR #830 merged as `b5dc77b73871fdfeda9576c592b48a8c74ad340b`. `SharedResourceAdmission` is used after the existing per-operation scheduler and before dispatch. Capacity is operator-owned (`NEXUS_MAX_SHARED_RESOURCE_UNITS`, default 1, bounded to 1–64); workspace declarations may lower it but cannot raise it. Identity is canonicalized and hashed, including provider/account/model or pool scope without persisting endpoint credentials. Kernel locks hold active slots until executor settlement or process exit; inconsistent or corrupt admission state fails closed. PR CI run `45671930702` and CodeQL run `45671930709` passed on the merge commit. `operation_resource_admission.test.ts` covers independent runners, simultaneous processes, capacity conflicts, cancellation, process crash release, corrupted state, and no dispatch on admission failure.
+- **Language-server process slots are shared across Nexus clients using the same credential home.** PR #831 merged as `ffddb53a796dd407fbf83f1a60a8a25d3818374d`. A supervisor retains the admission descriptor so the slot remains held if the Nexus parent exits while the server is alive. PR CI run `45681423228` and CodeQL run `45681423318` passed on the merge commit. The focused lifecycle test uses a fake server; the process-death case is skipped on Windows.
+- **The current release head is green.** Post-merge CI run `45861996625` and CodeQL run `45861996502` both passed on `03759986a7b22cfcfc3020bcc5bfcac0bf4999b6`.
 
-Keep `ResourceRegistry`, `ConvergenceScheduler`, per-operation locks, and `client_lease`. Add the smallest shared admission boundary at operation dispatch, keyed by a canonical non-secret resource identity (provider, endpoint, model, and known pool/account scope). The boundary must atomically reserve capacity before a unit starts and release or reconcile it after completion, cancellation, process exit, and restart. Reuse existing file-guard and process-identity primitives where they provide the needed cross-process ownership; do not add a second scheduler.
+### Remaining P10-04 scope
 
-Before selecting a global capacity default, define operator-owned limits and how conflicting resource descriptors across operations combine. Do not infer a provider-wide quota from operation-local `maxConcurrentUnits` alone.
+These merges close the reproduced cross-operation provider-slot gap and add same-home LSP process admission. They do **not** complete WP-P10-04's broader resource envelope:
 
-### Required failure-injection cases
+- CPU and memory reservations remain scheduling declarations enforced within one operation; they are not shared across operation IDs and are not OS consumption ceilings.
+- No product-wide active-session limit is established for ordinary CLI sessions. ACP limits remain per connection.
+- State GC remains an age/size cleanup target rather than a write-time disk quota. Compaction archives can continue to grow; no hard per-archive or aggregate archive admission cap is established here.
+- LSP admission is limited to clients sharing one credential home and a local filesystem with working kernel locks. Cross-host, network-filesystem, and independent-home coordination is not established; fake-server tests do not qualify every real server or Windows process-death behavior.
+- Provider request/token/cost totals are still process-local. The receipt opt-out fix preserves limits within a process, but does not make them durable or shared across processes. Track the remaining accounting with WP-P10-02; do not duplicate its active work.
+- Docker PID/tmpfs limits, unattended-job queue/output bounds, and retention GC retain their narrower per-container, per-runner, or cleanup-target scope from the baseline inventory. They do not establish a host-wide resource ceiling.
 
-1. Two operation IDs compete for one shared slot; only one side effect starts.
-2. Simultaneous admissions cannot both pass a check-then-write race.
-3. A completed unit releases its slot for the next operation.
-4. Cancellation and an unknown outcome retain or release capacity according to an explicit reconciliation rule; they never silently create extra capacity.
-5. Process termination and restart reclaim a dead owner's reservation without taking over a live one.
-6. A failed reservation write starts no unit.
-7. Different resource identities remain independent, while equivalent endpoint/model identities converge to one key without storing credentials.
-
-### Acceptance evidence still needed
-
-- An integration test with two real runner instances and separate operation IDs against a shared temporary state directory.
-- A cross-process test proving the atomic admission boundary under simultaneous starts.
-- Restart, cancellation, failed persistence, and dead-owner recovery tests.
-- Verification that existing operation-local scheduling tests remain green and that a single operation's behavior is unchanged.
-- A documented statement of enforcement scope: in-process, same-host cross-process, or broader. No claim beyond the tested boundary.
+The next P10-04 implementation decision is therefore not whether to add another scheduler. It is which remaining resource classes need an operator-owned, measurable cross-session bound, and which can be handled by existing per-operation, per-container, or cleanup controls. Any new bound must preserve user data, fail before the protected side effect, and state its enforcement scope. Do not claim host-wide CPU/memory containment without OS enforcement or exact provider-spend containment without authoritative provider accounting.
