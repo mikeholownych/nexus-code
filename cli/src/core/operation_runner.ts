@@ -477,6 +477,20 @@ export class OperationRunner {
         await this.revalidator.revalidate(signal);
         continue;
       }
+      if (d.kind === "complete" && this.state.policy.maxTotalTokens !== undefined) {
+        // The pre-dispatch check protects the next batch, but a final batch has no next dispatch to trigger it.
+        // Never report completion when its measured usage exceeded the cap or its final usage is unavailable.
+        const cap = this.state.policy.maxTotalTokens;
+        const total = this.rolledUpTokens();
+        if (total === undefined) {
+          this.pauseForUnmeasuredTokenBudget(cap);
+          return this.state;
+        }
+        if (total > cap) {
+          this.pauseForTokenBudget(total, cap);
+          return this.state;
+        }
+      }
       this.scheduler.finish(d);
       // A blocked operation keeps its unit worktrees: the retry/restart remedies run the unit again in them.
       if (d.kind === "complete") {
