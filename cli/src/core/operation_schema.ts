@@ -14,7 +14,9 @@
  *      `git.integrationVerifiers`, `mergedChecks` on a receipt, `INTEGRATION_REJECTED`). The version is bumped so a
  *      version-5 build refuses a record that may depend on cumulative merged-tree verification. v7 adds the
  *      persisted fingerprint-stall policy/state; older builds must refuse records that depend on that limit. v8
- *      adds a bounded active-wall-time budget and its durable accounting; older builds must refuse records that rely on it.
+ *      adds a bounded active-wall-time budget and its durable accounting; older builds must refuse records that rely on it. v9
+ *      adds a finite operation-wide inference-submission cap and durable request accounting; legacy history is marked
+ *      unknown and must be explicitly reset before the operation can resume.
  *      The optional `activeStartTicks` (driver start time) was added to v7 additively: no version bump, because a build
  *      that ignores it only loses the recycled-pid check. A record without it loads and reads as unknown driver identity (paused).
  *   3. A record from a newer build is refused. It is not corrupt: a build that wrote it can still read it, and
@@ -26,11 +28,15 @@
 import { unresolvedAssumptionsProblem, type DurableOperationState, type OperationPolicy, type WorkUnit } from "./operation.js";
 import { specialistInputsProblem } from "./specialist_profiles.js";
 import { parseBoundaryRules } from "./boundary_rules.js";
-import { MAX_OPERATION_ACTIVE_MS } from "./operation_budget_constants.js";
-export { MAX_OPERATION_ACTIVE_MS } from "./operation_budget_constants.js";
+import {
+  DEFAULT_OPERATION_INFERENCE_SUBMISSIONS,
+  MAX_OPERATION_ACTIVE_MS,
+  MAX_OPERATION_INFERENCE_SUBMISSIONS,
+} from "./operation_budget_constants.js";
+export { DEFAULT_OPERATION_INFERENCE_SUBMISSIONS, MAX_OPERATION_ACTIVE_MS, MAX_OPERATION_INFERENCE_SUBMISSIONS } from "./operation_budget_constants.js";
 
 /** The operation document version this build writes. Independent of the task-store envelope version. */
-export const CURRENT_OPERATION_SCHEMA_VERSION = 8;
+export const CURRENT_OPERATION_SCHEMA_VERSION = 9;
 
 /** The operation document version every released 1.0.0 build wrote. */
 export const LEGACY_OPERATION_SCHEMA_VERSION = 1;
@@ -102,10 +108,13 @@ export function migrateOperationState(raw: unknown): DurableOperationState {
   if (version < CURRENT_OPERATION_SCHEMA_VERSION) {
     const policy = (record as DurableOperationState).policy ?? ({} as OperationPolicy);
     migrated.policy = { ...policy, maxTotalActiveMs: policy.maxTotalActiveMs ?? MAX_OPERATION_ACTIVE_MS };
+    migrated.policy.maxInferenceCalls ??= DEFAULT_OPERATION_INFERENCE_SUBMISSIONS;
     migrated.activeElapsedMs ??= 0;
     // Older operation records do not say how much active time preceded this schema. Their age is used as a
     // conservative lower bound at resume; it may include time parked while the owner was away.
     migrated.activeElapsedHistoryComplete ??= false;
+    migrated.inferenceCalls ??= 0;
+    migrated.historyKnown ??= false;
   }
   validateOperationState(migrated);
   return migrated;
@@ -310,6 +319,15 @@ export function validateOperationState(state: DurableOperationState): void {
   if (!Number.isSafeInteger(state.policy.maxTotalActiveMs) || state.policy.maxTotalActiveMs < 1 || state.policy.maxTotalActiveMs > MAX_OPERATION_ACTIVE_MS) {
     throw new InvalidOperationStateError(`operation ${state.id}: policy.maxTotalActiveMs must be a safe integer from 1 to ${MAX_OPERATION_ACTIVE_MS} (got ${String(state.policy.maxTotalActiveMs)})`);
   }
+  if (!Number.isSafeInteger(state.policy.maxInferenceCalls) || state.policy.maxInferenceCalls < 1 || state.policy.maxInferenceCalls > MAX_OPERATION_INFERENCE_SUBMISSIONS) {
+    throw new InvalidOperationStateError(`operation ${state.id}: policy.maxInferenceCalls must be a safe integer from 1 to ${MAX_OPERATION_INFERENCE_SUBMISSIONS} (got ${String(state.policy.maxInferenceCalls)})`);
+  }
+  if (!Number.isSafeInteger(state.inferenceCalls) || state.inferenceCalls < 0 || state.inferenceCalls > MAX_OPERATION_INFERENCE_SUBMISSIONS) {
+    throw new InvalidOperationStateError(`operation ${state.id}: inferenceCalls must be a safe integer from 0 to ${MAX_OPERATION_INFERENCE_SUBMISSIONS} (got ${String(state.inferenceCalls)})`);
+  }
+  if (typeof state.historyKnown !== "boolean") {
+    throw new InvalidOperationStateError(`operation ${state.id}: historyKnown must be a boolean`);
+  }
   if (state.integrations !== undefined) {
     if (!Array.isArray(state.integrations)) throw new InvalidOperationStateError(`operation ${state.id}: integrations is not an array`);
     for (const receipt of state.integrations) {
@@ -381,6 +399,9 @@ export function validateOperationPolicy(policy: Partial<OperationPolicy>): void 
   }
   if (policy.maxTotalActiveMs !== undefined && (!Number.isSafeInteger(policy.maxTotalActiveMs) || policy.maxTotalActiveMs < 1 || policy.maxTotalActiveMs > MAX_OPERATION_ACTIVE_MS)) {
     throw new InvalidOperationStateError(`(new): policy.maxTotalActiveMs must be a safe integer from 1 to ${MAX_OPERATION_ACTIVE_MS} (got ${String(policy.maxTotalActiveMs)})`);
+  }
+  if (policy.maxInferenceCalls !== undefined && (!Number.isSafeInteger(policy.maxInferenceCalls) || policy.maxInferenceCalls < 1 || policy.maxInferenceCalls > MAX_OPERATION_INFERENCE_SUBMISSIONS)) {
+    throw new InvalidOperationStateError(`(new): policy.maxInferenceCalls must be a safe integer from 1 to ${MAX_OPERATION_INFERENCE_SUBMISSIONS} (got ${String(policy.maxInferenceCalls)})`);
   }
 }
 

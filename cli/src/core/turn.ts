@@ -51,6 +51,8 @@ export type TurnReason =
   | "TOOL_INVOCATION_BUDGET_EXHAUSTED"
   /** The objective-wide inference request admission ceiling is spent. */
   | "INFERENCE_SUBMISSION_BUDGET_EXHAUSTED"
+  /** The durable operation's shared inference request ceiling is spent. */
+  | "OPERATION_INFERENCE_SUBMISSION_BUDGET_EXHAUSTED"
   /** Continued turn: the wall-clock budget is spent. */
   | "TIME_BUDGET_EXHAUSTED"
   /** Continued turn: no progress for the configured number of steps, or bounded recovery from a repeated action failed. */
@@ -614,6 +616,9 @@ export function summarizeTurn(t: TurnResult): { heading: string; line: string } 
     }
     if (t.reason === "INFERENCE_SUBMISSION_BUDGET_EXHAUSTED") {
       return { heading: "INFERENCE SUBMISSION BUDGET EXHAUSTED", line: `execution=LIMIT_REACHED outcome=NOT_ESTABLISHED (${t.detail ?? "objective inference submission limit reached"}; raise NEXUS_MAX_INFERENCE_SUBMISSIONS only when starting a new objective)` };
+    }
+    if (t.reason === "OPERATION_INFERENCE_SUBMISSION_BUDGET_EXHAUSTED") {
+      return { heading: "OPERATION INFERENCE BUDGET EXHAUSTED", line: `execution=LIMIT_REACHED outcome=NOT_ESTABLISHED (${t.detail ?? "durable operation inference submission limit reached"})` };
     }
     return { heading: "STEP LIMIT REACHED", line: `execution=LIMIT_REACHED outcome=NOT_ESTABLISHED (${t.steps.used}/${t.steps.max} steps)` };
   }
