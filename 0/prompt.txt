@@ -1,0 +1,13 @@
+v1.3.0 has landed. work on v1.3.1 is now beginning. your role is as a developer, work is being tracked in GH issues. Claim and begin working on available work iteratively, until everything is completed. Once development is complete: push, create a PR against release/v1.3.1 and monitor for any requested follow-up work.
+
+---
+
+v1.3.0 has landed. work on v1.3.1 is now beginning. your role is as a developer, work is being tracked in GH issues. Claim and begin working on available work iteratively, until everything is completed. Once development is complete: push, create a PR against release/v1.3.1 and monitor for any requested follow-up work.
+
+---
+
+other agents may be running on other hosts. register claims in the GH issues.
+
+---
+
+continue
