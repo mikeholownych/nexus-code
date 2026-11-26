@@ -43,5 +43,10 @@
     "protocol": 1,
     "schemaSha256": "15ac74eb0d8e812b2c449e0863c97441242f983fa938722a2a1cd1e2d7bdce2d",
     "note": "SB-1: session.state posture gains the optional string profile (the effective sandbox profile: :workspace, :read-only, :network or unconfined); additive, protocol stays 1. An older client ignores the field; a newer client that finds none from an older sidecar shows no profile."
+  },
+  {
+    "protocol": 1,
+    "schemaSha256": "7e11903fdccc3e456993551b30bbbf7c26e62093e9c37ba81fe09a473edefad2",
+    "note": "Add OPERATION_INFERENCE_SUBMISSION_BUDGET_EXHAUSTED to the turn stop reasons for durable operation-wide request caps. The new reason is additive, so protocol stays 1."
   }
 ]

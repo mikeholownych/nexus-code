@@ -50,7 +50,11 @@ import type { ResourceConditionRecord, ResourceDescriptor, ResourceRegistry, Wor
 import type { InferenceFailure } from "./turn.js";
 import { REVISION_MARKER } from "./scheduler.js";
 import { CURRENT_OPERATION_SCHEMA_VERSION, validateOperationPolicy, validateResourceSlots } from "./operation_schema.js";
-import { MAX_OPERATION_ACTIVE_MS } from "./operation_budget_constants.js";
+import {
+  DEFAULT_OPERATION_INFERENCE_SUBMISSIONS,
+  MAX_OPERATION_ACTIVE_MS,
+  MAX_OPERATION_INFERENCE_SUBMISSIONS,
+} from "./operation_budget_constants.js";
 import type { BoundaryRules } from "./boundary_rules.js";
 export { ConvergenceScheduler, DecisionRejected, isRequired } from "./scheduler.js";
 export {
@@ -273,6 +277,8 @@ export interface OperationPolicy {
   maxTotalTokens?: number;
   /** Maximum active wall time across this operation's durable runs, including all concurrently executing units. */
   maxTotalActiveMs: number;
+  /** Maximum provider submissions across all durable units, retries and resumes in this operation. */
+  maxInferenceCalls: number;
 }
 
 /** Explicit execution reservation. Missing values are unknown, never inferred from provider or model identity. */
@@ -290,6 +296,7 @@ export const DEFAULT_OPERATION_POLICY: OperationPolicy = {
   maxStallsPerFingerprint: 3,
   minWaitMs: 1_000,
   maxTotalActiveMs: MAX_OPERATION_ACTIVE_MS,
+  maxInferenceCalls: DEFAULT_OPERATION_INFERENCE_SUBMISSIONS,
 };
 
 /** One unit's worktree/branch in an isolated operation. */
@@ -451,6 +458,10 @@ export interface DurableOperationState {
   activeElapsedMs: number;
   /** False for migrated records whose prior active intervals cannot be reconstructed exactly. */
   activeElapsedHistoryComplete: boolean;
+  /** Provider requests admitted across all durable units before dispatch. */
+  inferenceCalls: number;
+  /** False on migrated records whose pre-upgrade provider requests cannot be counted exactly. */
+  historyKnown: boolean;
   /** Timestamp of the current driver interval; retained so a crash is conservatively charged on resume. */
   activeSinceMs?: number;
   /** Operator-visible reason the operation was paused (stale recovery, explicit pause, etc.). */
@@ -633,6 +644,8 @@ export function newOperation(
     ...(bootId ? { activeBootId: bootId } : {}),
     activeElapsedMs: 0,
     activeElapsedHistoryComplete: true,
+    inferenceCalls: 0,
+    historyKnown: true,
     units: units.map((u) => ({
       id: u.id,
       title: u.title ?? u.id,

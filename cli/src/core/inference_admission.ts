@@ -6,6 +6,16 @@ export interface InferenceSubmissionAdmissionScope {
   admit?: () => void;
 }
 
+export type OperationInferenceAdmissionFailure = "budget_exhausted" | "history_unknown" | "persistence_failed";
+
+/** A durable operation's outer admission boundary refused a provider request before dispatch. */
+export class OperationInferenceAdmissionError extends Error {
+  constructor(readonly failure: OperationInferenceAdmissionFailure, message: string) {
+    super(message);
+    this.name = "OperationInferenceAdmissionError";
+  }
+}
+
 const scopes = new AsyncLocalStorage<readonly InferenceSubmissionAdmissionScope[]>();
 
 /**

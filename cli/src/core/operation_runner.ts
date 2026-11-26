@@ -30,6 +30,11 @@ import { STALE_PAUSE_PREFIX, clearDriver, liveForeignDriver, stampDriver, staleD
 import type { BoundaryRules } from "./boundary_rules.js";
 import { MAX_CONCURRENT_UNITS, MAX_OPERATION_ACTIVE_MS } from "./operation_schema.js";
 import { SharedResourceAdmission, type ResourceSlotLease } from "./shared_resource_admission.js";
+import {
+  activateInferenceSubmissionAdmissionScope,
+  OperationInferenceAdmissionError,
+  withInferenceSubmissionAdmissionScope,
+} from "./inference_admission.js";
 
 export { OperationStore, OperationLockedError, migrateLegacyAccountIdentities } from "./operation_runner_persistence.js";
 export { AgentWorkUnitExecutor } from "./operation_runner_execution.js";
@@ -147,6 +152,7 @@ export class OperationRunner {
   private activeElapsedSinceMs?: number;
   private activeBudgetController?: AbortController;
   private activeBudgetExpired = false;
+  private operationInferenceBudgetPaused = false;
 
   constructor(
     readonly state: DurableOperationState,
@@ -332,6 +338,14 @@ export class OperationRunner {
     this.scheduler.reconcileInterruptedRuns();
     // Persist every interrupted-run accounting transition before the first revalidation await.
     this.save();
+    if (!this.state.historyKnown) {
+      this.pauseForUnknownInferenceHistory();
+      return this.state;
+    }
+    if (this.state.inferenceCalls >= this.state.policy.maxInferenceCalls) {
+      this.pauseForInferenceSubmissionBudget();
+      return this.state;
+    }
     if (this.state.status === "WAITING" && this.state.wait && Date.parse(this.state.wait.wakeAt) <= this.clock.now()) {
       await this.revalidator.revalidate(signal);
     } else await this.revalidator.refresh(signal);
@@ -447,6 +461,7 @@ export class OperationRunner {
           for (const lease of leases) lease.release();
         }
         if (signal?.aborted) return this.stopForAbort();
+        if (this.operationInferenceBudgetPaused) return this.state;
         continue;
       }
       if (d.kind === "wait") {
@@ -627,7 +642,10 @@ export class OperationRunner {
           options: [{ label: "restart from the merged source and verify", action: { kind: "retry", restart: true } }],
         };
       }
-      const result: UnitRunResult = await this.opts.executor.run(unit, resource, ctx);
+      const result: UnitRunResult = await withInferenceSubmissionAdmissionScope(async (scope) => {
+        activateInferenceSubmissionAdmissionScope(scope, () => this.reserveInferenceSubmission());
+        return this.opts.executor.run(unit, resource, ctx);
+      });
       if (result.kind === "completed") {
         this.recordDelivery(unit.id, messages);
         this.save();
@@ -713,6 +731,65 @@ export class OperationRunner {
     this.scheduler.emit("OPERATION_PAUSED", reason, { detail: { reason: "token_budget", totalTokens: total, maxTotalTokens: cap } });
     this.save();
     return true;
+  }
+
+  private pauseForInferenceSubmissionBudget(): boolean {
+    if (this.state.status === "COMPLETE" || this.state.status === "CANCELLED" || this.state.status === "PAUSED") return false;
+    const cap = this.state.policy.maxInferenceCalls;
+    const count = this.state.inferenceCalls;
+    const reason = `Paused: operation inference submission budget exhausted (${count} of ${cap} provider requests). Raise the cap with 'nexus operation budget ${this.state.id} --max-total-inference-submissions <n>', then resume; blocked units need an explicit retry decision.`;
+    this.state.status = "PAUSED";
+    this.operationInferenceBudgetPaused = true;
+    this.state.pauseReason = reason;
+    delete this.state.wait;
+    delete this.state.blocked;
+    this.scheduler.emit("OPERATION_PAUSED", reason, { detail: { reason: "inference_submission_budget", inferenceCalls: count, maxInferenceCalls: cap } });
+    this.save();
+    return true;
+  }
+
+  private pauseForUnknownInferenceHistory(): void {
+    const cap = this.state.policy.maxInferenceCalls;
+    const reason = `Paused: this operation predates durable inference request accounting, so its prior request count is unknown. No new provider request was sent. Start an explicit accounting epoch with 'nexus operation budget ${this.state.id} --max-total-inference-submissions <n> --reset-inference-submission-history', then resume, or cancel.`;
+    this.state.status = "PAUSED";
+    this.state.pauseReason = reason;
+    delete this.state.wait;
+    delete this.state.blocked;
+    this.scheduler.emit("OPERATION_PAUSED", reason, { detail: { reason: "inference_submission_history_unknown", knownInferenceSubmissions: this.state.inferenceCalls, maxInferenceCalls: cap } });
+    this.save();
+  }
+
+  private reserveInferenceSubmission(): void {
+    if (!this.state.historyKnown) {
+      try {
+        this.pauseForUnknownInferenceHistory();
+      } catch (error: any) {
+        throw new OperationInferenceAdmissionError("persistence_failed", `Operation inference budget state could not be saved before provider dispatch: ${error?.message ?? error}`);
+      }
+      throw new OperationInferenceAdmissionError("history_unknown", this.state.pauseReason ?? "Operation inference request history is unknown; no provider request was sent.");
+    }
+    const cap = this.state.policy.maxInferenceCalls;
+    if (this.state.status === "PAUSED" || this.state.inferenceCalls >= cap) {
+      try {
+        this.pauseForInferenceSubmissionBudget();
+      } catch (error: any) {
+        throw new OperationInferenceAdmissionError("persistence_failed", `Operation inference budget state could not be saved before provider dispatch: ${error?.message ?? error}`);
+      }
+      throw new OperationInferenceAdmissionError(
+        "budget_exhausted",
+        `operation inference submission budget exhausted (${this.state.inferenceCalls}/${cap}); the operation is paused and no additional provider request was sent`,
+      );
+    }
+    this.state.inferenceCalls += 1;
+    try {
+      // Synchronous state persistence completes before the provider call can be dispatched.
+      this.save();
+    } catch (error: any) {
+      throw new OperationInferenceAdmissionError(
+        "persistence_failed",
+        `operation inference submission count could not be durably saved before provider dispatch: ${error?.message ?? error}`,
+      );
+    }
   }
 
   private recordDelivery(unitId: string, messages?: OperationMessage[]): void {

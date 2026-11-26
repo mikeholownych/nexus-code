@@ -15,7 +15,7 @@ import { InferenceError } from "../client.js";
 import { TurnResult, InterruptionRecord, InferenceFailure, CapacityRecord, ModelStop, ProviderRecoveryRecord, assertTurnResultInvariants, deepFreezeTurn, summarizeTurn } from "./turn.js";
 import { withDurableSync } from "./durable_file.js";
 import { ProviderRecoveryController, RecoveryCancelled, SubmissionAdmissionDenied, recoveryPolicyFromEnv } from "./provider_recovery.js";
-import { activateInferenceSubmissionAdmissionScope, withInferenceSubmissionAdmissionScope, type InferenceSubmissionAdmissionScope } from "./inference_admission.js";
+import { activateInferenceSubmissionAdmissionScope, OperationInferenceAdmissionError, withInferenceSubmissionAdmissionScope, type InferenceSubmissionAdmissionScope } from "./inference_admission.js";
 import { amendObjective, blockedRequirements, carryUnresolvedConflicts, createLedger, gatingRequirements, isNewObjective, openRequirements, supersededBy, trackingOf } from "./objective.js";
 import { snapshot } from "../file_diff.js";
 import { buildBlockedRequirementQuestion, buildSteeringConflictQuestion } from "./needs_input.js";
@@ -822,6 +822,21 @@ async function runTurnBody(this: any, taskPrompt: string | any[], onConfirm: Con
           this.ui.stopSpinner(true);
         }
       } catch (err: any) {
+        if (err instanceof OperationInferenceAdmissionError) {
+          if (err.failure === "persistence_failed") {
+            this.ui.stopSpinner(false, "Operation inference budget could not be saved; no provider request was sent");
+            persistenceFailure ??= err.message;
+          } else {
+            this.ui.stopSpinner(false, err.failure === "history_unknown"
+              ? "Operation inference history is unknown; no provider request was sent"
+              : "Operation inference submission budget exhausted; no additional provider request was sent");
+            stopReason = "OPERATION_INFERENCE_SUBMISSION_BUDGET_EXHAUSTED";
+            stopDetail = err.message;
+          }
+          stepsUsed = currentStep;
+          endStep();
+          break;
+        }
         if (err instanceof InferenceSubmissionBudgetExhausted) {
           this.ui.stopSpinner(false, "Objective inference submission budget exhausted; no additional provider request was sent");
           stopReason = "INFERENCE_SUBMISSION_BUDGET_EXHAUSTED";

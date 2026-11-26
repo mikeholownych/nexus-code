@@ -21,7 +21,7 @@ import { UnsupportedOperationSchemaError, clampUnisolatedConcurrency, concurrenc
 import { MessageRejected, publishMessage } from "./core/operation_messages.js";
 import { ROLE_PROFILES, specialistInputsProblem } from "./core/roles.js";
 import { AgentWorkUnitExecutor, applyOperatorDecision, driveOperation, OperationExistsError, type DriveOptions, OperationLockedError, OperationStore, resourcesFromConfig } from "./core/operation_runner.js";
-import { parseActiveMinutesCap, parseTokenCap, setOperationBudget } from "./core/operation_budget.js";
+import { parseActiveMinutesCap, parseInferenceSubmissionCap, parseTokenCap, setOperationBudget } from "./core/operation_budget.js";
 import { withDerivedPause } from "./core/driver_identity.js";
 import { buildOperationView, renderOperationView, renderReplay, watchOperation } from "./operation_view.js";
 import { ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "./core/operation_git.js";
@@ -466,16 +466,20 @@ export function registerOperationCommands(program: Command): void {
     .argument("<id>", "Operation id")
     .option("--max-total-tokens <n|none>", "New token cap for the operation's agent runs, or 'none' to remove it")
     .option("--max-total-active-minutes <n>", "New finite active-time cap for the operation (1–4320 minutes)")
+    .option("--max-total-inference-submissions <n>", "New finite provider request cap across all operation units (1–10000)")
+    .option("--reset-inference-submission-history", "Explicitly start a new request-accounting epoch when older usage is unknown")
     .option("-w, --workspace <path>", "Workspace directory (default: current directory)")
     .description("Operator command: change operation budgets (audited in its journal; applies to the next active interval)")
     .action(operationAction((id: string, options: any) => {
-      const changes: { maxTotalTokens?: number | undefined; maxTotalActiveMs?: number } = {};
+      const changes: { maxTotalTokens?: number | undefined; maxTotalActiveMs?: number; maxInferenceCalls?: number; resetInferenceSubmissionHistory?: boolean } = {};
       if (options.maxTotalTokens !== undefined) changes.maxTotalTokens = parseTokenCap(String(options.maxTotalTokens));
       if (options.maxTotalActiveMinutes !== undefined) changes.maxTotalActiveMs = parseActiveMinutesCap(String(options.maxTotalActiveMinutes));
-      if (!Object.keys(changes).length) throw new Error("Supply --max-total-tokens and/or --max-total-active-minutes.");
+      if (options.maxTotalInferenceSubmissions !== undefined) changes.maxInferenceCalls = parseInferenceSubmissionCap(String(options.maxTotalInferenceSubmissions));
+      if (options.resetInferenceSubmissionHistory) changes.resetInferenceSubmissionHistory = true;
+      if (!Object.keys(changes).length) throw new Error("Supply at least one budget cap.");
       const state = setOperationBudget(new OperationStore(path.resolve(options.workspace ?? process.cwd())), id, changes);
       console.log(
-        `Operation ${safeTerminal(id)}: token cap ${state.policy.maxTotalTokens ?? "none"}; active-time cap ${Math.floor(state.policy.maxTotalActiveMs / 60_000)} minutes (recorded in its journal). ${state.status === "PAUSED" ? "It stays paused; run 'nexus operation resume' to continue." : ""}`.trim(),
+        `Operation ${safeTerminal(id)}: token cap ${state.policy.maxTotalTokens ?? "none"}; active-time cap ${Math.floor(state.policy.maxTotalActiveMs / 60_000)} minutes; inference submissions ${state.inferenceCalls}/${state.policy.maxInferenceCalls} (recorded in its journal). ${state.status === "PAUSED" ? "It stays paused; run 'nexus operation resume' to continue." : ""}`.trim(),
       );
     }));
 
