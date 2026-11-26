@@ -152,6 +152,33 @@ test("side requests and nested delegates consume their enclosing durable inferen
   }
 });
 
+test("an in-turn subagent consumes the parent's persisted inference allowance", { timeout: 30_000 }, async () => {
+  const gateway = await startGateway((n, request) => {
+    const isSubagent = (request?.messages ?? []).some((message: any) => String(message.content ?? "").includes("[Subagent Objective]"));
+    if (isSubagent) return { kind: "tools", calls: [{ name: "task_completed", args: { summary: "The requested inspection is complete." } }] };
+    if (n === 1) return { kind: "tools", calls: [{ name: "spawn_subagent", args: { prompt: "Inspect the repository and report one finding." } }] };
+    return { kind: "text", content: "The parent must not receive this response." };
+  });
+  const workspace = makeRepo({ "notes.txt": "A harmless fixture.\n" });
+  const agent = quiet(new AutonomousAgent(config(gateway.url, workspace, {
+    maxInferenceSubmissions: 2,
+    continuation: { ...DEFAULT_CONTINUATION, maxInferenceSubmissions: 2 },
+  })));
+  try {
+    const result = await agent.runTurn("Inspect the repository and report one finding.");
+    assert.equal(result.execution, "LIMIT_REACHED", JSON.stringify(result));
+    assert.equal(result.reason, "INFERENCE_SUBMISSION_BUDGET_EXHAUSTED");
+    assert.equal(gateway.requests.length, 2, "parent tool request and child completion run; the next parent request is denied pre-dispatch");
+    assert.equal(agent.getObjective()!.execution!.inferenceSubmissions, 2);
+    assert.equal((gateway.requests as any[]).some((request) =>
+      (request.messages ?? []).some((message: any) => String(message.content ?? "").includes("[Subagent Objective]"))), true);
+  } finally {
+    agent.shutdown();
+    await gateway.close();
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test("failed persistence of a submission reservation prevents provider dispatch", { timeout: 30_000 }, async () => {
   const gateway = await startGateway(() => fileWrite("must-not-be-written.txt"));
   const workspace = makeRepo();
