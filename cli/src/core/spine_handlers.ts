@@ -570,6 +570,16 @@ export function setupSpineHandlersImpl(this: any): void {
           }
         } catch {
           this.verifiedWorktreeCompletion = false;
+          this.acceptancePersistenceFailure = "Candidate validation receipt could not be constructed; verified acceptance is blocked.";
+          this.activeValidationReceipt = undefined;
+          const candidateWorkspace = this.activeWorktree?.worktreePath;
+          if (candidateWorkspace) {
+            this.candidateTracker.invalidateReceipts(
+              "Candidate validation receipt could not be constructed.",
+              [candidateWorkspace],
+              candidateWorkspace,
+            );
+          }
         }
       } else {
         this.verifiedWorktreeCompletion = !worktreeHasChanges;
