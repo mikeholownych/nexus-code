@@ -80,3 +80,22 @@ The following requested scenarios are explicitly not represented as passes: an i
 ## 4. Reproduction notes
 
 From a clean checkout of the audited revision, install CLI dependencies with `npm ci --prefix cli`; use a throwaway `HOME` and XDG directories for tests; for Rust, set a worktree-local `CARGO_TARGET_DIR`. `npm --prefix cli test` was interrupted after exceeding 45 minutes without an aggregate summary (exit 130). The stream included failures and skips; do not treat the partial suite as green. The repository directs evaluation/resource tests to `make test-ci` with a dedicated `NEXUS_EVAL_TEST_WORKSPACE_ROOT`; that setup was not available in this audit environment. The no-ceiling behavior is reproducible from `DEFAULT_CONTINUATION` and loop guards cited in AT-06; an empirical reset test should use the repository’s `startGateway` fixture and should preserve its source/output transcript outside the main checkout.
+
+## 5. Follow-up: mandatory candidate receipt persistence now fails closed (2026-11-25)
+
+**Original failure:** The injected `recordCandidateAndReceipt` exception was first reproduced on `main` at `387647343ab5293549324756441cfa688f230ff0` (candidate test commit `296d6dc39`). The turn reported `persistence.durable=false` but returned `VERIFIED`; the pre-fix test exited 1. This was a confirmed P10-03 acceptance gap.
+
+**Remediation:** PR #850 merged as `8cc750bc3213cc5c79852394894c78c8b798df1e`. A failed mandatory write now clears `verifiedWorktreeCompletion` and the active receipt (`cli/src/agent.ts:1695-1700`); the turn promotes that failure to `PERSISTENCE_FAILED` before constructing its result (`cli/src/core/run_turn.ts:56-63,1232-1236,1477-1480`). Receipt identity binds source revision, candidate digest, verifier command and definition, runtime, and acceptance-policy hash (`cli/src/core/spine_handlers.ts:466-515`). The receipt also explicitly records that independent approval is unavailable in this single-maintainer repository.
+
+**Reproduction on fixed code:** On Node 24.11.1, in a detached worktree at `fa6c2eb65120a1a96ce737a967182e0ca4d5f364`, the focused fault-injection test passed 1/1. The test uses a local fixture gateway and a disposable candidate repository; it does not use a live provider or user workspace. It asserts that the injected persistence call occurred, `persistence.durable=false`, outcome is not `VERIFIED`, execution is `FAILED` with reason `PERSISTENCE_FAILED`, the worktree is not marked complete, and the candidate remains available for recovery. It also checks the bound receipt identity and that verifier source is represented by a digest.
+
+**Reproduction commands:** From a clean checkout, install dependencies and build the Rust worker into the worktree-local target directory so the CLI resolves it:
+
+```sh
+npm ci --prefix cli
+CARGO_TARGET_DIR="$PWD/core/target" cargo build --release --manifest-path core/Cargo.toml
+TEST_HOME=$(mktemp -d)
+(cd cli && HOME="$TEST_HOME" XDG_CONFIG_HOME="$TEST_HOME/.config" node --import tsx --test test/p10_receipt_persistence.test.ts)
+```
+
+**Status:** PASS for the tested candidate-receipt persistence path. This does not establish signed or externally immutable evidence, independent approval, or complete export-time binding across every acceptance path. The full CLI test suite was not rerun for this slice; hosted PR #850 checks passed, and post-merge CI and CodeQL passed on `e0139857ba189b2c7f695a4cdd6990ff4521c520` after PR #827.
