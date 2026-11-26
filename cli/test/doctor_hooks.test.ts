@@ -85,10 +85,10 @@ test("project hooks that are declared and not in force are a warning with the co
   assert.equal(changed.status, "warn");
   assert.match(changed.evidence[0], /\.nexus\/hooks\.json changed since the approval, so its hooks do not run/);
 
-  fs.writeFileSync(project, '{"version":1,"hooks":{"stop":[]}}');
+  fs.writeFileSync(project, '{"version":1,"hooks":{"unknown-event":[]}}');
   const invalid = diagnoseHooks(workspace, home);
   assert.equal(invalid.status, "warn");
-  assert.match(invalid.evidence[0], /not a valid hooks file, so its hooks do not run \(.*event 'stop' is not supported in this version/);
+  assert.match(invalid.evidence[0], /not a valid hooks file, so its hooks do not run \(.*unknown event 'unknown-event'/);
 });
 
 test("an unusable approval store and a tool name no tool has are warnings", () => {

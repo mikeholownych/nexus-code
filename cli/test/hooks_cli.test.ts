@@ -291,7 +291,7 @@ test("test: an allow is shown as ignored, an unapproved project hook is not run,
   assert.equal(fs.existsSync(marker), false, "the repository's program was not started");
   assert.match(unapproved.out, /are not approved; review them and run `nexus hooks approve` in a terminal/);
 
-  for (const args of [["test", "session-start", "--tool", "x"], ["test", "pre-tool", "--tool", "x", "--input", "not json"], ["test", "pre-tool", "--tool", "x", "--input", "[1]"]]) {
+  for (const args of [["test", "unknown-event", "--tool", "x"], ["test", "pre-tool", "--tool", "x", "--input", "not json"], ["test", "pre-tool", "--tool", "x", "--input", "[1]"]]) {
     const refused = await nexusHooks([...args, "-w", workspace]);
     assert.equal(refused.exitCode, 1, args.join(" "));
   }
