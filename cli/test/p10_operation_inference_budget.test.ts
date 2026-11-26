@@ -22,14 +22,12 @@ const resource = {
   rank: 0,
 };
 
-function failedOnAdmission(error: unknown, unitId: string) {
+function deniedOnAdmission(error: unknown) {
   assert.ok(error instanceof OperationInferenceAdmissionError);
   return {
-    kind: "failed" as const,
-    cause: "EXECUTION_FAILED" as const,
+    kind: "admission_denied" as const,
+    failure: error.failure,
     reason: error.message,
-    question: `${unitId} stopped at an operation budget boundary.`,
-    options: [{ label: "retry after raising the cap", action: { kind: "retry" as const } }],
   };
 }
 
@@ -66,12 +64,8 @@ test("one durable inference counter spans separate units and denies the first re
           return { kind: "completed", summary: "first unit done", outcome: "NOT_REQUIRED" };
         }
         await submit();
-        try {
-          await submit();
-          assert.fail("the request beyond the aggregate cap must be denied");
-        } catch (error) {
-          return failedOnAdmission(error, unit.id);
-        }
+        await submit();
+        assert.fail("the request beyond the aggregate cap must be denied");
       },
     },
     persist: (saved) => { durableCount = saved.inferenceCalls; },
@@ -85,8 +79,8 @@ test("one durable inference counter spans separate units and denies the first re
   assert.equal(result.status, "PAUSED");
   assert.match(result.pauseReason ?? "", /inference submission budget exhausted \(2 of 2/);
   assert.equal(result.units[0].status, "COMPLETE");
-  assert.equal(result.units[1].status, "BLOCKED");
-  assert.match(String(result.events.at(-1)?.detail?.reason ?? ""), /inference submission budget exhausted/);
+  assert.equal(result.units[1].status, "RUNNABLE");
+  assert.ok(result.events.some((event) => event.type === "WORK_ADMISSION_DENIED"));
 });
 
 test("operation admission covers actual provider calls from nested side and child scopes", { timeout: 30_000 }, async (t) => {
@@ -123,7 +117,7 @@ test("operation admission covers actual provider calls from nested side and chil
           await client.chatCompletion([{ role: "user", content: "must be denied" }], []);
           assert.fail("the request after the operation-wide limit must not reach the provider");
         } catch (error) {
-          return failedOnAdmission(error, unit.id);
+          return deniedOnAdmission(error);
         }
       }),
     },
@@ -142,8 +136,9 @@ test("operation admission covers actual provider calls from nested side and chil
   assert.equal(turnReservations, 3, "nested requests also satisfy the enclosing turn admission");
   assert.equal(childReservations, 1, "the child request also satisfies its own turn admission");
   assert.equal(result.status, "PAUSED");
-  assert.equal(result.units[0].status, "BLOCKED");
-  assert.match(result.units[0].blocked?.reason ?? "", /operation inference submission budget exhausted/);
+  assert.equal(result.units[0].status, "RUNNABLE");
+  assert.equal(result.units[0].blocked, undefined);
+  assert.match(result.pauseReason ?? "", /operation inference submission budget exhausted/);
 });
 
 test("changing an exhausted cap preserves the consumed count; only explicit legacy reset starts a new epoch", (t) => {
@@ -234,13 +229,9 @@ test("request admission persistence failure prevents the provider request", asyn
   const runner = new OperationRunner(state, {
     executor: {
       run: async (unit) => {
-        try {
-          admitCurrentInferenceSubmission();
-          dispatched += 1;
-          return { kind: "completed", summary: "unexpected dispatch", outcome: "NOT_REQUIRED" };
-        } catch (error) {
-          return failedOnAdmission(error, unit.id);
-        }
+        admitCurrentInferenceSubmission();
+        dispatched += 1;
+        return { kind: "completed", summary: "unexpected dispatch", outcome: "NOT_REQUIRED" };
       },
     },
     persist: (saved) => {
@@ -257,6 +248,8 @@ test("request admission persistence failure prevents the provider request", asyn
   assert.equal(dispatched, 0);
   assert.equal(result.inferenceCalls, 1, "a failed reservation may be conservatively overcounted");
   assert.equal(lastPersistedCount, 1);
-  assert.equal(result.units[0].status, "BLOCKED");
-  assert.match(result.units[0].blocked?.reason ?? "", /durably saved before provider dispatch/);
+  assert.equal(result.status, "PAUSED");
+  assert.equal(result.units[0].status, "RUNNABLE");
+  assert.equal(result.units[0].blocked, undefined);
+  assert.match(result.pauseReason ?? "", /durably saved before provider dispatch/);
 });

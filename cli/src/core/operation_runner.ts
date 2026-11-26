@@ -664,6 +664,19 @@ export class OperationRunner {
       return this.enqueueIntegration(unit, result);
     } catch (err: any) {
       if (signal?.aborted) return { kind: "cancelled" };
+      if (err instanceof OperationInferenceAdmissionError) {
+        // This gate runs before provider dispatch; do not classify a denied request as an unknown side effect.
+        if (err.failure === "persistence_failed") {
+          this.state.status = "PAUSED";
+          this.state.pauseReason = `Paused: ${err.message}`;
+          this.operationInferenceBudgetPaused = true;
+        }
+        this.scheduler.emit("OPERATION_PAUSED", err.message, {
+          unitId: unit.id,
+          detail: { reason: "inference_admission", failure: err.failure },
+        });
+        return { kind: "admission_denied", reason: err.message, failure: err.failure };
+      }
       return {
         kind: "failed",
         cause: "EXECUTION_FAILED",

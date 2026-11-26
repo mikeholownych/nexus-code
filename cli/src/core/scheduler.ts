@@ -635,6 +635,15 @@ export class ConvergenceScheduler {
           options: [{ label: "replay the step", action: { kind: "retry" } }],
         });
         return;
+      case "admission_denied":
+        // Admission runs before provider dispatch, so this is safe to resume after the operation pause is addressed.
+        u.status = "RUNNABLE";
+        this.emit("WORK_ADMISSION_DENIED", `${u.title} was not sent to a provider: ${result.reason}`, {
+          unitId,
+          resourceId,
+          detail: { failure: result.failure },
+        });
+        return;
       case "failed": {
         if (result.rejectedOutput) {
           const { raw, reason } = result.rejectedOutput;
