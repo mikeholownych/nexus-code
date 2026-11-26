@@ -44,14 +44,14 @@ jobs:
         with:
           node-version: 22.22.1
           registry-url: https://registry.npmjs.org
+      - name: Ensure npm supports trusted publishing
+        run: |
+          npm install -g npm@^11.5.1
+          npm --version
       - run: npm ci --prefix cli
       - run: npm --prefix cli run build
       - name: Verify package is publishable
         run: |
-          node -e "const p=require('./cli/package.json'); if (p.private) { console.error('cli/package.json is private; publish requires explicit owner-approved publishability change'); process.exit(1); }"
+          node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('./cli/package.json','utf8')); if (p.private) { console.error('cli/package.json is private; publish requires explicit owner-approved publishability change'); process.exit(1); } if (p.name !== '@nexus-code-ai/nexus-code') { console.error('unexpected package name: ' + p.name); process.exit(1); }"
       - run: npm publish --prefix cli --provenance --access public --dry-run
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - run: npm publish --prefix cli --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
