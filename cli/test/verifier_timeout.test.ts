@@ -13,7 +13,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execSync } from "node:child_process";
-import { RustCoreBridge, rpcDeadlines } from "../src/tools.js";
+import { MAX_TOOL_TIMEOUT_SECS, RustCoreBridge, maxToolTimeoutSecs, rpcDeadlines } from "../src/tools.js";
 import { runTestSuiteWithExecutor } from "../src/tester.js";
 import { AutonomousAgent } from "../src/agent.js";
 import { gateway, mute } from "./helpers/capacity_fixture.js";
@@ -37,6 +37,24 @@ describe("D3 timeout lifecycle", () => {
     // Other tools keep their previous outer deadline.
     assert.equal(rpcDeadlines("read_file", {}).bridgeMs, 35000);
     assert.equal(rpcDeadlines("read_file", { timeout_secs: 10 }).bridgeMs, 15000);
+  });
+
+  test("operator timeout override is strict and hard-bounded below Node's timer limit", () => {
+    const saved = process.env.NEXUS_MAX_TOOL_TIMEOUT_SECS;
+    try {
+      process.env.NEXUS_MAX_TOOL_TIMEOUT_SECS = "2147484";
+      assert.equal(maxToolTimeoutSecs(), MAX_TOOL_TIMEOUT_SECS);
+      const deadline = rpcDeadlines("run_command", { timeout_secs: Number.MAX_SAFE_INTEGER });
+      assert.equal(deadline.runnerSecs, MAX_TOOL_TIMEOUT_SECS);
+      assert.equal(deadline.bridgeMs, (MAX_TOOL_TIMEOUT_SECS + 5) * 1000);
+      assert.ok(deadline.bridgeMs <= 2_147_483_647, "the bridge timer must stay within Node's maximum supported delay");
+
+      process.env.NEXUS_MAX_TOOL_TIMEOUT_SECS = "1800seconds";
+      assert.equal(maxToolTimeoutSecs(), 1800, "malformed values use the finite default instead of parseInt prefixes");
+    } finally {
+      if (saved === undefined) delete process.env.NEXUS_MAX_TOOL_TIMEOUT_SECS;
+      else process.env.NEXUS_MAX_TOOL_TIMEOUT_SECS = saved;
+    }
   });
 
   test("verifier result mapping: timeout, ordinary failure and success are three distinct states", async () => {
