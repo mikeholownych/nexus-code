@@ -694,6 +694,19 @@ export class ConvergenceScheduler {
     }
   }
 
+  /** A stale driver was found by an unattended worker. Persist an operator decision before any work can resume. */
+  reconcileStaleDriverRuns(): void {
+    for (const u of this.state.units.filter((x) => x.status === "RUNNING")) {
+      u.unknownResumes++;
+      this.block(u, {
+        cause: "INTERRUPTED",
+        reason: `the previous driver stopped during this run; its outcome is unknown (${u.unknownResumes} interrupted resume${u.unknownResumes === 1 ? "" : "s"})`,
+        question: `${u.title}: its run may have partially run before the driver stopped. Inspect its effects before deciding whether to continue, or stop?`,
+        options: [{ label: "continue after inspection", action: { kind: "retry" } }],
+      });
+    }
+  }
+
   wait(d: Extract<Decision, { kind: "wait" }>): void {
     const first = this.state.status !== "WAITING";
     this.state.status = "WAITING";

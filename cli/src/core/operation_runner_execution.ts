@@ -464,7 +464,9 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         } catch (err: any) {
           unusable = `its durable state could not be loaded (${String(err?.message ?? err).slice(0, 160)})`;
         }
-        if (recovered?.interrupted) {
+        // A general retry (for example, after the step limit) does not acknowledge a side effect whose result is
+        // unknown. Only the interruption-specific choice or an authorized restart may move past this decision.
+        if (recovered?.interrupted && ctx.operatorDecision?.label !== "continue after inspection" && !ctx.operatorDecision?.restart) {
           const op = recovered.interruptedOperation;
           const what = op?.completedAt ? "finished, but its result was not saved before the process stopped" : "was in flight when the process stopped";
           return {

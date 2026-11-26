@@ -26,6 +26,7 @@ import {
   type WorkerResult,
 } from "./runner_store.js";
 import { scrubUnattendedEnv, UnattendedApprovalPolicy, UnattendedClampError, unattendedConfig } from "./unattended.js";
+import { STALE_PAUSE_PREFIX } from "./driver_identity.js";
 
 /** The event log stops growing here; one last line says so. */
 export const EVENT_LOG_LIMIT = 16 * 1024 * 1024;
@@ -140,6 +141,10 @@ export async function runJobWorker(id: string, options: JobWorkerOptions = {}): 
     const store = new OperationStore(config.workspace);
     const existing = store.has(job.operationId);
     const state = existing ? store.load(job.operationId) : createOperation(job, spec as unknown as OperationSpec, config, remainingMs);
+    // A worker started after a BLOCKED attempt was explicitly queued by `job resume`; crash resumes never follow an
+    // exited attempt (they follow `crashed` / `reboot` / `runner_stop`). This lets the operator's queue action
+    // acknowledge the stale-driver pause without allowing the automatic crash-recovery path to clear it.
+    const operatorResumingBlockedJob = attempt.n > 1 && job.attempts[attempt.n - 2]?.end?.reason === "exited";
 
     const log = eventLog(paths, id);
     log({ type: "WORKER_STARTED", attempt: attempt.n, resumed: existing });
@@ -155,11 +160,11 @@ export async function runJobWorker(id: string, options: JobWorkerOptions = {}): 
         store,
         signal: controller.signal,
         entry: existing ? "existing" : "new",
-        // As `nexus operation resume`: a cancelled or paused operation continues. The stale-driver pause is decided
-        // first, but `prepare` then turns every PAUSED operation back to RUNNABLE, so for a job the pause is overridden:
-        // a crashed job's resumption is the supervised retry, and nobody is at a terminal to resume it. The executor's
-        // recovery of an interrupted tool call still applies. (Goals never take this path: `/goal resume` is explicit.)
+        ...(operatorResumingBlockedJob ? { resumeAfterDecision: true } : {}),
+        // Automatic crash recovery must not clear a stale-driver pause (#807). Only a worker started after the
+        // operator queued a previously BLOCKED job receives resumeAfterDecision above.
         ...(existing ? { prepare: (fresh: DurableOperationState) => {
+          if (fresh.status === "PAUSED" && fresh.pauseReason?.startsWith(STALE_PAUSE_PREFIX)) return;
           if (fresh.status === "CANCELLED") fresh.status = "RUNNING";
           else if (fresh.status === "PAUSED") fresh.status = fresh.wait ? "WAITING" : "RUNNING";
           fresh.policy.maxWaitMs = Math.max(1, Math.min(fresh.policy.maxWaitMs, remainingMs));
