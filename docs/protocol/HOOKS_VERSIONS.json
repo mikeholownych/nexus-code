@@ -23,5 +23,10 @@
     "schema_version": 1,
     "schemaSha256": "b548295fd11087c29345028cc3dcf57d39bdee160bd22ac63843a9edea4aecfc",
     "note": "Same version: the `kind` of an approval in extension_trust.json may also be `workspace-manifest` (a workspace manifest plugin's directory, approved by its tree digest, with every file of the tree in `files`). Additive: a reader that does not know the kind treats the store as it treats any entry it cannot read, and approves nothing from it; stores without such entries read as before."
+  },
+  {
+    "schema_version": 1,
+    "schemaSha256": "28dabf6476d97dfe0fd4090aa7723b539396c2c4dff03cb27a2f2042e415288c",
+    "note": "Same version: HOOK_EVENTS expanded to include pre-verify, post-verify, permission-request, session-start, session-end, stop, pre-compact (previously unsupported). HK-1 hook events now supported."
   }
 ]

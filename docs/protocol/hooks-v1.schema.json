@@ -168,8 +168,15 @@
         },
         "nexus_event": {
           "enum": [
+            "permission-request",
             "post-tool",
-            "pre-tool"
+            "post-verify",
+            "pre-compact",
+            "pre-tool",
+            "pre-verify",
+            "session-end",
+            "session-start",
+            "stop"
           ]
         },
         "permission_mode": {
@@ -312,13 +319,55 @@
         "hooks": {
           "type": "object",
           "properties": {
+            "permission-request": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookDeclaration"
+              }
+            },
             "post-tool": {
               "type": "array",
               "items": {
                 "$ref": "#/$defs/HookDeclaration"
               }
             },
+            "post-verify": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookDeclaration"
+              }
+            },
+            "pre-compact": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookDeclaration"
+              }
+            },
             "pre-tool": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookDeclaration"
+              }
+            },
+            "pre-verify": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookDeclaration"
+              }
+            },
+            "session-end": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookDeclaration"
+              }
+            },
+            "session-start": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookDeclaration"
+              }
+            },
+            "stop": {
               "type": "array",
               "items": {
                 "$ref": "#/$defs/HookDeclaration"

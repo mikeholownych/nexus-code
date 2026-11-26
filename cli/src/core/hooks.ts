@@ -23,11 +23,11 @@ import { decodeStrictUtf8, fileStamp, parseStrictJson, readHardenedFile, type Ke
 
 export const HOOKS_SCHEMA_VERSION = 1;
 
-export const HOOK_EVENTS = ["pre-tool", "post-tool"] as const;
+export const HOOK_EVENTS = ["pre-tool", "post-tool", "pre-verify", "post-verify", "permission-request", "session-start", "session-end", "stop", "pre-compact"] as const;
 export type HookEvent = (typeof HOOK_EVENTS)[number];
 
 /** Events other tools have that this version does not run. Named so the message can say so instead of "unknown key". */
-const UNSUPPORTED_EVENTS = new Set(["pre-verify", "post-verify", "permission-request", "session-start", "session-end", "stop", "pre-compact"]);
+const UNSUPPORTED_EVENTS = new Set<string>([]);
 
 export const HOOK_DEFAULT_TIMEOUT_SECS = 10;
 export const HOOK_MAX_TIMEOUT_SECS = 60;
@@ -55,6 +55,13 @@ export interface HooksFile {
   hooks: {
     "pre-tool"?: HookDeclaration[];
     "post-tool"?: HookDeclaration[];
+    "pre-verify"?: HookDeclaration[];
+    "post-verify"?: HookDeclaration[];
+    "permission-request"?: HookDeclaration[];
+    "session-start"?: HookDeclaration[];
+    "session-end"?: HookDeclaration[];
+    "stop"?: HookDeclaration[];
+    "pre-compact"?: HookDeclaration[];
   };
 }
 

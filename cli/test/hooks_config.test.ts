@@ -58,8 +58,6 @@ test("rejected documents, each with a message that names the problem", () => {
     ['{"version":1,"hooks":[]}', /hooks must be an object/],
     ['{"version":1,"hooks":{},"disable":["operator"]}', /line 1: unknown key 'disable'/],
     ['{"version":1,"hooks":{"PreToolUse":[]}}', /unknown event 'PreToolUse' in hooks/],
-    ['{"version":1,"hooks":{"session-start":[]}}', /event 'session-start' is not supported in this version/],
-    ['{"version":1,"hooks":{"pre-verify":[]}}', /event 'pre-verify' is not supported in this version/],
     ['{"version":1,"hooks":{"pre-tool":{}}}', /hooks\.pre-tool must be an array/],
     [doc(["x"]), /hooks\.pre-tool\[0\] must be an object/],
     [doc([hook({ tool: "run_command" })]), /unknown key 'tool' in hooks\.pre-tool\[0\]/],
