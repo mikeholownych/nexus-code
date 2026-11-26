@@ -92,3 +92,15 @@ From a clean checkout of the audited revision, install CLI dependencies with `np
 **Observed:** `rpc_worker_timeout.test.ts` cases for unanswered RPC, non-command cancellation, unconfirmed command cancellation, bounded forced exit, and real Rust FIFO timeout/restart passed; `worker_stdin_epipe.test.ts` also passed in the focused combined run. `npm --prefix cli run build` passed. The Rust binary build passed. The initial unanswered-RPC test failed before the fix because the worker channel remained available after timeout. These are focused tests on an isolated local worktree, not hosted CI or a complete task-level deadline proof.
 
 **Classification:** PASS for the tested worker-retirement invariants; NOT TESTED for all provider/tool kinds, platform-specific process behavior beyond the current host, kernel-stuck I/O after forced process exit, or full session recovery after host restart. Source revision: branch based on `origin/release/v1.3.1`; record the resulting commit after publication.
+
+## 6. Follow-up validation: acceptance receipt identity (2026-11-26)
+
+**Hypothesis:** A passing worktree verifier can produce a durable receipt and audit export without enough information to bind the result to the candidate, verifier definition, runtime, or acceptance policy.
+
+**Setup:** On the isolated `codex/p10-03-acceptance-identity` worktree based on release merge `1c48520411d3ddff2dbe8f2bb33cc922394e5e7d`, run `npm --prefix cli run build`, build the Rust core with a worktree-local `CARGO_TARGET_DIR`, then run from `cli/`: `HOME=$(mktemp -d) TMPDIR=<isolated directory outside any Git worktree> node --import tsx --test test/p10_receipt_persistence.test.ts test/audit_export.test.ts`.
+
+**Expected safe behavior:** A receipt binds the source revision, candidate digest/id, verifier command/result and verifier-definition digest when available; identifies the Nexus build, Node runtime, platform and architecture; hashes acceptance policy inputs without copying raw policy or verifier source; states that independent approval is unavailable; and remains present in the existing durable state and audit bundle. Failed durable receipt writes remain non-success.
+
+**Observed:** The focused command passed 22/22 tests (1 receipt-persistence failure-injection test and 21 audit-export tests). The test confirms all identity fields, no verifier-source sentinel in the receipt, failure-closed acceptance, and identity retention through `recordCandidateAndReceipt` and audit export. An initial implementation placement was caught because completion cleared `changeBaseline` before receipt construction; moving the verifier-definition digest capture before that state clear made the assertion pass. TypeScript build, Rust core build, and `git diff --check` passed. Hosted checks are not yet complete.
+
+**Classification:** PASS for the tested local receipt creation/persistence/export behavior on this host; NOT TESTED for Windows identity formatting, old receipt migration across version upgrades, externally signed or immutable copies, or independent approval. Do not describe the local receipt as tamper-proof against the sole maintainer.
