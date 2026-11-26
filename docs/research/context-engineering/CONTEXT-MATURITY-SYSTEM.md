@@ -1,8 +1,28 @@
 # Nexus context maturity and inventory
 
-Status: implemented diagnostic, provenance, and request-observability layer on `release/v1.3.0`. Exact content-free request manifests are captured at the existing adapter-dispatch boundary; they do not replace request construction, token admission, or provider adapters.
+Status: implemented diagnostic, provenance, and request-observability layer, ported to `release/v1.3.1` in `codex/context-maturity-v131`. The integration branch is based on `origin/release/v1.3.1` at `22aa330a5ae544fca7171a664dc639a8ec9110f2`; the deterministic audit-export provenance integration is commit `9ace00a96`. Exact content-free request manifests are captured at the existing adapter-dispatch boundary; they do not replace request construction, token admission, or provider adapters. The earlier v1.3.0 measurements below are historical and are not evidence of v1.3.1 qualification.
 
-## Baseline
+## Current v1.3.1 integration verification
+
+The following checks were run on `codex/context-maturity-v131` with isolated temporary `HOME` and XDG configuration. No live or paid inference service was used. The full repository suite has not been run on this integration branch.
+
+| Check | Result | Scope |
+|---|---|---|
+| `npm run build` (from `cli/`) | Passed | TypeScript build/type check on the integrated source. |
+| `node --import tsx --test test/context_inventory.test.ts` | 20 passed, 0 failed | Inventory, request manifests, freshness invalidation, maturity evidence thresholds and ordering. |
+| `node --import tsx --test test/knowledge_memory_controls.test.ts` | 3 passed, 0 failed | Operator-only promotion and legacy memory controls. |
+| `node --import tsx --test test/session_durable_fields.test.ts` | 4 passed, 0 failed | Durable session integration. |
+| `node --import tsx --test test/session_export_escaping.test.ts` | 5 passed, 0 failed | Session export escaping. |
+| `node --import tsx --test test/persistence_protection.test.ts` | 27 passed, 0 failed | Session, workspace, checkpoint, export and persistence protections. |
+| `node --import tsx --test test/provider_wire_matrix.test.ts` | 90 passed, 0 failed | Local provider-wire fixtures only. |
+| `node --import tsx --test test/slash_router.test.ts` | 39 passed, 0 failed after rebuilding the Rust core | The first run failed because the isolated worktree lacked a built core; the rerun passed after a worktree-local build. |
+| `node --import tsx --test test/p10_receipt_persistence.test.ts` | 1 passed, 0 failed | Receipt persistence failure cannot authorize verified acceptance. Local fixture only; no live inference. |
+| `node --import tsx --test test/audit_export.test.ts` | 22 passed, 0 failed | Audit bundle export preserves deterministic context provenance timestamps and marks reconstructed timing as unmeasured. |
+| `git diff --check` | Passed | Whitespace check on the integrated worktree changes. |
+
+`workspace_trust.test.ts` also completed successfully, but the test summary count was not captured, so this record does not claim a count for it. The first audit-export test attempt used the host's default `/tmp` and failed 16/22 because an existing `/tmp/.git` marker made temporary fixtures look like repositories with unavailable Git metadata. The marker was left untouched; rerunning with `TMPDIR` under `/var/tmp` passed 22/22. Focused results do not qualify the release; required full-suite and hosted checks remain outstanding.
+
+## Historical v1.3.0 baseline and gap assessment
 
 Repository: Nexus Code. The initial operator checkout was clean `main` at `9156571f7d5fd8f8436c3105f0237628ab35e857`; the requested implementation target is `release/v1.3.0`, initially at `79ebb92c7254340effd5cd296181794d665648ae`. The isolated branch `codex/context-maturity-v130` was rebased onto the current `origin/release/v1.3.0` at `ab7af749b9dd2b6547bd265142d946848d938856`; working changes remain isolated there.
 
@@ -15,7 +35,7 @@ The reference is *The Context Engineering Maturity Model: A Framework for Buildi
 | Freshness | 1 — Ad hoc | Context is gathered from the live session; candidate/verification evidence has identity-based invalidation elsewhere in the execution model. | Ordinary transcript/tool observations do not consistently carry a repository fingerprint or invalidation rule. Persisted knowledge has timestamps but no enforced applicability fingerprint. Unknown freshness can look current if rendered as prose. | Attach explicit freshness state and source references; report `unknown` where no applicable fingerprint exists. |
 | Compounding value | 2 — Exploratory | Sessions, compaction archives and durable task state persist across process restarts (`cli/src/session.ts:102-184`); project knowledge persists in `.nexus/knowledge.json` (`cli/src/knowledge.ts:37-45`). | Session history, task summaries, and repository knowledge have different scopes but no unified provenance/retention view. Knowledge auto-extraction is opt-in and trust-gated, but a stored entry is not evidence of correctness. | Preserve source-only inventory metadata in session records and exports; do not elevate model or tool claims to verified facts. |
 
-## Implemented assessment
+## Implemented assessment on the original v1.3.0 branch
 
 The current `/context maturity` output is computed from one content-free on-demand inventory and can change with observed session evidence. On the deterministic command fixture used here, it reports navigability 2 — Exploratory, retrieval speed 2 — Exploratory, freshness 1 — Ad hoc, and compounding value 1 — Ad hoc (no durable memory was present in that fixture). Ratings remain independent and do not claim a managed maturity level.
 
@@ -76,7 +96,7 @@ XERJ retrieval on `nexus-cli` located the existing context admission/token-accou
 
 ## Verification evidence
 
-Implementation worktree: `codex/context-maturity-v130`. The feature branch began from `origin/release/v1.3.0` at `ab7af749b9dd2b6547bd265142d946848d938856` and was rebased after PR #739 onto `cebb31ac62752e8b1260f35cd5f19e507e8db7eb`; changes remain local, with no push or PR publication.
+Historical implementation worktree: `codex/context-maturity-v130`. The feature branch began from `origin/release/v1.3.0` at `ab7af749b9dd2b6547bd265142d946848d938856` and was rebased after PR #739 onto `cebb31ac62752e8b1260f35cd5f19e507e8db7eb`. The measurements in the table below apply to that historical branch only. Current v1.3.1 evidence is listed above.
 
 | Check | Result | Scope |
 |---|---|---|
@@ -103,4 +123,4 @@ After rebasing onto PR #739, focused checks passed on the rebased source: contex
 - No source deadline exists; synchronous source failures and partial outcomes are visible, but this implementation does not guarantee timeout handling.
 - Freshness compares bounded repository candidate fingerprints for saved session inventories, but does not cover ignored environment inputs, tool policy, provider-side context, or individual memory provenance; invalidation latency has not been measured. The candidate scan is bounded by 4,096 manifest entries and 16 MiB of changed content, with Git's configured timeout; failures produce unknown freshness and partial coverage. No retrieval-latency SLO or cache instrumentation exists.
 - Operator-only memory promotion now carries metadata and expiry enforcement, but no held-out task-quality evaluation establishes that durable memories improve results. Existing schema-1 records are migrated additively when a writable load occurs; read-only loads label them in memory without rewriting their files.
-- No independent review or full-suite run has been completed; qualification remains pending.
+- No second-maintainer review or full-suite run has been completed. This is a single-maintainer project; publication is not blocked on finding another reviewer. The full suite and required hosted checks remain necessary before merge or release qualification.

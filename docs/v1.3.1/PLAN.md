@@ -169,7 +169,7 @@ Dependabot PRs: #827 walkdir patch - merge after CI; #828 @babel/parser major - 
 
 **Scope:**
 - #1 PLAN-10 task 8: finish and seal held-out T2/T3 corpus, or close/supersede with measured evidence.
-- Context-maturity qualification/evidence as applicable.
+- Context maturity is integrated on `codex/context-maturity-v131`; focused results and remaining limits are recorded in `docs/research/context-engineering/CONTEXT-MATURITY-SYSTEM.md`. Full-suite and hosted CI qualification remain pending under G-1.
 - G-1–G-7 re-evaluated for v1.3.1; release notes/readiness updated with measured status.
 
 **Acceptance:**
@@ -213,7 +213,7 @@ Parallelism is allowed across independent WPs with worktree/claim discipline and
 
 - **#807 (recorded 2026-11-25):** default behavior approved — **block/keep paused with visible reason; no auto-clear**. Unattended job/loop stale-driver resume must not silently override pause; explicit operator resume/ack required.
 - **npm publish (recorded 2026-11-25):** in scope for v1.3.1, but npm package and publishing account are **not yet set up**. WP-131-10 must include package naming/scope decision, account/access setup checklist, dry-run/tarball audit, CI/release workflow wiring, and owner-gated first publish. No real publish without owner authorization.
-- **Testing infrastructure (recorded 2026-11-25):** local AI inference gateway and OpenAI ChatGPT subscription are authorized for testing. Deterministic tests remain release-gate authority; live-gateway/provider tests must record environment, model, and measured results.
+- **Testing infrastructure (updated 2026-11-26):** do not assume or require paid infrastructure or subscriptions for this FOSS project. Use deterministic local fixtures and locally available inference; live provider checks are deferred unless suitable infrastructure is donated or otherwise available at no cost. Deterministic tests remain release-gate authority.
 - **CodeQL (recorded 2026-11-25):** alerts must be **fixed**, or closed only with **specific reasoning/proof of false positive documented** (owner-approved rationale). Default: fix.
 - **#1 T2/T3 corpus:** still needs confirmation whether external data/access is required; close/seal with evidence or explicit owner-approved supersession.
 - **Remote branch (recorded 2026-11-25):** `release/v1.3.1` created on origin from `origin/main` (`e578571b`). Agents push PRs against `release/v1.3.1`.
