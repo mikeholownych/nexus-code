@@ -569,7 +569,7 @@ export function maxToolTimeoutSecs(): number {
 
 /**
  * Deadline ownership for one RPC. For `run_command` the runner owns the command deadline (`runnerSecs`) and the bridge's
- * outer timer is strictly longer; for other tools only the bridge timer applies.
+ * outer timer is strictly longer; other tool deadlines are validated and capped before they reach Node's timer.
  */
 export function rpcDeadlines(toolName: string, args: Record<string, any>): { runnerSecs?: number; bridgeMs: number } {
   if (toolName === "run_command") {
@@ -578,7 +578,11 @@ export function rpcDeadlines(toolName: string, args: Record<string, any>): { run
     const runnerSecs = Math.min(rawSecs, maxSecs);
     return { runnerSecs, bridgeMs: (runnerSecs + RPC_GRACE_SECS) * 1000 };
   }
-  return { bridgeMs: args.timeout_secs ? (args.timeout_secs + RPC_GRACE_SECS) * 1000 : RPC_DEFAULT_TIMEOUT_MS };
+  const requestedSecs = args.timeout_secs;
+  const validSecs = Number.isSafeInteger(requestedSecs) && requestedSecs > 0
+    ? Math.min(requestedSecs, maxToolTimeoutSecs())
+    : undefined;
+  return { bridgeMs: validSecs === undefined ? RPC_DEFAULT_TIMEOUT_MS : (validSecs + RPC_GRACE_SECS) * 1000 };
 }
 
 const READ_ONLY_COMMAND_MAX_OUTPUT_BYTES = 32_000;

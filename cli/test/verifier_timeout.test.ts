@@ -57,6 +57,28 @@ describe("D3 timeout lifecycle", () => {
     }
   });
 
+  test("non-command RPC timeout inputs cannot overflow the bridge timer", () => {
+    const saved = process.env.NEXUS_MAX_TOOL_TIMEOUT_SECS;
+    try {
+      process.env.NEXUS_MAX_TOOL_TIMEOUT_SECS = "2147484";
+      assert.equal(
+        rpcDeadlines("read_file", { timeout_secs: Number.MAX_SAFE_INTEGER }).bridgeMs,
+        (MAX_TOOL_TIMEOUT_SECS + 5) * 1000,
+      );
+
+      process.env.NEXUS_MAX_TOOL_TIMEOUT_SECS = "17";
+      assert.equal(rpcDeadlines("read_file", { timeout_secs: 999_999 }).bridgeMs, 22_000);
+
+      process.env.NEXUS_MAX_TOOL_TIMEOUT_SECS = "1800seconds";
+      for (const timeout_secs of [-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_VALUE]) {
+        assert.equal(rpcDeadlines("read_file", { timeout_secs }).bridgeMs, 35_000, String(timeout_secs));
+      }
+    } finally {
+      if (saved === undefined) delete process.env.NEXUS_MAX_TOOL_TIMEOUT_SECS;
+      else process.env.NEXUS_MAX_TOOL_TIMEOUT_SECS = saved;
+    }
+  });
+
   test("verifier result mapping: timeout, ordinary failure and success are three distinct states", async () => {
     const run = (payload: object) => runTestSuiteWithExecutor("/tmp", async () => ({ success: true, output: JSON.stringify(payload) }), "x");
     const timedOut = await run({ exit_code: null, timed_out: true, stdout: "before\n", stderr: "", duration_ms: 1000 });
