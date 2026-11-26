@@ -908,7 +908,7 @@
       "type": "function",
       "function": {
         "name": "manage_knowledge",
-        "description": "Query or record persistent project idioms, rules, dependencies, and architectural decisions.",
+        "description": "Retrieve or delete existing project knowledge. Durable knowledge promotion is available only through an explicit operator command.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -916,7 +916,6 @@
               "type": "string",
               "enum": [
                 "get",
-                "set",
                 "list",
                 "delete",
                 "query"
@@ -1193,14 +1192,14 @@
     "main/group=knowledge": {
       "count": 25,
       "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,run_tests,git_status,git_diff,git_log,outline_file,manage_knowledge,enable_tools,read_findings,read_archive",
-      "bytes": 13116,
-      "sha256": "83d6a6211907322597b0fbc36016c0c37aca4bad304d0163c6ca69a2cc700e5f"
+      "bytes": 13148,
+      "sha256": "35a2afc8d9f5be113182eca656ecab0b3266331294dd0dfb8523f111ae6dc4fa"
     },
     "main/groups=all": {
       "count": 37,
       "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,fetch_web,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,run_tests,search_web,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search,hybrid_search,browser_navigate,browser_screenshot,browser_click,browser_type,browser_console_logs,manage_knowledge,read_findings,read_archive",
-      "bytes": 17946,
-      "sha256": "e1ab682925ea85d6b6fe28e6b197f03f169036ae7d12b30b37acfc15b2e7d96a"
+      "bytes": 17978,
+      "sha256": "27e21aaab5d317c71914e9d4131f8f1e5b15cb8fac3f663a6f62726aff221477"
     },
     "main/objective": {
       "count": 25,
@@ -1235,14 +1234,14 @@
     "main/everything": {
       "count": 43,
       "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,fetch_web,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,activate_skill,run_tests,search_web,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search,hybrid_search,browser_navigate,browser_screenshot,browser_click,browser_type,browser_console_logs,manage_knowledge,read_objective,update_requirements,read_findings,read_archive,read_tool_output,mcp__demo__echo,custom__stamp",
-      "bytes": 21754,
-      "sha256": "ac29895d8aa8d4fd98b3752faaa33dc773234569d10c74f80cf07fc349bf3afc"
+      "bytes": 21786,
+      "sha256": "4e9ec0ce9ec8dcb30e4b6b39a7405220ec9e9e2f12f5c97de6bcf7809f4c872b"
     },
     "main/everything,mode=read-only": {
       "count": 43,
       "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,fetch_web,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,activate_skill,run_tests,search_web,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search,hybrid_search,browser_navigate,browser_screenshot,browser_click,browser_type,browser_console_logs,manage_knowledge,read_objective,update_requirements,read_findings,read_archive,read_tool_output,mcp__demo__echo,custom__stamp",
-      "bytes": 21754,
-      "sha256": "ac29895d8aa8d4fd98b3752faaa33dc773234569d10c74f80cf07fc349bf3afc"
+      "bytes": 21786,
+      "sha256": "4e9ec0ce9ec8dcb30e4b6b39a7405220ec9e9e2f12f5c97de6bcf7809f4c872b"
     },
     "main/delegated=read_file,run_command,enable_tools,mcp,no_such_tool": {
       "count": 3,
@@ -1259,8 +1258,8 @@
     "subagent/everything": {
       "count": 41,
       "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,fetch_web,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,activate_skill,run_tests,search_web,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search,hybrid_search,browser_navigate,browser_screenshot,browser_click,browser_type,browser_console_logs,manage_knowledge,read_findings,read_archive,read_tool_output,mcp__demo__echo,custom__stamp",
-      "bytes": 19176,
-      "sha256": "d645c75bacd0d688b601661529a48255b29b00ccc75576e550cd6097b59b545f"
+      "bytes": 19208,
+      "sha256": "1ae0f1c5defe4cd9525a4452d3b8c0b16c6679b319f1e0a5bfcc27d486722b4a"
     },
     "subagent/delegated=read_file,search_code,task_completed": {
       "count": 3,
@@ -1283,14 +1282,14 @@
     "main/role=architect,everything": {
       "count": 43,
       "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,fetch_web,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,activate_skill,run_tests,search_web,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search,hybrid_search,browser_navigate,browser_screenshot,browser_click,browser_type,browser_console_logs,manage_knowledge,read_objective,update_requirements,read_findings,read_archive,read_tool_output,mcp__demo__echo,custom__stamp",
-      "bytes": 21754,
-      "sha256": "ac29895d8aa8d4fd98b3752faaa33dc773234569d10c74f80cf07fc349bf3afc"
+      "bytes": 21786,
+      "sha256": "4e9ec0ce9ec8dcb30e4b6b39a7405220ec9e9e2f12f5c97de6bcf7809f4c872b"
     },
     "subagent/role=architect,everything": {
       "count": 41,
       "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,fetch_web,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,activate_skill,run_tests,search_web,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search,hybrid_search,browser_navigate,browser_screenshot,browser_click,browser_type,browser_console_logs,manage_knowledge,read_findings,read_archive,read_tool_output,mcp__demo__echo,custom__stamp",
-      "bytes": 19176,
-      "sha256": "d645c75bacd0d688b601661529a48255b29b00ccc75576e550cd6097b59b545f"
+      "bytes": 19208,
+      "sha256": "1ae0f1c5defe4cd9525a4452d3b8c0b16c6679b319f1e0a5bfcc27d486722b4a"
     },
     "main/role=implementer,everything": {
       "count": 37,
@@ -1393,8 +1392,8 @@
     "harnessTools": {
       "count": 36,
       "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,fetch_web,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,activate_skill,run_tests,search_web,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search,hybrid_search,browser_navigate,browser_screenshot,browser_click,browser_type,browser_console_logs,manage_knowledge",
-      "bytes": 17531,
-      "sha256": "cb93c2552bccf29975ee070c290f7a43211fe2a5959b7dbb1e9ef5fbe30ea683"
+      "bytes": 17563,
+      "sha256": "f5cf16145b022a377a9fa596297da4bae89ee243732d564338be4fd7520efc03"
     },
     "parserKnownToolNames": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,task_completed,spawn_subagent,file_info,batch_read,file_tree,patch_file,update_plan,run_tests,git_status,git_diff,git_log,outline_file,browser_navigate,browser_screenshot,browser_click,browser_type,browser_console_logs,lsp_hover,lsp_definition,lsp_diagnostics,fetch_web,search_web,cst_symbols,trigram_search,hybrid_search,manage_knowledge,update_requirements,activate_skill,mcp__demo__echo,custom__stamp,mcp__other__tool,custom__other",
     "parserUnknownToolNames": "enable_tools,read_findings,read_archive,read_objective,read_tool_output,no_such_tool,git_commit,git_stage,checkpoint_restore,nexus_verify,verifier",
@@ -1402,8 +1401,8 @@
     "serveMcpTools": {
       "count": 35,
       "names": "read_file,write_file,edit_file,list_dir,search_code,run_command,find_files,search_symbols,delete_file,fetch_web,task_completed,file_info,batch_read,file_tree,patch_file,update_plan,run_tests,search_web,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search,hybrid_search,browser_navigate,browser_screenshot,browser_click,browser_type,browser_console_logs,manage_knowledge,nexus_verify",
-      "bytes": 15686,
-      "sha256": "686c2bc657420df8012ed4f3df2cb77db6e4a13bff4a3305ad5c0bba8330f528"
+      "bytes": 15718,
+      "sha256": "158e64db4c79adb8b59f6df906c9653d6b682f408867dc06c53aede746f62c06"
     },
     "acpToolKinds": {
       "read_file": "read",

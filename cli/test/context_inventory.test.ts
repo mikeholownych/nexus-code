@@ -34,6 +34,23 @@ const input = (sourceLocation: string, scope: "turn" | "session" | "task" | "rep
   retention: "session", inclusionReason: "explicit test fixture", retrievalMethod: "fixture",
 });
 
+function withNeutralGitConfig<T>(action: () => T): T {
+  const keys = ["GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS"] as const;
+  const previous = new Map(keys.map((key) => [key, process.env[key]]));
+  for (const key of keys) delete process.env[key];
+  process.env.GIT_CONFIG_NOSYSTEM = "1";
+  process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+  try {
+    return action();
+  } finally {
+    for (const key of keys) {
+      const value = previous.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
 test("inventory has stable source identity, scope isolation, and omits source text", () => {
   const first = buildContextInventory({ capturedAt: "2026-11-22T00:00:00.000Z", sources: [{ name: "notes", status: "ok", durationMs: 3, items: [input("notes:1")] }] });
   const second = buildContextInventory({ capturedAt: "2026-11-23T00:00:00.000Z", sources: [{ name: "notes", status: "ok", durationMs: 3, items: [input("notes:1")] }] });
@@ -90,7 +107,7 @@ test("workspace fingerprints detect changed repository state and retain only sta
   assert.deepEqual(legacyComparison.invalidatedRepositoryItemIds, [legacy.items[0].id]);
 });
 
-test("agent workspace fingerprint is bounded by candidate limits and returns unknown on failure", () => {
+test("agent workspace fingerprint is bounded by candidate limits and returns unknown on failure", () => withNeutralGitConfig(() => {
   const agent: any = Object.create(AutonomousAgent.prototype);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-context-bounded-fingerprint-"));
   try {
@@ -107,9 +124,9 @@ test("agent workspace fingerprint is bounded by candidate limits and returns unk
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
-});
+}));
 
-test("workspace candidate fingerprint changes when tracked repository content changes", () => {
+test("workspace candidate fingerprint changes when tracked repository content changes", () => withNeutralGitConfig(() => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-context-fingerprint-"));
   try {
     execFileSync("git", ["init", "-q", root]);
@@ -128,7 +145,7 @@ test("workspace candidate fingerprint changes when tracked repository content ch
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
-});
+}));
 
 test("context fingerprint refuses a configured clean filter without running it", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-context-clean-filter-"));

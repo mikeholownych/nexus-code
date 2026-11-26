@@ -4,7 +4,7 @@ Status: implemented diagnostic, provenance, and request-observability layer, por
 
 ## Current v1.3.1 integration verification
 
-The following checks were run on `codex/context-maturity-v131` with isolated temporary `HOME` and XDG configuration. No live or paid inference service was used. The full repository suite has not been run on this integration branch.
+The following checks were run on `codex/context-maturity-v131` with isolated temporary `HOME` and XDG configuration. No live or paid inference service was used. Hosted full-suite CI ran on PR #871 at `851eec0b9efcd8e356c0cf056d46917acbaaa7b4` and exposed two stale expectations for operator-only knowledge promotion plus two fingerprint tests affected by inherited system Git configuration. Those regressions are corrected in the current working tree; the new exact-head CI result is pending publication.
 
 | Check | Result | Scope |
 |---|---|---|
@@ -21,6 +21,8 @@ The following checks were run on `codex/context-maturity-v131` with isolated tem
 | `git diff --check` | Passed | Whitespace check on the integrated worktree changes. |
 
 `workspace_trust.test.ts` also completed successfully, but the test summary count was not captured, so this record does not claim a count for it. The first audit-export test attempt used the host's default `/tmp` and failed 16/22 because an existing `/tmp/.git` marker made temporary fixtures look like repositories with unavailable Git metadata. The marker was left untouched; rerunning with `TMPDIR` under `/var/tmp` passed 22/22. Focused results do not qualify the release; required full-suite and hosted checks remain outstanding.
+
+The first hosted full-suite run on PR #871 was not green. It exposed stale assertions for operator-only knowledge promotion and two fingerprint tests affected by inherited system Git configuration. Those regressions are corrected in the current working tree. Targeted reruns after correction passed: `context_inventory.test.ts` 20/20, `turn_verdict_evidence.test.ts` 46/46, and the model-tool/dispatch characterization pair 23/23. The next exact-head hosted run remains pending; no green full-suite result is claimed.
 
 ## Historical v1.3.0 baseline and gap assessment
 
@@ -123,4 +125,4 @@ After rebasing onto PR #739, focused checks passed on the rebased source: contex
 - No source deadline exists; synchronous source failures and partial outcomes are visible, but this implementation does not guarantee timeout handling.
 - Freshness compares bounded repository candidate fingerprints for saved session inventories, but does not cover ignored environment inputs, tool policy, provider-side context, or individual memory provenance; invalidation latency has not been measured. The candidate scan is bounded by 4,096 manifest entries and 16 MiB of changed content, with Git's configured timeout; failures produce unknown freshness and partial coverage. No retrieval-latency SLO or cache instrumentation exists.
 - Operator-only memory promotion now carries metadata and expiry enforcement, but no held-out task-quality evaluation establishes that durable memories improve results. Existing schema-1 records are migrated additively when a writable load occurs; read-only loads label them in memory without rewriting their files.
-- No second-maintainer review or full-suite run has been completed. This is a single-maintainer project; publication is not blocked on finding another reviewer. The full suite and required hosted checks remain necessary before merge or release qualification.
+- No second-maintainer review is available; this is a single-maintainer project, and publication is not blocked on finding another reviewer. The current PR still needs a green full-suite run and required hosted checks before merge or release qualification.
