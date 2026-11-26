@@ -577,7 +577,12 @@ test("an export never writes over anything, and never reports a bundle that is n
 
 test("an export is deterministic for a fixed subject, clock and id, and its files are private", () => {
   const subject = savedSubject();
-  const first = snapshot(exportChecked(subject.request()).written.dir);
+  const firstExport = exportChecked(subject.request());
+  const first = snapshot(firstExport.written.dir);
+  const sessionExport = JSON.parse(fs.readFileSync(path.join(firstExport.written.dir, "session", "export.json"), "utf8"));
+  assert.equal(sessionExport.contextInventory.capturedAt, FIXED_NOW().toISOString());
+  assert.equal(sessionExport.contextInventory.metrics.assemblyDurationMeasured, false, "reconstructed export provenance does not invent an assembly timing measurement");
+  assert.ok(sessionExport.contextInventory.sourceMeasurements.every((source: any) => source.durationMeasured === false), "reconstructed export provenance labels source durations unmeasured");
   const second = snapshot(exportChecked(subject.request()).written.dir);
   assert.deepEqual(second, first);
   for (const [entry, mode] of Object.entries(first.modes)) assert.equal(mode, entry in first.files ? 0o600 : 0o700, entry);

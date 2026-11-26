@@ -11,6 +11,7 @@ import { isWorkspaceTrusted } from "../workspace_trust.js";
 import { PolicyContext } from "../core/approval_policy.js";
 import { isLegacyWorktreeArgs, relocationAfter, runWorktreeCommandAsync, tokenizeWorktreeArgs } from "../worktrunk/command.js";
 import { providerCompleter } from "../worktrunk/provider.js";
+import { assessContextMaturity, buildContextInventory, compareWorkspaceState, inventorySourcesFromMessagesBounded, isContextInventorySnapshot, renderContextInventoryText, renderContextMaturityText, type BoundedContextSourceItems, type ContextSourceItemInput, type ContextSourceStatus, type ContextSourceOutcome } from "../core/context_inventory.js";
 import { NOT_A_REPO, SlashContext, SlashHandler, SlashOutcome, errorText, reply } from "./catalog.js";
 import { MAX_PASTE } from "../protocol.js";
 
@@ -284,6 +285,316 @@ function paste(): SlashOutcome {
   return reply("paste", `Pasted ${result.text.length} characters into the composer.`, true, { composer: result.text });
 }
 
+const DEFAULT_CONTEXT_BUDGET_MS = 2_000;
+const MAX_CONTEXT_BUDGET_MS = 30_000;
+const MAX_CONTEXT_ITEMS = 500;
+
+class ContextSourceReadFailure extends Error {
+  constructor(readonly safeDetail: string) { super(safeDetail); }
+}
+
+function fingerprintUnavailableDetail(reason: string | undefined): string {
+  switch (reason) {
+    case "program_settings_present": return "repository Git configuration contains program settings; fingerprinting was refused and freshness is unknown";
+    case "configuration_unrecognized": return "repository Git configuration could not be safely interpreted; fingerprinting was refused and freshness is unknown";
+    case "configuration_unavailable": return "repository Git configuration could not be inspected safely; fingerprinting was refused and freshness is unknown";
+    case "fingerprint_failed": return "workspace fingerprint computation failed; freshness is unknown";
+    default: return "workspace fingerprint API is unavailable; freshness is unknown";
+  }
+}
+
+async function context({ host, args, signal }: SlashContext): Promise<SlashOutcome> {
+  const [view, ...tokens] = args.trim().split(/\s+/).filter(Boolean);
+  const usage = "Usage: /context inspect [--json] [--record] [--budget-ms <1..30000>] [--max-items <1..500>] | /context maturity [--json] [--budget-ms <1..30000>] [--max-items <1..500>]";
+  if (!view || !["inspect", "maturity"].includes(view)) return reply("context", usage, false);
+  let json = false;
+  let record = false;
+  let budgetMs = DEFAULT_CONTEXT_BUDGET_MS;
+  let maxItems = MAX_CONTEXT_ITEMS;
+  const seen = new Set<string>();
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index];
+    if (seen.has(token)) return reply("context", `Duplicate option: ${token}. ${usage}`, false);
+    seen.add(token);
+    if (token === "--json") { json = true; continue; }
+    if (token === "--record" && view === "inspect") { record = true; continue; }
+    if (token === "--budget-ms" || token === "--max-items") {
+      const value = tokens[++index];
+      if (!value || !/^[1-9]\d*$/.test(value)) return reply("context", `Invalid value for ${token}. ${usage}`, false);
+      const parsed = Number(value);
+      const upper = token === "--budget-ms" ? MAX_CONTEXT_BUDGET_MS : MAX_CONTEXT_ITEMS;
+      if (!Number.isSafeInteger(parsed) || parsed > upper) return reply("context", `Value for ${token} must be between 1 and ${upper}.`, false);
+      if (token === "--budget-ms") budgetMs = parsed;
+      else maxItems = parsed;
+      continue;
+    }
+    return reply("context", `Invalid option: ${token}. ${usage}`, false);
+  }
+  if (signal.aborted) return reply("context", "Context inspection was cancelled.", false);
+
+  const agent = host.app.getAgent();
+  const config = host.app.getConfig();
+  const sessionManager = host.app.getSessionManager();
+  const assemblyStarted = performance.now();
+  const savedSession = sessionManager.loadSession(host.sessionId());
+  const previousInventory = isContextInventorySnapshot(savedSession?.contextInventory) ? savedSession.contextInventory : undefined;
+  const sources: Array<{ name: string; status: ContextSourceStatus; outcome?: ContextSourceOutcome; durationMs: number; items: ContextSourceItemInput[]; omittedItemCount?: number; detail?: string }> = [];
+  const gaps: string[] = [];
+  if (typeof agent.getInferenceContextManifests !== "function") gaps.push("This agent instance does not expose persisted per-inference request manifests.");
+  type SourceReadResult = ContextSourceItemInput[] | BoundedContextSourceItems;
+  const remainingItemBudget = () => Math.max(0, maxItems - sources.reduce((sum, source) => sum + source.items.length + (source.omittedItemCount ?? 0), 0));
+  const recordSourceItems = (name: string, status: ContextSourceStatus, durationMs: number, result: SourceReadResult, detail?: string) => {
+    const collection = Array.isArray(result) ? { items: result, omittedItemCount: 0 } : result;
+    const itemBudget = remainingItemBudget();
+    const items = collection.items.slice(0, itemBudget);
+    const omittedItemCount = collection.omittedItemCount + Math.max(0, collection.items.length - items.length);
+    sources.push({ name, status, durationMs, items, ...(omittedItemCount ? { omittedItemCount } : {}), ...(detail ? { detail } : {}) });
+  };
+  const measure = async (name: string, read: (itemBudget: number) => SourceReadResult | Promise<SourceReadResult>, status: "ok" | "partial" = "ok", detail?: string): Promise<void> => {
+    const remainingMs = Math.max(0, budgetMs - (performance.now() - assemblyStarted));
+    if (signal.aborted || remainingMs <= 0) {
+      const timedOut = !signal.aborted;
+      const outcome: ContextSourceOutcome = timedOut ? "timed_out" : "cancelled";
+      const reason = timedOut ? "inspection budget exhausted before source lookup" : "inspection cancelled before source lookup";
+      sources.push({ name, status: "failed", outcome, durationMs: 0, items: [], detail: reason });
+      gaps.push(`${name} ${reason}`);
+      return;
+    }
+    const started = performance.now();
+    let timeout: NodeJS.Timeout | undefined;
+    let abortListener: (() => void) | undefined;
+    try {
+      const result = read(remainingItemBudget());
+      if (result && typeof (result as Promise<ContextSourceItemInput[]>).then === "function") {
+        const interrupted = new Promise<{ kind: "timeout" } | { kind: "cancelled" }>((resolve) => {
+          timeout = setTimeout(() => resolve({ kind: "timeout" }), remainingMs);
+          abortListener = () => resolve({ kind: "cancelled" });
+          signal.addEventListener("abort", abortListener, { once: true });
+        });
+        const completed = Promise.resolve(result).then(
+          (items) => ({ kind: "ok" as const, items }),
+          () => ({ kind: "failed" as const }),
+        );
+        const outcome = await Promise.race([completed, interrupted]);
+        if (outcome.kind === "timeout" || outcome.kind === "cancelled") {
+          const sourceOutcome: ContextSourceOutcome = outcome.kind === "timeout" ? "timed_out" : "cancelled";
+          const reason = outcome.kind === "timeout"
+            ? `source did not return within the remaining ${remainingMs}ms inspection budget; late results are discarded`
+            : "inspection cancelled while the source was pending; late results are discarded";
+          sources.push({ name, status: "failed", outcome: sourceOutcome, durationMs: performance.now() - started, items: [], detail: reason });
+          gaps.push(`${name} ${reason}`);
+          return;
+        }
+        if (outcome.kind === "failed") throw new Error("source rejected");
+        recordSourceItems(name, status, performance.now() - started, outcome.items, detail);
+      } else {
+        const durationMs = performance.now() - started;
+        if (durationMs > remainingMs) {
+          const reason = `synchronous source exceeded the remaining ${remainingMs}ms inspection budget by ${Math.round(durationMs - remainingMs)}ms; result discarded because synchronous reads cannot be preempted`;
+          sources.push({ name, status: "failed", outcome: "timed_out", durationMs, items: [], detail: reason });
+          gaps.push(`${name} ${reason}`);
+          return;
+        }
+        recordSourceItems(name, status, durationMs, result as SourceReadResult, detail);
+      }
+    } catch (error) {
+      const detail = error instanceof ContextSourceReadFailure ? error.safeDetail : "source lookup failed; no source content was recorded";
+      sources.push({ name, status: "failed", durationMs: performance.now() - started, items: [], detail });
+      gaps.push(`${name} ${detail}`);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      if (abortListener) signal.removeEventListener("abort", abortListener);
+    }
+  };
+
+  let promptComponentsAvailable = false;
+  await measure("system_prompt_components", () => {
+    if (typeof agent.getSystemPromptContextSources !== "function") throw new Error("system prompt source API unavailable");
+    const components = agent.getSystemPromptContextSources();
+    if (!components?.length) throw new Error("active system prompt source references are unavailable or stale");
+    promptComponentsAvailable = true;
+    return components;
+  }, "partial", "content is sliced from the active prompt in memory for token estimation; only metadata and source references are retained");
+  if (!promptComponentsAvailable) gaps.push("active system prompt sections could not be linked to the current message; the transcript fallback is retained as one opaque item");
+  await measure("session_messages", (itemBudget) => {
+    const messages: any = agent.getMessages();
+    const collect = (value: any[]) => inventorySourcesFromMessagesBounded(
+      promptComponentsAvailable ? value.filter((message: any, index: number) => !(index === 0 && message?.role === "system")) : value,
+      { maxItems: itemBudget },
+    );
+    return messages && typeof messages.then === "function" ? messages.then(collect) : collect(messages);
+  });
+  let workspaceFingerprint: string | undefined;
+  await measure("workspace_state_fingerprint", () => {
+    if (typeof agent.getWorkspaceContextFingerprintResult === "function") {
+      const result = agent.getWorkspaceContextFingerprintResult();
+      workspaceFingerprint = result.fingerprint;
+      if (!workspaceFingerprint) throw new ContextSourceReadFailure(fingerprintUnavailableDetail(result.unavailableReason));
+    } else if (typeof agent.getWorkspaceContextFingerprint === "function") {
+      workspaceFingerprint = agent.getWorkspaceContextFingerprint();
+      if (!workspaceFingerprint) throw new ContextSourceReadFailure(fingerprintUnavailableDetail(undefined));
+    } else {
+      throw new ContextSourceReadFailure(fingerprintUnavailableDetail(undefined));
+    }
+    return [{
+      sourceType: "workspace_state_fingerprint",
+      sourceLocation: "repository:candidate-identity",
+      scope: "repository",
+      content: "bounded composite candidate identity",
+      trust: "tool_output_unverified",
+      retention: "session_context_inventory",
+      inclusionReason: "supports equality comparison with the previous recorded workspace state; it is not evidence that repository content is correct",
+      retrievalMethod: "candidate_identity",
+      freshness: "current",
+      freshnessRule: "computed at capture from current candidate identity; any workspace candidate change invalidates this observation",
+    }];
+  });
+  if (typeof agent.getInferenceContextManifests === "function") {
+    await measure("inference_request_manifests", () => agent.getInferenceContextManifests().map((manifest: any) => ({
+        sourceType: "inference_request_manifest",
+        sourceLocation: `task:inference-request:${manifest.id}`,
+        scope: "task" as const,
+        content: JSON.stringify({ sequence: manifest.sequence, capturedAt: manifest.capturedAt, status: manifest.status, coverage: manifest.coverage, messageCount: manifest.messages.length, toolCount: manifest.tools.count, requestEstimateTokens: manifest.budget.requestEstimateTokens }),
+        trust: "persisted_unverified" as const,
+        retention: "bounded_latest_24_session_records",
+        inclusionReason: "client-side record of message and tool-schema arrays handed to the adapter; dispatch status does not prove provider processing",
+        retrievalMethod: "agent_submit_wrapper",
+        observationState: manifest.status,
+        observationSequence: manifest.sequence,
+        sourceRefs: manifest.messages.slice(0, 100).map((item: any) => item.sourceRef),
+      })));
+  } else {
+    await measure("inference_request_manifests", () => [], "partial", "request manifest history is unavailable from this agent instance");
+  }
+  await measure("task_ledger", () => {
+    const objective = agent.getObjective();
+    if (!objective) return [];
+    return [{ sourceType: "objective_ledger", sourceLocation: "task:objective-ledger", scope: "task", content: JSON.stringify(objective), trust: "persisted_unverified", retention: "task", inclusionReason: "pinned objective and acceptance state", retrievalMethod: "durable_task_state", freshness: "current", freshnessRule: "read from the live task ledger at inspection time", sourceRefs: objective.requirements?.map((requirement) => `requirement:${requirement.id}`) }];
+  });
+  await measure("plan", () => {
+    const plan = agent.getActivePlan();
+    return plan.length ? [{ sourceType: "active_plan", sourceLocation: "task:active-plan", scope: "task", content: JSON.stringify(plan), trust: "persisted_unverified", retention: "task", inclusionReason: "current task plan", retrievalMethod: "durable_task_state", freshness: "current", freshnessRule: "read from the live task plan at inspection time" }] : [];
+  });
+  await measure("durable_session_state", () => {
+    if (!savedSession) return [];
+    const items: ContextSourceItemInput[] = [];
+    savedSession.durableNotes?.forEach((note, index) => items.push({
+      sourceType: "durable_note",
+      sourceLocation: `task:durable-note:${index}`,
+      scope: "task",
+      content: note,
+      trust: "persisted_unverified",
+      retention: "task",
+      inclusionReason: "durable task note retained in session state",
+      retrievalMethod: "session_store",
+    }));
+    if (savedSession.compactionProvenance) items.push({
+      sourceType: "compaction_provenance",
+      sourceLocation: `session:compaction:${savedSession.compactionProvenance.recordId}`,
+      scope: "session",
+      content: savedSession.compactionProvenance.summaryContent ?? "compaction summary; content reference only",
+      trust: "persisted_unverified",
+      retention: "session_archive",
+      inclusionReason: "compaction record links the summary to archived predecessor messages",
+      retrievalMethod: "session_store",
+      sourceRefs: [savedSession.compactionProvenance.recordId, ...savedSession.compactionProvenance.predecessorIds],
+    });
+    return items;
+  }, "partial", "saved durable notes and compaction links only; full session messages are inventoried separately");
+  let changedKnowledgeCount = 0;
+  await measure("project_knowledge", () => agent.getKnowledgeGraph().list().map((entry, index) => {
+    const sourceLocation = `repository:knowledge:${entry.id || index + 1}`;
+    const validationStatus = entry.validationStatus === "operator_reviewed_unverified" ? entry.validationStatus : "legacy_unverified";
+    const updatedAt = typeof entry.updatedAt === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(entry.updatedAt) ? entry.updatedAt : null;
+    const sourceVersion = JSON.stringify([updatedAt, validationStatus]);
+    const previous = previousInventory?.items.find((item) => item.sourceType === "durable_knowledge" && item.sourceLocation === sourceLocation);
+    const recordChanged = Boolean(previous?.sourceVersion !== undefined && previous.sourceVersion !== sourceVersion);
+    if (recordChanged) changedKnowledgeCount++;
+    return {
+      sourceType: "durable_knowledge",
+      sourceLocation,
+      scope: "repository" as const,
+      content: `${entry.category}\n${entry.key}\n${entry.value}`,
+      trust: "persisted_unverified" as const,
+      retention: entry.retention?.policy === "expires_at" ? `expires_at:${entry.retention.expiresAt}` : "until_deleted",
+      freshness: "unknown" as const,
+      freshnessRule: "record version and validation metadata are compared with the prior capture; underlying memory sources are not fingerprinted or revalidated, so claim freshness remains unknown",
+      inclusionReason: `persistent project memory is available to the prompt builder; validation=${validationStatus}; source freshness is unknown${recordChanged ? "; the prior captured record changed and is invalidated" : ""}`,
+      retrievalMethod: "knowledge_graph",
+      sourceVersion,
+      sourceRefs: [`knowledge:${entry.id}`, ...(entry.provenance?.sourceRefs ?? [])],
+    };
+  }));
+  if (changedKnowledgeCount) gaps.push(`${changedKnowledgeCount} project knowledge record changed since the previous capture; the prior memory context is invalidated and the current claim remains unverified`);
+  await measure("skills", () => agent.getSkillManager().listSkills().map((skill) => ({
+    sourceType: "skill_catalog_entry",
+    sourceLocation: skill.isWorkspaceSkill ? `repository:skill:${path.relative(config.workspace, skill.path)}` : `profile:skill:${skill.name}`,
+    scope: skill.isWorkspaceSkill ? "repository" as const : "profile" as const,
+    content: `${skill.name}\n${skill.description}`,
+    trust: "persisted_unverified" as const,
+    retention: "skill_source_policy",
+    inclusionReason: `skill catalog is eligible for prompt discovery; activation is separate${skill.trusted === false ? "; source is not trusted" : "; source trust is recorded by SkillManager"}`,
+    retrievalMethod: "skill_manager",
+    freshness: "unknown" as const,
+    freshnessRule: skill.isWorkspaceSkill
+      ? "workspace skill file content is not revalidated here; repository candidate changes invalidate this prior item"
+      : "profile skill file content is not revalidated here; freshness remains unknown",
+    ...(skill.isWorkspaceSkill ? { sourceRefs: [path.relative(config.workspace, skill.path)] } : {}),
+  })), "partial");
+  await measure("tool_schemas", () => agent.getEffectiveTools().map((tool, index) => ({
+    sourceType: "tool_schema",
+    sourceLocation: `request:tool:${String(tool.function?.name ?? index + 1).replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80)}`,
+    scope: "turn" as const,
+    content: JSON.stringify(tool),
+    trust: "persisted_unverified" as const,
+    retention: "request_only",
+    inclusionReason: "effective tools are serialized with the inference request",
+    retrievalMethod: "tool_registry",
+    freshness: "current" as const,
+    freshnessRule: "effective runtime tool schema as observed at inspection time; invalidate after tool registry or policy changes",
+  })));
+  await measure("repository_state", () => {
+    const info = getGitInfo(config.workspace);
+    return [{ sourceType: "repository_state", sourceLocation: "repository:git-status", scope: "repository", content: JSON.stringify({ isRepo: info.isRepo, branch: info.branch, dirtyCount: info.dirtyCount }), trust: "tool_output_unverified", retention: "capture_only", inclusionReason: "current workspace state snapshot", retrievalMethod: "git_status", freshness: "current", freshnessRule: "live git status at observedAt; invalidate after any workspace or repository mutation" }];
+  });
+
+  const caps = agent.getProviderCapabilities();
+  const last = agent.getLastRequestCount();
+  let contextLimit: number | undefined;
+  try { contextLimit = agent.getContextBudget().contextLimit; } catch { gaps.push("context budget could not be read"); }
+  const snapshot = buildContextInventory({
+    sessionId: host.sessionId(), taskId: agent.getTaskId(), workspace: config.workspace,
+    workspaceState: compareWorkspaceState(previousInventory, workspaceFingerprint),
+    sources,
+    coverageGaps: gaps,
+    assemblyDurationMs: performance.now() - assemblyStarted,
+    maxItems,
+    contextLimit,
+    contextLimitSource: caps?.contextSource ?? (config.contextLimit ? "operator" : "client_default_or_unknown"),
+    ...(last ? { lastRequestTokens: last.promptTokens, lastRequestTokenSource: last.source } : {}),
+  });
+  snapshot.metrics.assemblyDurationMs = Math.round((performance.now() - assemblyStarted) * 100) / 100;
+
+  if (record) {
+    if (!savedSession) return reply("context", "No saved session exists to attach this inventory to. Run /save first, then /context inspect --record.", false);
+    sessionManager.saveSession({ ...savedSession, contextInventory: snapshot });
+  }
+
+  if (view === "inspect") {
+    return json
+      ? reply("context", JSON.stringify(snapshot, null, 2))
+      : reply("context", `${renderContextInventoryText(snapshot)}${record ? "\n\nInventory recorded in the current session." : ""}`);
+  }
+
+  const assessment = assessContextMaturity(snapshot, {
+    hasDurableKnowledge: Boolean(sources.find((source) => source.name === "project_knowledge")?.items.length),
+    hasActiveSkills: Boolean(sources.find((source) => source.name === "skills")?.items.length),
+  });
+  return json
+    ? reply("context", JSON.stringify(assessment, null, 2))
+    : reply("context", renderContextMaturityText(assessment));
+}
+
 export const WORKSPACE_HANDLERS: Record<string, SlashHandler> = {
   diff,
   git: gitStatus,
@@ -297,4 +608,5 @@ export const WORKSPACE_HANDLERS: Record<string, SlashHandler> = {
   test,
   copy,
   paste,
+  context,
 };

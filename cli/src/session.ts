@@ -20,6 +20,7 @@ import { insertedBlockPresent, isCompactionRecord } from "./core/compaction_reco
 import { appendLinesDurably, readArchiveLines, type ArchiveRead, ensurePrivateDir, writePrivateFile } from "./core/durable_file.js";
 import { persistableEndpoint } from "./core/endpoint_identity.js";
 import { WorktreeManager } from "./worktree.js";
+import { buildSessionContextInventory, isContextInventorySnapshot, isInferenceContextManifest, markInterruptedInferenceManifestsUnknown, markPersistedContextFreshnessUnknown } from "./core/context_inventory.js";
 
 // Re-export core state primitives
 export * from "./core/state.js";
@@ -169,6 +170,14 @@ export class SessionManager {
       ...(session.operation !== undefined ? { operation: session.operation } : {}),
       ...(session.changeBaseline !== undefined ? { changeBaseline: session.changeBaseline } : {}),
       messages: session.messages || [],
+      contextInventory: isContextInventorySnapshot(session.contextInventory) &&
+          (!session.contextInventory.sessionId || session.contextInventory.sessionId === sessionId) &&
+          (!session.contextInventory.workspace || path.resolve(session.contextInventory.workspace) === path.resolve(workspace))
+        ? session.contextInventory
+        : buildSessionContextInventory({ ...session, id: sessionId, taskId, sessionId, workspace, messages: session.messages || [] }),
+      ...(Array.isArray(session.inferenceContextManifests)
+        ? { inferenceContextManifests: session.inferenceContextManifests.filter(isInferenceContextManifest).slice(-24).map((manifest) => ({ ...manifest, sessionId })) }
+        : {}),
       ...(session.pinned !== undefined ? { pinned: session.pinned } : {}),
       ...(session.unverifiedChangesPending !== undefined ? { unverifiedChangesPending: session.unverifiedChangesPending } : {}),
       durableNotes: session.durableNotes,
@@ -284,7 +293,16 @@ export class SessionManager {
         undefined,
         workspacePath ? [workspacePath] : undefined
       );
-      return state as SessionData;
+      const session = state as SessionData;
+      if (session.inferenceContextManifests !== undefined) {
+        if (!Array.isArray(session.inferenceContextManifests) || session.inferenceContextManifests.length > 24 || !session.inferenceContextManifests.every(isInferenceContextManifest)) delete session.inferenceContextManifests;
+        else session.inferenceContextManifests = markInterruptedInferenceManifestsUnknown(session.inferenceContextManifests);
+      }
+      // The inventory is diagnostic metadata, never execution authority. Ignore malformed or future-shaped optional
+      // inventories without changing the backward-compatible session or promoting reconstructed facts to current.
+      if (session.contextInventory !== undefined && !isContextInventorySnapshot(session.contextInventory)) delete session.contextInventory;
+      else if (session.contextInventory) session.contextInventory = markPersistedContextFreshnessUnknown(session.contextInventory);
+      return session;
     } catch (err: any) {
       if (
         err instanceof CorruptStateError ||

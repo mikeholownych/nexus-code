@@ -45,6 +45,7 @@ export function readOnlySlashAllowed(command: string, args: string): boolean {
   if (name === "plan" || name === "requirements" || name === "knowledge") return !value;
   if (name === "skill") return !value || !/^(init)(?:\s|$)/.test(value);
   if (name === "theme") return !value;
+  if (name === "context") return /^(?:inspect(?:\s+--json)?|maturity(?:\s+--json)?)$/.test(value);
   return false;
 }
 import {
@@ -1182,6 +1183,7 @@ export class SidecarServer {
         model: config.model,
         endpoint: persistableEndpoint(config.endpoint),
         messages,
+        ...(typeof agent.getInferenceContextManifests === "function" ? { inferenceContextManifests: agent.getInferenceContextManifests() } : {}),
         unverifiedChangesPending: agent.hasUnverifiedChanges(),
         tokenStats: agent.getTokenStats(),
         // The authoritative task state, not only the conversation: plan, milestones, receipts, objective and history.

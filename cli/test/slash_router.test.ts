@@ -482,8 +482,8 @@ describe("slash router: extensions and turns", () => {
 
   test("knowledge sets, lists and deletes entries", async () => {
     await withRig(async ({ reply }) => {
-      assert.equal((await reply("knowledge", "set style use tabs")).output, "Saved [rule] style");
-      assert.match((await reply("knowledge")).output, /• \[rule\] style: use tabs/);
+      assert.match((await reply("knowledge", "set style use tabs")).output, /Saved \[rule\] style.*operator_reviewed_unverified.*not verified evidence/);
+      assert.match((await reply("knowledge")).output, /• \[rule\] style: use tabs \(operator_reviewed_unverified; until deleted\)/);
       assert.equal((await reply("knowledge", "delete style")).output, "Deleted style");
       assert.equal((await reply("knowledge", "delete style")).success, false);
     });

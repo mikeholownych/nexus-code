@@ -5,6 +5,7 @@
  * replaced by summaries (the replaced originals are included from the session's archive when it exists).
  */
 import type { SessionData, SessionManager } from "./session.js";
+import { buildSessionContextInventory, isContextInventorySnapshot, isInferenceContextManifest, markPersistedContextFreshnessUnknown, mergeContextInventorySnapshots, type ContextInventorySnapshot } from "./core/context_inventory.js";
 import { safeOperatorText } from "./protocol.js";
 import type { ChatMessage } from "./types.js";
 import { gatingRequirements, requirementDone } from "./core/objective.js";
@@ -66,19 +67,31 @@ export function evidenceProvenance(objective: SessionData["objective"] | null | 
   return (objective?.requirements ?? []).flatMap((r) => r.evidence.map((evidence) => ({ requirement: r.id, evidence, source: r.evidenceSources?.[evidence] ?? ("model" as const) })));
 }
 
-export function buildSessionExport(manager: SessionManager, session: SessionData): SessionExport {
+export function buildSessionExport(manager: SessionManager, session: SessionData, exportedAt = new Date()): SessionExport {
+  const capturedAt = exportedAt.toISOString();
   let archived: { messages: ChatMessage[]; unreadableLines: number } = { messages: [], unreadableLines: 0 };
   try {
     archived = manager.readArchivedHistory(session.id);
   } catch {}
   const history = historyCompleteness(session, archived);
+  const reconstructedInventory = buildSessionContextInventory(session, archived, capturedAt, false);
+  const savedInventory = isContextInventorySnapshot(session.contextInventory) ? markPersistedContextFreshnessUnknown(session.contextInventory) : undefined;
+  const contextInventory = savedInventory
+    ? mergeContextInventorySnapshots(savedInventory, buildSessionContextInventory({ ...session, messages: [], objective: undefined, durableNotes: undefined, activePlan: [], compactionProvenance: null }, archived, capturedAt, false))
+    : reconstructedInventory;
+  const inferenceContextManifests = Array.isArray(session.inferenceContextManifests) && session.inferenceContextManifests.length <= 24 && session.inferenceContextManifests.every(isInferenceContextManifest)
+    ? session.inferenceContextManifests
+    : [];
+  const exportSession = { ...session, inferenceContextManifests };
   const objective = session.objective ?? null;
   const lastTurn = session.lastTurn ?? null;
   const json: Record<string, unknown> = {
     ...session,
+    contextInventory,
+    inferenceContextManifests,
     export: {
       format: EXPORT_FORMAT,
-      exportedAt: new Date().toISOString(),
+      exportedAt: capturedAt,
       history,
       taskState: {
         status: session.status,
@@ -101,7 +114,7 @@ export function buildSessionExport(manager: SessionManager, session: SessionData
     },
     archivedHistory: archived.messages,
   };
-  return { json, markdown: markdownExport(session, history, archived.messages) };
+  return { json, markdown: markdownExport(exportSession, history, archived.messages, contextInventory) };
 }
 
 /**
@@ -117,7 +130,7 @@ export function escapeTableCell(value: string): string {
     .replace(/\|/g, "\\|");
 }
 
-function markdownExport(session: SessionData, history: HistoryCompleteness, archived: ChatMessage[]): string {
+function markdownExport(session: SessionData, history: HistoryCompleteness, archived: ChatMessage[], contextInventory?: ContextInventorySnapshot): string {
   const out: string[] = [
     "# Nexus Code Session Export",
     "",
@@ -178,6 +191,22 @@ function markdownExport(session: SessionData, history: HistoryCompleteness, arch
   if (session.activePlan?.length) {
     out.push("**Plan (the agent's roadmap; requirement states above are authoritative):**", "");
     for (const p of session.activePlan) out.push(`- [${p.status}] ${p.name}${p.detail ? ` — ${p.detail}` : ""}`);
+    out.push("");
+  }
+  if (contextInventory) {
+    out.push("## Context inventory (source references; content omitted)", "", `Coverage: **${contextInventory.coverage}** · ${contextInventory.metrics.includedItems} item(s) · ${contextInventory.metrics.omittedItems} omitted · ${contextInventory.metrics.estimatedTokens} estimated tokens (${contextInventory.metrics.tokenSource})`, "");
+    for (const item of contextInventory.items) out.push(`- \`${item.id}\` ${item.sourceType} — ${item.sourceLocation}; scope=${item.scope}; observed=${item.observedAt}; freshness=${item.freshness}${item.freshnessRule ? ` (${item.freshnessRule})` : ""}${item.sourceVersion ? `; source-version=\`${encodeURIComponent(item.sourceVersion)}\`` : ""}${item.observationState ? `; outcome=${item.observationState}` : ""}${item.observationSequence !== undefined ? `; sequence=${item.observationSequence}` : ""}; trust=${item.trust}; via=${item.retrievalMethod}${item.sourceRefs?.length ? `; refs=${item.sourceRefs.join(",")}` : ""}`);
+    if (contextInventory.coverageGaps.length) out.push("", "Coverage gaps:", ...contextInventory.coverageGaps.map((gap) => `- ${gap}`));
+    out.push("");
+  }
+  if (session.inferenceContextManifests?.length) {
+    out.push("## Inference context manifests (content omitted)", "");
+    for (const manifest of session.inferenceContextManifests) {
+      out.push(`- \`${manifest.id}\` sequence=${manifest.sequence}; captured=${manifest.capturedAt}; status=${manifest.status}; coverage=${manifest.coverage}; messages=${manifest.messages.length}; tools=${manifest.tools.count}; request estimate=${manifest.budget.requestEstimateTokens} tokens; context limit=${manifest.budget.contextLimit} (${manifest.budget.contextLimitSource}); output allowance=${manifest.budget.outputAllowance} (${manifest.budget.outputAllowanceSource}); tool reserve=${manifest.budget.toolResponseReserve}`);
+      for (const item of manifest.messages) out.push(`  - ${item.sourceRef}; role=${item.role}; estimated=${item.estimatedTokens} tokens`);
+      for (const ref of manifest.tools.schemaRefs) out.push(`  - ${ref}; effective tool schema included`);
+      if (manifest.coverageGaps.length) out.push(`  - Coverage gaps: ${manifest.coverageGaps.join("; ")}`);
+    }
     out.push("");
   }
   out.push("---", "");

@@ -44,6 +44,8 @@ import { persistableEndpoint } from "./core/endpoint_identity.js";
 import { executeBatchCommand } from "./batch_command.js";
 import { executeGoalCommand } from "./goal_command.js";
 import { executeLoopCommand } from "./loop_command.js";
+import { routeSlash } from "./slash/router.js";
+import type { SlashHost } from "./slash/catalog.js";
 
 interface PatchHunk {
   header: string;
@@ -116,6 +118,7 @@ export function replReadOnlyAllowed(command: string, args: string): boolean {
   }
   if (name === "loop") return /^(?:status(?:\s|$)|list$)/.test(value);
   if (name === "doctor") return !/(^|\s)--fix(?:=|\s|$)/.test(value);
+  if (name === "context") return /^(?:inspect(?:\s+--json)?|maturity(?:\s+--json)?)$/.test(value);
   return false;
 }
 
@@ -320,6 +323,7 @@ export class InteractiveRepl {
       model: this.config.model,
       endpoint: persistableEndpoint(this.config.endpoint),
       messages,
+      ...(typeof this.agent.getInferenceContextManifests === "function" ? { inferenceContextManifests: this.agent.getInferenceContextManifests() } : {}),
       unverifiedChangesPending: this.agent.hasUnverifiedChanges(),
       tokenStats: this.agent.getTokenStats(),
       activePlan: this.agent.getActivePlan(),
@@ -415,6 +419,7 @@ export class InteractiveRepl {
     console.log(`  ${pc.bold(pc.yellow("/doctor"))}             Diagnose this session's configuration and runtime (--deep, --fix [--yes])`);
     console.log(`  ${pc.bold(pc.yellow("/clear"))}              Reset conversation context memory`);
     console.log(`  ${pc.bold(pc.yellow("/compact"))}            Condense earlier messages to free token budget`);
+    console.log(`  ${pc.bold(pc.yellow("/context inspect|maturity"))} Inspect source provenance or per-dimension maturity (content-free)`);
     console.log(`  ${pc.bold(pc.yellow("/step"))}               Advance unresolved objective by one model/tool cycle`);
     console.log(`  ${pc.bold(pc.yellow("/mode [auto|review]"))} Toggle autonomous execution vs human review approval`);
     console.log(`  ${pc.bold(pc.yellow("/diff"))}               Show colored git diff of uncommitted changes`);
@@ -952,6 +957,11 @@ export class InteractiveRepl {
             } catch (err: any) {
               console.error(pc.red(formatReplStepError(err)));
             }
+            continue;
+          } else if (cmd === "context") {
+            const host = { app: this.app, sessionId: () => this.currentSessionId } as unknown as SlashHost;
+            const outcome = await routeSlash(host, cmd, arg, new AbortController().signal);
+            if (outcome.kind === "reply") console.log(`${outcome.success ? "" : pc.yellow("✖ ")}${outcome.output}\n`);
             continue;
           } else if (cmd === "doctor") {
             const { runDoctor, runRepairs, renderDoctorText } = await import("./doctor.js");

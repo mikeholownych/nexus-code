@@ -25,6 +25,7 @@ import pc from "picocolors";
 import { collectMaterialDependencies } from "../material_deps.js";
 import { DEFAULT_VERIFIER_TIMEOUT_SECS, foldVoluminousOutput, externalInputsFingerprint, RESUMED_WINDOW_REASON } from "./agent_support.js";
 import type { AutonomousAgent } from "../agent.js";
+import type { KnowledgeGraph } from "../knowledge.js";
 import { ROLE_PROFILES, isReadOnlyRole, roleToolAllowList, type AgentRole } from "./roles.js";
 import { acquireTransientDelegationSlot, createDelegationOutcome, delegationRuntimeLimits, resolveDelegationContract } from "./delegation_contract.js";
 import { isSpecialistRole, missingSpecialistInputs, specialistInputsProblem } from "./specialist_profiles.js";
@@ -67,6 +68,38 @@ export function testSnapshotDigest(workspace: string): TestSnapshotDigest {
     hash.update(file).update("\0").update(length).update(bytes);
   }
   return { digest: hash.digest("hex") };
+}
+
+/** The model-facing knowledge adapter is read/delete only; promotion stays in operator commands. */
+export function createManageKnowledgeHandler(knowledge: KnowledgeGraph) {
+  return async (args: any) => {
+    try {
+      const action = args?.action || "list";
+      if (action === "set") {
+        return {
+          success: false,
+          output: "",
+          error: "Model tool calls cannot promote durable knowledge. Use the explicit operator command /knowledge set or nexus knowledge set after reviewing the source.",
+        };
+      }
+      if (action === "get") {
+        const entry = knowledge.get(args.key || "");
+        return { success: true, output: JSON.stringify({ found: Boolean(entry), entry }, null, 2) };
+      }
+      if (action === "delete") {
+        const deleted = knowledge.delete(args.key || "");
+        return { success: true, output: JSON.stringify({ status: deleted ? "deleted" : "not_found", key: args.key }, null, 2) };
+      }
+      if (action === "query") {
+        const entries = knowledge.query(args.key || args.value, args.category);
+        return { success: true, output: JSON.stringify({ total: entries.length, entries }, null, 2) };
+      }
+      const entries = knowledge.list();
+      return { success: true, output: JSON.stringify({ total: entries.length, entries }, null, 2) };
+    } catch (err: any) {
+      return { success: false, output: "", error: `Error executing manage_knowledge: ${err.message}` };
+    }
+  };
 }
 
 export function setupSpineHandlersImpl(this: any): void {
@@ -889,43 +922,7 @@ export function setupSpineHandlersImpl(this: any): void {
     }
   });
 
-  this.spine.registerHandler("manage_knowledge", async (args: any) => {
-    try {
-      let output = "";
-      const action = args.action || "list";
-      if (action === "set") {
-        const entry = this.knowledge.set(
-          args.key || "custom-rule",
-          args.value || "",
-          args.category || "rule"
-        );
-        output = JSON.stringify({ status: "saved", entry }, null, 2);
-      } else if (action === "get") {
-        const entry = this.knowledge.get(args.key || "");
-        output = JSON.stringify({ found: Boolean(entry), entry }, null, 2);
-      } else if (action === "delete") {
-        const deleted = this.knowledge.delete(args.key || "");
-        output = JSON.stringify(
-          { status: deleted ? "deleted" : "not_found", key: args.key },
-          null,
-          2
-        );
-      } else if (action === "query") {
-        const entries = this.knowledge.query(args.key || args.value, args.category);
-        output = JSON.stringify({ total: entries.length, entries }, null, 2);
-      } else {
-        const entries = this.knowledge.list();
-        output = JSON.stringify({ total: entries.length, entries }, null, 2);
-      }
-      return { success: true, output };
-    } catch (err: any) {
-      return {
-        success: false,
-        output: "",
-        error: `Error executing manage_knowledge: ${err.message}`,
-      };
-    }
-  });
+  this.spine.registerHandler("manage_knowledge", createManageKnowledgeHandler(this.knowledge));
 
   this.spine.registerHandler("activate_skill", async (args: any) => {
     const skillName = args.name;

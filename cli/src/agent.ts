@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { assertValidContinuationBudget, ChatMessage, DEFAULT_CONTINUATION, EvaluationToolReceipt, HarnessConfig, MAX_CONTINUATION_STEPS, ToolCall, ToolDefinition } from "./types.js";
 import { LocalLlmClient } from "./client.js";
 import { normalizeToolArguments } from "./core/tool_arguments.js";
@@ -36,6 +36,7 @@ import { captureVerificationState } from "./worktrunk/verification.js";
 import { homeDir } from "./worktrunk/core.js";
 import { openRepo, currentEntry, NotARepositoryError } from "./worktrunk/repo.js";
 import { replacedWorktreeReason, verifyCheckout } from "./core/checkout_trust.js";
+import { inspectWorkspaceGitSafety, type WorkspaceGitSafetyReason } from "./core/workspace_git_safety.js";
 import { WORKTREE_BINDING_VERSION } from "./core/state.js";
 import { argsFingerprint } from "./core/operation_identity.js";
 import { isSandboxAvailable } from "./sandbox.js";
@@ -56,6 +57,7 @@ import { withDurableSync, type ArchiveRead } from "./core/durable_file.js";
 import { protectArchivedMessages } from "./core/persistence_protection.js";
 import { buildProbePrompt, describeRejection, parseProbeAnswer, PROBE_TIMEOUT_MS, type ProbeRequirement, type ProbeVerdict } from "./core/compaction_probe.js";
 import { buildCompactionRecord, type CompactionRecord } from "./core/compaction_record.js";
+import { buildInferenceContextManifest, isInferenceContextManifest, markInterruptedInferenceManifestsUnknown, retainInferenceContextManifest, type ContextSourceItemInput, type InferenceContextManifest } from "./core/context_inventory.js";
 import { advertisementChanged, describeCapabilities, resolveLimits, toolHeadroomPolicy, type AdmissionReport, type CountSource, type ProviderCapabilities, type RequestCount } from "./core/provider_capabilities.js";
 import { snapshotModel } from "./core/models_snapshot.js";
 import { ProviderRecoveryController, RecoveryCancelled, RecoveryClock, RecoveryHooks, RecoveryPolicy, realRecoveryClock, recoveryPolicyFromEnv, startupProblemWarning, startupEndpointProblems, type StartupEndpointProblem } from "./core/provider_recovery.js";
@@ -80,6 +82,9 @@ import { captureChangeBaselineImpl, ensureVerifierApprovedImpl, judgeIndependenc
 export { DEFAULT_VERIFIER_TIMEOUT_SECS, CompactionCommitError, ContextBudgetError, LedgerNotRetainedError, observationKey, foldVoluminousOutput } from "./core/agent_support.js";
 export type { ConfirmHandler, SubagentResult, AgentObserver, AgentActivity, CompactionOutcome } from "./core/agent_support.js";
 
+type SystemPromptSectionDefinition = Omit<ContextSourceItemInput, "content" | "freshness" | "freshnessRule" | "sourceRefs"> & { key: string; text: string };
+type SystemPromptSectionReference = Omit<ContextSourceItemInput, "content" | "freshness" | "freshnessRule"> & { segments: Array<{ start: number; end: number }> };
+
 export class AutonomousAgent {
   private client: LocalLlmClient;
   private bridge: RustCoreBridge;
@@ -100,6 +105,9 @@ export class AutonomousAgent {
   public lastToolReceipts: ExecutionReceipt[] = [];
   /** The skill catalog in `messages[0]`, the window it was sized for, and whether that window came from the provider. */
   private skillCatalog?: { text: string; limit: number; discovered: boolean };
+  /** Offsets into the active system message; avoids retaining a duplicate copy of prompt source text. */
+  private systemPromptSectionReferences: SystemPromptSectionReference[] = [];
+  private systemPromptSectionMessageDigest?: string;
   private mcpManager: McpClientManager;
   private pluginManager: PluginManager;
   private securityManager: SecurityManager;
@@ -320,6 +328,8 @@ export class AutonomousAgent {
   private tokenCountingDetail?: string;
   private tokenCountingCooldownUntil = 0;
   private lastRequestCount?: RequestCount & { estimate: number; step: number; admitted?: AdmissionReport; workerDiffers?: boolean };
+  private inferenceContextManifests: InferenceContextManifest[] = [];
+  private inferenceContextSequence = 0;
   /** Why capabilities must be re-read before the next request (a capacity rejection or a changed admission), if so. */
   private capabilitiesStale?: string;
   /** Measured/estimated ratio of the last counted request: admission estimates are scaled by it (0.5..4). */
@@ -930,6 +940,7 @@ export class AutonomousAgent {
       candidateId: this.activeValidationReceipt?.candidateId || null,
       validationReceipts: this.activeValidationReceipt ? [this.activeValidationReceipt] : [],
       messages: this.messages,
+      inferenceContextManifests: this.inferenceContextManifests,
       unverifiedChangesPending: this.hasPendingModifications,
       verificationConfigAttempts: this.bridge.getSecurityManager().getVerificationAttempts(),
       commandRuleDecisions: this.commandRuleDecisions,
@@ -1020,6 +1031,8 @@ export class AutonomousAgent {
       this.switchWorktreeWorkspace(state.worktreeBinding.worktreePath);
     }
     this.activePlan = state.activePlan || [];
+    this.systemPromptSectionReferences = [];
+    this.systemPromptSectionMessageDigest = undefined;
     this.messages = withHarnessProvenance(state.messages || []);
     this.restoreFindings(state.findings);
     this.objective = state.objective ?? undefined;
@@ -1420,7 +1433,40 @@ export class AutonomousAgent {
     return [...this.messages];
   }
 
+  public getInferenceContextManifests(): InferenceContextManifest[] {
+    return this.inferenceContextManifests.map((manifest) => ({
+      ...manifest,
+      coverageGaps: [...manifest.coverageGaps],
+      messages: manifest.messages.map((item) => ({ ...item })),
+      tools: { ...manifest.tools, schemaRefs: [...manifest.tools.schemaRefs] },
+      budget: { ...manifest.budget },
+    }));
+  }
+
+  /** Active system-prompt sections for inventory. Content is derived from message 0 only while its bytes match. */
+  public getSystemPromptContextSources(): ContextSourceItemInput[] | undefined {
+    const message = this.messages[0];
+    const promptContent = message?.content;
+    if (message?.role !== "system" || typeof promptContent !== "string" || !this.systemPromptSectionMessageDigest) return undefined;
+    if (createHash("sha256").update(promptContent).digest("hex") !== this.systemPromptSectionMessageDigest) return undefined;
+    return this.systemPromptSectionReferences.flatMap((section) => section.segments.map((segment, index) => ({
+      sourceType: section.sourceType,
+      sourceLocation: section.segments.length > 1 ? `${section.sourceLocation}:segment:${index + 1}` : section.sourceLocation,
+      scope: section.scope,
+      content: promptContent.slice(segment.start, segment.end),
+      trust: section.trust,
+      retention: section.retention,
+      inclusionReason: section.inclusionReason,
+      retrievalMethod: section.retrievalMethod,
+      freshness: "current" as const,
+      freshnessRule: "section bytes are sliced from the active system message; digest mismatch invalidates the references",
+      sourceRefs: ["request:message:0", ...(section.sourceRefs ?? []), ...(index ? [`prompt-segment:${index}`] : [])],
+    })));
+  }
+
   public setMessages(msgs: ChatMessage[]): void {
+    this.systemPromptSectionReferences = [];
+    this.systemPromptSectionMessageDigest = undefined;
     this.messages = withHarnessProvenance(msgs);
   }
 
@@ -1457,10 +1503,12 @@ export class AutonomousAgent {
     unverifiedChangesPending?: boolean,
     objective?: ObjectiveLedger | null,
     findings?: readonly string[] | null,
-    recovery?: Pick<DurableTaskState, "providerRecovery" | "operation" | "changeBaseline">,
+    recovery?: Pick<DurableTaskState, "providerRecovery" | "operation" | "changeBaseline" | "inferenceContextManifests">,
   ): void {
     this.approvedEgressOrigins.clear();
     this.approvedVerifiers.clear();
+    this.systemPromptSectionReferences = [];
+    this.systemPromptSectionMessageDigest = undefined;
     this.messages = withHarnessProvenance(msgs);
     this.restoreFindings(findings);
     this.objective = objective ?? undefined;
@@ -1473,6 +1521,8 @@ export class AutonomousAgent {
     }
     this.settleUnrecordedToolCalls();
     this.activeProviderRecovery = recovery?.providerRecovery ?? null;
+    this.inferenceContextManifests = markInterruptedInferenceManifestsUnknown((recovery?.inferenceContextManifests ?? []).filter(isInferenceContextManifest).slice(-24));
+    this.inferenceContextSequence = this.inferenceContextManifests.reduce((max, manifest) => Math.max(max, manifest.sequence), 0);
     this.recoveredOperation = recovery?.operation;
     this.untrustedRecoveredBaseline = recovery?.changeBaseline ?? undefined;
     this.recheckOnResume();
@@ -1599,7 +1649,7 @@ export class AutonomousAgent {
   }
 
   /** Save mid-turn progress and report whether every configured persistence sink succeeded. */
-  private persistProgress(progress: { commandRuleDecisions?: boolean; verificationConfigAttempts?: boolean; messages?: boolean; unverifiedChangesPending?: boolean; changeBaseline?: ChangeBaseline | null }): boolean {
+  private persistProgress(progress: { commandRuleDecisions?: boolean; verificationConfigAttempts?: boolean; messages?: boolean; unverifiedChangesPending?: boolean; changeBaseline?: ChangeBaseline | null; inferenceContextManifests?: boolean }): boolean {
     if (!this.durable || this.restoringConversation) return true;
     let saved = true;
     try {
@@ -1630,6 +1680,7 @@ export class AutonomousAgent {
         ...(progress.unverifiedChangesPending !== undefined ? { unverifiedChangesPending: progress.unverifiedChangesPending } : {}),
         ...(progress.verificationConfigAttempts ? { verificationConfigAttempts: this.bridge.getSecurityManager().getVerificationAttempts() } : {}),
         ...(progress.commandRuleDecisions ? { commandRuleDecisions: this.commandRuleDecisions } : {}),
+        ...(progress.inferenceContextManifests ? { inferenceContextManifests: this.inferenceContextManifests } : {}),
         ...(progress.changeBaseline !== undefined ? {
           changeBaseline: progress.changeBaseline
             ? {
@@ -1830,6 +1881,23 @@ export class AutonomousAgent {
 
   public getWorkspacePathIdentity(): WorkspacePath {
     return this.workspacePathIdentity;
+  }
+
+  /** A bounded, content-free candidate identity for revalidating recorded repository context. */
+  public getWorkspaceContextFingerprintResult(): { fingerprint?: string; unavailableReason?: WorkspaceGitSafetyReason } {
+    const safety = inspectWorkspaceGitSafety(this.config.workspace);
+    if (!safety.safe) return { unavailableReason: safety.reason };
+    try {
+      return { fingerprint: computeCandidateIdentitySync(this.config.workspace, { maxEntries: 4096, maxTotalBytes: 16 * 1024 * 1024 }).candidateId };
+    } catch {
+      // Unknown is safer than presenting an old repository observation as current.
+      return { unavailableReason: "fingerprint_failed" };
+    }
+  }
+
+  /** Backward-compatible fingerprint accessor; callers needing an explanation use the result form. */
+  public getWorkspaceContextFingerprint(): string | undefined {
+    return this.getWorkspaceContextFingerprintResult().fingerprint;
   }
 
   /** Judges, once per workspace, whether the session STARTED in a linked worktree the agent had already worked in. */
@@ -3312,7 +3380,7 @@ export class AutonomousAgent {
       ];
       let text = "";
       try {
-        const res = await this.submitGenAiRequest(client, () => client.chatCompletion(prompt, [], randomUUID(), signal));
+        const res = await this.submitGenAiRequest(client, () => this.submitGuardingLength({ step, cutAfterMs: 0 }, prompt, (request) => client.chatCompletion(request, [], randomUUID(), signal)));
         text = typeof res.content === "string" ? res.content.trim() : "";
         const reported = client.getProviderId?.() ? client.getLastUsage?.() : undefined;
         this.totalTokens.prompt += reported?.inputTokens ?? calculateContextBudget(prompt, [], contextLimit).totalActiveTokens;
@@ -3367,15 +3435,68 @@ export class AutonomousAgent {
   private async submitGuardingLength<T>(guard: { step: number; cutAfterMs: number }, messages: ChatMessage[], send: (messages: ChatMessage[]) => Promise<T>): Promise<T> {
     const seconds = Math.round(guard.cutAfterMs / 1000);
     const request = guard.cutAfterMs ? [...messages, { role: "user" as const, content: cutResponseNotice(guard.step, seconds) }] : messages;
+    const manifest = this.captureInferenceContextRequest(request, guard.step);
     const started = this.recoveryClock.now();
     try {
       const result = await send(request);
       if (guard.cutAfterMs) this.cutResponse = { step: guard.step, seconds };
+      this.settleInferenceContextRequest(manifest.id, "response_received");
       return result;
     } catch (err) {
       const ran = this.recoveryClock.now() - started;
       if (ran >= LONG_RESPONSE_MS && err instanceof InferenceError && err.toFailure().execution === "UNKNOWN") guard.cutAfterMs = Math.max(guard.cutAfterMs, ran);
+      this.settleInferenceContextRequest(manifest.id, "unknown_effect");
       throw err;
+    }
+  }
+
+  /** Record only source references and measurements for the exact arrays passed to an adapter. */
+  private captureInferenceContextRequest(messages: ChatMessage[], step: number): InferenceContextManifest {
+    const tools = this.getEffectiveTools();
+    const limits = this.effectiveLimits();
+    const reserves = this.getContextReserves();
+    const manifest = buildInferenceContextManifest({
+      id: `ctxreq_${randomUUID()}`,
+      taskId: this.currentTaskId,
+      workspace: this.workspacePathIdentity.value,
+      sequence: ++this.inferenceContextSequence,
+      messages,
+      tools,
+      contextLimit: limits.contextLimit,
+      contextLimitSource: this.capabilities?.contextSource ?? (this.config.contextLimit ? "operator" : "client_default_or_unknown"),
+      outputAllowance: reserves.completion,
+      outputAllowanceSource: this.capabilities?.outputSource ?? (this.config.completionReserveTokens ? "operator" : "client_default_or_unknown"),
+      toolResponseReserve: reserves.toolResponse,
+    });
+    this.inferenceContextManifests = retainInferenceContextManifest(this.inferenceContextManifests, manifest);
+    if (!this.persistInferenceContextManifests()) {
+      manifest.status = "not_dispatched";
+      this.persistInferenceContextManifests();
+      throw new Error("Inference context could not be recorded before dispatch; the request was not sent.");
+    }
+    return manifest;
+  }
+
+  private settleInferenceContextRequest(id: string, status: "response_received" | "unknown_effect"): void {
+    const manifest = this.inferenceContextManifests.find((item) => item.id === id);
+    if (!manifest || manifest.status !== "dispatching") return;
+    manifest.status = status;
+    this.persistInferenceContextManifests();
+  }
+
+  private persistInferenceContextManifests(): boolean {
+    if (this.durable) {
+      return this.persistProgress({ inferenceContextManifests: true });
+    }
+    try {
+      this.progressListener?.();
+      return true;
+    } catch (err: any) {
+      const text = `The inference context manifest could not be saved (${redactSecrets(String(err?.message ?? err)).slice(0, 200)}); a resume may not show this request.`;
+      this.turnPersistenceFailures.push(text);
+      if (this.observer?.onNotice) this.observer.onNotice(text);
+      else console.warn(pc.yellow(text));
+      return false;
     }
   }
 
@@ -3763,7 +3884,7 @@ export class AutonomousAgent {
     try {
       const requestId = randomUUID();
       const prompt = buildProbePrompt(requirements, summary);
-      const answer = await this.submitGenAiRequest(this.client, () => this.client.chatCompletion(prompt, [], requestId, probeSignal, "compaction"));
+      const answer = await this.submitGenAiRequest(this.client, () => this.submitGuardingLength({ step: 0, cutAfterMs: 0 }, prompt, (request) => this.client.chatCompletion(request, [], requestId, probeSignal, "compaction")));
       return parseProbeAnswer(answer.content, requirements);
     } catch (err: any) {
       if (signal?.aborted) throw err;
@@ -3802,7 +3923,7 @@ export class AutonomousAgent {
           this.messages = original;
           this.pendingCompaction = undefined;
         }
-        const res = await this.submitGenAiRequest(this.client, () => this.client.chatCompletion(admittedPrompt, [], requestId, signal, "compaction"));
+        const res = await this.submitGenAiRequest(this.client, () => this.submitGuardingLength({ step, cutAfterMs: 0 }, admittedPrompt, (request) => this.client.chatCompletion(request, [], requestId, signal, "compaction")));
         if (typeof res.content === "string" && res.content.trim()) {
           // CX-3: a second bounded call checks the model's summary against the gating requirements before it is used.
           const verdict = await this.probeCompactionSummary(res.content.trim(), signal);
@@ -3980,7 +4101,7 @@ export class AutonomousAgent {
     const verifierCommand = this.config.authoritativeVerifierCommand?.trim() || discoverVerifier(this.config.workspace)?.command;
     // Fixed text first and per-workspace text last: a provider's prompt cache reuses the longest unchanged prefix, so
     // the workspace path and project sections must not sit above the operating rules.
-    return `You are Nexus Code, an autonomous AI software engineering agent running in a Linux shell environment.
+    const prompt = `You are Nexus Code, an autonomous AI software engineering agent running in a Linux shell environment.
 You solve coding problems, build features, fix bugs, and refactor codebases by iteratively exploring, reading, editing, and verifying files.
 
 ### Operating Rules:
@@ -4005,6 +4126,52 @@ The pinned Objective Ledger lists the operator's requirements; your plan never r
 ` : ""}${rulesSection}${skillsSection}${knowledgeSection}
 
 ${NEXUS_RUNTIME_IDENTITY}`;
+    const definitions: SystemPromptSectionDefinition[] = [
+      { key: "few_shots", sourceType: "few_shot_examples", sourceLocation: "client:fewshots", scope: "profile", trust: "system_instruction", retention: "runtime_prompt", inclusionReason: "canonical examples selected by the client for this request", retrievalMethod: "few_shot_selector", text: fewShotSection },
+      ...(tddSection ? [{ key: "tdd_policy", sourceType: "tdd_policy", sourceLocation: "profile:tdd", scope: "profile" as const, trust: "system_instruction" as const, retention: "runtime_prompt", inclusionReason: "operator-configured test-driven development policy", retrievalMethod: "agent_config", text: tddSection }] : []),
+      ...(roleSection ? [{ key: "role_profile", sourceType: "role_profile", sourceLocation: `profile:${this.role}`, scope: "profile" as const, trust: "system_instruction" as const, retention: "runtime_prompt", inclusionReason: "selected specialist role instructions", retrievalMethod: "role_profile_registry", text: roleSection }] : []),
+      ...(rulesSection ? [{ key: "project_rules", sourceType: "project_rules", sourceLocation: "repository:project-rules", scope: "repository" as const, trust: "persisted_unverified" as const, retention: "workspace_rules_policy", inclusionReason: "workspace rules included by the startup trust policy; their text remains untrusted input", retrievalMethod: "trusted_project_rules", text: rulesSection }] : []),
+      ...(skillsSection ? [{ key: "skill_catalog", sourceType: "skill_catalog_prompt", sourceLocation: "profile:eligible-skills", scope: "profile" as const, trust: "persisted_unverified" as const, retention: "skill_source_policy", inclusionReason: "eligible skill descriptions included for discovery; this does not activate skills or grant permission", retrievalMethod: "skill_manager", text: skillsSection }] : []),
+      ...(knowledgeSection ? [{ key: "project_knowledge", sourceType: "durable_knowledge_prompt", sourceLocation: "repository:project-knowledge", scope: "repository" as const, trust: "persisted_unverified" as const, retention: "knowledge_graph_policy", inclusionReason: "durable project knowledge was rendered into the active prompt; memory is not evidence", retrievalMethod: "knowledge_graph", text: knowledgeSection }] : []),
+    ];
+    const located: Array<{ definition: SystemPromptSectionDefinition; start: number; end: number }> = [];
+    let searchFrom = 0;
+    for (const definition of definitions) {
+      const start = prompt.indexOf(definition.text, searchFrom);
+      if (start < 0) continue;
+      located.push({ definition, start, end: start + definition.text.length });
+      searchFrom = start + definition.text.length;
+    }
+    const references: SystemPromptSectionReference[] = located.map(({ definition, start, end }) => ({
+      sourceType: definition.sourceType,
+      sourceLocation: definition.sourceLocation,
+      scope: definition.scope,
+      trust: definition.trust,
+      retention: definition.retention,
+      inclusionReason: definition.inclusionReason,
+      retrievalMethod: definition.retrievalMethod,
+      segments: [{ start, end }],
+    }));
+    const baseSegments: Array<{ start: number; end: number }> = [];
+    let cursor = 0;
+    for (const range of located) {
+      if (range.start > cursor) baseSegments.push({ start: cursor, end: range.start });
+      cursor = range.end;
+    }
+    if (cursor < prompt.length) baseSegments.push({ start: cursor, end: prompt.length });
+    if (baseSegments.length) references.unshift({
+      sourceType: "client_system_prompt",
+      sourceLocation: "client:runtime-system-prompt",
+      scope: "profile",
+      trust: "system_instruction",
+      retention: "runtime_prompt",
+      inclusionReason: "base Nexus runtime policy and task-specific instructions assembled by the client",
+      retrievalMethod: "system_prompt_builder_residual_sections",
+      segments: baseSegments,
+    });
+    this.systemPromptSectionReferences = references;
+    this.systemPromptSectionMessageDigest = createHash("sha256").update(prompt).digest("hex");
+    return prompt;
   }
 
   private setupSpineHandlers(): void {

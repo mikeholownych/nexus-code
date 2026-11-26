@@ -157,10 +157,10 @@ describe("D-04: the verdict follows this turn's evidence", () => {
     }
   });
 
-  test("3c. a turn that only records knowledge writes .nexus/knowledge.json, which is outside the comparison: NOT_REQUIRED", async () => {
+  test("3c. model-requested knowledge promotion writes nothing and is NOT_REQUIRED", async () => {
     const { results: [r], repo } = await turns([knowledge]);
     try {
-      assert.ok(fs.existsSync(path.join(repo, ".nexus", "knowledge.json")), "the knowledge file was written");
+      assert.equal(fs.existsSync(path.join(repo, ".nexus", "knowledge.json")), false, "model output cannot promote durable knowledge");
       assert.equal(r.outcome, "NOT_REQUIRED", `got ${r.outcome}/${r.reason}`);
       assert.equal(r.turnEvidence?.workspaceChanged, "no");
     } finally {

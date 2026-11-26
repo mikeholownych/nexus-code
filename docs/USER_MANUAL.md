@@ -332,7 +332,7 @@ Press `<TAB>` at any prompt to autocomplete slash commands and directory paths.
   recognised. The check can also be wrongly cautious (a URL with `a=1&b=2`, `|&`, a quoted `&`, or the word `setsid`
   in an `echo` keep the turn `UNVERIFIED`), which only keeps the verification step. A file-write tool
   (`write_file`, `edit_file`, `patch_file`, `delete_file`) always counts as a change, so it still needs a verifier
-  (`UNVERIFIED`, exit code 2), as does a command that changes a file. Nexus's own `.nexus/` state is not part of that comparison, so a turn that only records knowledge (`manage_knowledge`, which writes `.nexus/knowledge.json`) also ends `Done`. The receipt's `turnEvidence`
+  (`UNVERIFIED`, exit code 2), as does a command that changes a file. Nexus's own `.nexus/` state is not part of that comparison; model-invoked `manage_knowledge` writes are denied, while explicit operator promotion is recorded as separate workspace state. The receipt's `turnEvidence`
   records what the turn did: whether the workspace changed, changes carried in, actions denied and verifier runs.
   **Verified** means the passing test run — whether you configured the
   verifier or Nexus found it — is evidence about the change: it
@@ -618,6 +618,8 @@ nexus (qwen2.5-coder) my-app ❯ !npm test
 | :--- | :--- |
 | `/help` | Display cheatsheet of all available commands |
 | `/status` | View active model, endpoint, shell, git badge, context sizing with sources, last request count, objective progress |
+| `/context inspect [--json] [--record] [--budget-ms <1..30000>] [--max-items <1..500>]` | Inspect source provenance, freshness, retrieval timing, omissions, and context budget; default assembly budget is 2,000 ms |
+| `/context maturity [--json] [--budget-ms <1..30000>] [--max-items <1..500>]` | Report separate evidence-based levels for navigability, retrieval speed, freshness, and compounding value |
 | `/plan [add\|done\|start\|clear]` | Formulate and manage multi-phase milestone execution plan |
 | `/tui` | REPL only: open the session dashboard (not offered in the live TUI, where it had no purpose) |
 | `/doctor [--deep] [--fix [--yes]]` | Diagnose this session's configuration, endpoint, engine, shell and state (see `docs/DOCTOR_TROUBLESHOOTING.md`) |
@@ -824,7 +826,7 @@ when `approval.disable_yes`, `sandbox.required` or `sandbox.forbid_network` is s
   - Injected prompt blocks from skills and knowledge are explicitly annotated with source path and trust state (`[source: <path>] [trust: <state>]`).
   - In `--read-only` mode, untrusted components are never loaded, no writes occur, and `.nexus/` is never created.
   Servers, plugins, and skills in your home configuration (`~/.config/nexus/`, `~/.nexus/`) are always trusted and loaded.
-- **Knowledge Graph Hygiene & Auto-Extraction Gating (REQ-SEC-114)**: The `KnowledgeGraph` has a lazy constructor that performs no filesystem creation until a write is explicitly requested. In `--read-only` mode, all mutations are blocked. Implicit standing instruction creation via automatic prompt mining (`autoExtract`) is disabled by default per DEC-15. It can only be enabled explicitly via `NEXUS_KNOWLEDGE_AUTOEXTRACT=1`, which prints a notification whenever a new rule is recorded into `<workspace>/.nexus/knowledge.json`.
+- **Knowledge Graph Hygiene & Controlled Promotion (REQ-SEC-114)**: The `KnowledgeGraph` has a lazy constructor that performs no filesystem creation until a write is explicitly requested. In `--read-only` mode, all mutations are blocked. Promote durable project knowledge only through an explicit operator command: `/knowledge set <key> <rule>` or `nexus knowledge set <key> <value>`. Model calls to `manage_knowledge` cannot set entries, and the legacy `NEXUS_KNOWLEDGE_AUTOEXTRACT` flag no longer enables conversation-derived writes. Entries are scoped to the workspace, retain provenance and validation status, expire according to their retention policy, and are labeled unverified memory rather than evidence. Credential-bearing entries are rejected.
 - **MCP Server Environment**: MCP servers start with basic process, locale, proxy (`HTTPS_PROXY`, `NO_PROXY`, …) and CA-trust (`SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, …) variables only — not Nexus's own credentials. Give a server the token it needs in its `env` block in `mcp.json`.
 - **Build Identity**: `nexus --version` and `nexus doctor` show the commit the running build was made from, its branch, and whether the source had uncommitted changes (`1.2.1 (cc177be91d15-dirty, feat/tui-surface)`), recorded at `make build`.
 - **Pseudo-Terminal (PTY) Allocation**: Commands requiring TTY capabilities run inside allocated virtual pseudo-terminals via `portable-pty`.
