@@ -18,7 +18,7 @@
   },
   "scripts": {
     "build": "tsc && tsc -p tsconfig.lib.json && node scripts/copy_data.mjs && node scripts/write_build_info.mjs",
-    "prepublishOnly": "echo 'local-code-harness is not published (docs/v1.3.0/PLAN.md, D13)' >&2; exit 1",
+    "prepublishOnly": "npm run build",
     "test": "npm run test:cli && npm run test:scope",
     "test:cli": "node scripts/test_shards.mjs",
     "test:unit": "node scripts/test_tiers.mjs --tier=unit",
