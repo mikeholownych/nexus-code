@@ -1,11 +1,11 @@
-# nexus-code
+# @nexus-code-ai/nexus-code
 
 Auditable AI coding CLI with independent verification.
 
 ## Install
 
 ```bash
-npm install -g nexus-code
+npm install -g @nexus-code-ai/nexus-code
 ```
 
 ## Usage

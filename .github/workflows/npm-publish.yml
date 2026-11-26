@@ -17,15 +17,57 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve publish ref
+        id: publish-ref
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            tag="$DISPATCH_TAG"
+          else
+            tag="$GITHUB_REF_NAME"
+          fi
+          if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$'; then
+            if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+              echo "workflow_dispatch requires inputs.tag like v1.3.1 or v1.3.1-rc.1" >&2
+            fi
+            echo "refusing non-release tag: $tag" >&2
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "ref=refs/tags/$tag" >> "$GITHUB_OUTPUT"
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=${GITHUB_REF}" >> "$GITHUB_OUTPUT"
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
+          ref: ${{ steps.publish-ref.outputs.ref }}
+      - name: Verify tag checkout
+        env:
+          PUBLISH_TAG: ${{ steps.publish-ref.outputs.tag }}
+        run: |
+          git rev-parse --verify "refs/tags/$PUBLISH_TAG"
+          [ "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "refs/tags/$PUBLISH_TAG")" ]
+      - name: Verify release versions
+        env:
+          PUBLISH_TAG: ${{ steps.publish-ref.outputs.tag }}
+        run: node scripts/sync-version.mjs --tag "$PUBLISH_TAG" --check
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 22.22.1
           registry-url: https://registry.npmjs.org
+      - name: Ensure npm supports trusted publishing
+        run: |
+          npm install -g npm@^11.5.1
+          npm --version
       - run: npm ci --prefix cli
       - run: npm --prefix cli run build
+      - name: Verify package is publishable
+        run: |
+          node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('./cli/package.json','utf8')); if (p.private) { console.error('cli/package.json is private; publish requires explicit owner-approved publishability change'); process.exit(1); } if (p.name !== '@nexus-code-ai/nexus-code') { console.error('unexpected package name: ' + p.name); process.exit(1); }"
+      - run: npm publish --prefix cli --provenance --access public --dry-run
       - run: npm publish --prefix cli --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
