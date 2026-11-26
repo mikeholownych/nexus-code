@@ -3,10 +3,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 export interface InferenceSubmissionAdmissionScope {
   active: boolean;
   closed: boolean;
-  admit?: () => void;
+  admit?: (estimatedTokens?: number) => void;
 }
 
-export type OperationInferenceAdmissionFailure = "budget_exhausted" | "history_unknown" | "persistence_failed";
+export type OperationInferenceAdmissionFailure = "budget_exhausted" | "token_budget_exhausted" | "history_unknown" | "persistence_failed";
 
 /** A durable operation's outer admission boundary refused a provider request before dispatch. */
 export class OperationInferenceAdmissionError extends Error {
@@ -40,7 +40,7 @@ export async function withInferenceSubmissionAdmissionScope<T>(
 
 export function activateInferenceSubmissionAdmissionScope(
   scope: InferenceSubmissionAdmissionScope,
-  admit: () => void,
+  admit: (estimatedTokens?: number) => void,
 ): void {
   if (scope.closed || scope.active) throw new Error("Inference admission scope cannot be activated in its current state.");
   scope.admit = admit;
@@ -48,9 +48,9 @@ export function activateInferenceSubmissionAdmissionScope(
 }
 
 /** Reserve synchronously before a client sends a chat-completion request. */
-export function admitCurrentInferenceSubmission(): void {
+export function admitCurrentInferenceSubmission(estimatedTokens?: number): void {
   for (const scope of scopes.getStore() ?? []) {
     if (scope.closed) throw new Error("Inference request outlived its active turn scope; refusing dispatch.");
-    if (scope.active) scope.admit!();
+    if (scope.active) scope.admit!(estimatedTokens);
   }
 }

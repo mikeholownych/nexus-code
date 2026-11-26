@@ -1353,6 +1353,11 @@ export class LocalLlmClient {
     if (Number.isFinite(tokens) && tokens > 0) this.maxOutputTokens = Math.floor(tokens);
   }
 
+  /** Input-character estimate plus the configured output allowance used for operation token admission. */
+  private estimatedInferenceTokenReservation(payloadChars: number): number {
+    return Math.ceil(payloadChars / 4) + this.maxOutputTokens;
+  }
+
   public getOutputAllowance(): number {
     return this.maxOutputTokens;
   }
@@ -1790,7 +1795,7 @@ export class LocalLlmClient {
     if (this.conn.streamOnly) return this.chatCompletionStreamOnce(messages, tools, undefined, requestId, signal);
     return this.executeWithFailover("chatCompletion", async (currentEp) => {
       if (signal?.aborted) throw abortedError(requestId);
-      admitCurrentInferenceSubmission();
+      admitCurrentInferenceSubmission(this.estimatedInferenceTokenReservation(JSON.stringify(messages).length + JSON.stringify(tools).length));
       const url = this.endpointUrl(currentEp, "/chat/completions");
       await this.prepareCredential(currentEp, requestId);
       this.preflight(currentEp, requestId, JSON.stringify(messages).length + JSON.stringify(tools).length);
@@ -2011,7 +2016,7 @@ export class LocalLlmClient {
     if (wireProtocol(this.conn.protocol).native) return this.nativeCompletion(messages, tools, onToken, requestId, signal, true);
     return this.executeWithFailover("chatCompletionStream", async (currentEp) => {
       if (signal?.aborted) throw abortedError(requestId);
-      admitCurrentInferenceSubmission();
+      admitCurrentInferenceSubmission(this.estimatedInferenceTokenReservation(JSON.stringify(messages).length + JSON.stringify(tools).length));
       const url = this.endpointUrl(currentEp, "/chat/completions");
       await this.prepareCredential(currentEp, requestId);
       this.preflight(currentEp, requestId, JSON.stringify(messages).length + JSON.stringify(tools).length);
@@ -2169,7 +2174,7 @@ export class LocalLlmClient {
   ): Promise<ChatMessage> {
     return this.executeWithFailover(stream ? "chatCompletionStream" : "chatCompletion", async (currentEp) => {
       if (signal?.aborted) throw abortedError(requestId);
-      admitCurrentInferenceSubmission();
+      admitCurrentInferenceSubmission(this.estimatedInferenceTokenReservation(JSON.stringify(messages).length + JSON.stringify(tools).length));
       await this.prepareCredential(currentEp, requestId);
       this.preflight(currentEp, requestId, JSON.stringify(messages).length + JSON.stringify(tools).length);
       const outbound = this.egress(messages, tools, currentEp);

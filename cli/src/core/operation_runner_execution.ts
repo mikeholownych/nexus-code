@@ -967,6 +967,14 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
           reason: `operation inference submission budget exhausted: ${detail}`.slice(0, 300),
         };
       }
+      if (turn.reason === "OPERATION_TOKEN_BUDGET_EXHAUSTED") {
+        const detail = turn.detail ?? "the operation-wide token estimate limit is reached";
+        return {
+          kind: "admission_denied",
+          failure: "token_budget_exhausted",
+          reason: `operation token estimate limit reached: ${detail}`.slice(0, 300),
+        };
+      }
       // A continued unit stops only on a budget or on stagnation; say which, so the operator's choice is informed.
       const why =
         turn.reason === "STAGNATION_DETECTED"
