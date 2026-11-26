@@ -22,7 +22,8 @@ describe("harness real probe adapter", () => {
     const store = new HarnessStore({ rootDir: path.join(tmp, "state") });
     const orch = new HarnessOrchestrator(store);
     const run = await orch.init({ taskSuitePath: suite, basePath: base, store });
-    const done = await orch.run(run.id, { store, real: true });
+    const { isSandboxAvailable } = await import("../src/sandbox.js");
+    const done = await orch.run(run.id, { store, real: true, allowUnsandboxedRealProbe: !isSandboxAvailable("auto") });
     assert.equal(done.status, "COMPLETED");
     assert.equal(fs.readFileSync(path.join(base, "SYSTEM.md"), "utf8"), "base\n");
     const report = store.loadReport(done.id);

@@ -7,7 +7,7 @@ export interface HarnessCommandResult { success: boolean; output: string }
 
 const USAGE = [
   "Usage: /harness init --task-suite <path> --base <path> [--base-kind path|profile|fixture]",
-  "       /harness run <id> [--mock|--real] [--candidate <path>]",
+  "       /harness run <id> [--mock|--real] [--allow-unsandboxed-real-probe] [--candidate <path>]",
   "       /harness status [id] | show <id> | report <id> | cancel <id>",
   "       /harness library list|show <id>|accept <id>|reject <id>",
   "Note: HIR never mutates live harness/profile state; promotion reports are review-only.",
@@ -52,8 +52,9 @@ export async function executeHarnessSlashCommand(args: string, _config: HarnessC
       if (!id) return { success: false, output: USAGE };
       const mock = rest.includes("--mock");
       const real = rest.includes("--real");
+      const allowUnsandboxedRealProbe = rest.includes("--allow-unsandboxed-real-probe");
       const candidatePath = getFlag(rest, "--candidate");
-      const run = await orch.run(id, { store, mock, real, candidatePath });
+      const run = await orch.run(id, { store, mock, real, candidatePath, allowUnsandboxedRealProbe });
       return { success: run.status !== "FAILED", output: JSON.stringify(run, null, 2) };
     }
     if (sub === "status") {

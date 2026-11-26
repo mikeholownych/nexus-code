@@ -35,6 +35,7 @@ export interface HirRunOptions {
   dryRun?: boolean;
   candidatePath?: string; // optional explicit candidate for MVP
   adapter?: ProbeAdapter;
+  allowUnsandboxedRealProbe?: boolean;
 }
 
 function nowIso() { return new Date().toISOString(); }
@@ -112,7 +113,7 @@ export class HarnessOrchestrator {
       recordEvent(store, run.id, "hir.blocked", run.reason);
       return run;
     }
-    const adapter = opts.adapter ?? (opts.real ? new RealProbeAdapter() : new MockProbeAdapter());
+    const adapter = opts.adapter ?? (opts.real ? new RealProbeAdapter({ allowUnsandboxed: !!opts.allowUnsandboxedRealProbe }) : new MockProbeAdapter());
     const baseManifest = store.loadBaseManifest(run.baseHarnessId);
     const suite = store.loadTaskSuite(run.taskSuiteRef);
     const started = Date.now();
@@ -128,7 +129,7 @@ export class HarnessOrchestrator {
     run.status = "PROBING";
     run.updatedAt = nowIso();
     store.saveRun(run);
-    recordEvent(store, run.id, "hir.started", `Started HIR ${run.id}`, { mock: !!opts.mock, real: !!opts.real, dryRun: !!opts.dryRun });
+    recordEvent(store, run.id, "hir.started", `Started HIR ${run.id}`, { mock: !!opts.mock, real: !!opts.real, dryRun: !!opts.dryRun, allowUnsandboxedRealProbe: !!opts.allowUnsandboxedRealProbe });
 
     // MVP: baseline = base tree, candidate = explicit candidatePath or base tree copy.
     const baseTree = path.join(store.baseDir(baseManifest.id), "tree");

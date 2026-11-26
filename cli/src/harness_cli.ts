@@ -44,6 +44,7 @@ export function registerHarnessCommands(program: Command): void {
     .description("Run a harness improvement run")
     .option("--mock", "Use deterministic mock probe adapter (no network, no live model)")
     .option("--real", "Use isolated real probe adapter (deterministic verifier/artifact cases only; no live harness mutation)")
+    .option("--allow-unsandboxed-real-probe", "OWNER-APPROVED ONLY: allow real probes when OS sandbox is unavailable (unsafe)")
     .option("--dry-run", "Validate/plan only; no probes executed")
     .option("--candidate <path>", "Candidate harness directory; defaults to base tree")
     .option("--state-dir <path>", "Harness state root")
@@ -51,7 +52,7 @@ export function registerHarnessCommands(program: Command): void {
     .action(async (id, opts) => {
       const store = storeFrom(opts);
       const orch = new HarnessOrchestrator(store);
-      const run = await orch.run(id, { store, mock: !!opts.mock, real: !!opts.real, dryRun: !!opts.dryRun, candidatePath: opts.candidate });
+      const run = await orch.run(id, { store, mock: !!opts.mock, real: !!opts.real, dryRun: !!opts.dryRun, candidatePath: opts.candidate, allowUnsandboxedRealProbe: !!opts.allowUnsandboxedRealProbe });
       out(opts.json ? run : `Run ${statusLine(run)}${run.reason ? `\nreason: ${run.reason}` : ""}${run.nextAction ? `\nnext: ${run.nextAction}` : ""}`, opts.json);
     });
 

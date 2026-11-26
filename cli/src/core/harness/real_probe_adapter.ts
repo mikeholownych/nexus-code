@@ -39,7 +39,13 @@ function scrubEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
+export interface RealProbeAdapterOptions {
+  allowUnsandboxed?: boolean;
+}
+
 export class RealProbeAdapter implements ProbeAdapter {
+  constructor(private readonly opts: RealProbeAdapterOptions = {}) {}
+
   async run(input: ProbeInput): Promise<ProbeResult> {
     const startedAt = new Date().toISOString();
     const start = Date.now();
@@ -57,7 +63,25 @@ export class RealProbeAdapter implements ProbeAdapter {
       if (cmd) {
         const sandboxed = wrapSandboxedCommand(cmd, candidateWork, { mode: "auto", network: false });
         const useSandbox = sandboxed.sandboxed && !!sandboxed.argv?.length;
-        observations.push(useSandbox ? `os_sandbox=${sandboxed.engine}` : `os_sandbox=unavailable:${sandboxed.warning ?? "none"}`);
+        if (!useSandbox && !this.opts.allowUnsandboxed) {
+          return {
+            schemaVersion: 1,
+            id: `hprobe_${randomUUID()}`,
+            runId: input.runId,
+            candidateId: input.candidateId,
+            caseId: input.case.id,
+            status: "BLOCKED",
+            startedAt,
+            endedAt: new Date().toISOString(),
+            metrics: { wallClockMs: Date.now() - start, tokens: 0, toolErrors: 0, verifierPass: null, score: null },
+            artifacts: {},
+            observations: [
+              `os_sandbox_unavailable:${sandboxed.warning ?? sandboxed.denial?.reason ?? "no sandbox engine"}`,
+              "real probe blocked: OS sandbox required; rerun only with explicit owner-approved --allow-unsandboxed-real-probe",
+            ],
+          };
+        }
+        observations.push(useSandbox ? `os_sandbox=${sandboxed.engine}` : "os_sandbox=UNSANDBOXED_EXPLICIT_OVERRIDE");
         const r = useSandbox
           ? spawnSync(sandboxed.argv![0], sandboxed.argv!.slice(1), {
               cwd: candidateWork,

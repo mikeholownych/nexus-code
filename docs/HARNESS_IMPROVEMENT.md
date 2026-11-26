@@ -14,7 +14,7 @@ Harness Improvement Runs are a Nexus-native, evidence-gated workflow for improvi
 ```bash
 nexus harness init --task-suite <suite.json> --base <path> [--base-kind path|profile|fixture] [--json]
 nexus harness run <hir-id> --mock [--candidate <path>] [--json]
-nexus harness run <hir-id> --real [--candidate <path>] [--json]
+nexus harness run <hir-id> --real [--allow-unsandboxed-real-probe] [--candidate <path>] [--json]
 nexus harness status [hir-id] [--json]
 nexus harness show <hir-id> [--json]
 nexus harness report <hir-id> [--json] [--out report.md]
@@ -63,3 +63,7 @@ HIR stores durable state under `<state>/harness/` (default `~/.nexus/harness` or
 - Real probes support deterministic verifier/artifact cases and run in isolated temp workspaces.
 - No auto-apply. Library accept/reject records operator decision only; it does not mutate live harnesses.
 - Profile snapshot copies files from an explicit path/profile source; review snapshots/reports for sensitive content before sharing.
+
+## Real probe sandbox policy
+
+`--real` runs verifier commands in isolated temp workspaces and attempts OS sandboxing via Nexus sandbox backends (bwrap/docker, network off). If no OS sandbox is available, HIR blocks real probes unless `--allow-unsandboxed-real-probe` is explicitly set (unsafe, owner-approved only).
