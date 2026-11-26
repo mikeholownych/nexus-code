@@ -17,15 +17,41 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve publish ref
+        id: publish-ref
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+            if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$'; then
+              echo "workflow_dispatch requires inputs.tag like v1.3.1 or v1.3.1-rc.1" >&2
+              exit 1
+            fi
+            echo "ref=refs/tags/$tag" >> "$GITHUB_OUTPUT"
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=${GITHUB_REF}" >> "$GITHUB_OUTPUT"
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
+          ref: ${{ steps.publish-ref.outputs.ref }}
+      - name: Verify tag checkout
+        run: |
+          git rev-parse --verify "refs/tags/${{ steps.publish-ref.outputs.tag }}"
+          [ "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "refs/tags/${{ steps.publish-ref.outputs.tag }}")" ]
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 22.22.1
           registry-url: https://registry.npmjs.org
       - run: npm ci --prefix cli
       - run: npm --prefix cli run build
+      - name: Verify package is publishable
+        run: |
+          node -e "const p=require('./cli/package.json'); if (p.private) { console.error('cli/package.json is private; publish requires explicit owner-approved publishability change'); process.exit(1); }"
+      - run: npm publish --prefix cli --provenance --access public --dry-run
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - run: npm publish --prefix cli --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
