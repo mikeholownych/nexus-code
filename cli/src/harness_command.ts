@@ -1,6 +1,7 @@
 import type { HarnessConfig } from "./types.js";
 import { HarnessOrchestrator } from "./core/harness/orchestrator.js";
 import { HarnessStore } from "./core/harness/store.js";
+import { setLibraryEntryStatus } from "./core/harness/library.js";
 
 export interface HarnessCommandResult { success: boolean; output: string }
 
@@ -19,67 +20,70 @@ function parseArgs(args: string): string[] {
   return out;
 }
 
-export async function executeHarnessSlashCommand(args: string, config: HarnessConfig, _signal: AbortSignal): Promise<HarnessCommandResult> {
+function getFlag(parts: string[], name: string): string | undefined {
+  const i = parts.indexOf(name);
+  return i >= 0 ? parts[i + 1] : undefined;
+}
+
+export async function executeHarnessSlashCommand(args: string, _config: HarnessConfig, _signal: AbortSignal): Promise<HarnessCommandResult> {
   const parts = parseArgs(args.trim());
-  const [sub, ...rest] = parts;
+  if (parts.length === 0) return { success: false, output: USAGE };
+  const stateDir = getFlag(parts, "--state-dir") ?? (process.env.NEXUS_STATE_DIR ? `${process.env.NEXUS_STATE_DIR}/harness` : undefined);
+  const filtered: string[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i] === "--state-dir") { i++; continue; }
+    filtered.push(parts[i]);
+  }
+  const [sub, ...rest] = filtered;
   if (!sub) return { success: false, output: USAGE };
-  const stateDirFlagIdx = parts.indexOf("--state-dir");
-  const stateDir = stateDirFlagIdx >= 0 ? parts[stateDirFlagIdx + 1] : (process.env.NEXUS_STATE_DIR ? `${process.env.NEXUS_STATE_DIR}/harness` : undefined);
-  const filtered = parts.filter((t, i) => !(t === "--state-dir" || i === stateDirFlagIdx + 1));
-  const [sub2, ...rest2] = filtered;
-  const subUse = sub2 ?? sub;
-  const restUse = sub2 ? rest2 : rest;
   const store = new HarnessStore(stateDir ? { rootDir: stateDir } : {});
   const orch = new HarnessOrchestrator(store);
   try {
-    if (subUse === "init") {
-      let taskSuite = "", base = "", baseKind: "path"|"profile"|"fixture" = "path";
-      for (let i = 0; i < restUse.length; i++) {
-        const t = restUse[i];
-        if (t === "--task-suite") taskSuite = restUse[++i] ?? "";
-        else if (t === "--base") base = restUse[++i] ?? "";
-        else if (t === "--base-kind") baseKind = (restUse[++i] as any) ?? "path";
-      }
+    if (sub === "init") {
+      const taskSuite = getFlag(rest, "--task-suite") ?? "";
+      const base = getFlag(rest, "--base") ?? "";
+      const baseKind = (getFlag(rest, "--base-kind") as "path" | "profile" | "fixture" | undefined) ?? "path";
       if (!taskSuite || !base) return { success: false, output: USAGE };
       const run = await orch.init({ taskSuitePath: taskSuite, basePath: base, baseKind, store });
       return { success: true, output: JSON.stringify(run, null, 2) };
     }
-    if (subUse === "run") {
-      const id = restUse[0];
+    if (sub === "run") {
+      const id = rest.find((t) => !t.startsWith("--") && rest[rest.indexOf(t) - 1] !== "--candidate");
       if (!id) return { success: false, output: USAGE };
-      const mock = restUse.includes("--mock");
-      const real = restUse.includes("--real");
-      const candIdx = restUse.indexOf("--candidate");
-      const candidatePath = candIdx >= 0 ? restUse[candIdx + 1] : undefined;
+      const mock = rest.includes("--mock");
+      const real = rest.includes("--real");
+      const candidatePath = getFlag(rest, "--candidate");
       const run = await orch.run(id, { store, mock, real, candidatePath });
       return { success: run.status !== "FAILED", output: JSON.stringify(run, null, 2) };
     }
-    if (subUse === "status") {
-      const id = restUse[0];
-      if (!id) return { success: true, output: JSON.stringify(store.listRuns().map((r) => ({ id: r.id, status: r.status, probes: r.actualUsage.probes, report: r.promotionReportId })), null, 2) };
+    if (sub === "status") {
+      const id = rest.find((t) => !t.startsWith("--"));
+      if (!id) return { success: true, output: JSON.stringify(store.listRuns().map((r) => ({ id: r.id, status: r.status, probes: r.actualUsage.probes, report: r.promotionReportId, reason: r.reason })), null, 2) };
       return { success: true, output: JSON.stringify({ ...store.loadRun(id), liveMutation: false }, null, 2) };
     }
-    if (subUse === "show") {
-      const id = restUse[0]; if (!id) return { success: false, output: USAGE };
+    if (sub === "show") {
+      const id = rest.find((t) => !t.startsWith("--"));
+      if (!id) return { success: false, output: USAGE };
       return { success: true, output: JSON.stringify({ run: store.loadRun(id), report: store.loadReport(id), liveMutation: false }, null, 2) };
     }
-    if (subUse === "report") {
-      const id = restUse[0]; if (!id) return { success: false, output: USAGE };
+    if (sub === "report") {
+      const id = rest.find((t) => !t.startsWith("--"));
+      if (!id) return { success: false, output: USAGE };
       const report = store.loadReport(id);
       if (!report) return { success: false, output: `No report for ${id}` };
       return { success: true, output: JSON.stringify(report, null, 2) };
     }
-    if (subUse === "cancel") {
-      const id = restUse[0]; if (!id) return { success: false, output: USAGE };
+    if (sub === "cancel") {
+      const id = rest.find((t) => !t.startsWith("--"));
+      if (!id) return { success: false, output: USAGE };
       return { success: true, output: JSON.stringify(orch.cancel(id), null, 2) };
     }
-    if (subUse === "library") {
-      const action = restUse[0];
+    if (sub === "library") {
+      const action = rest[0];
       if (action === "list") return { success: true, output: JSON.stringify(store.listLibraryEntries(), null, 2) };
-      if (action === "show" && restUse[1]) return { success: true, output: JSON.stringify(store.loadLibraryEntry(restUse[1]), null, 2) };
-      if ((action === "accept" || action === "reject") && restUse[1]) {
-        const { setLibraryEntryStatus } = await import("./core/harness/library.js");
-        return { success: true, output: JSON.stringify(setLibraryEntryStatus(store, restUse[1], action as "accepted"|"rejected"), null, 2) };
+      if (action === "show" && rest[1]) return { success: true, output: JSON.stringify(store.loadLibraryEntry(rest[1]), null, 2) };
+      if ((action === "accept" || action === "reject") && rest[1]) {
+        return { success: true, output: JSON.stringify(setLibraryEntryStatus(store, rest[1], action as "accepted" | "rejected"), null, 2) };
       }
       return { success: false, output: USAGE };
     }
