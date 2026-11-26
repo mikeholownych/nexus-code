@@ -86,7 +86,7 @@ test("kill the worker mid-tool-call: the runner resumes the job, nothing is repl
     assert.equal(world.job(id)!.outcome, undefined);
     const ended = await world.waitJob(id, ["BLOCKED", "COMPLETE", "FAILED", "CANCELLED", "TIMED_OUT"], 200_000);
     assert.equal(counts(), 1, "continuing must not re-run the non-idempotent command");
-    assert.equal(gw.requests.length, 2, "exactly one resumed inference");
+    assert.equal(gw.requests.length, 2, `exactly one resumed inference; job=${JSON.stringify(world.job(id))}; receipt=${JSON.stringify(readReceipt(world.paths, id))}`);
     assert.match(JSON.stringify((gw.requests[1] as any).messages), /may have partially run/);
     assert.equal(ended.attempts.length, 3);
     assert.equal(ended.autoResumes, 1, "an operator resume is not a crash");

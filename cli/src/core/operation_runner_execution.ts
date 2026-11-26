@@ -464,7 +464,7 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
         } catch (err: any) {
           unusable = `its durable state could not be loaded (${String(err?.message ?? err).slice(0, 160)})`;
         }
-        if (recovered?.interrupted) {
+        if (recovered?.interrupted && !ctx.operatorDecision) {
           const op = recovered.interruptedOperation;
           const what = op?.completedAt ? "finished, but its result was not saved before the process stopped" : "was in flight when the process stopped";
           return {

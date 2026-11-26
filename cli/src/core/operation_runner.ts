@@ -1074,6 +1074,36 @@ function shouldBlockStalePause(state: DurableOperationState, resumeAfterDecision
   return hasStaleDriverPause(state) && resumeAfterDecision !== true;
 }
 
+function blockStaleDriverRecovery(
+  state: DurableOperationState,
+  store: OperationStore,
+  callbacks: Pick<OperationRunnerOptions, "onEvent" | "onDiagnostic">,
+): DurableOperationState {
+  const now = Date.now;
+  const registry = new ResourceRegistry(state.resources, state.conditions, { now, random: Math.random });
+  const scheduler = new ConvergenceScheduler(state, registry, now, callbacks.onEvent, callbacks.onDiagnostic);
+  scheduler.reconcileStaleDriverRuns();
+  state.status = "RUNNING";
+  const decisions = state.units.filter((unit) => unit.status === "BLOCKED" && unit.blocked).map((unit) => unit.blocked!.decision);
+  if (!decisions.length) {
+    decisions.push({
+      id: "operation#stale-driver",
+      unitId: "*",
+      cause: "INTERRUPTED",
+      question: "The previous driver stopped and its remaining work cannot be confirmed. Inspect the workspace, then resume or stop the operation?",
+      options: [
+        { id: "1", label: "resume after inspection", action: { kind: "keep_waiting" } },
+        { id: "2", label: "stop the operation", action: { kind: "cancel_operation" } },
+      ],
+    });
+  }
+  scheduler.finish({ kind: "blocked", decisions });
+  state.conditions = registry.snapshot();
+  state.updatedAt = new Date(now()).toISOString();
+  store.save(state);
+  return state;
+}
+
 export async function driveOperation(state: DurableOperationState, opts: DriveOptions): Promise<DurableOperationState> {
   const { store, signal, entry, prepare, resumeAfterDecision, ...runnerOpts } = opts;
   const release = store.acquire(state.id);
@@ -1088,8 +1118,7 @@ export async function driveOperation(state: DurableOperationState, opts: DriveOp
       refuseLiveForeignDriver(state);
       pauseForStaleDriver(state);
       if (shouldBlockStalePause(state, resumeAfterDecision)) {
-        store.save(state);
-        return state;
+        return blockStaleDriverRecovery(state, store, runnerOpts);
       }
     }
     prepare?.(state);

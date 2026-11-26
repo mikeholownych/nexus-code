@@ -84,7 +84,7 @@ test("a scheduled worktree-write run: a fresh worktree from the HEAD of the day,
   }
 });
 
-test("kill and resume a scheduled run: the runner resumes the job after its worker dies and again after its own restart, and the slot is never run twice", { timeout: 290_000 }, async () => {
+test("a killed scheduled worker blocks for operator review, and runner restart does not rerun the slot", { timeout: 290_000 }, async () => {
   const world = runnerWorld();
   const repo = fs.realpathSync(makeRepo({ "README.md": "hello\n" }));
   const gw = await stalledGateway();
@@ -99,40 +99,31 @@ test("kill and resume a scheduled run: the runner resumes the job after its work
     world.remember(first.pid);
     assert.equal(signalProcess(first, "SIGKILL"), true, "the worker is killed by pid after its start time was checked");
 
-    // The runner counts one crash and starts a new attempt of the same job; the schedule does not start a second one.
-    const resumed = await until(() => {
-      const record = world.job(job.id);
-      return record && record.attempts.length >= 2 && !record.attempts[1].end && record.state !== "BLOCKED" ? record : undefined;
-    }, 150_000, () => `a second attempt\n${JSON.stringify(world.job(job.id))}`);
-    assert.equal(resumed.autoResumes, 1);
-    assert.deepEqual(resumed.attempts[0].end, { code: null, signal: "SIGKILL", reason: "crashed" });
+    // The runner counts one crash and starts a bounded recovery attempt, which records a decision without new inference.
+    const blocked = await world.waitJob(job.id, ["BLOCKED", "COMPLETE", "FAILED", "CANCELLED", "TIMED_OUT"], 150_000);
+    assert.equal(blocked.state, "BLOCKED", JSON.stringify(readReceipt(world.paths, job.id)));
+    assert.equal(blocked.autoResumes, 1);
+    assert.equal(blocked.attempts.length, 2);
+    assert.deepEqual(blocked.attempts[0].end, { code: null, signal: "SIGKILL", reason: "crashed" });
     assert.equal(sameProcess(first), false);
     assert.equal(jobsOf(world, "steady").length, 1);
 
-    // Then the runner itself dies; a new one adopts the worker and the schedule fires nothing again.
-    await until(() => world.job(job.id)?.state === "RUNNING" && gw.requests.length >= 2, 150_000, () => `the resumed attempt to be mid-inference\n${JSON.stringify(world.job(job.id))}`);
-    const second = world.job(job.id)!.attempts[1];
-    world.remember(second.pid);
+    // Restart the runner: it leaves the blocked job alone and does not fire another job for this schedule slot.
     runner.proc.kill("SIGKILL");
     await runner.exited;
-    assert.equal(sameProcess(second), true, "the worker outlives its runner");
     await world.startRunner();
     await new Promise((resolve) => setTimeout(resolve, 8_000));
     assert.equal(jobsOf(world, "steady").length, 1, "no second job for the slot, and the next slot is five minutes away");
     assert.equal(world.job(job.id)!.attempts.length, 2);
     assert.equal(world.job(job.id)!.autoResumes, 1);
-
-    // The run is still the schedule's, in every record, until the operator stops it.
-    const stopped = await world.run(["job", "stop", job.id]);
-    assert.equal(stopped.code, 0, stopped.stderr);
-    const ended = await world.waitJob(job.id, ["CANCELLED", "COMPLETE", "BLOCKED", "FAILED", "TIMED_OUT"], 120_000);
-    assert.equal(ended.state, "CANCELLED");
+    assert.equal(world.job(job.id)!.state, "BLOCKED");
+    assert.equal(gw.requests.length, 1, "no new inference before an operator decision");
     const receipt = readReceipt(world.paths, job.id)!;
     assert.equal(receipt.schedule_id, "steady");
     assert.equal(receipt.unattended, true);
-    assert.equal(receipt.outcome, "CANCELLED");
+    assert.equal(receipt.outcome, "BLOCKED");
     assert.equal(receipt.attempts, 2);
-    await until(() => readSchedule(schedulePaths(world.paths), "steady")?.state.lastOutcome === "CANCELLED", 30_000, () => "the schedule to record the outcome");
+    await until(() => readSchedule(schedulePaths(world.paths), "steady")?.state.lastOutcome === "BLOCKED", 30_000, () => "the schedule to record the outcome");
   } finally {
     await world.cleanup();
     await gw.close();
