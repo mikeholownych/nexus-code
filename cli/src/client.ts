@@ -24,6 +24,7 @@ import {
   classifyTransportFailure,
   isTlsVerificationError,
   providerHints,
+  SubmissionAdmissionDenied,
   TEMPORARY_CONDITIONS,
   type ProbeResult,
   type ProviderClassification,
@@ -42,6 +43,7 @@ import { refreshStoredSignIn } from "./oauth_shared_refresh.js";
 import { providerDefinition } from "./providers.js";
 import { ServerKindCache } from "./core/server_kind_cache.js";
 import { persistableEndpoint } from "./core/endpoint_identity.js";
+import { admitCurrentInferenceSubmission } from "./core/inference_admission.js";
 
 /** Longest a request waits for an expired server identity to be re-read before proceeding without it. */
 const REVERIFY_WAIT_MS = 1000;
@@ -1274,6 +1276,7 @@ export class LocalLlmClient {
         return result;
       } catch (err: any) {
         lastError = err;
+        if (err instanceof SubmissionAdmissionDenied) throw err;
         if (err instanceof InferenceError && !err.failoverEligible) throw err;
         if (total > 1 && attempt < total - 1) {
           const nextIdx = (idx + 1) % total;
@@ -1787,6 +1790,7 @@ export class LocalLlmClient {
     if (this.conn.streamOnly) return this.chatCompletionStreamOnce(messages, tools, undefined, requestId, signal);
     return this.executeWithFailover("chatCompletion", async (currentEp) => {
       if (signal?.aborted) throw abortedError(requestId);
+      admitCurrentInferenceSubmission();
       const url = this.endpointUrl(currentEp, "/chat/completions");
       await this.prepareCredential(currentEp, requestId);
       this.preflight(currentEp, requestId, JSON.stringify(messages).length + JSON.stringify(tools).length);
@@ -2007,6 +2011,7 @@ export class LocalLlmClient {
     if (wireProtocol(this.conn.protocol).native) return this.nativeCompletion(messages, tools, onToken, requestId, signal, true);
     return this.executeWithFailover("chatCompletionStream", async (currentEp) => {
       if (signal?.aborted) throw abortedError(requestId);
+      admitCurrentInferenceSubmission();
       const url = this.endpointUrl(currentEp, "/chat/completions");
       await this.prepareCredential(currentEp, requestId);
       this.preflight(currentEp, requestId, JSON.stringify(messages).length + JSON.stringify(tools).length);
@@ -2164,6 +2169,7 @@ export class LocalLlmClient {
   ): Promise<ChatMessage> {
     return this.executeWithFailover(stream ? "chatCompletionStream" : "chatCompletion", async (currentEp) => {
       if (signal?.aborted) throw abortedError(requestId);
+      admitCurrentInferenceSubmission();
       await this.prepareCredential(currentEp, requestId);
       this.preflight(currentEp, requestId, JSON.stringify(messages).length + JSON.stringify(tools).length);
       const outbound = this.egress(messages, tools, currentEp);

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { AutonomousAgent } from "../src/agent.js";
 import { continuationBudget, inferenceSubmissionLimit } from "../src/config.js";
 import { normalizeTracking } from "../src/core/execution_tracking.js";
+import { activateInferenceSubmissionAdmissionScope, admitCurrentInferenceSubmission, withInferenceSubmissionAdmissionScope } from "../src/core/inference_admission.js";
 import { DEFAULT_CONTINUATION, DEFAULT_MAX_INFERENCE_SUBMISSIONS, type HarnessConfig } from "../src/types.js";
 import "./helpers/leak_guard.js";
 import { startGateway, makeRepo, type Reply } from "./helpers/fixtures.js";
@@ -99,6 +100,53 @@ test("provider retries consume the durable objective submission budget and resum
   } finally {
     resumedAgent?.shutdown();
     firstAgent.shutdown();
+    await gateway.close();
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("side requests and nested delegates consume their enclosing durable inference budgets", { timeout: 30_000 }, async () => {
+  const gateway = await startGateway(() => ({ kind: "text", content: "Condensed older context." }));
+  const workspace = makeRepo();
+  const agent = quiet(new AutonomousAgent(config(gateway.url, workspace, {
+    maxInferenceSubmissions: 1,
+    continuation: { ...DEFAULT_CONTINUATION, maxInferenceSubmissions: 1 },
+  })));
+  (agent as any).messages.push(
+    { role: "user", content: `Earlier request ${"retain this context ".repeat(5_000)}` },
+    { role: "assistant", content: "Earlier response." },
+  );
+  const originalMeasure = (agent as any).measureAdmission.bind(agent);
+  (agent as any).measureAdmission = async (...args: unknown[]) => {
+    // This is the real LLM compaction path, called from inside runTurn after its durable tracker is established.
+    await agent.compactNow(true);
+    return originalMeasure(...args);
+  };
+  let childAdmissions = 0;
+  let parentAdmissions = 0;
+  let nestedCheck = false;
+  try {
+    const result = await agent.runTurn("Leave the existing files unchanged.");
+    assert.equal(gateway.requests.length, 1, "the compaction summary used the last request and the primary turn was stopped before dispatch");
+    assert.equal(result.execution, "LIMIT_REACHED", JSON.stringify(result));
+    assert.equal(result.reason, "INFERENCE_SUBMISSION_BUDGET_EXHAUSTED");
+    assert.equal(agent.getObjective()!.execution!.inferenceSubmissions, 1);
+
+    await withInferenceSubmissionAdmissionScope(async (parent) => {
+      activateInferenceSubmissionAdmissionScope(parent, () => { parentAdmissions++; });
+      await withInferenceSubmissionAdmissionScope(async (child) => {
+        activateInferenceSubmissionAdmissionScope(child, () => { childAdmissions++; });
+        await Promise.resolve();
+        admitCurrentInferenceSubmission();
+      });
+      admitCurrentInferenceSubmission();
+      nestedCheck = true;
+    });
+    assert.equal(nestedCheck, true);
+    assert.equal(parentAdmissions, 2, "both child and parent requests consume the enclosing task allowance");
+    assert.equal(childAdmissions, 1, "the child request also consumes its own allowance");
+  } finally {
+    agent.shutdown();
     await gateway.close();
     fs.rmSync(workspace, { recursive: true, force: true });
   }
