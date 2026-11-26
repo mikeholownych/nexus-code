@@ -962,11 +962,9 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
       if (turn.reason === "OPERATION_INFERENCE_SUBMISSION_BUDGET_EXHAUSTED") {
         const detail = turn.detail ?? "the operation-wide provider request allowance is exhausted";
         return {
-          kind: "failed",
-          cause: "EXECUTION_FAILED",
+          kind: "admission_denied",
+          failure: "budget_exhausted",
           reason: `operation inference submission budget exhausted: ${detail}`.slice(0, 300),
-          question: `${unit.title} stopped because the durable operation reached its shared provider request cap. Raise the operation budget, resume it, then explicitly retry this unit if its work remains unfinished.`,
-          options: [{ label: "retry after raising the operation inference budget", action: { kind: "retry" } }],
         };
       }
       // A continued unit stops only on a budget or on stagnation; say which, so the operator's choice is informed.

@@ -223,6 +223,7 @@ export type OperationEventType =
   | "WORK_PARKED"
   | "WORK_RESUMED"
   | "WORK_BLOCKED"
+  | "WORK_ADMISSION_DENIED"
   | "CONTINUING_INDEPENDENT_WORK"
   | "OPERATION_WAITING"
   | "OPERATION_RESUMED"
@@ -524,6 +525,8 @@ export type UnitRunResult =
   | { kind: "resource_unavailable"; failure: InferenceFailure; condition: ResourceConditionRecord }
   /** Inference may have executed and its bounded replays are spent: never resubmitted elsewhere automatically. */
   | { kind: "execution_unknown"; failure: InferenceFailure }
+  /** The operation-wide inference gate refused before provider dispatch; no external effect occurred. */
+  | { kind: "admission_denied"; reason: string; failure: "budget_exhausted" | "history_unknown" | "persistence_failed" }
   | ({ kind: "failed" } & BlockSpec & {
       rejectedOutput?: RejectedOutput;
       /** The attempt ran a verifier that did not pass: kept on the unit for a dependent failure_debugger. */
