@@ -452,7 +452,7 @@ export function setupSpineHandlersImpl(this: any): void {
         try {
           const candidateWorkspace = this.activeWorktree.worktreePath;
           const candidateIdentity = this.candidateTracker.computeCandidateIdentitySync(candidateWorkspace);
-          this.activeValidationReceipt = this.candidateTracker.recordValidationReceipt({
+          const receipt = this.candidateTracker.recordValidationReceipt({
             candidateId: candidateIdentity.candidateId,
             verifierCommand: this.config.authoritativeVerifierCommand?.trim() || "authoritative_verifier",
             exitCode: 0,
@@ -465,17 +465,27 @@ export function setupSpineHandlersImpl(this: any): void {
             },
             materialDependencies: collectMaterialDependencies(candidateWorkspace),
           });
-          this.verifiedWorktreeCompletion = true;
-          if (this.durable && this.stateManager && this.currentTaskId) {
-            try {
-              this.stateManager.recordCandidateAndReceipt(this.currentTaskId, {
-                candidateId: candidateIdentity.candidateId,
-                candidateIdentity,
-                receipt: this.activeValidationReceipt,
-              });
-            } catch (err: any) {
-              this.reportPersistenceFailure("candidate_receipt", err);
+          this.activeValidationReceipt = receipt;
+          try {
+            if (!this.durable || !this.stateManager || !this.currentTaskId) {
+              throw new Error("durable task state is unavailable");
             }
+            this.stateManager.recordCandidateAndReceipt(this.currentTaskId, {
+              candidateId: candidateIdentity.candidateId,
+              candidateIdentity,
+              receipt,
+            });
+            this.verifiedWorktreeCompletion = true;
+          } catch (err: any) {
+            this.verifiedWorktreeCompletion = false;
+            this.acceptancePersistenceFailure = "Candidate validation receipt could not be durably persisted; verified acceptance is blocked.";
+            this.candidateTracker.invalidateReceipts(
+              "Candidate validation receipt was not durably persisted.",
+              [candidateWorkspace],
+              candidateWorkspace,
+            );
+            this.activeValidationReceipt = undefined;
+            this.reportPersistenceFailure("candidate_receipt", err);
           }
         } catch {
           this.verifiedWorktreeCompletion = false;

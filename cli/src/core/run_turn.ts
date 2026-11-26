@@ -139,6 +139,7 @@ async function runTurnBody(this: any, taskPrompt: string | any[], onConfirm: Con
   this.completionSummary = undefined;
   this.turnPersistenceFailures = this.initialStatePersistenceFailure ? [this.initialStatePersistenceFailure] : [];
   this.objectiveBudgetPersistenceFailure = undefined;
+  this.acceptancePersistenceFailure = undefined;
   this.turnMutations = 0;
   this.turnToolCallSyntax = { native: 0, trailing: 0, structural: 0, invalid: 0, schema: 0 };
   this.turnConfiguredVerifier = "NOT_RUN";
@@ -1174,6 +1175,11 @@ async function runTurnBody(this: any, taskPrompt: string | any[], onConfirm: Con
           persistenceFailure = this.objectiveBudgetPersistenceFailure;
           stopReason = "PERSISTENCE_FAILED";
           stopDetail = this.objectiveBudgetPersistenceFailure;
+        }
+        if (this.acceptancePersistenceFailure) {
+          persistenceFailure = this.acceptancePersistenceFailure;
+          stopReason = "PERSISTENCE_FAILED";
+          stopDetail = this.acceptancePersistenceFailure;
         }
 
         if (shouldExit) {
