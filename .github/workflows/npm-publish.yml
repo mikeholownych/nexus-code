@@ -19,13 +19,23 @@ jobs:
     steps:
       - name: Resolve publish ref
         id: publish-ref
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_TAG: ${{ inputs.tag }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            tag="${{ inputs.tag }}"
-            if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$'; then
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            tag="$DISPATCH_TAG"
+          else
+            tag="$GITHUB_REF_NAME"
+          fi
+          if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$'; then
+            if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
               echo "workflow_dispatch requires inputs.tag like v1.3.1 or v1.3.1-rc.1" >&2
-              exit 1
             fi
+            echo "refusing non-release tag: $tag" >&2
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             echo "ref=refs/tags/$tag" >> "$GITHUB_OUTPUT"
             echo "tag=$tag" >> "$GITHUB_OUTPUT"
           else
@@ -37,9 +47,15 @@ jobs:
           fetch-depth: 0
           ref: ${{ steps.publish-ref.outputs.ref }}
       - name: Verify tag checkout
+        env:
+          PUBLISH_TAG: ${{ steps.publish-ref.outputs.tag }}
         run: |
-          git rev-parse --verify "refs/tags/${{ steps.publish-ref.outputs.tag }}"
-          [ "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "refs/tags/${{ steps.publish-ref.outputs.tag }}")" ]
+          git rev-parse --verify "refs/tags/$PUBLISH_TAG"
+          [ "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "refs/tags/$PUBLISH_TAG")" ]
+      - name: Verify release versions
+        env:
+          PUBLISH_TAG: ${{ steps.publish-ref.outputs.tag }}
+        run: node scripts/sync-version.mjs --tag "$PUBLISH_TAG" --check
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 22.22.1
