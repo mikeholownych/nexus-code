@@ -549,13 +549,22 @@ export const RUN_COMMAND_DEFAULT_TIMEOUT_SECS = 60;
 /** Extra time the bridge waits beyond the runner's own deadline (kill grace + reply), so the runner's structured result wins. */
 export const RPC_GRACE_SECS = 5;
 const RPC_DEFAULT_TIMEOUT_MS = 35_000;
+/** Keep bridge timers within Node's supported timeout range and command waits within one day. */
+export const MAX_TOOL_TIMEOUT_SECS = 86_400;
+const DEFAULT_MAX_TOOL_TIMEOUT_SECS = 1_800;
 
 /** Maximum allowed tool timeout in seconds per REQ-SEC-107 (default 1800). */
 export function maxToolTimeoutSecs(): number {
   const env = process.env.NEXUS_MAX_TOOL_TIMEOUT_SECS;
-  if (!env) return 1800;
-  const parsed = parseInt(env, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1800;
+  if (!env || !/^\d+$/.test(env)) return DEFAULT_MAX_TOOL_TIMEOUT_SECS;
+  let parsed: bigint;
+  try {
+    parsed = BigInt(env);
+  } catch {
+    return DEFAULT_MAX_TOOL_TIMEOUT_SECS;
+  }
+  if (parsed < 1n) return DEFAULT_MAX_TOOL_TIMEOUT_SECS;
+  return parsed > BigInt(MAX_TOOL_TIMEOUT_SECS) ? MAX_TOOL_TIMEOUT_SECS : Number(parsed);
 }
 
 /**
