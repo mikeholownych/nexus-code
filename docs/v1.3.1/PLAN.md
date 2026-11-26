@@ -169,7 +169,7 @@ Dependabot PRs: #827 walkdir patch - merge after CI; #828 @babel/parser major - 
 
 **Scope:**
 - #1 PLAN-10 task 8: finish and seal held-out T2/T3 corpus, or close/supersede with measured evidence.
-- Context maturity is integrated on `codex/context-maturity-v131`; focused results and remaining limits are recorded in `docs/research/context-engineering/CONTEXT-MATURITY-SYSTEM.md`. Full-suite and hosted CI qualification remain pending under G-1.
+- Context maturity merged in PR #871 as `8560af8165f7c1ceb1fcc9e309ce0d0c8a77c35f`; exact-head and post-merge CI and CodeQL passed. Its focused results and remaining limits are recorded in `docs/research/context-engineering/CONTEXT-MATURITY-SYSTEM.md`. CI for the later release head `e324bcc98b4f158125bb3647c1a2132c2bc356d1` reported failures at the 2026-11-26 snapshot: version drift (`cli/package.json`) and failures across all eight CLI shards, with provider rate-limit/unsupported-request errors in the logs. This readiness changeset restores the CLI manifest to the repository's canonical `1.3.0`; the `1.3.1` version-only bump stays in the release process. G-1 still needs a fresh exact-head run and resolution of the shard failures.
 - G-1–G-7 re-evaluated for v1.3.1; release notes/readiness updated with measured status.
 
 **Acceptance:**
