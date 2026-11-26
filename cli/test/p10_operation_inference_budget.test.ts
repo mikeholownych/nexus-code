@@ -10,6 +10,7 @@ import { newOperation } from "../src/core/operation.js";
 import { parseInferenceSubmissionCap, setOperationBudget } from "../src/core/operation_budget.js";
 import { OperationRunner } from "../src/core/operation_runner.js";
 import { OperationStore } from "../src/core/operation_runner_persistence.js";
+import "./helpers/leak_guard.js";
 import { startGateway } from "./helpers/fixtures.js";
 
 const resource = {
