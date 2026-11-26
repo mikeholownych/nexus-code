@@ -3,12 +3,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
+import { LocalLlmClient } from "../src/client.js";
 import { activateInferenceSubmissionAdmissionScope, admitCurrentInferenceSubmission, OperationInferenceAdmissionError, withInferenceSubmissionAdmissionScope } from "../src/core/inference_admission.js";
 import { MAX_OPERATION_INFERENCE_SUBMISSIONS, migrateOperationState } from "../src/core/operation_schema.js";
 import { newOperation } from "../src/core/operation.js";
 import { parseInferenceSubmissionCap, setOperationBudget } from "../src/core/operation_budget.js";
 import { OperationRunner } from "../src/core/operation_runner.js";
 import { OperationStore } from "../src/core/operation_runner_persistence.js";
+import { startGateway } from "./helpers/fixtures.js";
 
 const resource = {
   id: "primary",
@@ -84,6 +86,63 @@ test("one durable inference counter spans separate units and denies the first re
   assert.equal(result.units[0].status, "COMPLETE");
   assert.equal(result.units[1].status, "BLOCKED");
   assert.match(String(result.events.at(-1)?.detail?.reason ?? ""), /inference submission budget exhausted/);
+});
+
+test("operation admission covers actual provider calls from nested side and child scopes", { timeout: 30_000 }, async (t) => {
+  const gateway = await startGateway(() => ({ kind: "text", content: "ok" }));
+  t.after(() => gateway.close());
+  const state = newOperation(
+    "op-nested-inference-budget",
+    "Count nested provider requests at the durable operation boundary",
+    [{ id: "unit", prompt: "make bounded nested requests" }],
+    [resource],
+    Date.now(),
+    { maxInferenceCalls: 3 },
+  );
+  const client = new LocalLlmClient({
+    endpoint: gateway.url,
+    model: "test-model",
+    apiKey: "test-key",
+    maxSteps: 1,
+  } as any);
+  let turnReservations = 0;
+  let childReservations = 0;
+  let durableCount = 0;
+  const runner = new OperationRunner(state, {
+    executor: {
+      run: async (unit) => withInferenceSubmissionAdmissionScope(async (turnScope) => {
+        activateInferenceSubmissionAdmissionScope(turnScope, () => { turnReservations++; });
+        await client.chatCompletion([{ role: "user", content: "side request" }], []);
+        await withInferenceSubmissionAdmissionScope(async (childScope) => {
+          activateInferenceSubmissionAdmissionScope(childScope, () => { childReservations++; });
+          await client.chatCompletion([{ role: "user", content: "child request" }], []);
+        });
+        await client.chatCompletion([{ role: "user", content: "primary request" }], []);
+        try {
+          await client.chatCompletion([{ role: "user", content: "must be denied" }], []);
+          assert.fail("the request after the operation-wide limit must not reach the provider");
+        } catch (error) {
+          return failedOnAdmission(error, unit.id);
+        }
+      }),
+    },
+    persist: (saved) => { durableCount = saved.inferenceCalls; },
+  });
+
+  const result = await runner.run();
+
+  assert.equal(gateway.requests.length, 3, "the denied fourth request never reaches the provider");
+  assert.deepEqual(
+    gateway.requests.map((request: any) => request.messages?.[0]?.content),
+    ["side request", "child request", "primary request"],
+  );
+  assert.equal(result.inferenceCalls, 3);
+  assert.equal(durableCount, 3, "each operation reservation is persisted before its provider call");
+  assert.equal(turnReservations, 3, "nested requests also satisfy the enclosing turn admission");
+  assert.equal(childReservations, 1, "the child request also satisfies its own turn admission");
+  assert.equal(result.status, "PAUSED");
+  assert.equal(result.units[0].status, "BLOCKED");
+  assert.match(result.units[0].blocked?.reason ?? "", /operation inference submission budget exhausted/);
 });
 
 test("changing an exhausted cap preserves the consumed count; only explicit legacy reset starts a new epoch", (t) => {

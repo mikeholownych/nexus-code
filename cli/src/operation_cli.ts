@@ -19,6 +19,7 @@ import { ConvergenceScheduler, DecisionRejected, newOperation, unresolvedAssumpt
 import { BoundaryRules, parseBoundaryRules } from "./core/boundary_rules.js";
 import { UnsupportedOperationSchemaError, clampUnisolatedConcurrency, concurrencyIsolationProblem, parallelResourceBudgetProblem, validateExecutionResources, validateOperationPolicy, validateResourceSlots } from "./core/operation_schema.js";
 import { MessageRejected, publishMessage } from "./core/operation_messages.js";
+import { collectOperationUsage } from "./core/operation_usage.js";
 import { ROLE_PROFILES, specialistInputsProblem } from "./core/roles.js";
 import { AgentWorkUnitExecutor, applyOperatorDecision, driveOperation, OperationExistsError, type DriveOptions, OperationLockedError, OperationStore, resourcesFromConfig } from "./core/operation_runner.js";
 import { parseActiveMinutesCap, parseInferenceSubmissionCap, parseTokenCap, setOperationBudget } from "./core/operation_budget.js";
@@ -238,8 +239,11 @@ function printEvent(e: OperationEvent): void {
   console.log(color(`◆ ${safeTerminal(e.message)}`));
 }
 
-function printStatus(op: DurableOperationState): void {
+function printStatus(op: DurableOperationState, store: OperationStore, workspace: string): void {
   console.log(pc.bold(`Operation ${safeTerminal(op.id)}: ${safeTerminal(op.status)}`) + pc.dim(`  (${safeTerminal(op.objective)})`));
+  const usage = collectOperationUsage(op, (taskId) => store.manager.loadTaskState(taskId, workspace).tokenStats);
+  const cap = usage.maxTotalTokens === undefined ? "no token cap" : `cap ${usage.maxTotalTokens}`;
+  console.log(pc.dim(`  Tokens: ${usage.totalTokens} (${usage.reportedTokens} reported, ${usage.estimatedTokens} estimated), ${usage.inferenceRequests} requests; ${cap}; ${usage.tokenAccountingComplete ? "complete accounting" : "incomplete accounting (persisted subtotal)"}`));
   for (const u of op.units) {
     const extra =
       u.status === "PARKED" ? ` — ${u.parked!.reason}; wakes ${u.parked!.wakeAt}` :
@@ -280,7 +284,7 @@ async function drive(
       ...(json ? {} : { onEvent: printEvent }),
     });
     if (json) console.log(JSON.stringify(out, null, 2));
-    else printStatus(out);
+    else printStatus(out, store, config.workspace);
     process.exitCode = out.status === "COMPLETE" ? 0 : out.status === "CANCELLED" ? 130 : 2;
   } finally {
     process.off("SIGINT", onSignal);
@@ -408,7 +412,7 @@ export function registerOperationCommands(program: Command): void {
         process.exitCode = 2;
         return;
       }
-      if (options.resume === false) return void printStatus(state);
+      if (options.resume === false) return void printStatus(state, store, path.resolve(options.workspace ?? process.cwd()));
       await drive(state, config, store, Boolean(options.discover), Boolean(options.json), { entry: "existing", resumeAfterDecision: true });
     }));
 
@@ -421,7 +425,8 @@ export function registerOperationCommands(program: Command): void {
     .option("--events <count>", "Events to include with --dag (newest kept)", "20")
     .description("Show operation state, parked work, wake time and pending decisions")
     .action(operationAction((id: string | undefined, options: any) => {
-      const store = new OperationStore(path.resolve(options.workspace ?? process.cwd()));
+      const workspace = path.resolve(options.workspace ?? process.cwd());
+      const store = new OperationStore(workspace);
       if (options.dag && options.replay) {
         console.error(pc.red("--dag and --replay are separate read-only views; pass one of them."));
         process.exitCode = 2;
@@ -446,7 +451,11 @@ export function registerOperationCommands(program: Command): void {
           process.exitCode = 2;
           return;
         }
-        const views = ops.map((state) => buildOperationView(state, { events: Math.floor(eventLimit), ...(options.replay ? { replay: true } : {}) }));
+        const views = ops.map((state) => buildOperationView(state, {
+          events: Math.floor(eventLimit),
+          tokenUsage: collectOperationUsage(state, (taskId) => store.manager.loadTaskState(taskId, workspace).tokenStats),
+          ...(options.replay ? { replay: true } : {}),
+        }));
         if (options.json) return void console.log(JSON.stringify(views, null, 2));
         if (!views.length) return void console.log("No operations in this workspace.");
         const width = process.stdout.isTTY ? process.stdout.columns ?? 0 : 0;
@@ -457,9 +466,12 @@ export function registerOperationCommands(program: Command): void {
       }
       // A record whose driver is not provably alive is shown as drive would leave it: PAUSED, with the reason.
       const ops = (id ? [store.loadForInspection(id)] : store.listForInspection()).map((state) => withDerivedPause(state));
-      if (options.json) return void console.log(JSON.stringify(ops, null, 2));
+      if (options.json) return void console.log(JSON.stringify(ops.map((state) => ({
+        ...state,
+        tokenUsage: collectOperationUsage(state, (taskId) => store.manager.loadTaskState(taskId, workspace).tokenStats),
+      })), null, 2));
       if (!ops.length) return void console.log("No operations in this workspace.");
-      ops.forEach(printStatus);
+      ops.forEach((state) => printStatus(state, store, workspace));
     }));
 
   op.command("budget")
@@ -477,9 +489,13 @@ export function registerOperationCommands(program: Command): void {
       if (options.maxTotalInferenceSubmissions !== undefined) changes.maxInferenceCalls = parseInferenceSubmissionCap(String(options.maxTotalInferenceSubmissions));
       if (options.resetInferenceSubmissionHistory) changes.resetInferenceSubmissionHistory = true;
       if (!Object.keys(changes).length) throw new Error("Supply at least one budget cap.");
-      const state = setOperationBudget(new OperationStore(path.resolve(options.workspace ?? process.cwd())), id, changes);
+      const workspace = path.resolve(options.workspace ?? process.cwd());
+      const store = new OperationStore(workspace);
+      const state = setOperationBudget(store, id, changes);
+      const usage = collectOperationUsage(state, (taskId) => store.manager.loadTaskState(taskId, workspace).tokenStats);
+      const tokenUsage = `${usage.totalTokens} tokens used (${usage.reportedTokens} reported, ${usage.estimatedTokens} estimated; ${usage.inferenceRequests} requests; ${usage.tokenAccountingComplete ? "complete" : "incomplete subtotal"})`;
       console.log(
-        `Operation ${safeTerminal(id)}: token cap ${state.policy.maxTotalTokens ?? "none"}; active-time cap ${Math.floor(state.policy.maxTotalActiveMs / 60_000)} minutes; inference submissions ${state.inferenceCalls}/${state.policy.maxInferenceCalls} (recorded in its journal). ${state.status === "PAUSED" ? "It stays paused; run 'nexus operation resume' to continue." : ""}`.trim(),
+        `Operation ${safeTerminal(id)}: ${tokenUsage}; token cap ${state.policy.maxTotalTokens ?? "none"}; active-time cap ${Math.floor(state.policy.maxTotalActiveMs / 60_000)} minutes; inference submissions ${state.inferenceCalls}/${state.policy.maxInferenceCalls} (recorded in its journal). ${state.status === "PAUSED" ? "It stays paused; run 'nexus operation resume' to continue." : ""}`.trim(),
       );
     }));
 
@@ -628,7 +644,8 @@ export function registerOperationCommands(program: Command): void {
     .option("--events <count>", "Events to include (newest kept)", "20")
     .description("Watch an operation read-only until it completes or you stop it (Ctrl-C)")
     .action(operationAction(async (id: string | undefined, options: any) => {
-      const store = new OperationStore(path.resolve(options.workspace ?? process.cwd()));
+      const workspace = path.resolve(options.workspace ?? process.cwd());
+      const store = new OperationStore(workspace);
       const intervalSecs = Number(options.interval);
       const eventsText = String(options.events);
       const eventLimit = Number(eventsText);
@@ -676,7 +693,10 @@ export function registerOperationCommands(program: Command): void {
           process.exitCode = 2;
           return;
         }
-        const view = buildOperationView(state, { events: Math.floor(eventLimit) });
+        const view = buildOperationView(state, {
+          events: Math.floor(eventLimit),
+          tokenUsage: collectOperationUsage(state, (taskId) => store.manager.loadTaskState(taskId, workspace).tokenStats),
+        });
         console.log(renderOperationView(view));
         process.exitCode = state.status === "COMPLETE" ? 0 : state.status === "CANCELLED" ? 130 : 2;
         return;
@@ -688,7 +708,10 @@ export function registerOperationCommands(program: Command): void {
         const result = await watchOperation({
           load: () => withDerivedPause(store.load(watchId)),
           render: (state) =>
-            renderOperationView(buildOperationView(state, { events: Math.floor(eventLimit) }), {
+            renderOperationView(buildOperationView(state, {
+              events: Math.floor(eventLimit),
+              tokenUsage: collectOperationUsage(state, (taskId) => store.manager.loadTaskState(taskId, workspace).tokenStats),
+            }), {
               width: process.stdout.columns ?? 0,
             }),
           intervalMs: Math.max(250, Math.round(intervalSecs * 1000)),
