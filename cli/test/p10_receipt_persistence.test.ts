@@ -82,6 +82,8 @@ test("candidate receipt persistence failure cannot yield verified acceptance", {
     assert.equal(result?.execution, "FAILED", "mandatory receipt persistence failure fails the turn closed");
     assert.equal(result?.reason, "PERSISTENCE_FAILED", "the turn names the mandatory persistence failure");
     assert.equal((agent as any).verifiedWorktreeCompletion, false, "the worktree cannot be marked complete without its durable receipt");
+    assert.equal(agent.getActiveValidationReceipt(), undefined, "an in-memory receipt cannot authorize a merge after its durable write failed");
+    assert.equal(agent.candidateTracker.getActiveReceipt(), null, "the candidate tracker must invalidate the unpersisted receipt");
     const identity = attemptedReceipt.evidence.acceptanceIdentity;
     assert.equal(identity.schemaVersion, 1);
     assert.equal(identity.sourceRevision, attemptedCandidateIdentity.rootBaseSha);
