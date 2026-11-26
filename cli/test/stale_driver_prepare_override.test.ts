@@ -171,3 +171,59 @@ test("explicit operator resume (resumeAfterDecision) still works and allows prep
     await f.cleanup();
   }
 });
+
+test("stale-driver pause blocks unattended resume even without prepare hook", { skip: !linux && "driver identity needs /proc" }, async () => {
+  const f = fixture();
+  try {
+    const child = f.live();
+    const ticks = processStartTicks(child.pid)!;
+    const id = "stale-no-prepare";
+    seedStaleOperation(f, id, { activePid: child.pid, activeHost: host, activeBootId: boot, activeStartTicks: ticks });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    child.kill("SIGKILL");
+    await new Promise((resolve) => child.once("exit", resolve));
+
+    const { calls, executor } = counting();
+    const driven = await driveOperation(f.store.load(id), {
+      store: f.store,
+      executor,
+      workspace: f.workspace,
+      entry: "existing",
+    });
+
+    assert.equal(driven.status, "BLOCKED");
+    assert.equal(driven.blocked?.decisions[0]?.cause, "INTERRUPTED");
+    assert.match(driven.pauseReason ?? "", /^Paused on resume:/);
+    assert.deepEqual(calls, []);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("resumeAfterDecision acknowledges stale driver by restamping identity before stale check", { skip: !linux && "driver identity needs /proc" }, async () => {
+  const f = fixture();
+  try {
+    const child = f.live();
+    const ticks = processStartTicks(child.pid)!;
+    const id = "stale-resume-restamp";
+    seedStaleOperation(f, id, { activePid: child.pid, activeHost: host, activeBootId: boot, activeStartTicks: ticks });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    child.kill("SIGKILL");
+    await new Promise((resolve) => child.once("exit", resolve));
+
+    const { calls, executor } = counting();
+    const driven = await driveOperation(f.store.load(id), {
+      store: f.store,
+      executor,
+      workspace: f.workspace,
+      entry: "existing",
+      resumeAfterDecision: true,
+    });
+
+    assert.equal(driven.status, "COMPLETE");
+    assert.ok(calls.length > 0);
+    assert.equal(driven.pauseReason, undefined);
+  } finally {
+    await f.cleanup();
+  }
+});
