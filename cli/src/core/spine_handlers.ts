@@ -481,7 +481,7 @@ export function setupSpineHandlersImpl(this: any): void {
             verifierCommand,
             verifierDefinitionSha256: boundVerifierDefinitionSha256,
           });
-          this.activeValidationReceipt = this.candidateTracker.recordValidationReceipt({
+          const receipt = this.candidateTracker.recordValidationReceipt({
             candidateId: candidateIdentity.candidateId,
             verifierCommand,
             exitCode: 0,
@@ -513,17 +513,25 @@ export function setupSpineHandlersImpl(this: any): void {
               },
             },
           });
-          this.verifiedWorktreeCompletion = true;
-          if (this.durable && this.stateManager && this.currentTaskId) {
-            try {
-              this.stateManager.recordCandidateAndReceipt(this.currentTaskId, {
-                candidateId: candidateIdentity.candidateId,
-                candidateIdentity,
-                receipt: this.activeValidationReceipt,
-              });
-            } catch (err: any) {
-              this.reportPersistenceFailure("candidate_receipt", err);
+          this.activeValidationReceipt = receipt;
+          try {
+            if (!this.durable || !this.stateManager || !this.currentTaskId) {
+              throw new Error("durable task state is unavailable");
             }
+            this.stateManager.recordCandidateAndReceipt(this.currentTaskId, {
+              candidateId: candidateIdentity.candidateId,
+              candidateIdentity,
+              receipt,
+            });
+            this.verifiedWorktreeCompletion = true;
+          } catch (err: any) {
+            this.verifiedWorktreeCompletion = false;
+            this.candidateTracker.invalidateReceipts(
+              "Candidate validation receipt was not durably persisted.",
+              [candidateWorkspace],
+              candidateWorkspace,
+            );
+            this.reportPersistenceFailure("candidate_receipt", err);
           }
         } catch {
           this.verifiedWorktreeCompletion = false;
