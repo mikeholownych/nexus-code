@@ -194,7 +194,7 @@ test("an invalid operator hooks file denies every call until it is fixed, and sa
   const unusable: Array<[string, () => void, RegExp]> = [
     ["a second pre-tool key", () => writeOperatorHooks('{"version":1,"hooks":{"pre-tool":[{"name":"g","tools":["*"],"command":"exit 2"}],"pre-tool":[]}}'), /duplicate key "pre-tool"/],
     ["not JSON", () => writeOperatorHooks("hooks: none"), /line 1, column 1/],
-    ["an unsupported event", () => writeOperatorHooks({ version: 1, hooks: { "session-start": [] } }), /not supported in this version/],
+    ["an unknown event", () => writeOperatorHooks({ version: 1, hooks: { "unknown-event": [] } }), /unknown event 'unknown-event'/],
     ["writable by others", () => { writeOperatorHooks({ version: 1, hooks: {} }); fs.chmodSync(operatorHooksFile(), 0o666); }, /permissions are too open/],
     ["a symbolic link", () => { const real = path.join(scripts, "real.json"); fs.writeFileSync(real, '{"version":1,"hooks":{}}'); fs.rmSync(operatorHooksFile()); fs.symlinkSync(real, operatorHooksFile()); }, /symbolic link/],
   ];

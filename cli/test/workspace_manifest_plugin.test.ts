@@ -170,6 +170,7 @@ test("a file the manifest does not account for, a symbolic link, or a manifest t
     ["a hooks file outside the directory", () => { plugin({ manifest: { contributions: { hooks: ["../../hooks.json"] } } }); writeProjectHooks(repo, { version: 1, hooks: {} }); }, /the hooks file '\.\.\/\.\.\/hooks\.json' is not a path inside the plugin's directory/],
     ["hooks without the permission", () => plugin({ manifest: { permissions: ["skills"] } }), /contributes hooks without the 'hooks' permission/],
     ["a key that would disable other hooks", () => plugin({ hooks: { version: 1, hooks: { "pre-tool": [] }, disable: ["operator"] } }), /unknown key 'disable'/],
+    ["an unknown event", () => plugin({ hooks: { version: 1, hooks: { "unknown-event": [] } } }), /unknown event 'unknown-event'/],
   ];
   for (const [name, arrange, pattern] of refused) {
     fs.rmSync(pluginDir(), { recursive: true, force: true });

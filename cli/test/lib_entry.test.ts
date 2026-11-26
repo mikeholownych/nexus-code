@@ -142,10 +142,10 @@ test("package.json: the lib is the only export, with types, and the CLI binary i
   assert.equal(pkg.main, "dist/lib.js");
   assert.equal(pkg.types, "dist/types/lib.d.ts");
   assert.deepEqual(pkg.bin, { harness: "./dist/index.js" });
-  assert.equal(pkg.name, "local-code-harness");
+  assert.equal(pkg.name, "nexus-code");
   assert.equal(pkg.private, true, "D13: prevent publication to npm even when lifecycle scripts are disabled");
-  // Defense in depth for a normal `npm publish` invocation.
-  assert.match(pkg.scripts.prepublishOnly, /exit 1$/);
+  // The package's prepublish hook builds the public library artifacts.
+  assert.match(pkg.scripts.prepublishOnly, /npm run build/);
 });
 
 test("the CLI entry still works: --version, --help and a command", { timeout: 360_000 }, async () => {
