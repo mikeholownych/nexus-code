@@ -15,7 +15,7 @@ import { AutonomousAgent } from "../src/agent.js";
 import { buildConfig } from "../src/config.js";
 import { LocalLlmClient } from "../src/client.js";
 import { DecisionRejected, newOperation, type DurableOperationState, type OperationEvent, type OperationEventType, type UnitRunResult, type WorkUnit } from "../src/core/operation.js";
-import { MAX_OPERATION_ACTIVE_MS } from "../src/core/operation_schema.js";
+import { DEFAULT_OPERATION_INFERENCE_SUBMISSIONS, MAX_OPERATION_ACTIVE_MS } from "../src/core/operation_schema.js";
 import { AgentWorkUnitExecutor, applyOperatorDecision, OperationRunner, OperationStore, type UnitRunContext, type WorkUnitExecutor } from "../src/core/operation_runner.js";
 import { ResourceRegistry, type ResourceDescriptor } from "../src/core/resources.js";
 import { DurableStateManager } from "../src/core/state.js";
@@ -204,6 +204,7 @@ describe("/team truthful outcome", () => {
         maxStallsPerFingerprint: 3,
         minWaitMs: 250,
         maxTotalActiveMs: MAX_OPERATION_ACTIVE_MS,
+        maxInferenceCalls: DEFAULT_OPERATION_INFERENCE_SUBMISSIONS,
       });
     }, {
       operationPolicy: { maxWaitMs: 3_600_000, unknownResumeBudget: 0, maxRunsPerUnit: 8, minWaitMs: 250 },

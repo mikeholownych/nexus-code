@@ -23,5 +23,10 @@
     "schema_version": 4,
     "schemaSha256": "83cde247b7904d0e1e52b873c483bf848fa377af33445859c379f80d6c4b56bc",
     "note": "Description-only update: clarify that sandbox denial profile labels reflect SB-1 named profiles when present and default otherwise. The schema structure and validation contract are unchanged; schema_version remains 4."
+  },
+  {
+    "schema_version": 4,
+    "schemaSha256": "d7bd22d9d3d4e31ba661c989cd9432a32cd5a46a053c927a381478daf21d6880",
+    "note": "Add OPERATION_INFERENCE_SUBMISSION_BUDGET_EXHAUSTED to ACP turn results for durable operation-wide request caps. The new result reason is additive; adapter schema version remains 4."
   }
 ]
