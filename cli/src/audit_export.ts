@@ -365,7 +365,7 @@ const WORKTREE_STAND_IN = "[NEXUS_AUDIT_WORKTREE]";
  * Runs the public loader and the session export on a private copy of the subject's files, so whatever the loader
  * repairs, migrates or quarantines happens there. No workspace identity is passed, so the loader never runs `git`.
  */
-function loadFromPrivateCopy(snapshot: StoreSnapshot, id: string): LoadedSubject {
+function loadFromPrivateCopy(snapshot: StoreSnapshot, id: string, now: Date): LoadedSubject {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-audit-export-"));
   try {
     // One level down, so the loader's guard looks for its restore marker inside the scratch directory, not in the temp directory.
@@ -408,7 +408,7 @@ function loadFromPrivateCopy(snapshot: StoreSnapshot, id: string): LoadedSubject
     const session = state as SessionData;
     // The session export reads the archive under the id the loaded record carries.
     if (auditIdProblem(session.id) === undefined) put(`${session.id}.history.jsonl`, snapshot.history);
-    const exported = buildSessionExport(manager, session);
+    const exported = buildSessionExport(manager, session, now);
     return { session, exportJson: exported.json, exportMarkdown: exported.markdown, rewritten };
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
@@ -613,7 +613,7 @@ export function exportAuditBundle(request: AuditExportRequest): AuditExport {
   const store = present[0];
   const snapshot = snapshotStore(dirs[store], store, id);
   omitted.push(...snapshot.omitted);
-  const loaded = loadFromPrivateCopy(snapshot, id);
+  const loaded = loadFromPrivateCopy(snapshot, id, now);
   const { session } = loaded;
   const raw = snapshot.raw;
   if (loaded.rewritten) {
@@ -656,6 +656,9 @@ export function exportAuditBundle(request: AuditExportRequest): AuditExport {
   if (isObject(exportJson.export)) exportJson.export.exportedAt = createdAt;
   generated("session/export.json", "session_export", exportJson, (redacted: Record<string, unknown>) => {
     for (const key of ["workspacePath", "workspace"]) if (redacted[key] === WORKSPACE_STAND_IN) redacted[key] = text(raw[key]) ?? workspacePath;
+    if (isObject(redacted.contextInventory) && redacted.contextInventory.workspace === WORKSPACE_STAND_IN) {
+      redacted.contextInventory.workspace = text(raw.workspacePath) ?? text(raw.workspace) ?? workspacePath;
+    }
     if (isObject(redacted.worktreeBinding) && redacted.worktreeBinding.worktreePath === WORKTREE_STAND_IN && isObject(raw.worktreeBinding)) redacted.worktreeBinding.worktreePath = raw.worktreeBinding.worktreePath;
     return asJson(redacted);
   });

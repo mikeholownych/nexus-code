@@ -67,16 +67,17 @@ export function evidenceProvenance(objective: SessionData["objective"] | null | 
   return (objective?.requirements ?? []).flatMap((r) => r.evidence.map((evidence) => ({ requirement: r.id, evidence, source: r.evidenceSources?.[evidence] ?? ("model" as const) })));
 }
 
-export function buildSessionExport(manager: SessionManager, session: SessionData): SessionExport {
+export function buildSessionExport(manager: SessionManager, session: SessionData, exportedAt = new Date()): SessionExport {
+  const capturedAt = exportedAt.toISOString();
   let archived: { messages: ChatMessage[]; unreadableLines: number } = { messages: [], unreadableLines: 0 };
   try {
     archived = manager.readArchivedHistory(session.id);
   } catch {}
   const history = historyCompleteness(session, archived);
-  const reconstructedInventory = buildSessionContextInventory(session, archived);
+  const reconstructedInventory = buildSessionContextInventory(session, archived, capturedAt, false);
   const savedInventory = isContextInventorySnapshot(session.contextInventory) ? markPersistedContextFreshnessUnknown(session.contextInventory) : undefined;
   const contextInventory = savedInventory
-    ? mergeContextInventorySnapshots(savedInventory, buildSessionContextInventory({ ...session, messages: [], objective: undefined, durableNotes: undefined, activePlan: [], compactionProvenance: null }, archived))
+    ? mergeContextInventorySnapshots(savedInventory, buildSessionContextInventory({ ...session, messages: [], objective: undefined, durableNotes: undefined, activePlan: [], compactionProvenance: null }, archived, capturedAt, false))
     : reconstructedInventory;
   const inferenceContextManifests = Array.isArray(session.inferenceContextManifests) && session.inferenceContextManifests.length <= 24 && session.inferenceContextManifests.every(isInferenceContextManifest)
     ? session.inferenceContextManifests
@@ -90,7 +91,7 @@ export function buildSessionExport(manager: SessionManager, session: SessionData
     inferenceContextManifests,
     export: {
       format: EXPORT_FORMAT,
-      exportedAt: new Date().toISOString(),
+      exportedAt: capturedAt,
       history,
       taskState: {
         status: session.status,
