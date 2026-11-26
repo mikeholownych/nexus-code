@@ -69,7 +69,7 @@ const host = os.hostname();
 const boot = bootId();
 const linux = boot !== undefined;
 
-test("prepare hook does not override stale-driver pause for unattended resume (job_worker pattern)", { skip: !linux && "driver identity needs /proc" }, async () => {
+test("unattended stale-driver recovery blocks for an operator decision before prepare (job_worker pattern)", { skip: !linux && "driver identity needs /proc" }, async () => {
   const f = fixture();
   try {
     const child = f.live();
@@ -94,7 +94,9 @@ test("prepare hook does not override stale-driver pause for unattended resume (j
       prepare: prepareOverride,
     });
 
-    assert.equal(driven.status, "PAUSED", "stale-driver pause should not be overridden by prepare hook");
+    assert.equal(driven.status, "BLOCKED", "stale-driver recovery requires an operator decision before prepare");
+    assert.equal(driven.blocked?.decisions[0]?.cause, "INTERRUPTED");
+    assert.match(driven.blocked?.decisions[0]?.question ?? "", /previous driver stopped/);
     assert.match(driven.pauseReason ?? "", /^Paused on resume:/);
     assert.deepEqual(calls, [], "no unit should run when stale-driver pause is preserved");
   } finally {
@@ -102,7 +104,7 @@ test("prepare hook does not override stale-driver pause for unattended resume (j
   }
 });
 
-test("prepare hook does not override stale-driver pause for loop resume (loop.ts pattern)", { skip: !linux && "driver identity needs /proc" }, async () => {
+test("loop stale-driver recovery blocks for an operator decision before prepare", { skip: !linux && "driver identity needs /proc" }, async () => {
   const f = fixture();
   try {
     const child = f.live();
@@ -127,7 +129,9 @@ test("prepare hook does not override stale-driver pause for loop resume (loop.ts
       prepare: prepareOverride,
     });
 
-    assert.equal(driven.status, "PAUSED", "stale-driver pause should not be overridden by prepare hook");
+    assert.equal(driven.status, "BLOCKED", "stale-driver recovery requires an operator decision before prepare");
+    assert.equal(driven.blocked?.decisions[0]?.cause, "INTERRUPTED");
+    assert.match(driven.blocked?.decisions[0]?.question ?? "", /previous driver stopped/);
     assert.match(driven.pauseReason ?? "", /^Paused on resume:/);
     assert.deepEqual(calls, [], "no unit should run when stale-driver pause is preserved");
   } finally {
