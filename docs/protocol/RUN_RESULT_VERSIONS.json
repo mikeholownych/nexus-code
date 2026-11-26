@@ -23,5 +23,10 @@
     "schema_version": 1,
     "schemaSha256": "97de0441fa6869679238084ea4ffe4bb39f46f5421cc8e086eebfa7fe10be02f",
     "note": "Add OPERATION_INFERENCE_SUBMISSION_BUDGET_EXHAUSTED for durable operation-wide request caps. The new stop reason is additive and existing result meanings are unchanged, so schema_version stays 1."
+  },
+  {
+    "schema_version": 1,
+    "schemaSha256": "4fd360d78babaf5335dcf0d551933adc9ca0eb1d08117b7e8ba23e7d824c5078",
+    "note": "Add OPERATION_TOKEN_BUDGET_EXHAUSTED for the durable operation-wide request-token estimate ceiling. The stop reason is additive and existing run-result meanings are unchanged, so schema_version stays 1."
   }
 ]
