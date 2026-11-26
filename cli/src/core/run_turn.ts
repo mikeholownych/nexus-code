@@ -15,6 +15,7 @@ import { InferenceError } from "../client.js";
 import { TurnResult, InterruptionRecord, InferenceFailure, CapacityRecord, ModelStop, ProviderRecoveryRecord, assertTurnResultInvariants, deepFreezeTurn, summarizeTurn } from "./turn.js";
 import { withDurableSync } from "./durable_file.js";
 import { ProviderRecoveryController, RecoveryCancelled, SubmissionAdmissionDenied, recoveryPolicyFromEnv } from "./provider_recovery.js";
+import { activateInferenceSubmissionAdmissionScope, withInferenceSubmissionAdmissionScope, type InferenceSubmissionAdmissionScope } from "./inference_admission.js";
 import { amendObjective, blockedRequirements, carryUnresolvedConflicts, createLedger, gatingRequirements, isNewObjective, openRequirements, supersededBy, trackingOf } from "./objective.js";
 import { snapshot } from "../file_diff.js";
 import { buildBlockedRequirementQuestion, buildSteeringConflictQuestion } from "./needs_input.js";
@@ -77,6 +78,10 @@ function shouldOverrideStopAfterDeadline(timeBudgetExpired: boolean, modelStop: 
 }
 
 export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfirm?: ConfirmHandler, options?: { signal?: AbortSignal; resume?: boolean; tddRed?: boolean; step?: boolean }): Promise<TurnResult> {
+  return withInferenceSubmissionAdmissionScope((scope) => runTurnBody.call(this, taskPrompt, onConfirm, options, scope));
+}
+
+async function runTurnBody(this: any, taskPrompt: string | any[], onConfirm: ConfirmHandler | undefined, options: { signal?: AbortSignal; resume?: boolean; tddRed?: boolean; step?: boolean } | undefined, inferenceAdmissionScope: InferenceSubmissionAdmissionScope): Promise<TurnResult> {
   // The REPL calls runTurn directly. Route worktree-enabled turns through the
   // same establishment and resolution boundary as one-shot `run` tasks. A retained
   // named worktree is where the session keeps working; `run` reuses it.
@@ -321,6 +326,13 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
         throw new InferenceSubmissionPersistenceFailed(persistenceFailure);
       }
     };
+    activateInferenceSubmissionAdmissionScope(inferenceAdmissionScope, () => {
+      try {
+        reserveInferenceSubmission();
+      } catch (err) {
+        throw new SubmissionAdmissionDenied(err);
+      }
+    });
     const stopForToolBudget = () => {
       stopReason = "TOOL_INVOCATION_BUDGET_EXHAUSTED";
       const count = tracker.data.toolInvocationHistoryComplete
@@ -738,6 +750,7 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
         };
         break;
       }
+      if (persistenceFailure) break;
       this.ui.startSpinner("Thinking and analyzing next step...");
       turn.phase = "inference";
       this.activity("inference");
@@ -763,13 +776,6 @@ export async function runTurnImpl(this: any, taskPrompt: string | any[], onConfi
       };
       try {
         assistantMessage = await recovery.run(requestId, {
-          beforeSubmit: () => {
-            try {
-              reserveInferenceSubmission();
-            } catch (err) {
-              throw new SubmissionAdmissionDenied(err);
-            }
-          },
           submit: (s) => this.submitGenAiRequest(activeClient, () =>
               this.submitGuardingLength(lengthGuard, this.requestMessages(this.messages), (request: any) =>
                 activeClient.chatCompletionStream(
