@@ -714,12 +714,17 @@ function runReadOnlySandbox(
 
 /** How long a cancelled RPC waits for the runner to confirm the command ended (its grace period is 2 s). */
 const RPC_CANCEL_CONFIRM_MS = 5_000;
+/** Allow the Rust worker to process stdin EOF and clean up owned child process groups before forcing its exit. */
+const RPC_WORKER_SHUTDOWN_GRACE_MS = 5_000;
 
 type WorkerRole = "all" | "files" | "commands";
 
 /** One worker process and the requests waiting on it. */
 interface WorkerChannel {
   process: ChildProcess | null;
+  /** A worker asked to shut down after a timeout; do not dispatch or start a replacement until it exits. */
+  retiring: ChildProcess | null;
+  retireTimer: NodeJS.Timeout | null;
   pending: Map<number, { resolve: (res: ExecutionResult) => void; timeoutTimer: NodeJS.Timeout }>;
   buffer: string;
   handshakePromise: Promise<{ version: string; protocol: number }> | null;
@@ -728,7 +733,7 @@ interface WorkerChannel {
   refusal?: string;
 }
 
-const newWorkerChannel = (): WorkerChannel => ({ process: null, pending: new Map(), buffer: "", handshakePromise: null, handshakeError: null });
+const newWorkerChannel = (): WorkerChannel => ({ process: null, retiring: null, retireTimer: null, pending: new Map(), buffer: "", handshakePromise: null, handshakeError: null });
 
 /** The methods that start, list or end a command. A files worker refuses them (`core/src/main.rs`, COMMAND_METHODS). */
 const WORKER_COMMAND_METHODS: ReadonlySet<string> = new Set(["run_command", "cancel", "end_background", "list_services"]);
@@ -913,6 +918,7 @@ export class RustCoreBridge {
   }
 
   private ensureRpcDaemon(channel: WorkerChannel = this.channels.primary): ChildProcess | null {
+    if (channel.retiring) return null;
     if (channel.process && !channel.process.killed && channel.process.stdin && !channel.process.stdin.destroyed) {
       return channel.process;
     }
@@ -949,7 +955,7 @@ export class RustCoreBridge {
       // after that raises EPIPE on the stream, asynchronously. Without a listener that is an uncaught exception that
       // ends the CLI; with one, the request waiting on this worker is answered as a disconnect.
       child.stdin?.on("error", () => {
-        if (channel.process === child) this.cleanupChannel(channel);
+        if (channel.process === child && channel.retiring !== child) this.cleanupChannel(channel);
       });
 
       child.on("exit", () => {
@@ -970,6 +976,8 @@ export class RustCoreBridge {
   }
 
   private cleanupChannel(channel: WorkerChannel): void {
+    if (channel.retireTimer) clearTimeout(channel.retireTimer);
+    channel.retireTimer = null;
     if (channel.process) {
       try {
         channel.process.stdin?.end();
@@ -979,6 +987,7 @@ export class RustCoreBridge {
       } catch {}
       channel.process = null;
     }
+    channel.retiring = null;
     for (const [_, pending] of channel.pending.entries()) {
       clearTimeout(pending.timeoutTimer);
       pending.resolve({
@@ -993,7 +1002,42 @@ export class RustCoreBridge {
     channel.handshakePromise = null;
   }
 
+  /**
+   * Stop a worker whose RPC deadline expired. Closing stdin lets the Rust server run its normal shutdown path, which
+   * ends command groups it owns. A bounded force-kill prevents a blocked spawn_blocking task from retaining the worker
+   * forever. All sibling requests become unknown, and no replacement worker starts until this process exits.
+   */
+  private retireRpcWorker(channel: WorkerChannel, worker: ChildProcess, reason: string): void {
+    if (channel.process !== worker || channel.retiring === worker) return;
+    channel.retiring = worker;
+    for (const pending of channel.pending.values()) {
+      clearTimeout(pending.timeoutTimer);
+      pending.resolve({
+        success: false,
+        output: "",
+        outcomeUnknown: true,
+        error: reason,
+      });
+    }
+    channel.pending.clear();
+    channel.handshakePromise = null;
+    channel.handshakeError = null;
+
+    try {
+      worker.stdin?.end();
+    } catch {}
+
+    channel.retireTimer = setTimeout(() => {
+      if (channel.process !== worker || channel.retiring !== worker) return;
+      try {
+        worker.kill("SIGKILL");
+      } catch {}
+    }, RPC_WORKER_SHUTDOWN_GRACE_MS);
+    channel.retireTimer.unref();
+  }
+
   private handleRpcStdout(channel: WorkerChannel, data: string): void {
+    if (channel.retiring) return;
     channel.buffer += data;
     const lines = channel.buffer.split("\n");
     channel.buffer = lines.pop() || "";
@@ -1192,6 +1236,9 @@ export class RustCoreBridge {
     if (signal?.aborted) {
       return { success: false, output: "", error: `'${toolName}' was not started: the turn was cancelled`, cancelled: true };
     }
+    if (channel.retiring) {
+      return { success: false, output: "", error: `'${toolName}' was not started: the Rust core worker is shutting down after a timed-out request` };
+    }
     const daemon = this.ensureRpcDaemon(channel);
     if (!daemon || !daemon.stdin || daemon.stdin.destroyed) {
       return null;
@@ -1219,15 +1266,36 @@ export class RustCoreBridge {
       let cancelTimer: NodeJS.Timeout | undefined;
       const onAbort = () => {
         if (!channel.pending.has(id)) return;
-        // The runner ends the command's process group and answers with cancelled: true within its grace period; if it
-        // does not answer, the call is reported cancelled anyway rather than left waiting.
+        if (toolName !== "run_command") {
+          const pending = channel.pending.get(id)!;
+          clearTimeout(pending.timeoutTimer);
+          channel.pending.delete(id);
+          this.retireRpcWorker(channel, daemon, `RPC request for '${toolName}' was cancelled; the Rust worker is stopping and the result is unknown`);
+          resolve({
+            success: false,
+            output: "",
+            error: `RPC request for '${toolName}' was cancelled; worker shutdown was requested (result unknown)`,
+            cancelled: true,
+            outcomeUnknown: true,
+          });
+          return;
+        }
+        // Give the runner time to end the command group. If it cannot confirm, retire the worker so the command's
+        // blocking task cannot keep running without an owner.
         this.sendCancel(channel, id);
         cancelTimer = setTimeout(() => {
           if (channel.pending.has(id)) {
             const pending = channel.pending.get(id)!;
             clearTimeout(pending.timeoutTimer);
             channel.pending.delete(id);
-            resolve({ success: false, output: "", error: `'${toolName}' was cancelled; the command runner did not confirm within ${RPC_CANCEL_CONFIRM_MS / 1000}s`, cancelled: true });
+            this.retireRpcWorker(channel, daemon, `RPC request for '${toolName}' was cancelled without runner confirmation; sibling outcomes are unknown`);
+            resolve({
+              success: false,
+              output: "",
+              error: `'${toolName}' cancellation was not confirmed within ${RPC_CANCEL_CONFIRM_MS / 1000}s; worker shutdown was requested (result unknown)`,
+              cancelled: true,
+              outcomeUnknown: true,
+            });
           }
         }, RPC_CANCEL_CONFIRM_MS);
       };
@@ -1242,12 +1310,12 @@ export class RustCoreBridge {
       const timeoutTimer = setTimeout(() => {
         if (channel.pending.has(id)) {
           channel.pending.delete(id);
-          // The bridge stops waiting; the runner is told to end the command too, so nothing keeps running unowned.
-          this.sendCancel(channel, id);
+          if (toolName === "run_command") this.sendCancel(channel, id);
+          this.retireRpcWorker(channel, daemon, `RPC worker stopped after '${toolName}' timed out; sibling request outcomes are unknown`);
           resolve({
             success: false,
             output: "",
-            error: `RPC request for '${toolName}' timed out after ${timeoutMs / 1000}s without an answer from the command runner (result unknown); the command was told to stop`,
+            error: `RPC request for '${toolName}' timed out after ${timeoutMs / 1000}s without an answer (result unknown); worker shutdown was requested`,
             timedOut: true,
             outcomeUnknown: true,
           });

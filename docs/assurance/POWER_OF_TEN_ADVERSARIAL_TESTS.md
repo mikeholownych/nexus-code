@@ -80,3 +80,15 @@ The following requested scenarios are explicitly not represented as passes: an i
 ## 4. Reproduction notes
 
 From a clean checkout of the audited revision, install CLI dependencies with `npm ci --prefix cli`; use a throwaway `HOME` and XDG directories for tests; for Rust, set a worktree-local `CARGO_TARGET_DIR`. `npm --prefix cli test` was interrupted after exceeding 45 minutes without an aggregate summary (exit 130). The stream included failures and skips; do not treat the partial suite as green. The repository directs evaluation/resource tests to `make test-ci` with a dedicated `NEXUS_EVAL_TEST_WORKSPACE_ROOT`; that setup was not available in this audit environment. The no-ceiling behavior is reproducible from `DEFAULT_CONTINUATION` and loop guards cited in AT-06; an empirical reset test should use the repository’s `startGateway` fixture and should preserve its source/output transcript outside the main checkout.
+
+## 5. Follow-up validation: generic RPC worker retirement (2026-11-26)
+
+**Hypothesis:** A generic Rust RPC timeout or cancellation only stops waiting in TypeScript while the Rust worker's blocking task continues, so the operation can outlive its owner and overlap later work.
+
+**Setup:** On the isolated `codex/p10-02-rpc-timeout-worker-termination` worktree, build the Rust core with `CARGO_TARGET_DIR="$PWD/core/target" cargo build --locked --manifest-path core/Cargo.toml --bin harness-core`. Then run `cd cli && HOME=$(mktemp -d) node --import tsx --test test/rpc_worker_timeout.test.ts test/worker_stdin_epipe.test.ts`. The integration case uses a temporary FIFO to hold a real `read_file` RPC, observes the deadline, verifies the worker exits before a replacement handles a new request, then checks the new request's output.
+
+**Expected safe behavior:** Timed-out/cancelled worker is no longer used; pending sibling results are explicitly unknown; graceful shutdown is attempted; a bounded force-exit prevents a stuck process from remaining indefinitely; replacement starts only after old worker exit.
+
+**Observed:** `rpc_worker_timeout.test.ts` cases for unanswered RPC, non-command cancellation, unconfirmed command cancellation, bounded forced exit, and real Rust FIFO timeout/restart passed; `worker_stdin_epipe.test.ts` also passed in the focused combined run. `npm --prefix cli run build` passed. The Rust binary build passed. The initial unanswered-RPC test failed before the fix because the worker channel remained available after timeout. These are focused tests on an isolated local worktree, not hosted CI or a complete task-level deadline proof.
+
+**Classification:** PASS for the tested worker-retirement invariants; NOT TESTED for all provider/tool kinds, platform-specific process behavior beyond the current host, kernel-stuck I/O after forced process exit, or full session recovery after host restart. Source revision: branch based on `origin/release/v1.3.1`; record the resulting commit after publication.
