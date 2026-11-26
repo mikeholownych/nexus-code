@@ -1,0 +1,56 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "01M8C6D5Q6M6XAEGS56274Z0G5",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "cli/src/agent.ts",
+    "cli/src/core/context_inventory.ts",
+    "cli/src/core/spine_handlers.ts",
+    "cli/src/core/state.ts",
+    "cli/src/core/tool_approval.ts",
+    "cli/src/session.ts",
+    "docs/research/context-engineering/CONTEXT-MATURITY-SYSTEM.md",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-fixture/dist/src/customer-store.js",
+    "experiments/cloudflare-artifacts-vertical-slice/agent-collab-fixture/dist/test/store.test.js"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4150066,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 476447360,
+    "output_tokens": 589293,
+    "api_call_count": 3122,
+    "subagent_tokens": {
+      "input_tokens": 0,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 0,
+      "output_tokens": 0,
+      "api_call_count": 0
+    },
+    "subagent_tokens_complete": true
+  },
+  "redaction": {
+    "replacements": 3277,
+    "layers": {
+      "betterleaks": 1028,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 154,
+      "credentialed_uri": 146,
+      "entropy": 2457,
+      "key_context": 0,
+      "provider_token": 25,
+      "shell_stdin": 0
+    }
+  }
+}
