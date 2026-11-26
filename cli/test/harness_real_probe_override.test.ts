@@ -17,12 +17,15 @@ describe("harness real probe unsafe override", () => {
     const orch = new HarnessOrchestrator(store);
     const run = await orch.init({ taskSuitePath: suite, basePath: base, store });
     const oldPath = process.env.PATH;
+    const oldAllow = process.env.NEXUS_ALLOW_UNSANDBOXED_HIR_PROBE;
     process.env.PATH = "/nonexistent";
+    process.env.NEXUS_ALLOW_UNSANDBOXED_HIR_PROBE = "1";
     try {
       const done = await orch.run(run.id, { store, real: true, allowUnsandboxedRealProbe: true });
       assert.equal(done.status, "COMPLETED");
     } finally {
       process.env.PATH = oldPath;
+      if (oldAllow === undefined) delete process.env.NEXUS_ALLOW_UNSANDBOXED_HIR_PROBE; else process.env.NEXUS_ALLOW_UNSANDBOXED_HIR_PROBE = oldAllow;
     }
   });
 });

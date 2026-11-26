@@ -113,7 +113,17 @@ export class HarnessOrchestrator {
       recordEvent(store, run.id, "hir.blocked", run.reason);
       return run;
     }
-    const adapter = opts.adapter ?? (opts.real ? new RealProbeAdapter({ allowUnsandboxed: !!opts.allowUnsandboxedRealProbe }) : new MockProbeAdapter());
+    const allowUnsandboxed = !!opts.allowUnsandboxedRealProbe && process.env.NEXUS_ALLOW_UNSANDBOXED_HIR_PROBE === "1";
+    if (opts.allowUnsandboxedRealProbe && !allowUnsandboxed) {
+      run.status = "BLOCKED";
+      run.reason = "Unsafe real-probe override requires NEXUS_ALLOW_UNSANDBOXED_HIR_PROBE=1 in addition to --allow-unsandboxed-real-probe.";
+      run.nextAction = "Set NEXUS_ALLOW_UNSANDBOXED_HIR_PROBE=1 only for owner-approved unsafe debugging, or run with OS sandbox available.";
+      run.updatedAt = nowIso();
+      store.saveRun(run);
+      recordEvent(store, run.id, "hir.blocked", run.reason);
+      return run;
+    }
+    const adapter = opts.adapter ?? (opts.real ? new RealProbeAdapter({ allowUnsandboxed }) : new MockProbeAdapter());
     const baseManifest = store.loadBaseManifest(run.baseHarnessId);
     const suite = store.loadTaskSuite(run.taskSuiteRef);
     const started = Date.now();
