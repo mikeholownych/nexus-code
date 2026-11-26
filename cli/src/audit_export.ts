@@ -170,7 +170,11 @@ export interface AuditExport {
   /** What `--json` prints. */
   document: AuditExportResult;
   /** The current-workspace comparison printed for people and serialized in receipts/candidate-binding.json. */
-  candidateBinding: { status: "no_receipts" | "matched" | "mismatch" | "partial" | "unavailable"; currentCandidateId: string | null };
+  candidateBinding: {
+    status: "no_receipts" | "matched" | "mismatch" | "partial" | "unavailable";
+    currentCandidateId: string | null;
+    legacyIdentityReceiptCount: number;
+  };
   /** `receipts/verify-<n>.json` for each `--receipt-file`, in the order given (also the ones left out). */
   receipts: Array<{ path: string; source: string }>;
 }
@@ -670,16 +674,28 @@ export function exportAuditBundle(request: AuditExportRequest): AuditExport {
     current_candidate_id: string | null;
     receipt_count: number;
     receipts_omitted: number;
+    legacy_identity_receipts: number;
     unavailable_reason?: string;
-    receipts: Array<{ receipt_id: string | null; receipt_status: string | null; receipt_candidate_id: string | null; relation: "match" | "mismatch" | "unverifiable" }>;
+    receipts: Array<{
+      receipt_id: string | null;
+      receipt_status: string | null;
+      receipt_candidate_id: string | null;
+      acceptance_identity_recorded: boolean;
+      relation: "match" | "mismatch" | "unverifiable";
+    }>;
   } = {
     schema_version: 1,
     checked_at: createdAt,
-    meaning: "Candidate identity relation sampled separately from bundle collection; it is not an atomic workspace snapshot and does not indicate verifier success or task acceptance.",
+    meaning: "Candidate identity relation sampled separately from bundle collection; it is not an atomic workspace snapshot and does not indicate verifier success or task acceptance. acceptance_identity_recorded only reports whether a structured identity object was saved; it does not validate that object's claims.",
     status: validationReceipts.length === 0 ? "no_receipts" : "unavailable",
     current_candidate_id: null,
     receipt_count: allValidationReceipts.length,
     receipts_omitted: Math.max(0, allValidationReceipts.length - validationReceipts.length),
+    legacy_identity_receipts: validationReceipts.filter((value) => {
+      const receipt: Record<string, unknown> = isObject(value) ? value : {};
+      const evidence = isObject(receipt.evidence) ? receipt.evidence : {};
+      return !isObject(evidence.acceptanceIdentity);
+    }).length,
     receipts: [],
   };
   if (validationReceipts.length > 0) {
@@ -714,6 +730,7 @@ export function exportAuditBundle(request: AuditExportRequest): AuditExport {
         receipt_id: typeof receipt.receiptId === "string" ? receipt.receiptId : null,
         receipt_status: typeof receipt.status === "string" ? receipt.status : null,
         receipt_candidate_id: validReceiptCandidate ? receiptCandidateId : null,
+        acceptance_identity_recorded: isObject(receipt.evidence) && isObject(receipt.evidence.acceptanceIdentity),
         relation,
       });
     }
@@ -727,6 +744,9 @@ export function exportAuditBundle(request: AuditExportRequest): AuditExport {
     warnings.push("Some persisted validation receipts could not be bound to the current workspace candidate or the report was truncated; see receipts/candidate-binding.json.");
   } else if (candidateBinding.status === "no_receipts") {
     warnings.push("No persisted validation receipts were available to bind to the current workspace candidate.");
+  }
+  if (candidateBinding.legacy_identity_receipts > 0) {
+    warnings.push(`${candidateBinding.legacy_identity_receipts} sampled validation receipt(s) predate structured acceptance identity; candidate binding does not establish verifier, runtime, or policy provenance.`);
   }
   generated("receipts/candidate-binding.json", "validation_receipts", candidateBinding, asJson);
   generated("receipts/last-turn.json", "last_turn", session.lastTurn ?? null, asJson);
@@ -813,7 +833,11 @@ export function exportAuditBundle(request: AuditExportRequest): AuditExport {
   return {
     written,
     document,
-    candidateBinding: { status: candidateBinding.status, currentCandidateId: candidateBinding.current_candidate_id },
+    candidateBinding: {
+      status: candidateBinding.status,
+      currentCandidateId: candidateBinding.current_candidate_id,
+      legacyIdentityReceiptCount: candidateBinding.legacy_identity_receipts,
+    },
     receipts,
   };
 }
@@ -835,6 +859,7 @@ export function renderAuditExportText(exported: AuditExport): string {
     `  subject: ${subject.kind} ${subject.kind === "task" ? subject.task_id : subject.session_id} (${subject.store} store), status ${subject.status ?? "unknown"}, last updated ${subject.updated_at ?? "unknown"}`,
     `  files: ${document.file_count} (${document.file_bytes} bytes) and manifest.json`,
     `  candidate binding: ${exported.candidateBinding.status} (see receipts/candidate-binding.json; not a verifier or acceptance result)`,
+    `  legacy receipts without structured acceptance identity: ${exported.candidateBinding.legacyIdentityReceiptCount}`,
   ];
   for (const log of manifest.chained_logs) {
     const parts = [describeLog(log.status, log.records)];

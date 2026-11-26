@@ -133,9 +133,13 @@ test("a saved task exports every artefact with its role, and the bundle verifies
   const binding = JSON.parse(files["receipts/candidate-binding.json"]);
   assert.equal(binding.status, process.platform === "linux" ? "partial" : "unavailable", "a legacy or malformed candidate id is not treated as a match");
   assert.equal(binding.receipts[0].relation, "unverifiable");
-  assert.equal(binding.meaning, "Candidate identity relation sampled separately from bundle collection; it is not an atomic workspace snapshot and does not indicate verifier success or task acceptance.");
+  assert.equal(binding.receipts[0].acceptance_identity_recorded, true);
+  assert.equal(binding.legacy_identity_receipts, 0);
+  assert.equal(binding.meaning, "Candidate identity relation sampled separately from bundle collection; it is not an atomic workspace snapshot and does not indicate verifier success or task acceptance. acceptance_identity_recorded only reports whether a structured identity object was saved; it does not validate that object's claims.");
   assert.equal(exported.candidateBinding.status, binding.status);
+  assert.equal(exported.candidateBinding.legacyIdentityReceiptCount, 0);
   assert.ok(renderAuditExportText(exported).includes("candidate binding: " + binding.status + " (see receipts/candidate-binding.json; not a verifier or acceptance result)"));
+  assert.ok(renderAuditExportText(exported).includes("legacy receipts without structured acceptance identity: 0"));
   assert.equal(JSON.parse(files["receipts/last-turn.json"]).outcome, "VERIFIED");
   assert.deepEqual(JSON.parse(files["verification/attempts.json"]).map((attempt: any) => [attempt.n, attempt.status]), [[1, "PASSED"]]);
   assert.deepEqual(JSON.parse(files["evidence/provenance.json"]), [{ requirement: "R1", evidence: "npm test", source: "tool" }]);
@@ -176,6 +180,31 @@ test("a saved task exports every artefact with its role, and the bundle verifies
       : ["Current workspace candidate identity could not be computed; validation receipt bindings are inconclusive."] },
   );
   assert.equal(exported.document.file_bytes, manifest.files.reduce((sum, file) => sum + file.bytes, 0));
+});
+
+test("legacy validation receipts remain readable and are explicitly reported without structured acceptance identity", () => {
+  const subject = savedSubject({ flight: false });
+  const statePath = path.join(subject.storeDir, `${subject.id}.json`);
+  const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  const legacyReceipt = state.validationReceipts[0];
+  delete legacyReceipt.evidence?.acceptanceIdentity;
+  fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+  const before = fs.readFileSync(statePath);
+
+  const exported = exportChecked(subject.request({ out: path.join(subject.root, "out", "legacy") }));
+  const files = bundleTexts(exported.written.dir);
+  const receipt = JSON.parse(files["receipts/validation-receipts.json"])[0];
+  const binding = JSON.parse(files["receipts/candidate-binding.json"]);
+
+  assert.equal(receipt.receiptId, legacyReceipt.receiptId);
+  assert.equal(receipt.status, "PASSED", "the export preserves the recorded historical status without assigning new provenance");
+  assert.equal(receipt.evidence?.acceptanceIdentity, undefined, "legacy fields are not synthesized during export");
+  assert.equal(binding.receipts[0].acceptance_identity_recorded, false);
+  assert.equal(binding.legacy_identity_receipts, 1);
+  assert.equal(exported.candidateBinding.legacyIdentityReceiptCount, 1);
+  assert.ok(exported.document.warnings.some((warning) => warning.includes("predate structured acceptance identity")));
+  assert.ok(renderAuditExportText(exported).includes("legacy receipts without structured acceptance identity: 1"));
+  assert.deepEqual(fs.readFileSync(statePath), before, "export reports the legacy status without rewriting the stored task");
 });
 
 test("candidate binding distinguishes current receipts from stale and unavailable identities", { skip: process.platform !== "linux" }, () => {
