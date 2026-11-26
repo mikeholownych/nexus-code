@@ -142,8 +142,8 @@ test("package.json: the lib is the only export, with types, and the CLI binary i
   assert.equal(pkg.main, "dist/lib.js");
   assert.equal(pkg.types, "dist/types/lib.d.ts");
   assert.deepEqual(pkg.bin, { harness: "./dist/index.js" });
-  assert.equal(pkg.name, "nexus-code");
-  assert.equal(pkg.private, true, "D13: prevent publication to npm even when lifecycle scripts are disabled");
+  assert.equal(pkg.name, "@nexus-code-ai/nexus-code");
+  assert.equal(pkg.private, false, "the scoped package is intentionally publishable");
   // The package's prepublish hook builds the public library artifacts.
   assert.match(pkg.scripts.prepublishOnly, /npm run build/);
 });
