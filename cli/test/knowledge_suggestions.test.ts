@@ -142,3 +142,57 @@ test("workspace safety preflight refuses knowledge admission with configured Git
   assert.throws(() => open().propose(proposal), /safely establish workspace identity/);
   assert.deepEqual(open().list(), []);
 });
+
+test("a recorded candidate change stays stale after revert and reopen", (t) => {
+  const { worktree, open, proposal, setEvidence } = fixture(t);
+  const first = open().propose(proposal);
+  open().review(first.id, "operator");
+  open().promote(first.id, "operator");
+  fs.writeFileSync(path.join(worktree, "package.json"), '{"name":"changed"}');
+  const observed = open().list()[0];
+  assert.equal(observed.freshness, "stale");
+  assert.equal(observed.invalidation?.reason, "candidate_changed");
+  assert.ok(observed.invalidation?.observedAt);
+
+  fs.writeFileSync(path.join(worktree, "package.json"), "{}");
+  assert.deepEqual(open().list()[0].invalidation, observed.invalidation);
+  assert.equal(open().propose(proposal).freshness, "stale");
+  assert.equal(new KnowledgeGraph(worktree, { trusted: true, suggestions: open() }).get(proposal.key), undefined);
+  setEvidence({ source: "tool", revision: "b".repeat(64) });
+  const replacement = open().propose(proposal);
+  assert.notEqual(replacement.id, first.id);
+  assert.equal(replacement.freshness, "current");
+});
+
+test("rejected review durably records a changed source revision but leaves missing evidence unknown", (t) => {
+  const { open, proposal, setEvidence } = fixture(t);
+  const first = open().propose(proposal);
+  setEvidence(undefined);
+  assert.throws(() => open().review(first.id, "operator"), /fresh evidence/);
+  assert.equal(open().list()[0].freshness, "unknown");
+  assert.equal(open().list()[0].invalidation, undefined);
+  setEvidence({ source: "tool", revision: "a".repeat(64) });
+  assert.equal(open().list()[0].freshness, "current");
+  setEvidence({ source: "tool", revision: "b".repeat(64) });
+  assert.throws(() => open().review(first.id, "operator"), /fresh evidence/);
+  setEvidence({ source: "tool", revision: "a".repeat(64) });
+  const stale = open().list()[0];
+  assert.equal(stale.freshness, "stale");
+  assert.equal(stale.invalidation?.reason, "source_revision_changed");
+  assert.equal(stale.invalidation?.sourceIndex, 0);
+});
+
+test("read-only observations suppress stale knowledge without writing, and reconciliation records the change", (t) => {
+  const { open, options, proposal, worktree } = fixture(t);
+  const item = open().propose(proposal);
+  open().review(item.id, "operator");
+  open().promote(item.id, "operator");
+  fs.writeFileSync(path.join(worktree, "package.json"), '{"name":"changed"}');
+  const readOnly = new KnowledgeSuggestions(worktree, { ...options, readOnly: true });
+  assert.equal(readOnly.list()[0].freshness, "stale");
+  assert.equal(readOnly.list()[0].invalidation, undefined);
+  assert.equal(new KnowledgeGraph(worktree, { readOnly: true, trusted: true, suggestions: open() }).get(proposal.key), undefined);
+  assert.equal(readOnly.list()[0].invalidation, undefined);
+  assert.equal(open().reconcile()[0].invalidation?.reason, "candidate_changed");
+  assert.equal(readOnly.list()[0].invalidation?.reason, "candidate_changed");
+});

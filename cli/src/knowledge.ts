@@ -317,10 +317,10 @@ export class KnowledgeGraph {
   private promotedSuggestions(): KnowledgeEntry[] {
     if (!this.isTrusted()) return [];
     try {
-      // The journal owns promotion and deletion atomically. Model-facing graph
-      // operations see a fresh projection and cannot change journal state.
-      const suggestions = this.suggestions ?? new KnowledgeSuggestions(this.workspace, { readOnly: true });
-      return suggestions.list({ state: "promoted" }).flatMap((item): KnowledgeEntry[] => {
+      // The journal owns promotion and deletion. The graph can record a
+      // definitive invalidation during observation and can only remove context.
+      const suggestions = this.suggestions ?? new KnowledgeSuggestions(this.workspace, { readOnly: this.readOnly });
+      return suggestions.list({ state: "promoted", persistInvalidations: !this.readOnly }).flatMap((item): KnowledgeEntry[] => {
         if (item.state !== "promoted" || item.freshness !== "current" || !item.proposal) return [];
         const { key, value, category, sourceRefs } = item.proposal;
         return [{

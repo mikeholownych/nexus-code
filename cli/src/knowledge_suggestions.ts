@@ -20,6 +20,19 @@ const RETENTION_MS = 30 * 86_400_000;
 const CATEGORIES: readonly KnowledgeCategory[] = ["idiom", "architecture", "dependency", "troubleshooting", "rule"];
 const SOURCE_CLASSES = ["operator", "model", "tool", "verified_evidence"] as const;
 const STATES = ["candidate", "reviewed", "promoted", "rejected", "expired", "deleted"] as const;
+const SCOPE_CHANGES = {
+  repository: "repository_changed",
+  workspace: "workspace_changed",
+  worktree: "worktree_changed",
+  candidate: "candidate_changed",
+} as const;
+
+type ScopeChangeReason = typeof SCOPE_CHANGES[keyof typeof SCOPE_CHANGES];
+type InvalidationCause =
+  | { reason: ScopeChangeReason; observedDigest: string }
+  | { reason: "source_revision_changed" | "source_class_changed"; sourceIndex: number; observedDigest: string };
+type Invalidation = InvalidationCause & { observedAt: string };
+
 
 export interface KnowledgeEvidence {
   source: typeof SOURCE_CLASSES[number];
@@ -58,6 +71,7 @@ interface StoredSuggestion {
   expiresAt: string;
   actor?: string;
   decisions?: Array<{ state: SuggestionState; at: string; actor?: string }>;
+  invalidation?: Invalidation;
 }
 
 export interface KnowledgeSuggestion extends StoredSuggestion {
@@ -164,12 +178,22 @@ function suggestionId(contentDigest: string, scope: SuggestionScope, evidence: E
   return sha256([contentDigest, scope.repository, scope.workspace, scope.worktree, evidence]);
 }
 
+function validInvalidation(value: Invalidation): boolean {
+  if (!value || typeof value !== "object" || !isDigest(value.observedDigest) ||
+    typeof value.observedAt !== "string" || !Number.isFinite(Date.parse(value.observedAt))) return false;
+  if (value.reason === "source_revision_changed" || value.reason === "source_class_changed") {
+    return Number.isSafeInteger(value.sourceIndex) && value.sourceIndex >= 0 && value.sourceIndex < 12;
+  }
+  return Object.values(SCOPE_CHANGES).includes(value.reason) && !("sourceIndex" in value);
+}
+
 function validateStored(value: unknown): StoredSuggestion {
   const item = value as StoredSuggestion | null;
   if (!item || typeof item !== "object" || !isDigest(item.id) || !isDigest(item.contentDigest) || !STATES.includes(item.state) ||
     !item.scope || ![item.scope.repository, item.scope.workspace, item.scope.worktree, item.scope.candidate].every(isDigest) ||
     ![item.createdAt, item.updatedAt, item.expiresAt].every((v) => typeof v === "string" && Number.isFinite(Date.parse(v))) ||
     (item.actor !== undefined && !isText(item.actor, 120)) ||
+    (item.invalidation !== undefined && !validInvalidation(item.invalidation)) ||
     (item.decisions !== undefined && (!Array.isArray(item.decisions) || item.decisions.length > 4 ||
       item.decisions.some((decision) => !decision || !STATES.includes(decision.state) ||
         typeof decision.at !== "string" || !Number.isFinite(Date.parse(decision.at)) ||
@@ -229,7 +253,7 @@ export class KnowledgeSuggestions {
       const contentDigest = sha256(proposal);
       const id = suggestionId(contentDigest, scope, evidence);
       const prior = records.find((entry) => entry.id === id);
-      if (prior) return this.present(prior, scope);
+      if (prior) return this.present(prior, scope, now);
       if (records.length >= MAX_RECORDS) throw new Error("Knowledge suggestion store has reached its retention limit");
       const createdAt = new Date(now).toISOString();
       const record: StoredSuggestion = {
@@ -241,14 +265,38 @@ export class KnowledgeSuggestions {
     });
   }
 
-  list(options: { state?: SuggestionState } = {}): KnowledgeSuggestion[] {
+  list(options: { state?: SuggestionState; persistInvalidations?: boolean } = {}): KnowledgeSuggestion[] {
     const records = this.load();
-    this.expire(records, this.now());
+    const now = this.now();
+    this.expire(records, now);
     const selected = options.state ? records.filter((record) => record.state === options.state) : records;
     if (!selected.length) return [];
-    let scope: SuggestionScope | undefined;
-    try { scope = inspectScope(this.workspace); } catch {}
-    return selected.map((record) => this.present(record, scope));
+    const scope = this.currentScope();
+    const observed = new Map<string, Invalidation>();
+    const persistInvalidations = !this.options.readOnly && options.persistInvalidations !== false;
+    const result = selected.map((record) => {
+      const previous = record.invalidation;
+      const projection = this.present(record, scope, persistInvalidations ? now : undefined);
+      if (!previous && record.invalidation) observed.set(record.id, record.invalidation);
+      return projection;
+    });
+    if (observed.size) {
+      const persisted = this.update((current) => {
+        const applied = new Map<string, Invalidation>();
+        for (const item of current) {
+          const invalidation = observed.get(item.id);
+          if (invalidation && item.evidence) {
+            item.invalidation ??= invalidation;
+            applied.set(item.id, item.invalidation);
+          }
+        }
+        return applied;
+      });
+      for (const item of result) {
+        if (observed.has(item.id)) item.invalidation = persisted.get(item.id);
+      }
+    }
+    return result;
   }
 
   review(id: string, actor: string): KnowledgeSuggestion {
@@ -267,26 +315,29 @@ export class KnowledgeSuggestions {
     return this.transition(id, actor, "deleted", ["candidate", "reviewed", "rejected", "expired", "promoted"]);
   }
 
-  /** Persist deadline-based expiry without changing read-only inspection. */
+  /** Persist expiry and definitive invalidations without changing read-only inspection. */
   reconcile(): KnowledgeSuggestion[] {
-    this.update(() => undefined);
-    return this.list();
+    return this.update((records, now) => {
+      const scope = records.length ? this.currentScope() : undefined;
+      return records.map((record) => this.present(record, scope, now));
+    });
   }
 
   private transition(id: string, actor: string, state: SuggestionState, allowed: SuggestionState[]): KnowledgeSuggestion {
     if (!isText(actor, 120)) throw new Error("A valid operator identity is required");
     checkProtectedContent(actor);
-    return this.update((records, now) => {
+    const result = this.update((records, now) => {
       const item = records.find((entry) => entry.id === id);
       if (!item) throw new Error("Knowledge suggestion not found");
-      let scope: SuggestionScope | undefined;
-      try { scope = inspectScope(this.workspace); } catch {}
-      if (item.state === state) return this.present(item, scope);
+      const scope = this.currentScope();
+      const before = this.present(item, scope, now);
+      if (item.state === state) return before;
       if (!allowed.includes(item.state)) throw new Error(`Cannot transition a ${item.state} knowledge suggestion to ${state}`);
-      if ((state === "reviewed" || state === "promoted") && this.present(item, scope).freshness !== "current") {
-        throw new Error("Knowledge suggestion review or promotion requires fresh evidence");
+      if ((state === "reviewed" || state === "promoted") && before.freshness !== "current") {
+        // Return the blocked outcome after writing the observation in this transaction.
+        return undefined;
       }
-      if (state === "promoted" && records.some((other) => other.state === "promoted" && other.id !== item.id && other.proposal?.key === item.proposal?.key && this.present(other, scope).freshness === "current")) {
+      if (state === "promoted" && records.some((other) => other.state === "promoted" && other.id !== item.id && other.proposal?.key === item.proposal?.key && this.present(other, scope, now).freshness === "current")) {
         throw new Error("A current promoted suggestion already uses that knowledge key");
       }
       item.state = state;
@@ -297,26 +348,55 @@ export class KnowledgeSuggestions {
         delete item.proposal;
         delete item.evidence;
       }
-      return this.present(item, scope);
+      return this.present(item, scope, now);
     });
+    if (!result) throw new Error("Knowledge suggestion review or promotion requires fresh evidence");
+    return result;
   }
 
-  private present(item: StoredSuggestion, scope?: SuggestionScope): KnowledgeSuggestion {
-    const freshness = this.freshness(item, scope);
-    return { ...item, freshness, validationStatus: "model_suggestion_unverified", redactionStatus: "screened" };
+  private currentScope(): SuggestionScope | undefined {
+    try { return inspectScope(this.workspace); } catch { return undefined; }
   }
 
-  private freshness(item: StoredSuggestion, scope?: SuggestionScope): KnowledgeSuggestion["freshness"] {
-    if (!scope || !item.evidence) return "unknown";
-    if (item.scope.repository !== scope.repository || item.scope.workspace !== scope.workspace ||
-      item.scope.worktree !== scope.worktree || item.scope.candidate !== scope.candidate) return "stale";
-    for (const evidence of item.evidence) {
-      let current: KnowledgeEvidence | undefined;
-      try { current = this.resolveEvidence(evidence.ref); } catch { return "unknown"; }
-      if (!validEvidence(current)) return "unknown";
-      if (evidence.revision !== current.revision || evidence.source !== current.source) return "stale";
+  private present(item: StoredSuggestion, scope?: SuggestionScope, now?: number): KnowledgeSuggestion {
+    const observation = this.observeFreshness(item, scope);
+    if (now !== undefined && observation.invalidate) {
+      item.invalidation = { ...observation.invalidate, observedAt: new Date(now).toISOString() };
     }
-    return "current";
+    return { ...item, freshness: observation.freshness, validationStatus: "model_suggestion_unverified", redactionStatus: "screened" };
+  }
+
+  private observeFreshness(item: StoredSuggestion, scope?: SuggestionScope): {
+    freshness: KnowledgeSuggestion["freshness"];
+    invalidate?: InvalidationCause;
+  } {
+    if (item.invalidation) return { freshness: "stale" };
+    if (!scope || !item.evidence) return { freshness: "unknown" };
+    for (const key of ["repository", "workspace", "worktree", "candidate"] as const) {
+      if (item.scope[key] !== scope[key]) {
+        return { freshness: "stale", invalidate: { reason: SCOPE_CHANGES[key], observedDigest: scope[key] } };
+      }
+    }
+    let unknown = false;
+    for (const [sourceIndex, evidence] of item.evidence.entries()) {
+      let current: KnowledgeEvidence | undefined;
+      try { current = this.resolveEvidence(evidence.ref); } catch {}
+      if (!validEvidence(current)) {
+        unknown = true;
+        continue;
+      }
+      if (evidence.revision !== current.revision || evidence.source !== current.source) {
+        return {
+          freshness: "stale",
+          invalidate: {
+            reason: evidence.source !== current.source ? "source_class_changed" : "source_revision_changed",
+            sourceIndex,
+            observedDigest: current.revision,
+          },
+        };
+      }
+    }
+    return { freshness: unknown ? "unknown" : "current" };
   }
 
   private resolveEvidence(ref: string): KnowledgeEvidence | undefined {
