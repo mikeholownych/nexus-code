@@ -48,15 +48,17 @@ test("production planning and independent review route locally and leave the wor
       handoffs: [],
     }],
   };
-  const cloud = await startGateway(() => ({ kind: "text", content: JSON.stringify(plan) }));
-  t.after(() => cloud.close());
-  const local = await startGateway(() => ({ kind: "text", content: JSON.stringify(plan) }));
-  t.after(() => local.close());
   const findings = {
     findings: [{ category: "acceptance", unitId: "inspect", summary: "Name the report output format", blocking: true }],
     uncertainty: [],
   };
-  const reviewer = await startGateway(() => ({ kind: "text", content: JSON.stringify(findings) }));
+  const cloud = await startGateway(() => ({ kind: "text", content: JSON.stringify(findings) }));
+  t.after(() => cloud.close());
+  const local = await startGateway(() => ({ kind: "text", content: JSON.stringify(plan) }));
+  t.after(() => local.close());
+  const reviewer = await startGateway((call) => call === 1
+    ? { kind: "text", content: JSON.stringify(findings) }
+    : { kind: "http", status: 429, body: '{"error":"rate limited"}' });
   t.after(() => reviewer.close());
   const cloudOrigin = new URL(cloud.url).origin;
   const config: HarnessConfig = {
@@ -104,4 +106,17 @@ test("production planning and independent review route locally and leave the wor
   assert.deepEqual(reviewRequest.tools ?? [], []);
   assert.deepEqual(readdirSync(workspace), ["README.md"]);
   assert.match((await executeBatchCommand("list", config)).output, /No batches/);
+
+  const next = await executeBatchCommand(`plan "${plan.objective}"`, config);
+  assert.equal(next.success, true, next.output);
+  const nextDraft = JSON.parse(next.output.slice(next.output.indexOf("\n") + 1));
+  const fallback = await executeBatchCommand(`plan review ${nextDraft.id}`, config);
+  assert.equal(fallback.success, true, fallback.output);
+  const fallbackReview = JSON.parse(fallback.output.slice(fallback.output.indexOf("\n") + 1)).review;
+  assert.deepEqual(fallbackReview.provenance, {
+    resourceId: "primary", model: "cloud-fixture", disclosure: "cloud", fallbackFrom: "coder",
+  });
+  assert.equal(cloud.requests.length, 1);
+  assert.equal(local.requests.length, 2, "failover must not reuse the planner");
+  assert.deepEqual(readdirSync(workspace), ["README.md"]);
 });

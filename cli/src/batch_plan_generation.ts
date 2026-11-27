@@ -80,15 +80,31 @@ export async function generateBatchPlanProposal(input: string, config: HarnessCo
 }
 
 export async function generateBatchPlanReview(draft: BatchPlanDraft, config: HarnessConfig, signal?: AbortSignal) {
-  signal?.throwIfAborted();
+  const timeout = AbortSignal.timeout(60_000);
+  const deadline = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  deadline.throwIfAborted();
   if (!draft.provenance) throw new Error("An independent review requires known planner provenance.");
   const input = JSON.stringify(draft.plan);
   const { clients, resources } = proposalClients(BATCH_PLAN_REVIEW_CONTRACT, input, config, "batch-plan-reviewer");
-  const resource = selectBatchPlanReviewer(
-    resources, draft.provenance, (candidate) => clients.get(candidate.id)!.client.disclosureOf(), { allowCloud: true },
-  );
-  if (!resource) throw new Error("No distinct qualified resource is configured for plan review.");
-  const { client } = clients.get(resource.id)!;
-  const review = await requestJsonProposal(client, BATCH_PLAN_REVIEW_CONTRACT, input, signal);
-  return { review, provenance: inferenceProvenance(resource.id, client) };
+  const planner = draft.provenance;
+  const attempted = new Set<string>();
+  let lastFailure: { resourceId: string; error: InferenceError } | undefined;
+  while (attempted.size < 3) {
+    const resource = selectBatchPlanReviewer(
+      resources.filter((candidate) => !attempted.has(candidate.id)),
+      planner, (candidate) => clients.get(candidate.id)!.client.disclosureOf(), { allowCloud: true },
+    );
+    if (!resource) break;
+    attempted.add(resource.id);
+    const { client } = clients.get(resource.id)!;
+    try {
+      const review = await requestJsonProposal(client, BATCH_PLAN_REVIEW_CONTRACT, input, deadline);
+      return { review, provenance: inferenceProvenance(resource.id, client, lastFailure?.resourceId) };
+    } catch (error) {
+      if (!(error instanceof InferenceError) || !error.failoverEligible) throw error;
+      lastFailure = { resourceId: resource.id, error };
+    }
+  }
+  if (lastFailure) throw lastFailure.error;
+  throw new Error("No distinct qualified resource is configured for plan review.");
 }
