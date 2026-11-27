@@ -320,7 +320,7 @@ describe("the real Bubblewrap box", { skip: BWRAP_SKIP }, () => {
         `cat node_modules/dep/index.js`,
         `tail -n +3 /proc/net/dev | cut -d: -f1 | tr -d ' ' | tr '\\n' ' '; echo "<- interfaces"`,
       ].join("\n");
-      const built = sandboxedVerifierCommand(script, own, { engine: "bwrap", network: false, scratch, readOnlyDirs: [dependency] });
+      const built = sandboxedVerifierCommand(script, own, { engine: "bwrap", network: false, scratch, readOnlyDirs: [dependency], maskDirs: [checkout] });
       assert.ok("command" in built, JSON.stringify(built));
       const ran = runVerifierShell(built.command, own, 60_000);
       assert.equal(ran.exitCode, 0, ran.output);
