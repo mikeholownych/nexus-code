@@ -2,6 +2,7 @@ import * as os from "node:os";
 import { LocalLlmClient } from "./client.js";
 import { classifyLocality } from "./core/egress.js";
 import { requestJsonProposal } from "./core/proposal_inference.js";
+import { knowledgeOperationExcerpts } from "./knowledge_operation_evidence.js";
 import { knowledgeSessionExcerpts } from "./knowledge_session_evidence.js";
 import { KnowledgeSuggestions, type KnowledgeSuggestion } from "./knowledge_suggestions.js";
 import { disclosureClass } from "./providers.js";
@@ -16,6 +17,7 @@ const CONTRACT = [
   "The category must be idiom, architecture, dependency, troubleshooting, or rule.",
   "Use only source reference IDs in the input. Include at least one. Use repository-relative paths.",
   "Avoid personal, secret, protected, or one-off content. The suggestion is unverified and has no authority.",
+  "A verified check excerpt establishes only the recorded check on its bound candidate.",
 ].join(" ");
 
 interface CommandOptions {
@@ -57,17 +59,19 @@ export async function executeKnowledgeSuggestionCommand(args: string, config: Ha
         !["HOST_LOCAL", "LOCAL_APPLIANCE"].includes(classifyLocality(config.endpoint).boundary)) {
       throw new Error("Knowledge suggestions require a configured local inference endpoint.");
     }
-    if (!value) throw new Error("Usage: /knowledge suggest <saved-session-id>");
+    if (!value) throw new Error("Usage: /knowledge suggest <saved-session-id|operation:id>");
     const scope = store.scopeFingerprint();
-    const excerpts = knowledgeSessionExcerpts(config.workspace, value);
-    if (!excerpts.length) return { output: "The selected session has no eligible source excerpts.", success: false };
+    const excerpts = value.startsWith("operation:")
+      ? knowledgeOperationExcerpts(config.workspace, value.slice("operation:".length))
+      : knowledgeSessionExcerpts(config.workspace, value);
+    if (!excerpts.length) return { output: "The selected record has no eligible source excerpts.", success: false };
     const evidence = new Map(excerpts.map((excerpt) => [excerpt.ref, excerpt.evidence]));
     const input = JSON.stringify(excerpts.map(({ ref, content, evidence: source }) => ({ ref, content, source: source.source })));
     const generate = options.generate ?? ((contract: string, text: string, signal?: AbortSignal) =>
       requestJsonProposal(new LocalLlmClient({ ...config, pinEndpoint: true, readOnly: true }), contract, text, signal));
     const candidate = await generate(CONTRACT, input, options.signal);
     options.signal?.throwIfAborted();
-    if (candidate === null) return { output: "No reusable knowledge suggested for this session.", success: true };
+    if (candidate === null) return { output: "No reusable knowledge suggested for this record.", success: true };
     if (!candidate || typeof candidate !== "object" || Array.isArray(candidate) ||
       Object.keys(candidate).some((key) => !["key", "value", "category", "sourceRefs", "paths"].includes(key))) {
       throw new Error("The model returned an invalid knowledge suggestion.");

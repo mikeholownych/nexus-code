@@ -9,6 +9,7 @@ import { assertNoSensitivePersistenceContent, redactForPersistence, writeProtect
 import { inspectWorkspaceGitSafety } from "./core/workspace_git_safety.js";
 import { assertPrivateDir, readPrivateJson } from "./core/runner_store.js";
 import type { KnowledgeCategory } from "./knowledge.js";
+import { resolveKnowledgeOperationEvidence } from "./knowledge_operation_evidence.js";
 import { resolveKnowledgeSessionEvidence } from "./knowledge_session_evidence.js";
 import { isPathStrictlyWithin } from "./path_within.js";
 import { currentEntry, openRepo } from "./worktrunk/repo.js";
@@ -319,7 +320,10 @@ export class KnowledgeSuggestions {
   }
 
   private resolveEvidence(ref: string): KnowledgeEvidence | undefined {
-    return this.options.resolveEvidence ? this.options.resolveEvidence(ref) : resolveKnowledgeSessionEvidence(this.workspace, ref);
+    if (this.options.resolveEvidence) return this.options.resolveEvidence(ref);
+    return ref.startsWith("operation/")
+      ? resolveKnowledgeOperationEvidence(this.workspace, ref)
+      : resolveKnowledgeSessionEvidence(this.workspace, ref);
   }
 
   private now(): number { return this.options.now?.() ?? Date.now(); }
