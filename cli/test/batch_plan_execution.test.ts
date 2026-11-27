@@ -89,6 +89,8 @@ test("operator-approved checks run through the durable batch runner only once", 
   await assert.rejects(batch.runAcceptedPlan(plans, draft.id, "0".repeat(64)), /exact displayed/);
   await assert.rejects(new BatchOrchestrator({ ...config, authoritativeVerifierCommand: "false" }, options)
     .runAcceptedPlan(plans, draft.id, draft.digest), /operator-configured/);
+  await assert.rejects(new BatchOrchestrator(config, { ...options, resources: [] })
+    .runAcceptedPlan(plans, draft.id, draft.digest), /no configured resource meets/);
   assert.equal(batch.list().length, 0);
   assert.equal(attempts, 0);
   const first = await batch.runAcceptedPlan(plans, draft.id, draft.digest);

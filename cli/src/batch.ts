@@ -14,12 +14,12 @@ import {
   type WorkUnitExecutor,
 } from "./core/operation_runner.js";
 import { ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "./core/operation_git.js";
-import type { ResourceDescriptor } from "./core/resources.js";
+import { ResourceRegistry, type ResourceDescriptor } from "./core/resources.js";
 import { credentialStorageHome } from "./client.js";
 import { mergeOperationPolicy } from "./config.js";
 import { validateBatchSpec, type BatchSpecification } from "./batch_spec.js";
 import { normalizeResources, type OperationSpec } from "./operation_cli.js";
-import type { BatchPlanStore } from "./batch_plan.js";
+import type { BatchPlanAcceptance, BatchPlanStore } from "./batch_plan.js";
 import { batchPlanExecution } from "./batch_plan_execution.js";
 import { parseOperationVerificationChecks } from "./core/operation_verification.js";
 import { realpathAllowingMissing } from "./core/socket_files.js";
@@ -251,20 +251,30 @@ export class BatchOrchestrator {
     if (checks.some((check) => !allowed.has(check.command))) {
       throw new Error("Every plan check must use an operator-configured verifier command.");
     }
-    const acceptance = plans.accept(draftId, digest);
-    const existingResult = (): BatchResult => {
+    const existingResult = (acceptance: BatchPlanAcceptance): BatchResult => {
       const existing = this.results(acceptance.operationId);
       if (existing.operation.git?.acceptedPlanDigest !== acceptance.digest) {
         throw new Error("The operation ID is already in use by a different plan.");
       }
       return existing;
     };
-    if (this.store.has(acceptance.operationId)) return existingResult();
+    if (prior && this.store.has(prior.operationId)) return existingResult(prior);
     const resources = this.options.resources ?? normalizeResources(
       { objective: draft.plan.objective, units: mapped.units },
       this.config,
       createOperationAccountIdentity(credentialStorageHome()),
     );
+    const registry = new ResourceRegistry(resources);
+    const candidates = new Map(mapped.units.map((unit) => [
+      unit.id, registry.select(unit.requires ?? {}).qualified.map(({ resource }) => resource),
+    ]));
+    for (const unit of mapped.units.filter((entry) => entry.required !== false)) {
+      const eligible = candidates.get(unit.id)!.some((candidate) =>
+        (unit.requires?.independentOf ?? []).every((source) =>
+          candidates.get(source)?.some((resource) => resource.model !== candidate.model)));
+      if (!eligible) throw new Error(`For unit '${unit.id}', no configured resource meets the approved requirements.`);
+    }
+    const acceptance = plans.accept(draftId, digest);
     const operation = newOperation(
       acceptance.operationId, draft.plan.objective, mapped.units, resources,
       this.options.now?.() ?? Date.now(), { ...mergeOperationPolicy(this.config.operationPolicy, undefined), maxConcurrentUnits: 1, ...mapped.policy },
@@ -295,7 +305,7 @@ export class BatchOrchestrator {
       });
       return { id: result.id, status: batchStatus(result), operation: result };
     } catch (error) {
-      if (error instanceof OperationExistsError) return existingResult();
+      if (error instanceof OperationExistsError) return existingResult(acceptance);
       throw error;
     }
   }

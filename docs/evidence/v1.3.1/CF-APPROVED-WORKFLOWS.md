@@ -35,6 +35,7 @@ Release-branch CI, comparative evaluation, and the remaining acceptance criteria
 
 ## Parallel writes, waiver approval, and source inspection
 
+- Approved-plan admission rejects a required unit with no qualified configured resource and checks that independent sources have a distinct model candidate. The scheduler rechecks independence when choosing an actual reviewer. A recovery decision that changes the approved task or acceptance requires a revised draft.
 - An operator-reviewed execution budget and bounded per-unit reservations reach the existing scheduler. A Git fixture held two write units in flight concurrently, observed separate worktrees, and verified both changes on the integrated candidate while the operator checkout stayed clean.
 - Waiver tests refused the wrong commit, absent reason, duplicate approval, and a noninteractive CLI invocation. The retry identified the retained candidate by its physical Git objects and kept the waived result distinct from verified evidence. Standalone Git replacement refs cannot substitute another object for the candidate during integration verification.
 - Archived knowledge references require a committed compaction record with a matching digest and a bounded private archive. Source inspection reopens the record within the saved workspace. The archive qualification run passed 110 of 112 broader tests. A compaction failure reproduced on the unchanged baseline, and an isolated rerun passed the credentials counting case.
