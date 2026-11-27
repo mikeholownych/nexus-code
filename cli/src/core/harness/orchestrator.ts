@@ -17,6 +17,7 @@ import { draftLibraryEntriesFromReport } from "./library.js";
 import { recordEvidence, recordEvent } from "./events.js";
 import { reflectCandidate } from "./reflection.js";
 import { NoopProposalAdapter, type ProposalAdapter } from "./proposal_adapter.js";
+import { NexusModelProposalAdapter } from "./nexus_model_proposal_adapter.js";
 import { assertValid, validateHirRun } from "./schema.js";
 import type { HarnessCandidate, HarnessImprovementRun, ProbeResult, ScorecardEntry } from "./types.js";
 
@@ -39,6 +40,7 @@ export interface HirRunOptions {
   mock?: boolean;
   real?: boolean;
   nexusAgent?: boolean;
+  nexusPropose?: boolean;
   dryRun?: boolean;
   candidatePath?: string; // explicit candidate; may be passed repeatedly by CLI
   candidatePaths?: string[];
@@ -46,6 +48,7 @@ export interface HirRunOptions {
   proposalAdapter?: ProposalAdapter;
   allowUnsandboxedRealProbe?: boolean;
   nexusAgentConfig?: { model: string; endpoint: string; apiKey?: string; maxSteps?: number; temperature?: number; sandbox?: "auto" | "bwrap" | "docker" | "none"; network?: boolean };
+  nexusProposalConfig?: { model: string; endpoint: string; apiKey?: string; maxSteps?: number; temperature?: number; sandbox?: "auto" | "bwrap" | "docker" | "none"; network?: boolean };
 }
 
 function nowIso() { return new Date().toISOString(); }
@@ -206,7 +209,8 @@ export class HarnessOrchestrator {
     }
     const adapter = opts.adapter
       ?? (opts.nexusAgent ? new NexusAgentProbeAdapter({ resolveConfig: () => opts.nexusAgentConfig }) : opts.real ? new RealProbeAdapter({ allowUnsandboxed }) : new MockProbeAdapter());
-    const proposalAdapter = opts.proposalAdapter ?? new NoopProposalAdapter();
+    const proposalAdapter = opts.proposalAdapter
+      ?? (opts.nexusPropose ? new NexusModelProposalAdapter({ resolveConfig: () => opts.nexusProposalConfig }) : new NoopProposalAdapter());
     const baseManifest = store.loadBaseManifest(run.baseHarnessId);
     const suite = store.loadTaskSuite(run.taskSuiteRef);
     const started = Date.now();
