@@ -94,6 +94,7 @@ export class NexusModelProposalAdapter implements ProposalAdapter {
             `Prior reflections: ${JSON.stringify((ctx.priorReflections ?? []).slice(-10))}`,
             `Prior scorecards: ${JSON.stringify(ctx.priorScorecards.slice(-20))}`,
             `Prior probe observations: ${JSON.stringify(ctx.priorProbes.slice(-10).map((p) => ({ caseId: p.caseId, status: p.status, verifierPass: p.metrics.verifierPass, observations: p.observations.slice(-3) })))}`,
+            `Relevant library lessons (advisory, do not auto-apply): ${JSON.stringify((ctx.libraryEntries ?? []).slice(-5).map((e) => ({ id: e.id, status: e.status, confidence: e.confidence, statement: e.statement })))}`,
           ].join("\n");
           turn = await agent.run(prompt);
         } finally {

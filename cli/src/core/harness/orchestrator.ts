@@ -13,7 +13,7 @@ import { NexusAgentProbeAdapter } from "./nexus_agent_probe_adapter.js";
 import { compareProbes } from "./compare.js";
 import { composeDecision } from "./compose.js";
 import { buildPromotionReport, renderPromotionReportMd } from "./report.js";
-import { draftLibraryEntriesFromReport } from "./library.js";
+import { draftLibraryEntriesFromReport, retrieveRelevantLibraryEntries } from "./library.js";
 import { recordEvidence, recordEvent } from "./events.js";
 import { reflectCandidate, type ReflectionSummary } from "./reflection.js";
 import { NoopProposalAdapter, type ProposalAdapter } from "./proposal_adapter.js";
@@ -260,6 +260,7 @@ export class HarnessOrchestrator {
       }
       let roundInputs = round === 1 ? uniqueRequested : [baseTree];
       if (round > 1) {
+        const libraryEntries = retrieveRelevantLibraryEntries(store, { baseHarnessId: baseManifest.id, limit: 5, statuses: ["accepted", "draft"] });
         const proposals = await proposalAdapter.propose({
           run,
           suite,
@@ -269,6 +270,7 @@ export class HarnessOrchestrator {
           priorProbes: run.probeIds.map((id) => { try { return store.loadProbe(id); } catch { return undefined; } }).filter(Boolean) as ProbeResult[],
           priorScorecards: allScorecards,
           priorReflections: allReflections,
+          libraryEntries,
         });
         if (proposals.length > 0) {
           roundInputs = proposals.map((p) => path.resolve(p.candidatePath));

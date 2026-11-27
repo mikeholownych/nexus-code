@@ -4,7 +4,7 @@ import type { HarnessLibraryEntry, PromotionReport } from "./types.js";
 
 export function draftLibraryEntriesFromReport(store: HarnessStore, report: PromotionReport): HarnessLibraryEntry[] {
   const now = new Date().toISOString();
-  const entries: HarnessLibraryEntry[] = report.changes.map((c, i) => ({
+  const entries: HarnessLibraryEntry[] = report.changes.map((c) => ({
     schemaVersion: 1,
     id: `hlesson_${randomUUID()}`,
     runId: report.runId,
@@ -29,4 +29,21 @@ export function setLibraryEntryStatus(store: HarnessStore, id: string, status: "
   entry.updatedAt = new Date().toISOString();
   store.saveLibraryEntry(entry);
   return entry;
+}
+
+export function retrieveRelevantLibraryEntries(store: HarnessStore, opts: { baseHarnessId?: string; limit?: number; statuses?: Array<"draft" | "accepted" | "rejected"> }): HarnessLibraryEntry[] {
+  const statuses = opts.statuses ?? ["accepted", "draft"];
+  const limit = Math.max(0, Math.min(opts.limit ?? 5, 20));
+  const entries = store.listLibraryEntries().filter((e) => statuses.includes(e.status));
+  const scored = entries.map((e) => {
+    let score = 0;
+    if (opts.baseHarnessId && e.scope?.baseHarnessId === opts.baseHarnessId) score += 3;
+    if (e.status === "accepted") score += 2;
+    if (e.confidence === "high") score += 2;
+    else if (e.confidence === "medium") score += 1;
+    if (e.recommendation === "review" || e.recommendation === "apply") score += 1;
+    return { e, score };
+  });
+  scored.sort((a, b) => b.score - a.score || b.e.updatedAt.localeCompare(a.e.updatedAt));
+  return scored.slice(0, limit).map((s) => s.e);
 }
