@@ -3,7 +3,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { computeCandidateIdentitySync } from "./core/candidate.js";
 import type { DurableOperationState, IntegrationReceipt } from "./core/operation.js";
-import { operationVerificationDefinitionDigest } from "./core/operation_verification.js";
+import { verificationMaterialDigest } from "./core/operation_verification_material.js";
+import { operationVerificationDefinitionDigest, type OperationVerificationCheck } from "./core/operation_verification.js";
 import { migrateOperationState } from "./core/operation_schema.js";
 import { isLinkedWorktreeDir, redactForPersistence } from "./core/persistence_protection.js";
 import { assertPrivateDir, readPrivateJson } from "./core/runner_store.js";
@@ -26,6 +27,7 @@ interface SavedOperation {
   workspace: string;
   op: DurableOperationState;
   cleanIntegrationCommit?: string | null;
+  materialByReceipt?: WeakMap<IntegrationReceipt, boolean>;
 }
 
 function readOperation(workspace: string, id: string): SavedOperation | undefined {
@@ -99,6 +101,29 @@ function verifiedIntegration(record: SavedOperation, receipt: IntegrationReceipt
   });
 }
 
+function typedMaterialMatches(record: SavedOperation, receipt: IntegrationReceipt): boolean {
+  const binding = receipt.verificationBinding;
+  if (!binding?.typedChecks || !binding.materialInputsSha256) return false;
+  const cache = record.materialByReceipt ??= new WeakMap<IntegrationReceipt, boolean>();
+  const cached = cache.get(receipt);
+  if (cached !== undefined) return cached;
+  const definitions: OperationVerificationCheck[] = [];
+  let matches = false;
+  try {
+    for (const outcome of binding.typedChecks) {
+      const definition = record.op.git?.verificationChecks?.find(({ id }) => id === outcome.id);
+      if (!definition || operationVerificationDefinitionDigest(definition) !== outcome.definitionSha256) return false;
+      if (outcome.status !== "SKIPPED") definitions.push(definition);
+    }
+    matches = verificationMaterialDigest(binding.worktree, definitions) === binding.materialInputsSha256;
+    return matches;
+  } catch {
+    return false;
+  } finally {
+    cache.set(receipt, matches);
+  }
+}
+
 function typedVerificationExcerpt(record: SavedOperation, receiptIndex: number, checkIndex: number): KnowledgeSessionExcerpt | undefined {
   const receipt = record.op.integrations?.[receiptIndex];
   const binding = receipt?.verificationBinding;
@@ -108,10 +133,11 @@ function typedVerificationExcerpt(record: SavedOperation, receiptIndex: number, 
   if (!receipt || !binding || !definition || check?.status !== "PASSED" ||
     check.definitionSha256 !== operationVerificationDefinitionDigest(definition) ||
     !run || run.command !== definition.command || run.timeoutMs !== definition.timeoutMs || run.exitCode !== 0 ||
-    run.outputTruncated || !DIGEST.test(run.outputSha256) || !currentIntegrationMatches(record, receipt)) return undefined;
+    run.outputTruncated || !DIGEST.test(run.outputSha256) || !currentIntegrationMatches(record, receipt) ||
+    !typedMaterialMatches(record, receipt)) return undefined;
   const content = JSON.stringify({
     integratedCommit: binding.commit, unitId: receipt.unitId, checkId: definition.id,
-    attemptId: binding.attemptId, definitionSha256: check.definitionSha256, requirement: definition.requirement, purpose: definition.purpose,
+    attemptId: binding.attemptId, materialInputsSha256: binding.materialInputsSha256, definitionSha256: check.definitionSha256, requirement: definition.requirement, purpose: definition.purpose,
     command: run.command, completedAt: run.completedAt, outputSha256: run.outputSha256,
   });
   return excerpt(record, `operation/${record.op.id}/typed-verification/${receiptIndex}/${checkIndex}`, "verified_evidence", content);
