@@ -12,6 +12,7 @@ import type { ProbeAdapter, ProbeInput } from "./probe_adapter.js";
 import { AutonomousAgent } from "../../agent.js";
 import type { HarnessConfig } from "../../types.js";
 import type { TurnResult } from "../turn.js";
+import { resolveCoreBinary } from "../../tools.js";
 
 export interface NexusAgentProbeOptions {
   model: string;
@@ -26,6 +27,7 @@ export interface NexusAgentProbeOptions {
 export interface NexusAgentProbeAdapterOptions {
   createAgent?: (config: HarnessConfig, workspace: string) => { run: (prompt: string, signal?: AbortSignal) => Promise<TurnResult>; shutdown?: () => void };
   resolveConfig?: (input: ProbeInput) => NexusAgentProbeOptions | undefined;
+  resolveCoreBinary?: () => string | undefined;
 }
 
 function hasDeterministicOracle(input: ProbeInput): boolean {
@@ -53,14 +55,26 @@ export class NexusAgentProbeAdapter implements ProbeAdapter {
       }
 
       const cfg = this.opts.resolveConfig?.(input);
-      if (!cfg && !this.opts.createAgent) {
-        const blocked: ProbeResult = {
-          schemaVersion: 1, id: `hprobe_${randomUUID()}`, runId: input.runId, candidateId: input.candidateId, caseId: input.case.id,
-          status: "BLOCKED", startedAt, endedAt: new Date().toISOString(),
-          metrics: { wallClockMs: Date.now() - started, tokens: 0, toolErrors: 0, verifierPass: null, score: null },
-          artifacts: {}, observations: ["nexus agent probe config unavailable; provide model/endpoint or injected createAgent"],
-        };
-        return input.store ? writeProbeArtifacts(input.store, blocked, { stderr: blocked.observations.join("\n") + "\n" }) : blocked;
+      const coreBinaryPath = this.opts.createAgent ? undefined : (this.opts.resolveCoreBinary ?? resolveCoreBinary)();
+      if (!this.opts.createAgent) {
+        if (!cfg) {
+          const blocked: ProbeResult = {
+            schemaVersion: 1, id: `hprobe_${randomUUID()}`, runId: input.runId, candidateId: input.candidateId, caseId: input.case.id,
+            status: "BLOCKED", startedAt, endedAt: new Date().toISOString(),
+            metrics: { wallClockMs: Date.now() - started, tokens: 0, toolErrors: 0, verifierPass: null, score: null },
+            artifacts: {}, observations: ["nexus agent probe config unavailable; provide model/endpoint or injected createAgent"],
+          };
+          return input.store ? writeProbeArtifacts(input.store, blocked, { stderr: blocked.observations.join("\n") + "\n" }) : blocked;
+        }
+        if (!coreBinaryPath) {
+          const blocked: ProbeResult = {
+            schemaVersion: 1, id: `hprobe_${randomUUID()}`, runId: input.runId, candidateId: input.candidateId, caseId: input.case.id,
+            status: "BLOCKED", startedAt, endedAt: new Date().toISOString(),
+            metrics: { wallClockMs: Date.now() - started, tokens: 0, toolErrors: 0, verifierPass: null, score: null },
+            artifacts: {}, observations: ["harness-core binary not found; build core or set NEXUS_CORE_BIN before running Nexus agent probes"],
+          };
+          return input.store ? writeProbeArtifacts(input.store, blocked, { stderr: blocked.observations.join("\n") + "\n" }) : blocked;
+        }
       }
 
       const tempHome = path.join(tempRoot, "home");
@@ -78,6 +92,7 @@ export class NexusAgentProbeAdapter implements ProbeAdapter {
         fullAccess: true,
         sandbox: cfg?.sandbox ?? "auto",
         sandboxNetwork: cfg?.network ?? false,
+        ...(coreBinaryPath ? { coreBinaryPath } : {}),
       } as any;
 
       const prevHome = process.env.HOME;

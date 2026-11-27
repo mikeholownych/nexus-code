@@ -29,13 +29,25 @@ export const CORE_PROTOCOL_VERSION = 1;
 /** Rust engine binaries the bridge looks for, in order (release before debug). */
 export function coreBinaryCandidates(): string[] {
   const packagedCoreDir = process.env.NEXUS_HOME ? path.join(process.env.NEXUS_HOME, "lib", "core") : undefined;
-  return [
+  const explicit = process.env.NEXUS_CORE_BIN?.trim();
+  const home = process.env.HOME || process.env.USERPROFILE;
+  const candidates = [
+    ...(explicit ? [path.resolve(explicit)] : []),
     ...(packagedCoreDir ? [path.join(packagedCoreDir, "harness-core")] : []),
     path.resolve(__dirname, "../../core/target/release/harness-core"),
     path.resolve(__dirname, "../../core/target/debug/harness-core"),
     path.resolve(__dirname, "../../core/target/release/harness-core.exe"),
     path.resolve(__dirname, "../../core/target/debug/harness-core.exe"),
+    // Installed/package layouts and common local build locations.
+    path.resolve(__dirname, "../core/harness-core"),
+    path.resolve(__dirname, "../../lib/core/harness-core"),
+    ...(home ? [
+      path.join(home, "nexus-code", "core", "target", "release", "harness-core"),
+      path.join(home, "nexus-code", "core", "target", "debug", "harness-core"),
+      path.join(home, ".nexus", "bin", "harness-core"),
+    ] : []),
   ];
+  return [...new Set(candidates)];
 }
 
 /** The engine binary the bridge would run, or undefined when it falls back to `cargo run`. */
@@ -775,6 +787,11 @@ export class RustCoreBridge {
   /** The command (or only) worker's process; the files worker is `channels.files.process`. */
   private get rpcProcess(): ChildProcess | null {
     return this.channels.primary.process;
+  }
+
+  /** Visible for tests/diagnostics: which core binary this bridge will run. */
+  public getCoreBinaryPath(): string | null {
+    return this.coreBinaryPath;
   }
 
   constructor(
