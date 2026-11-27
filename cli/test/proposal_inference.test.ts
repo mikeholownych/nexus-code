@@ -19,6 +19,7 @@ test("proposal inference rejects tool calls, prose and oversized replies", async
   const replies: ChatMessage[] = [
     { role: "assistant", content: '{"items":[]}', tool_calls: [{ id: "call", type: "function", function: { name: "write_file", arguments: "{}" } }] },
     { role: "assistant", content: 'Here is the plan: {"items":[]}' },
+    { role: "assistant", content: '{"items":[],"items":["duplicate"]}' },
     { role: "assistant", content: JSON.stringify({ items: "x".repeat(128 * 1024) }) },
   ];
   for (const reply of replies) {

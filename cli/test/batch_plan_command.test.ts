@@ -80,3 +80,43 @@ test("an operator can import a revised draft without executing it", async (t) =>
   assert.equal(JSON.parse(result.output.slice(result.output.indexOf("\n") + 1)).plan.objective, "Revised objective");
   assert.match((await executeBatchCommand("list", config)).output, /No batches/);
 });
+
+test("batch review records findings against the displayed digest without approving the draft", async (t) => {
+  const workspace = mkdtempSync(join(tmpdir(), "nexus-batch-plan-review-"));
+  t.after(() => rmSync(workspace, { recursive: true, force: true }));
+  const config: HarnessConfig = {
+    workspace, endpoint: "http://127.0.0.1:1", model: "test-planner",
+    shell: "bash", maxSteps: 1, temperature: 0,
+  };
+  const plan = {
+    version: 1, objective: "Inspect project", acceptanceCriteria: ["Record result"],
+    checks: [{ id: "final", command: "git status --short", cwd: ".", expectation: "exit 0", timeoutSeconds: 10, required: true }],
+    risks: [], assumptions: [], blockers: [],
+    units: [{
+      id: "inspect", title: "Inspect files", objective: "Read files", role: "researcher",
+      mode: "read", required: true, dependsOn: [], scope: ["."],
+      acceptanceCriteria: ["Report contents"], checks: [], outputs: ["Report"], handoffs: [],
+    }],
+  };
+  const saved = await executeBatchCommand("plan Inspect project", config, undefined, undefined, {
+    async propose() {
+      return { plan, provenance: { resourceId: "primary", model: "test-planner", disclosure: "local" } };
+    },
+  });
+  assert.equal(saved.success, true, saved.output);
+  const draft = JSON.parse(saved.output.slice(saved.output.indexOf("\n") + 1));
+  const reviewed = await executeBatchCommand(`plan review ${draft.id}`, config, undefined, undefined, {
+    async review(selected) {
+      assert.equal(selected.digest, draft.digest);
+      return {
+        review: { findings: [{ category: "acceptance", summary: "Define the output format", blocking: true }], uncertainty: [] },
+        provenance: { resourceId: "planner", model: "test-reviewer", disclosure: "local" },
+      };
+    },
+  });
+  assert.equal(reviewed.success, true, reviewed.output);
+  const shown = await executeBatchCommand(`plan show ${draft.id}`, config);
+  assert.match(shown.output, /Define the output format/);
+  assert.match(shown.output, new RegExp(draft.digest));
+  assert.match((await executeBatchCommand("list", config)).output, /No batches/);
+});

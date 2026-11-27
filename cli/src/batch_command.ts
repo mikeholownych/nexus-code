@@ -1,6 +1,6 @@
 import { BatchOrchestrator, batchStatus, parseBatchWords, readBatchInputFile, readBatchSpecFile, renderBatchResult } from "./batch.js";
 import { BatchPlanStore, parseBatchPlan, type BatchPlanDraft } from "./batch_plan.js";
-import { generateBatchPlanProposal } from "./batch_plan_generation.js";
+import { generateBatchPlanProposal, generateBatchPlanReview } from "./batch_plan_generation.js";
 import { visibleControls } from "./file_diff.js";
 import { formatDiagnosticForOutput, safeTerminal } from "./ui.js";
 import type { OperationEvent } from "./core/operation.js";
@@ -11,7 +11,12 @@ export interface BatchCommandResult {
   output: string;
 }
 
-const PLAN_USAGE = "Usage: /batch plan <objective> | plan show <draft-id> | plan import <file>";
+const PLAN_USAGE = "Usage: /batch plan <objective> | plan show|review <draft-id> | plan import <file> [previous-draft-id]";
+
+interface BatchPlanDependencies {
+  propose?: typeof generateBatchPlanProposal;
+  review?: typeof generateBatchPlanReview;
+}
 
 const USAGE = [
   "Usage: /batch <spec-file> | run <spec-file> | validate <spec-file>",
@@ -33,12 +38,16 @@ async function executePlanCommand(
   words: string[],
   config: HarnessConfig,
   signal: AbortSignal | undefined,
-  propose: typeof generateBatchPlanProposal,
+  dependencies: BatchPlanDependencies,
 ): Promise<BatchCommandResult> {
   if (words[0] === "accept") {
     return { success: false, output: "Plan execution is unavailable until the required verification gates are enabled." };
   }
-  if (["show", "import"].includes(words[0]) && words.length !== 2) return { success: false, output: PLAN_USAGE };
+  const action = words[0];
+  if ((["show", "review"].includes(action) && words.length !== 2) ||
+      (action === "import" && (words.length < 2 || words.length > 3))) {
+    return { success: false, output: PLAN_USAGE };
+  }
   try {
     const store = new BatchPlanStore(config.workspace);
     let draft: BatchPlanDraft;
@@ -49,9 +58,18 @@ async function executePlanCommand(
         throw new Error("This mode cannot save a plan draft.");
       }
       signal?.throwIfAborted();
-      if (words[0] === "import") {
-        draft = store.create(parseBatchPlan(readBatchInputFile(words[1], config.workspace), config.workspace));
+      if (action === "review") {
+        draft = store.read(words[1]);
+        const reviewPlan = dependencies.review ?? generateBatchPlanReview;
+        const { review, provenance } = await reviewPlan(draft, config, signal);
+        signal?.throwIfAborted();
+        store.recordReview(draft.id, draft.digest, provenance, review);
+      } else if (action === "import") {
+        const previous = words[2] ? store.read(words[2]) : undefined;
+        const plan = parseBatchPlan(readBatchInputFile(words[1], config.workspace), config.workspace);
+        draft = store.create(plan, previous?.provenance);
       } else {
+        const propose = dependencies.propose ?? generateBatchPlanProposal;
         const input = words.join(" ").trim();
         if (!input) throw new Error(PLAN_USAGE);
         const { plan, provenance } = await propose(input, config, signal);
@@ -59,9 +77,15 @@ async function executePlanCommand(
         draft = store.create(plan, provenance);
       }
     }
-    const normalized = JSON.stringify({ ...draft, workspace: safeTerminal(draft.workspace) }, null, 2)
+    const review = store.readReview(draft.id);
+    const normalized = JSON.stringify({
+      ...draft,
+      workspace: safeTerminal(draft.workspace),
+      ...(review ? { review } : {}),
+    }, null, 2)
       .split("\n").map(visibleControls).join("\n");
-    return { success: true, output: `Proposal saved for review.\n${normalized}` };
+    const status = review ? "Advisory review recorded." : "Proposal saved for review.";
+    return { success: true, output: `${status}\n${normalized}` };
   } catch (error) {
     return { success: false, output: formatDiagnosticForOutput(error) };
   }
@@ -73,12 +97,12 @@ export async function executeBatchCommand(
   config: HarnessConfig,
   signal?: AbortSignal,
   onEvent?: (event: OperationEvent) => void,
-  dependencies: { propose?: typeof generateBatchPlanProposal } = {},
+  dependencies: BatchPlanDependencies = {},
 ): Promise<BatchCommandResult> {
   const words = parseBatchWords(args);
   const first = words[0]?.toLowerCase();
   if (first === "plan" && words.length > 1) {
-    return executePlanCommand(words.slice(1), config, signal, dependencies.propose ?? generateBatchPlanProposal);
+    return executePlanCommand(words.slice(1), config, signal, dependencies);
   }
   const operation = new BatchOrchestrator(config, {
     signal,

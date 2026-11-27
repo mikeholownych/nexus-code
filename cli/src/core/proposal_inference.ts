@@ -1,4 +1,5 @@
 import type { LocalLlmClient } from "../client.js";
+import { parseStrictJson } from "./strict_json.js";
 
 const MAX_INPUT_BYTES = 64 * 1024;
 const MAX_REPLY_BYTES = 128 * 1024;
@@ -29,7 +30,7 @@ export async function requestJsonProposal(
     throw new Error("Proposal output is too large.");
   }
   try {
-    return JSON.parse(response.content) as unknown;
+    return parseStrictJson(response.content, 8);
   } catch {
     throw new Error("Proposal output is not valid JSON.");
   }
