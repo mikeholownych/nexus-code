@@ -96,7 +96,8 @@ export function runHookProcess(request: HookProcessRequest): Promise<HookProcess
     let file: string;
     let args: string[];
     if (typeof request.command === "string") {
-      file = "/bin/sh";
+      // Fixed system shell; command text is hook config, not env-derived path.
+      file = "/bin/sh"; // codeql[js/shell-command-injection-from-environment]
       args = ["-c", request.command];
     } else {
       const exe = request.command[0] ?? "";

@@ -380,7 +380,6 @@ export class HarnessOrchestrator {
           run.status = "BLOCKED";
           run.reason = `Required baseline probe ${b.id} did not complete with usable evidence (${b.status}).`;
           run.nextAction = "Resolve the probe failure or sandbox requirement, then start a new HIR run.";
-          run.actualUsage.wallClockMs += Date.now() - started;
           run.updatedAt = nowIso();
           store.saveRun(run);
           recordEvent(store, run.id, "hir.blocked", run.reason, { probeId: b.id, probeStatus: b.status });
@@ -459,6 +458,14 @@ export class HarnessOrchestrator {
     }
 
     if (opts.signal?.aborted || store.cancellationRequested(runId)) return this.cancelInStore(runId, store);
+    // A blocked baseline or exhausted run budget is not a promotion result. In
+    // particular, do not persist a READY_FOR_REVIEW report from partial probes.
+    if ((run.status as string) === "BLOCKED") {
+      run.actualUsage.wallClockMs += Date.now() - started;
+      run.updatedAt = nowIso();
+      store.saveRun(run);
+      return run;
+    }
     const rank = (r: "apply" | "review" | "reject" | "defer") => ({ apply: 4, review: 3, defer: 2, reject: 1 }[r]);
     const betterCount = (sc: ScorecardEntry[]) => sc.filter((s) => s.dimension === "correctness" && s.verdict === "better").length;
     const worseCount = (sc: ScorecardEntry[]) => sc.filter((s) => s.dimension === "correctness" && s.verdict === "worse").length;
