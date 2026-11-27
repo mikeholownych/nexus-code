@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { computeCandidateIdentitySync } from "./core/candidate.js";
 import type { DurableOperationState, IntegrationReceipt } from "./core/operation.js";
+import { operationVerificationDefinitionDigest } from "./core/operation_verification.js";
 import { migrateOperationState } from "./core/operation_schema.js";
 import { isLinkedWorktreeDir, redactForPersistence } from "./core/persistence_protection.js";
 import { assertPrivateDir, readPrivateJson } from "./core/runner_store.js";
@@ -14,7 +15,7 @@ import type { KnowledgeEvidence } from "./knowledge_suggestions.js";
 import { currentEntry, openRepo } from "./worktrunk/repo.js";
 
 const RECORD_ID = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,159}$/;
-const REFERENCE = /^operation\/([A-Za-z0-9_-][A-Za-z0-9._-]{0,159})(?:\/(unit|verification)\/(\d{1,6}))?$/;
+const REFERENCE = /^operation\/([A-Za-z0-9_-][A-Za-z0-9._-]{0,159})(?:\/(unit|verification|typed-verification)\/(\d{1,6})(?:\/(\d{1,2}))?)?$/;
 const COMMIT = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 const DIGEST = /^[a-f0-9]{64}$/;
 const MAX_BYTES = 8 * 1024 * 1024;
@@ -24,6 +25,7 @@ const MAX_EXCERPT_BYTES = 1500;
 interface SavedOperation {
   workspace: string;
   op: DurableOperationState;
+  cleanIntegrationCommit?: string | null;
 }
 
 function readOperation(workspace: string, id: string): SavedOperation | undefined {
@@ -54,31 +56,40 @@ function excerpt(record: SavedOperation, ref: string, source: KnowledgeEvidence[
   return { ref, content, evidence: { revision, source } };
 }
 
-function verifiedIntegration(record: SavedOperation, receipt: IntegrationReceipt): string | undefined {
+function currentIntegrationMatches(record: SavedOperation, receipt: IntegrationReceipt): boolean {
   const git = record.op.git;
   const binding = receipt.verificationBinding;
-  const required = git?.integrationVerifiers;
-  if (record.op.status !== "COMPLETE" || !git || !binding || !required?.length ||
+  if (record.op.status !== "COMPLETE" || !git || !binding || !COMMIT.test(binding.commit) ||
+    binding.commit !== receipt.integratedCommit || binding.worktree !== git.integrationWorktree) return false;
+  if (record.cleanIntegrationCommit !== undefined) return record.cleanIntegrationCommit === binding.commit;
+  try {
+    if (!inspectWorkspaceGitSafety(record.workspace).safe) return false;
+    const parent = openRepo(record.workspace);
+    if (!isLinkedWorktreeDir(binding.worktree, parent.commonDir) || !inspectWorkspaceGitSafety(binding.worktree).safe) return false;
+    const candidateRepo = openRepo(binding.worktree);
+    const current = currentEntry(candidateRepo);
+    if (candidateRepo.commonDir !== parent.commonDir || current?.branch !== git.integrationBranch || !COMMIT.test(current.head)) return false;
+    const candidate = computeCandidateIdentitySync(binding.worktree, {
+      baseRef: current.head, includeUntracked: true, maxEntries: 4096, maxTotalBytes: 16 * 1024 * 1024,
+    });
+    record.cleanIntegrationCommit = candidate.rootBaseSha === current.head && !candidate.trackedChanges.length && !candidate.untrackedFiles.length
+      ? current.head : null;
+    return record.cleanIntegrationCommit === binding.commit;
+  } catch {
+    record.cleanIntegrationCommit = null;
+    return false;
+  }
+}
+
+function verifiedIntegration(record: SavedOperation, receipt: IntegrationReceipt): string | undefined {
+  const binding = receipt.verificationBinding;
+  const required = record.op.git?.integrationVerifiers;
+  if (!binding || !required?.length ||
     (receipt.verification !== "PASSED" && receipt.verification !== "PASSED_POSTHOC") ||
-    !COMMIT.test(binding.commit) || binding.commit !== receipt.integratedCommit || binding.worktree !== git.integrationWorktree ||
     !required.every((command) =>
       receipt.mergedChecks?.some((check) => check.command === command && check.status === "PASSED" && check.owners.includes("operator") && !check.outputTruncated)
-      && binding.runs.some((run) => run.command === command && run.exitCode === 0 && run.outputTruncated === false && DIGEST.test(run.outputSha256)))) {
-    return undefined;
-  }
-  try {
-    if (!inspectWorkspaceGitSafety(record.workspace).safe) return undefined;
-    const parent = openRepo(record.workspace);
-    if (!isLinkedWorktreeDir(binding.worktree, parent.commonDir) || !inspectWorkspaceGitSafety(binding.worktree).safe) return undefined;
-    const candidateRepo = openRepo(binding.worktree);
-    if (candidateRepo.commonDir !== parent.commonDir || currentEntry(candidateRepo)?.head !== binding.commit) return undefined;
-    const candidate = computeCandidateIdentitySync(binding.worktree, {
-      baseRef: binding.commit, includeUntracked: true, maxEntries: 4096, maxTotalBytes: 16 * 1024 * 1024,
-    });
-    if (candidate.rootBaseSha !== binding.commit || candidate.trackedChanges.length || candidate.untrackedFiles.length) return undefined;
-  } catch {
-    return undefined;
-  }
+      && binding.runs.some((run) => run.command === command && run.exitCode === 0 && run.outputTruncated === false && DIGEST.test(run.outputSha256))) ||
+    !currentIntegrationMatches(record, receipt)) return undefined;
   return JSON.stringify({
     integratedCommit: binding.commit,
     unitId: receipt.unitId,
@@ -86,6 +97,24 @@ function verifiedIntegration(record: SavedOperation, receipt: IntegrationReceipt
       .filter((run) => required.includes(run.command) && run.exitCode === 0 && !run.outputTruncated && DIGEST.test(run.outputSha256))
       .map(({ command, completedAt, outputSha256 }) => ({ command, completedAt, outputSha256 })),
   });
+}
+
+function typedVerificationExcerpt(record: SavedOperation, receiptIndex: number, checkIndex: number): KnowledgeSessionExcerpt | undefined {
+  const receipt = record.op.integrations?.[receiptIndex];
+  const binding = receipt?.verificationBinding;
+  const check = binding?.typedChecks?.[checkIndex];
+  const definition = check && record.op.git?.verificationChecks?.find((item) => item.id === check.id);
+  const run = check?.run;
+  if (!receipt || !binding || !definition || check?.status !== "PASSED" ||
+    check.definitionSha256 !== operationVerificationDefinitionDigest(definition) ||
+    !run || run.command !== definition.command || run.timeoutMs !== definition.timeoutMs || run.exitCode !== 0 ||
+    run.outputTruncated || !DIGEST.test(run.outputSha256) || !currentIntegrationMatches(record, receipt)) return undefined;
+  const content = JSON.stringify({
+    integratedCommit: binding.commit, unitId: receipt.unitId, checkId: definition.id,
+    definitionSha256: check.definitionSha256, requirement: definition.requirement, purpose: definition.purpose,
+    command: run.command, completedAt: run.completedAt, outputSha256: run.outputSha256,
+  });
+  return excerpt(record, `operation/${record.op.id}/typed-verification/${receiptIndex}/${checkIndex}`, "verified_evidence", content);
 }
 
 function operationExcerpt(record: SavedOperation): KnowledgeSessionExcerpt | undefined {
@@ -116,8 +145,15 @@ export function knowledgeOperationExcerpts(workspace: string, id: string): Knowl
   const result = header ? [header] : [];
   const integrations = record.op.integrations ?? [];
   for (let index = integrations.length - 1; index >= 0 && index >= integrations.length - MAX_SOURCES && result.length < MAX_SOURCES; index--) {
-    const source = verificationExcerpt(record, index);
-    if (source) result.push(source);
+    const typed = integrations[index].verificationBinding?.typedChecks ?? [];
+    for (let check = 0; check < typed.length && result.length < MAX_SOURCES; check++) {
+      const source = typedVerificationExcerpt(record, index, check);
+      if (source) result.push(source);
+    }
+    if (result.length < MAX_SOURCES) {
+      const source = verificationExcerpt(record, index);
+      if (source) result.push(source);
+    }
   }
   for (let index = record.op.units.length - 1; index >= 0 && index >= record.op.units.length - MAX_SOURCES && result.length < MAX_SOURCES; index--) {
     const source = unitExcerpt(record, index);
@@ -133,6 +169,10 @@ export function resolveKnowledgeOperationEvidence(workspace: string, ref: string
     const record = readOperation(workspace, match[1]);
     if (!record) return undefined;
     const index = Number(match[3]);
+    if (match[2] === "typed-verification") {
+      return match[4] === undefined ? undefined : typedVerificationExcerpt(record, index, Number(match[4]))?.evidence;
+    }
+    if (match[4] !== undefined) return undefined;
     if (match[2] === "unit") return unitExcerpt(record, index)?.evidence;
     if (match[2] === "verification") return verificationExcerpt(record, index)?.evidence;
     return operationExcerpt(record)?.evidence;

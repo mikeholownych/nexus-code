@@ -6,6 +6,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { executeKnowledgeSuggestionCommand } from "../src/knowledge_command.js";
 import type { HarnessConfig } from "../src/types.js";
+import { operationVerificationDefinitionDigest } from "../src/core/operation_verification.js";
 import { newOperation } from "../src/core/operation.js";
 import { knowledgeOperationExcerpts, resolveKnowledgeOperationEvidence } from "../src/knowledge_operation_evidence.js";
 
@@ -25,7 +26,7 @@ test("completed operations provide scoped provenance and classify only captured 
   git("init");
   git("-c", "user.name=Nexus Fixture", "-c", "user.email=nexus@example.invalid", "commit", "--allow-empty", "-m", "fixture");
   const commit = git("rev-parse", "HEAD");
-  git("worktree", "add", "--detach", integrationWorktree);
+  git("worktree", "add", "-b", "fixture", integrationWorktree);
 
   const now = new Date().toISOString();
   const check = { command: "npm test", owners: ["operator"], status: "PASSED" };
@@ -80,6 +81,26 @@ test("completed operations provide scoped provenance and classify only captured 
   run.outputTruncated = true;
   persist();
   assert.equal(resolveKnowledgeOperationEvidence(workspace, proof.ref), undefined);
+  const definition = { id: "tests", purpose: "Run tests", command: run.command, requirement: "required" as const, cwd: ".", timeoutMs: run.timeoutMs };
+  const typedRun = { ...run, outputTruncated: false };
+  const typed = { id: definition.id, definitionSha256: operationVerificationDefinitionDigest(definition), status: "PASSED" as const, run: typedRun };
+  op.git.integrationVerifiers = [];
+  op.git.verificationChecks = [definition];
+  op.integrations[0].mergedChecks = [];
+  op.integrations[0].verificationBinding = { commit, worktree: integrationWorktree, runs: [], typedChecks: [typed] };
+  persist();
+  const typedProof = knowledgeOperationExcerpts(workspace, op.id).find((row) => row.evidence.source === "verified_evidence");
+  assert.ok(typedProof);
+  assert.deepEqual(resolveKnowledgeOperationEvidence(workspace, typedProof.ref), typedProof.evidence);
+  assert.equal(JSON.parse(typedProof.content).checkId, "tests");
+  definition.purpose = "Mismatched definition";
+  persist();
+  assert.equal(resolveKnowledgeOperationEvidence(workspace, typedProof.ref), undefined);
+  definition.purpose = "Run tests";
+  typedRun.timeoutMs--;
+  persist();
+  assert.equal(resolveKnowledgeOperationEvidence(workspace, typedProof.ref), undefined);
+
   op.status = "PAUSED";
   persist();
   assert.throws(() => knowledgeOperationExcerpts(workspace, op.id), /terminal operation/);
