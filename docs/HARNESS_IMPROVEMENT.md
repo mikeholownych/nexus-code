@@ -12,15 +12,19 @@ Harness Improvement Runs are a Nexus-native, evidence-gated workflow for improvi
 ## CLI
 
 ```bash
-nexus harness init --task-suite <suite.json> --base <path> [--base-kind path|profile|fixture] [--json]
-nexus harness run <hir-id> --mock [--candidate <path>] [--json]
-nexus harness run <hir-id> --real [--allow-unsandboxed-real-probe] [--candidate <path>] [--json]
+nexus harness init --task-suite <suite.json> --base <path> [--base-kind path|profile|fixture] [--max-rounds N] [--max-candidates-per-round N] [--max-probes N] [--json]
+nexus harness run <hir-id> --mock [--candidate <path> ...] [--json]
+nexus harness run <hir-id> --real [--allow-unsandboxed-real-probe] [--candidate <path> ...] [--json]
+nexus harness run <hir-id> --nexus-agent [--nexus-propose] [--nexus-model ... --nexus-endpoint ...] [--candidate <path> ...] [--json]
 nexus harness status [hir-id] [--json]
 nexus harness show <hir-id> [--json]
 nexus harness report <hir-id> [--json] [--out report.md]
+nexus harness apply-preview <hir-id> [--json]
 nexus harness cancel <hir-id> [--json]
 nexus harness library list|show <id>|accept <id>|reject <id> [--json]
 ```
+
+`--nexus-agent` runs probes through the Nexus agent in an isolated copied candidate workspace and requires deterministic verifier/artifact oracles. `--nexus-propose` enables model-backed round>1 proposal generation in isolated workspace; proposals/reflections/library lessons are advisory and never auto-applied.
 
 ## Slash command
 
@@ -58,11 +62,12 @@ HIR stores durable state under `<state>/harness/` (default `~/.nexus/harness` or
 - `probes/<probe-id>/result.json`
 - `library/entries/<hlesson-id>.json`
 
-## Limits (v1.3.1 MVP)
+## Limits / invariants
 
-- Real probes support deterministic verifier/artifact cases and run in isolated temp workspaces.
-- No auto-apply. Library accept/reject records operator decision only; it does not mutate live harnesses.
-- Profile snapshot copies files from an explicit path/profile source; review snapshots/reports for sensitive content before sharing.
+- **No live mutation / no auto-apply.** Library accept/reject and apply-preview are review-only; manual reviewed apply is required.
+- Real/Nexus-agent probes run in isolated temp workspaces and require deterministic verifier/artifact oracles in v1.3.1.
+- Nexus agent/proposal modes require explicit model/endpoint config; credentials should come from env/config, not committed files.
+- Profile snapshot copies files from an explicit path/profile source; review snapshots/reports for sensitive content before sharing. Redaction is heuristic.
 
 ## Real probe sandbox policy
 
