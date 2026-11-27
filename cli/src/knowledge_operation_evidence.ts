@@ -162,7 +162,7 @@ export function knowledgeOperationExcerpts(workspace: string, id: string): Knowl
   return result;
 }
 
-export function resolveKnowledgeOperationEvidence(workspace: string, ref: string): KnowledgeEvidence | undefined {
+export function readKnowledgeOperationSource(workspace: string, ref: string): KnowledgeSessionExcerpt | undefined {
   const match = REFERENCE.exec(ref);
   if (!match) return undefined;
   try {
@@ -170,13 +170,17 @@ export function resolveKnowledgeOperationEvidence(workspace: string, ref: string
     if (!record) return undefined;
     const index = Number(match[3]);
     if (match[2] === "typed-verification") {
-      return match[4] === undefined ? undefined : typedVerificationExcerpt(record, index, Number(match[4]))?.evidence;
+      return match[4] === undefined ? undefined : typedVerificationExcerpt(record, index, Number(match[4]));
     }
     if (match[4] !== undefined) return undefined;
-    if (match[2] === "unit") return unitExcerpt(record, index)?.evidence;
-    if (match[2] === "verification") return verificationExcerpt(record, index)?.evidence;
-    return operationExcerpt(record)?.evidence;
+    if (match[2] === "unit") return unitExcerpt(record, index);
+    if (match[2] === "verification") return verificationExcerpt(record, index);
+    return operationExcerpt(record);
   } catch {
     return undefined;
   }
+}
+
+export function resolveKnowledgeOperationEvidence(workspace: string, ref: string): KnowledgeEvidence | undefined {
+  return readKnowledgeOperationSource(workspace, ref)?.evidence;
 }

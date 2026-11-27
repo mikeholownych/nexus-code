@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { computeCandidateIdentitySync, type ValidationReceipt } from "./core/candidate.js";
+import { auditCompaction, isCompactionRecord, messageDigest } from "./core/compaction_record.js";
+import { readArchiveLines } from "./core/durable_file.js";
 import { assertNoPendingStateRestore } from "./core/state_restore.js";
 import type { TurnResult } from "./core/turn.js";
 import { outcomeFromEvidence } from "./core/verification_outcome.js";
@@ -13,10 +15,12 @@ import type { KnowledgeEvidence } from "./knowledge_suggestions.js";
 import type { ChatMessage } from "./types.js";
 
 const SESSION_ID = /^session_\d{8}_\d{6}_[a-z0-9]{1,8}$/;
-const SOURCE_REF = /^(session_\d{8}_\d{6}_[a-z0-9]{1,8}):(\d{1,8}|verification)$/;
+const SOURCE_REF = /^(session_\d{8}_\d{6}_[a-z0-9]{1,8}):(?:(\d{1,8}|verification)|archive:(c\d{1,8}-[a-f0-9]{8}):(\d{1,8}))$/;
 const MAX_SESSION_BYTES = 8 * 1024 * 1024;
 const MAX_SOURCE_BYTES = 1500;
 const MAX_SOURCES = 12;
+const MAX_ARCHIVE_SOURCES = 4;
+const COMPACTION_ID = /^c\d{1,8}-[a-f0-9]{8}$/;
 const TERMINAL_STATUSES = new Set(["completed", "failed", "interrupted"]);
 const ROLE_CLASS = { user: "operator", assistant: "model", tool: "tool" } as const;
 
@@ -30,6 +34,7 @@ interface SourceSession {
   messages: ChatMessage[];
   lastTurn?: TurnResult;
   validationReceipts?: ValidationReceipt[];
+  history?: { committedCompactions?: unknown };
 }
 
 export interface KnowledgeSessionExcerpt {
@@ -52,14 +57,73 @@ function readSession(workspace: string, sessionId: string): SourceSession | unde
   return session;
 }
 
-function excerptAt(session: SourceSession, index: number): KnowledgeSessionExcerpt | undefined {
-  const message = session.messages[index];
+function messageExcerpt(
+  session: SourceSession,
+  ref: string,
+  message: ChatMessage | undefined,
+  archiveDigest?: string,
+): KnowledgeSessionExcerpt | undefined {
   if (!message || message.harness !== undefined || (message.role !== "user" && message.role !== "assistant" && message.role !== "tool") ||
     typeof message.content !== "string" || !message.content.trim() || Buffer.byteLength(message.content) > MAX_SOURCE_BYTES) return undefined;
   if (redactForPersistence(message.content) !== message.content) return undefined;
-  const ref = `${session.sessionId}:${index}`;
-  const revision = createHash("sha256").update(JSON.stringify([ref, session.workspacePath, session.candidateId, message.role, message.content])).digest("hex");
+  const inputs = archiveDigest
+    ? [ref, session.workspacePath, archiveDigest, messageDigest(message)]
+    : [ref, session.workspacePath, session.candidateId, message.role, message.content];
+  const revision = createHash("sha256").update(JSON.stringify(inputs)).digest("hex");
   return { ref, content: message.content, evidence: { revision, source: ROLE_CLASS[message.role] } };
+}
+
+function excerptAt(session: SourceSession, index: number): KnowledgeSessionExcerpt | undefined {
+  return messageExcerpt(session, `${session.sessionId}:${index}`, session.messages[index]);
+}
+
+function archivedSession(session: SourceSession) {
+  const ids = session.history?.committedCompactions;
+  if (!Array.isArray(ids) || !ids.length || ids.length > 4096 ||
+    !ids.every((id): id is string => typeof id === "string" && COMPACTION_ID.test(id))) return undefined;
+  const committed = new Set(ids);
+  if (committed.size !== ids.length) return undefined;
+  const dir = defaultSessionsDir();
+  assertNoPendingStateRestore(dir);
+  const archive = readArchiveLines<ChatMessage>(path.join(dir, `${session.sessionId}.history.jsonl`), committed, {
+    privateByteLimit: MAX_SESSION_BYTES,
+  });
+  assertNoPendingStateRestore(dir);
+  return { ids, archive };
+}
+
+function archiveGroup(archive: ReturnType<typeof archivedSession>, id: string) {
+  const group = archive?.archive.byCompaction?.get(id);
+  if (!group || !isCompactionRecord(group.record)) return undefined;
+  try {
+    if (auditCompaction(id, group.record, group.messages).status !== "ok") return undefined;
+    return { messages: group.messages, digest: group.record.coveredSha256 };
+  } catch {
+    return undefined;
+  }
+}
+
+function archiveExcerpt(
+  session: SourceSession, id: string, index: number,
+  group: NonNullable<ReturnType<typeof archiveGroup>>,
+): KnowledgeSessionExcerpt | undefined {
+  return messageExcerpt(session, `${session.sessionId}:archive:${id}:${index}`, group.messages[index], group.digest);
+}
+
+function recentArchiveExcerpts(session: SourceSession): KnowledgeSessionExcerpt[] {
+  const saved = archivedSession(session);
+  if (!saved) return [];
+  const excerpts: KnowledgeSessionExcerpt[] = [];
+  for (let index = saved.ids.length - 1; index >= 0 && excerpts.length < MAX_ARCHIVE_SOURCES; index--) {
+    const id = saved.ids[index];
+    const group = archiveGroup(saved, id);
+    if (!group) continue;
+    for (let row = group.messages.length - 1; row >= 0 && excerpts.length < MAX_ARCHIVE_SOURCES; row--) {
+      const excerpt = archiveExcerpt(session, id, row, group);
+      if (excerpt) excerpts.unshift(excerpt);
+    }
+  }
+  return excerpts;
 }
 
 function verificationExcerpt(session: SourceSession, workspace: string): KnowledgeSessionExcerpt | undefined {
@@ -92,21 +156,29 @@ export function knowledgeSessionExcerpts(workspace: string, sessionId: string): 
   const session = readSession(workspace, sessionId);
   if (!session) throw new Error("A saved terminal session in this exact workspace is required.");
   const proof = verificationExcerpt(session, workspace);
+  const archived = recentArchiveExcerpts(session);
   const excerpts = proof ? [proof] : [];
-  for (let index = session.messages.length - 1; index >= 0 && excerpts.length < MAX_SOURCES; index--) {
+  for (let index = session.messages.length - 1; index >= 0 && excerpts.length + archived.length < MAX_SOURCES; index--) {
     const excerpt = excerptAt(session, index);
     if (excerpt) excerpts.unshift(excerpt);
   }
-  return excerpts;
+  return [...archived, ...excerpts];
 }
 
-/** Reopen the original source for freshness checks. A missing or pruned source resolves to unknown. */
-export function resolveKnowledgeSessionEvidence(workspace: string, ref: string): KnowledgeEvidence | undefined {
+/** Reopen a precise source without loading or resuming the conversation. */
+export function readKnowledgeSessionSource(workspace: string, ref: string): KnowledgeSessionExcerpt | undefined {
   const match = SOURCE_REF.exec(ref);
   if (!match) return undefined;
   const session = readSession(workspace, match[1]);
   if (!session) return undefined;
-  return match[2] === "verification"
-    ? verificationExcerpt(session, workspace)?.evidence
-    : excerptAt(session, Number(match[2]))?.evidence;
+  if (match[3]) {
+    const group = archiveGroup(archivedSession(session), match[3]);
+    return group ? archiveExcerpt(session, match[3], Number(match[4]), group) : undefined;
+  }
+  return match[2] === "verification" ? verificationExcerpt(session, workspace) : excerptAt(session, Number(match[2]));
+}
+
+/** A missing or pruned source resolves to unknown. */
+export function resolveKnowledgeSessionEvidence(workspace: string, ref: string): KnowledgeEvidence | undefined {
+  return readKnowledgeSessionSource(workspace, ref)?.evidence;
 }
