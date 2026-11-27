@@ -15,7 +15,7 @@ import { composeDecision } from "./compose.js";
 import { buildPromotionReport, renderPromotionReportMd } from "./report.js";
 import { draftLibraryEntriesFromReport } from "./library.js";
 import { recordEvidence, recordEvent } from "./events.js";
-import { reflectCandidate } from "./reflection.js";
+import { reflectCandidate, type ReflectionSummary } from "./reflection.js";
 import { NoopProposalAdapter, type ProposalAdapter } from "./proposal_adapter.js";
 import { NexusModelProposalAdapter } from "./nexus_model_proposal_adapter.js";
 import { assertValid, validateHirRun } from "./schema.js";
@@ -248,6 +248,7 @@ export class HarnessOrchestrator {
     const candidates: HarnessCandidate[] = [];
     const baseProbeByCase = new Map<string, ProbeResult>();
     const allScorecards: ScorecardEntry[] = [];
+    const allReflections: ReflectionSummary[] = [];
     const decisions: Array<{ candidateId: string; round: number; decision: ReturnType<typeof composeDecision>; scorecard: ScorecardEntry[] }> = [];
     let usedCandidates = 0;
 
@@ -259,7 +260,16 @@ export class HarnessOrchestrator {
       }
       let roundInputs = round === 1 ? uniqueRequested : [baseTree];
       if (round > 1) {
-        const proposals = await proposalAdapter.propose({ run, suite, baseTree, round, priorCandidates: candidates.map((c) => ({ id: c.id, treeRef: c.treeRef, diffRef: c.diffRef })), priorProbes: run.probeIds.map((id) => { try { return store.loadProbe(id); } catch { return undefined; } }).filter(Boolean) as ProbeResult[], priorScorecards: allScorecards });
+        const proposals = await proposalAdapter.propose({
+          run,
+          suite,
+          baseTree,
+          round,
+          priorCandidates: candidates.map((c) => ({ id: c.id, treeRef: c.treeRef, diffRef: c.diffRef })),
+          priorProbes: run.probeIds.map((id) => { try { return store.loadProbe(id); } catch { return undefined; } }).filter(Boolean) as ProbeResult[],
+          priorScorecards: allScorecards,
+          priorReflections: allReflections,
+        });
         if (proposals.length > 0) {
           roundInputs = proposals.map((p) => path.resolve(p.candidatePath));
           recordEvent(store, run.id, "hir.proposals", `Round ${round} received ${proposals.length} proposal(s)`, { round, proposals: proposals.map((p) => ({ candidatePath: p.candidatePath, source: p.source, rationale: p.rationale, targetWeaknesses: p.targetWeaknesses })) });
@@ -386,6 +396,7 @@ export class HarnessOrchestrator {
         decisions.push({ candidateId: candidate.id, round, decision, scorecard });
         recordEvidence(store, run.id, { kind: "comparison", subjectId: candidate.id, summary: `decision=${decision.recommendation}`, refs: [], confidence: "medium", deterministic: true });
         const reflection = reflectCandidate({ candidateId: candidate.id, round, recommendation: decision.recommendation, scorecard, probes: candProbes });
+        allReflections.push(reflection);
         recordEvidence(store, run.id, { kind: "reflection", subjectId: candidate.id, summary: `reflection ${decision.recommendation}; strengths=${reflection.strengths.length}; weaknesses=${reflection.weaknesses.length}`, refs: reflection.evidenceIds, confidence: "medium", deterministic: false });
         recordEvent(store, run.id, "hir.reflection", `Reflection for ${candidate.id}`, reflection as unknown as Record<string, unknown>);
         if (run.status === "BLOCKED") break;

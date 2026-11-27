@@ -1,4 +1,5 @@
 import type { HarnessImprovementRun, HirTaskSuite, ProbeResult, ScorecardEntry } from "./types.js";
+import type { ReflectionSummary } from "./reflection.js";
 
 export interface ProposalContext {
   run: HarnessImprovementRun;
@@ -8,6 +9,7 @@ export interface ProposalContext {
   priorCandidates: Array<{ id: string; treeRef: string; diffRef: string }>;
   priorProbes: ProbeResult[];
   priorScorecards: ScorecardEntry[];
+  priorReflections?: ReflectionSummary[];
 }
 
 export interface ProposalResult {

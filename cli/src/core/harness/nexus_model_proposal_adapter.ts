@@ -87,11 +87,13 @@ export class NexusModelProposalAdapter implements ProposalAdapter {
             "You are proposing an improved harness candidate for a Harness Improvement Run.",
             "Do NOT mutate live harness/profile state outside this isolated workspace.",
             "Return JSON in a code block with shape: {\"rationale\":string,\"targetWeaknesses\":string[],\"edits\":[{\"path\":string,\"content\":string}]}",
-            "Only edit files inside the workspace; use relative paths; no secrets.",
+            "Only edit files inside the workspace; use relative paths; no secrets. Prefer small, targeted edits addressing observed weaknesses.",
             `Round: ${ctx.round}`,
             `Task suite: ${ctx.suite.id}`,
             `Cases: ${JSON.stringify(ctx.suite.cases.map((c) => ({ id: c.id, description: c.description, expected: c.expected })))}`,
+            `Prior reflections: ${JSON.stringify((ctx.priorReflections ?? []).slice(-10))}`,
             `Prior scorecards: ${JSON.stringify(ctx.priorScorecards.slice(-20))}`,
+            `Prior probe observations: ${JSON.stringify(ctx.priorProbes.slice(-10).map((p) => ({ caseId: p.caseId, status: p.status, verifierPass: p.metrics.verifierPass, observations: p.observations.slice(-3) })))}`,
           ].join("\n");
           turn = await agent.run(prompt);
         } finally {
