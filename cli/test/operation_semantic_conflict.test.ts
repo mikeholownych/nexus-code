@@ -334,6 +334,44 @@ test("resume requires the stored verifier binding to match the current integrati
   assert.equal((await restored.run()).status, "COMPLETE");
 });
 
+test("a verification receipt that fails to persist requires fresh evidence on retry", async (t) => {
+  const root = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pa2-home-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new OperationStore(root, path.join(home, "tasks"), home);
+  const state = operation(root, ["u1"], "op-pa2-evidence-write-failure");
+  const marker = path.join(home, "verification-attempts");
+  const command = "printf '%s\n' check >> " + JSON.stringify(marker);
+  const executor: WorkUnitExecutor = {
+    integrationPolicy: () => ({ verifier: command }),
+    async run(_unit, _resource, ctx) {
+      write(ctx.workspace!, "u1.txt", "one\n");
+      return { kind: "completed", summary: "done", outcome: "NOT_REQUIRED" };
+    },
+  };
+  let failedWrite = false;
+  await new OperationRunner(state, {
+    executor, clock: clock(), persist: (s) => {
+      if (s.integrations?.length && !failedWrite) {
+        failedWrite = true;
+        throw new Error("fixture could not persist verification receipt");
+      }
+      store.save(s);
+    },
+  }).run();
+
+  assert.equal(failedWrite, true);
+  const loaded = store.load(state.id);
+  assert.equal(loaded.status, "BLOCKED");
+  assert.equal(loaded.integrations?.length ?? 0, 0);
+  assert.equal(loaded.events.some((event) => event.type === "WORK_INTEGRATED"), false);
+  const retry = new OperationRunner(loaded, { executor, clock: clock(), persist: (s) => store.save(s) });
+  retry.scheduler.resolve(loaded.blocked!.decisions[0].id, "1");
+  assert.equal((await retry.run()).status, "COMPLETE");
+  assert.equal(fs.readFileSync(marker, "utf8"), "check\ncheck\n");
+});
+
 test("operation status --json shows the verified receipt and the rejection", async (t) => {
   const root = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pa2-home-"));
