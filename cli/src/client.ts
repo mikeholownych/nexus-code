@@ -2146,13 +2146,21 @@ export class LocalLlmClient {
         await readChatStream(res.body, parser, () => watchdog.onChunk());
       } catch (streamErr: any) {
         syncReported();
-        settleCurrentInferenceSubmission(outputLimit.lease, "unknown");
-        if (streamErr instanceof ChatErrorFrame) throw this.fromChatErrorFrame(streamErr, requestId);
-        if (streamErr instanceof ProviderStreamError) throw this.fromStreamError(streamErr, requestId);
+        if (streamErr instanceof ChatErrorFrame) {
+          settleCurrentInferenceSubmission(outputLimit.lease, "response_received");
+          throw this.fromChatErrorFrame(streamErr, requestId);
+        }
+        if (streamErr instanceof ProviderStreamError) {
+          settleCurrentInferenceSubmission(outputLimit.lease, "response_received");
+          throw this.fromStreamError(streamErr, requestId);
+        }
         const classified = classifyTransportError(streamErr, signal, requestId, "stream", parser.text());
         // A transport error after the terminal event cannot change the (already complete) response.
         const postCompletionTransportError = parser.complete() && !(streamErr instanceof InferenceError) && classified.kind !== "aborted";
-        if (!postCompletionTransportError) throw classified;
+        if (!postCompletionTransportError) {
+          settleCurrentInferenceSubmission(outputLimit.lease, "unknown");
+          throw classified;
+        }
       } finally {
         watchdog.done();
       }

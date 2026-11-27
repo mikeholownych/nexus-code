@@ -9,6 +9,7 @@ import path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import { InferenceError, LocalLlmClient } from "../src/client.js";
+import { activateInferenceSubmissionAdmissionScope, withInferenceSubmissionAdmissionScope } from "../src/core/inference_admission.js";
 
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse, body: string) => void;
 interface Seen { id?: string; stream: boolean; remotePort?: number }
@@ -148,7 +149,18 @@ describe("inference transport: success paths", () => {
         res.write(text("done") + finish() + "data: [DONE]\n\n");
         setTimeout(() => res.socket?.destroy(), 20);
       },
-      async (base) => assert.equal((await client(base).chatCompletionStream(msgs, [], () => {})).content, "done"),
+      async (base) => {
+        const outcomes: string[] = [];
+        await withInferenceSubmissionAdmissionScope(async (scope) => {
+          activateInferenceSubmissionAdmissionScope(scope, () => undefined, {
+            reserve: () => 1,
+            markDispatched: () => {},
+            settle: (_reservation, outcome) => outcomes.push(outcome),
+          });
+          assert.equal((await client(base).chatCompletionStream(msgs, [], () => {})).content, "done");
+        });
+        assert.deepEqual(outcomes, ["response_received"]);
+      },
     );
   });
 
