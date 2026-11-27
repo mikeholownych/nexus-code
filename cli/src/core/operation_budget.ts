@@ -1,10 +1,11 @@
 /**
  * Operator command behind `nexus operation budget`: tighten, loosen or remove an operation's token cap.
  *
- * The cap is `policy.maxTotalTokens`. It is checked before every dispatch against the rolled-up child token totals, so
- * a change applies from the next dispatch. A change is an audited operator decision: who, when, old and new value go
- * into the operation's event journal. It takes the driver lock, so a record a live driver holds in memory is never
- * rewritten under it (the command is refused until that driver stops). It does not resume a goal paused on the old cap;
+ * The cap is `policy.maxTotalTokens`. It checks rolled-up child token totals before work and terminal completion, and
+ * operation-scoped inference requests reserve an input/output token estimate before dispatch. These reservations do
+ * not establish provider-reported usage or a hard external token ceiling. A change is an audited operator decision:
+ * who, when, old and new value go into the operation's event journal. It takes the driver lock, so it never rewrites
+ * a record held by a live driver (the command is refused until that driver stops). It does not resume a goal paused on the old cap;
  * resuming stays the operator's separate step.
  */
 import * as os from "node:os";

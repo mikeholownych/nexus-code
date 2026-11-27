@@ -296,6 +296,14 @@ provider-side work that continues after a connection is lost. Nexus retains at m
 for admission; once that bound is reached, new identities are refused while existing ones remain available. Only reset
 the admission state after confirming that no operation is active.
 
+For an additional host-wide cap across all provider identities, set `NEXUS_MAX_SHARED_OPERATION_UNITS` to an integer
+from 1 to 64. The default is four active durable-operation work units across Nexus processes sharing the same operator
+state directory. This limit is independent of the provider-identity limit above; both must admit a unit before it
+starts. If either limit is full, the operation waits and retries. Changing the configured capacity while a lease is
+active fails closed until the current leases are released. Operations already running in an older Nexus process do not
+hold this new aggregate lease and are not counted until that process exits; the cap applies to work admitted by
+versions implementing this setting.
+
 ## Limitations
 
 - Implemented: OpenRouter, OpenAI (Responses), Anthropic (Messages), generic OpenAI-compatible, ChatGPT plan and

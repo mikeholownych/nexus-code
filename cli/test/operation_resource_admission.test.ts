@@ -34,6 +34,14 @@ function clock(): RecoveryClock {
   return { now: () => now, random: () => 0.5, sleep: async (ms) => { now += ms; } };
 }
 
+function controllableClock(): { clock: RecoveryClock; advance(ms: number): void } {
+  let now = Date.now();
+  return {
+    clock: { now: () => now, random: () => 0.5, sleep: async (ms) => { now += ms; } },
+    advance: (ms) => { now += ms; },
+  };
+}
+
 test("shared slots compose across independent operation admission instances", () => {
   const f = fixture();
   try {
@@ -212,6 +220,53 @@ test("simultaneous processes cannot both reserve a shared one-slot resource", as
   }
 });
 
+test("simultaneous processes cannot exceed the named shared operation capacity", async () => {
+  const f = fixture();
+  const children: ReturnType<typeof spawn>[] = [];
+  try {
+    const readyFiles = [path.join(f.root, "operation-ready-1"), path.join(f.root, "operation-ready-2")];
+    const goFile = path.join(f.root, "operation-go");
+    const source = `
+      import * as fs from "node:fs";
+      import { setTimeout as delay } from "node:timers/promises";
+      import { SharedResourceAdmission } from "./src/core/shared_resource_admission.ts";
+      fs.writeFileSync(process.env.READY_FILE, "ready");
+      const until = Date.now() + 5000;
+      while (!fs.existsSync(process.env.GO_FILE) && Date.now() < until) await delay(10);
+      if (!fs.existsSync(process.env.GO_FILE)) throw new Error("start barrier timed out");
+      const admission = new SharedResourceAdmission(process.env.ADMISSION_DIR);
+      const lease = admission.acquireNamed("durable-operation-unit", 1, "operation work unit");
+      if (!lease) { console.log("busy"); process.exit(0); }
+      console.log("acquired");
+      await delay(500);
+      lease.release();
+    `;
+    children.push(...readyFiles.map((ready) => spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", source], {
+      cwd: path.resolve(import.meta.dirname, ".."),
+      env: { ...process.env, ADMISSION_DIR: f.dir, READY_FILE: ready, GO_FILE: goFile },
+      stdio: ["ignore", "pipe", "pipe"],
+    })));
+    const outputs = children.map((child) => new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+      let stdout = "";
+      let stderr = "";
+      child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });
+      child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
+      child.once("error", reject);
+      child.once("close", (code) => resolve({ code, stdout, stderr }));
+    }));
+    const deadline = Date.now() + 5000;
+    while (readyFiles.some((file) => !fs.existsSync(file)) && Date.now() < deadline) await delay(10);
+    assert.ok(readyFiles.every((file) => fs.existsSync(file)), "both child processes reach the start barrier");
+    fs.writeFileSync(goFile, "go");
+    const results = await Promise.all(outputs);
+    assert.deepEqual(results.map((result) => result.code), [0, 0], results.map((result) => result.stderr).join("\n"));
+    assert.deepEqual(results.map((result) => result.stdout.trim()).sort(), ["acquired", "busy"]);
+  } finally {
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    f.cleanup();
+  }
+});
+
 test("simultaneous new identities cannot race past the persistent identity bound", async () => {
   const f = fixture();
   const children: ReturnType<typeof spawn>[] = [];
@@ -315,6 +370,8 @@ test("a process crash releases its kernel-owned resource slot", async () => {
 
 test("separate operation runners share one resource slot and leave the waiting unit unstarted", async () => {
   const f = fixture();
+  const priorLimit = process.env.NEXUS_MAX_SHARED_OPERATION_UNITS;
+  process.env.NEXUS_MAX_SHARED_OPERATION_UNITS = "2";
   try {
     let firstStarted!: () => void;
     const started = new Promise<void>((resolve) => { firstStarted = resolve; });
@@ -345,12 +402,89 @@ test("separate operation runners share one resource slot and leave the waiting u
     assert.equal(waiting.status, "WAITING");
     assert.equal(secondStarts, 0, "no side effect starts while the shared slot is held");
     assert.equal(secondState.units[0].status, "RUNNABLE");
+    const releasedOperationSlot = sharedAdmission().acquireNamed("durable-operation-unit", 2, "operation work unit");
+    assert.ok(releasedOperationSlot, "a provider-slot miss releases the already acquired aggregate slot");
+    releasedOperationSlot.release();
 
     finishFirst();
     assert.equal((await firstRun).status, "COMPLETE");
     assert.equal((await secondRunner.run()).status, "COMPLETE");
     assert.equal(secondStarts, 1, "the next operation runs after the first releases its slot");
   } finally {
+    if (priorLimit === undefined) delete process.env.NEXUS_MAX_SHARED_OPERATION_UNITS;
+    else process.env.NEXUS_MAX_SHARED_OPERATION_UNITS = priorLimit;
+    f.cleanup();
+  }
+});
+
+test("shared active operation capacity accepts only operator integers from 1 through 64", () => {
+  const priorLimit = process.env.NEXUS_MAX_SHARED_OPERATION_UNITS;
+  const state = newOperation("op-active-cap-config", "objective", [{ id: "unit", prompt: "run" }], [resource()], Date.now());
+  try {
+    for (const value of ["0", "65", "1.5", "-1", "not-a-number"]) {
+      process.env.NEXUS_MAX_SHARED_OPERATION_UNITS = value;
+      assert.throws(
+        () => new OperationRunner(state, { executor: { run: async () => ({ kind: "completed", summary: "unused", outcome: "NOT_REQUIRED" }) }, persist: () => undefined }),
+        /Invalid NEXUS_MAX_SHARED_OPERATION_UNITS/,
+        `invalid setting ${JSON.stringify(value)} must fail before operation work starts`,
+      );
+    }
+    process.env.NEXUS_MAX_SHARED_OPERATION_UNITS = "64";
+    assert.doesNotThrow(() => new OperationRunner(state, {
+      executor: { run: async () => ({ kind: "completed", summary: "unused", outcome: "NOT_REQUIRED" }) },
+      persist: () => undefined,
+    }));
+  } finally {
+    if (priorLimit === undefined) delete process.env.NEXUS_MAX_SHARED_OPERATION_UNITS;
+    else process.env.NEXUS_MAX_SHARED_OPERATION_UNITS = priorLimit;
+  }
+});
+
+test("separate operations with different providers share the active operation cap", async () => {
+  const f = fixture();
+  const priorLimit = process.env.NEXUS_MAX_SHARED_OPERATION_UNITS;
+  process.env.NEXUS_MAX_SHARED_OPERATION_UNITS = "1";
+  try {
+    let firstStarted!: () => void;
+    const started = new Promise<void>((resolve) => { firstStarted = resolve; });
+    let finishFirst!: () => void;
+    const gate = new Promise<void>((resolve) => { finishFirst = resolve; });
+    const firstResource = resource({ id: "provider-a", endpoint: "https://provider-a.example.invalid/v1" });
+    const secondResource = resource({ id: "provider-b", endpoint: "https://provider-b.example.invalid/v1" });
+    const firstState = newOperation("op-active-cap-a", "first", [{ id: "unit-a", prompt: "run" }], [firstResource], Date.now());
+    const secondState = newOperation("op-active-cap-b", "second", [{ id: "unit-b", prompt: "run" }], [secondResource], Date.now());
+    const firstRunner = new OperationRunner(firstState, {
+      clock: clock(),
+      resourceAdmission: new SharedResourceAdmission(f.dir),
+      persist: () => undefined,
+      executor: { run: async () => { firstStarted(); await gate; return { kind: "completed", summary: "first done", outcome: "NOT_REQUIRED" }; } },
+    });
+    let secondStarts = 0;
+    const secondTime = controllableClock();
+    const secondRunner = new OperationRunner(secondState, {
+      clock: secondTime.clock,
+      maxInProcessWaitMs: 0,
+      resourceAdmission: new SharedResourceAdmission(f.dir),
+      persist: () => undefined,
+      executor: { run: async () => { secondStarts++; return { kind: "completed", summary: "second done", outcome: "NOT_REQUIRED" }; } },
+    });
+
+    const firstRun = firstRunner.run();
+    await started;
+    const waiting = await secondRunner.run();
+    assert.equal(waiting.status, "WAITING");
+    assert.equal(secondStarts, 0, "the aggregate cap blocks work even when provider identities differ");
+    assert.equal(secondState.units[0].status, "RUNNABLE");
+    assert.match(secondState.wait?.reason ?? "", /shared operation/);
+
+    finishFirst();
+    assert.equal((await firstRun).status, "COMPLETE");
+    secondTime.advance(1_000);
+    assert.equal((await secondRunner.run()).status, "COMPLETE");
+    assert.equal(secondStarts, 1, "the waiting operation starts after the active unit releases its lease");
+  } finally {
+    if (priorLimit === undefined) delete process.env.NEXUS_MAX_SHARED_OPERATION_UNITS;
+    else process.env.NEXUS_MAX_SHARED_OPERATION_UNITS = priorLimit;
     f.cleanup();
   }
 });

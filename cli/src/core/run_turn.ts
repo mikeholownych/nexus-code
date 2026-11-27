@@ -826,6 +826,10 @@ async function runTurnBody(this: any, taskPrompt: string | any[], onConfirm: Con
           if (err.failure === "persistence_failed") {
             this.ui.stopSpinner(false, "Operation inference budget could not be saved; no provider request was sent");
             persistenceFailure ??= err.message;
+          } else if (err.failure === "token_budget_exhausted") {
+            this.ui.stopSpinner(false, "Operation token estimate limit reached; no provider request was sent");
+            stopReason = "OPERATION_TOKEN_BUDGET_EXHAUSTED";
+            stopDetail = err.message;
           } else {
             this.ui.stopSpinner(false, err.failure === "history_unknown"
               ? "Operation inference history is unknown; no provider request was sent"

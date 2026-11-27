@@ -136,6 +136,18 @@ function sharedResourceMaximum(): number {
   return value;
 }
 
+/** Operator-owned host-wide ceiling across active durable-operation work units. */
+function sharedOperationMaximum(): number {
+  const raw = operatorSetting("NEXUS_MAX_SHARED_OPERATION_UNITS");
+  if (raw === undefined) return 4;
+  if (!/^\d+$/.test(raw)) throw new Error(`Invalid NEXUS_MAX_SHARED_OPERATION_UNITS='${raw}': expected an integer from 1 to ${MAX_CONCURRENT_UNITS}.`);
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_CONCURRENT_UNITS) {
+    throw new Error(`Invalid NEXUS_MAX_SHARED_OPERATION_UNITS='${raw}': expected an integer from 1 to ${MAX_CONCURRENT_UNITS}.`);
+  }
+  return value;
+}
+
 /** PA-2: how many verifiers held on the merged tree, for the operator's event line. */
 function mergedChecksNote(checks: readonly MergedCheck[] | undefined): string {
   return checks?.length ? ` (${checks.length} merged-tree ${checks.length === 1 ? "check" : "checks"} passed)` : "";
@@ -147,19 +159,21 @@ export class OperationRunner {
   private readonly clock: RecoveryClock;
   private readonly revalidator: OperationRevalidator;
   private readonly resourceAdmission: SharedResourceAdmission;
+  private readonly sharedOperationCapacity: number;
   private readonly git: OperationGit | undefined;
   /** One merge at a time: all units share the operation's integration worktree. */
   private integrationChain: Promise<void> = Promise.resolve();
   private activeElapsedSinceMs?: number;
   private activeBudgetController?: AbortController;
   private activeBudgetExpired = false;
-  private operationInferenceBudgetPaused = false;
+  private operationBudgetAdmissionPaused = false;
 
   constructor(
     readonly state: DurableOperationState,
     private readonly opts: OperationRunnerOptions,
   ) {
     this.clock = opts.clock ?? realRecoveryClock;
+    this.sharedOperationCapacity = sharedOperationMaximum();
     this.resourceAdmission = opts.resourceAdmission ?? new SharedResourceAdmission(
       path.join(credentialStorageHome(), ".local/state/nexus/resource-admission"),
       { operatorMaxUnits: sharedResourceMaximum() },
@@ -408,19 +422,46 @@ export class OperationRunner {
             this.pauseForUnmeasuredTokenBudget(cap);
             return this.state;
           }
-          if (total >= cap) {
-            this.pauseForTokenBudget(total, cap);
+          const committed = Math.max(total, this.state.tokenReservations ?? total);
+          if (committed >= cap) {
+            this.pauseForTokenBudget(committed, cap);
             return this.state;
+          }
+          // Seed migrated operations from complete measured usage before units become RUNNING. Every later provider
+          // call durably adds its request estimate before dispatch.
+          if (this.state.tokenReservations !== committed) {
+            this.state.tokenReservations = committed;
+            this.save();
           }
         }
         const admitted: Assignment[] = [];
         const leases: ResourceSlotLease[] = [];
+        let operationCapacityBusy = false;
         try {
           for (const assignment of ready) {
             if (signal?.aborted) break;
-            const lease = this.resourceAdmission.acquire(assignment.resource);
-            if (!lease) continue;
-            leases.push(lease);
+            const operationLease = this.resourceAdmission.acquireNamed(
+              "durable-operation-unit",
+              this.sharedOperationCapacity,
+              "operation work unit",
+            );
+            if (!operationLease) {
+              operationCapacityBusy = true;
+              continue;
+            }
+            let resourceLease: ResourceSlotLease | null;
+            try {
+              resourceLease = this.resourceAdmission.acquire(assignment.resource);
+            } catch (error) {
+              operationLease.release();
+              throw error;
+            }
+            if (!resourceLease) {
+              operationLease.release();
+              continue;
+            }
+            // Release the provider-specific lock first, the reverse of acquisition, then return the aggregate slot.
+            leases.push(resourceLease, operationLease);
             admitted.push(assignment);
           }
         } catch (error) {
@@ -436,7 +477,9 @@ export class OperationRunner {
           this.scheduler.wait({
             kind: "wait",
             wakeAt,
-            reason: "shared inference-resource capacity is reserved by another operation",
+            reason: operationCapacityBusy
+              ? "shared operation or inference-resource capacity is reserved by another operation"
+              : "shared inference-resource capacity is reserved by another operation",
             parked: ready.map((assignment) => assignment.unit.id),
           });
           this.save();
@@ -462,7 +505,7 @@ export class OperationRunner {
           for (const lease of leases) lease.release();
         }
         if (signal?.aborted) return this.stopForAbort();
-        if (this.operationInferenceBudgetPaused) return this.state;
+        if (this.operationBudgetAdmissionPaused) return this.state;
         continue;
       }
       if (d.kind === "wait") {
@@ -481,6 +524,20 @@ export class OperationRunner {
         const verificationProblem = this.git?.completionVerificationProblem(this.state.integrations ?? []);
         if (verificationProblem) {
           this.blockOnGit(verificationProblem);
+          return this.state;
+        }
+      }
+      if (d.kind === "complete" && this.state.policy.maxTotalTokens !== undefined) {
+        // The pre-dispatch check protects the next batch, but a final batch has no next dispatch to trigger it.
+        // Never report completion when its measured usage exceeded the cap or its final usage is unavailable.
+        const cap = this.state.policy.maxTotalTokens;
+        const total = this.rolledUpTokens();
+        if (total === undefined) {
+          this.pauseForUnmeasuredTokenBudget(cap);
+          return this.state;
+        }
+        if (total > cap) {
+          this.pauseForTokenBudget(total, cap);
           return this.state;
         }
       }
@@ -651,7 +708,11 @@ export class OperationRunner {
         };
       }
       const result: UnitRunResult = await withInferenceSubmissionAdmissionScope(async (scope) => {
-        activateInferenceSubmissionAdmissionScope(scope, () => this.reserveInferenceSubmission());
+        activateInferenceSubmissionAdmissionScope(
+          scope,
+          (estimatedInputTokens, requestedOutputTokens) => this.reserveInferenceSubmission(estimatedInputTokens, requestedOutputTokens),
+          { requireOutputTokenLimit: this.state.policy.maxTotalTokens !== undefined },
+        );
         return this.opts.executor.run(unit, resource, ctx);
       });
       if (result.kind === "completed") {
@@ -676,7 +737,23 @@ export class OperationRunner {
         if (err.failure === "persistence_failed") {
           this.state.status = "PAUSED";
           this.state.pauseReason = `Paused: ${err.message}`;
-          this.operationInferenceBudgetPaused = true;
+          this.operationBudgetAdmissionPaused = true;
+        } else if (err.failure === "output_limit_unsupported") {
+          this.state.status = "PAUSED";
+          this.state.pauseReason = `Paused: ${err.message} Configure a provider that honors an output-token limit, or explicitly change the operation token cap before resuming.`;
+          this.operationBudgetAdmissionPaused = true;
+          delete this.state.wait;
+          delete this.state.blocked;
+          for (const candidate of this.state.units) {
+            if (candidate.status === "RUNNING") candidate.status = "RUNNABLE";
+          }
+          this.state.updatedAt = new Date(this.clock.now()).toISOString();
+          try {
+            this.save();
+          } catch (saveError: any) {
+            this.state.pauseReason = `Paused: required provider output-token limit is unavailable, and the pause could not be durably saved (${saveError?.message ?? saveError}).`;
+            err = new OperationInferenceAdmissionError("persistence_failed", this.state.pauseReason);
+          }
         }
         this.scheduler.emit("OPERATION_PAUSED", err.message, {
           unitId: unit.id,
@@ -710,6 +787,7 @@ export class OperationRunner {
     if (this.state.status === "COMPLETE" || this.state.status === "CANCELLED" || this.state.status === "PAUSED") return false;
     const reason = `Paused: goal token budget cannot be enforced because child token usage is unavailable; inspect or repair the accounting before resuming (cap ${cap}).`;
     this.state.status = "PAUSED";
+    this.operationBudgetAdmissionPaused = true;
     this.state.pauseReason = reason;
     delete this.state.wait;
     delete this.state.blocked;
@@ -747,7 +825,7 @@ export class OperationRunner {
     const count = this.state.inferenceCalls;
     const reason = `Paused: operation inference submission budget exhausted (${count} of ${cap} provider requests). Raise the cap with 'nexus operation budget ${this.state.id} --max-total-inference-submissions <n>', then resume; blocked units need an explicit retry decision.`;
     this.state.status = "PAUSED";
-    this.operationInferenceBudgetPaused = true;
+    this.operationBudgetAdmissionPaused = true;
     this.state.pauseReason = reason;
     delete this.state.wait;
     delete this.state.blocked;
@@ -767,7 +845,7 @@ export class OperationRunner {
     this.save();
   }
 
-  private reserveInferenceSubmission(): void {
+  private reserveInferenceSubmission(estimatedInputTokens?: number, requestedOutputTokens?: number): number | undefined {
     if (!this.state.historyKnown) {
       try {
         this.pauseForUnknownInferenceHistory();
@@ -788,16 +866,79 @@ export class OperationRunner {
         `operation inference submission budget exhausted (${this.state.inferenceCalls}/${cap}); the operation is paused and no additional provider request was sent`,
       );
     }
+
+    const tokenCap = this.state.policy.maxTotalTokens;
+    let nextTokenReservations = this.state.tokenReservations;
+    let admittedOutputTokens: number | undefined;
+    if (tokenCap !== undefined) {
+      if (!Number.isSafeInteger(estimatedInputTokens) || estimatedInputTokens! < 1 || !Number.isSafeInteger(requestedOutputTokens) || requestedOutputTokens! < 1) {
+        try {
+          this.pauseForUnmeasuredTokenBudget(tokenCap);
+        } catch (error: any) {
+          throw new OperationInferenceAdmissionError("persistence_failed", `Operation token budget state could not be saved before provider dispatch: ${error?.message ?? error}`);
+        }
+        throw new OperationInferenceAdmissionError(
+          "token_budget_exhausted",
+          "operation token budget requires positive, safe per-request input and output-token estimates; no provider request was sent",
+        );
+      }
+      const reserved = nextTokenReservations;
+      if (!Number.isSafeInteger(reserved) || reserved! < 0) {
+        try {
+          this.pauseForUnmeasuredTokenBudget(tokenCap);
+        } catch (error: any) {
+          throw new OperationInferenceAdmissionError("persistence_failed", `Operation token budget state could not be saved before provider dispatch: ${error?.message ?? error}`);
+        }
+        throw new OperationInferenceAdmissionError(
+          "token_budget_exhausted",
+          "operation token budget reservation history is unavailable; no provider request was sent",
+        );
+      }
+      const availableOutputTokens = tokenCap - reserved! - estimatedInputTokens!;
+      if (availableOutputTokens < 1) {
+        const minimumRequestEstimate = estimatedInputTokens! + 1;
+        const reason = `operation token budget reservation exhausted (${reserved} reserved + ${minimumRequestEstimate} minimum requested estimate exceeds ${tokenCap}); no provider request was sent`;
+        try {
+          this.pauseForTokenReservationBudget(reserved!, minimumRequestEstimate, tokenCap);
+        } catch (error: any) {
+          throw new OperationInferenceAdmissionError("persistence_failed", `Operation token budget pause could not be saved before provider dispatch: ${error?.message ?? error}`);
+        }
+        throw new OperationInferenceAdmissionError("token_budget_exhausted", reason);
+      }
+      admittedOutputTokens = Math.min(requestedOutputTokens!, availableOutputTokens);
+      nextTokenReservations = reserved! + estimatedInputTokens! + admittedOutputTokens;
+    }
+
     this.state.inferenceCalls += 1;
+    if (tokenCap !== undefined) this.state.tokenReservations = nextTokenReservations;
     try {
-      // Synchronous state persistence completes before the provider call can be dispatched.
+      // Synchronous state persistence completes before the provider call can be dispatched. Request estimates are
+      // never refunded: cancellation, retries, or an unknown provider outcome must not reopen admitted capacity.
       this.save();
     } catch (error: any) {
+      this.state.status = "PAUSED";
+      this.state.pauseReason = `Paused: provider request allowance could not be durably saved; no request was sent (${error?.message ?? error}).`;
+      this.operationBudgetAdmissionPaused = true;
       throw new OperationInferenceAdmissionError(
         "persistence_failed",
-        `operation inference submission count could not be durably saved before provider dispatch: ${error?.message ?? error}`,
+        `operation inference submission and token allowance could not be durably saved before provider dispatch: ${error?.message ?? error}`,
       );
     }
+    return admittedOutputTokens;
+  }
+
+  private pauseForTokenReservationBudget(reserved: number, requested: number, cap: number): void {
+    if (this.state.status === "COMPLETE" || this.state.status === "CANCELLED" || this.state.status === "PAUSED") return;
+    const reason = `Paused: operation token estimate exhausted (${reserved} reserved + ${requested} requested estimate exceeds ${cap} tokens). Raise the cap with 'nexus operation budget ${this.state.id} --max-total-tokens <n|none>', then resume.`;
+    this.state.status = "PAUSED";
+    this.operationBudgetAdmissionPaused = true;
+    this.state.pauseReason = reason;
+    delete this.state.wait;
+    delete this.state.blocked;
+    this.scheduler.emit("OPERATION_PAUSED", reason, {
+      detail: { reason: "token_budget_reservation", reservedTokens: reserved, requestedTokens: requested, maxTotalTokens: cap },
+    });
+    this.save();
   }
 
   private recordDelivery(unitId: string, messages?: OperationMessage[]): void {

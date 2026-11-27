@@ -272,8 +272,8 @@ export interface OperationPolicy {
   /** Operator-declared aggregate reservations for parallel work; these are admission weights, not OS-enforced quotas. */
   executionBudget?: ExecutionResourceRequest;
   /**
-   * Optional cap on rolled-up tokens consumed by agent sub-operations (reported + estimated). When reached, the
-   * operation pauses before starting new work so the operator can inspect, raise the cap, or cancel.
+   * Optional cap on rolled-up token usage (reported + estimated) and request estimates reserved before provider
+   * dispatch. Estimates are not provider-reported usage; the operation also checks actual persisted usage on completion.
    */
   maxTotalTokens?: number;
   /** Maximum active wall time across this operation's durable runs, including all concurrently executing units. */
@@ -484,6 +484,8 @@ export interface DurableOperationState {
   inferenceCalls: number;
   /** False on migrated records whose pre-upgrade provider requests cannot be counted exactly. */
   historyKnown: boolean;
+  /** Cumulative request-token estimate reserved before provider dispatch; not provider-reported usage. */
+  tokenReservations?: number;
   /** Timestamp of the current driver interval; retained so a crash is conservatively charged on resume. */
   activeSinceMs?: number;
   /** Operator-visible reason the operation was paused (stale recovery, explicit pause, etc.). */
@@ -547,7 +549,7 @@ export type UnitRunResult =
   /** Inference may have executed and its bounded replays are spent: never resubmitted elsewhere automatically. */
   | { kind: "execution_unknown"; failure: InferenceFailure }
   /** The operation-wide inference gate refused before provider dispatch; no external effect occurred. */
-  | { kind: "admission_denied"; reason: string; failure: "budget_exhausted" | "history_unknown" | "persistence_failed" }
+  | { kind: "admission_denied"; reason: string; failure: "budget_exhausted" | "token_budget_exhausted" | "history_unknown" | "persistence_failed" }
   | ({ kind: "failed" } & BlockSpec & {
       rejectedOutput?: RejectedOutput;
       /** The attempt ran a verifier that did not pass: kept on the unit for a dependent failure_debugger. */
@@ -670,6 +672,7 @@ export function newOperation(
     activeElapsedHistoryComplete: true,
     inferenceCalls: 0,
     historyKnown: true,
+    tokenReservations: 0,
     units: units.map((u) => ({
       id: u.id,
       title: u.title ?? u.id,

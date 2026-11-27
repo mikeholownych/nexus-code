@@ -421,20 +421,22 @@ function v4Record(): Record<string, any> {
   return { ...JSON.parse(JSON.stringify(state)), schemaVersion: 4 };
 }
 
-test("schema: this build writes operation document version 9 and adds bounded request accounting to older records", () => {
-  assert.equal(CURRENT_OPERATION_SCHEMA_VERSION, 9);
+test("schema: this build writes operation document version 10 and adds bounded request accounting to older records", () => {
+  assert.equal(CURRENT_OPERATION_SCHEMA_VERSION, 10);
   const v4 = v4Record();
   v4.schemaVersion = 6;
   v4.origin = { kind: "job", jobId: "job-pa2", unattended: true };
   delete v4.inferenceCalls;
   delete v4.historyKnown;
+  delete v4.tokenReservations;
   delete v4.policy.maxInferenceCalls;
   const before = JSON.parse(JSON.stringify(v4));
   const migrated = migrateOperationState(v4);
-  assert.equal(migrated.schemaVersion, 9);
+  assert.equal(migrated.schemaVersion, 10);
   assert.equal(migrated.inferenceCalls, 0);
   assert.equal(migrated.historyKnown, false, "pre-v9 inference usage is unknown");
   assert.equal(migrated.policy.maxInferenceCalls, 1_000);
+  assert.equal(migrated.tokenReservations, undefined, "legacy token accounting is not fabricated during migration");
   assert.deepEqual(v4, before, "the migration mutated its input");
   assert.equal(migrated.git!.integrationVerifiers, undefined, "nothing is pinned after the fact");
 
@@ -446,7 +448,7 @@ test("schema: this build writes operation document version 9 and adds bounded re
 
 test("schema: a record from a newer build is refused, never interpreted", (t) => {
   const newer = { ...v4Record(), schemaVersion: CURRENT_OPERATION_SCHEMA_VERSION + 1 };
-  assert.throws(() => migrateOperationState(newer), (error: Error) => error instanceof UnsupportedOperationSchemaError && /schema 10 is newer than this build supports \(9\)/.test(error.message));
+  assert.throws(() => migrateOperationState(newer), (error: Error) => error instanceof UnsupportedOperationSchemaError && error.recordVersion === CURRENT_OPERATION_SCHEMA_VERSION + 1);
 
   // Through the store too, and the record is left in place (not quarantined, not rewritten).
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pa2-home-"));

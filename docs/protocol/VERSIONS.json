@@ -48,5 +48,10 @@
     "protocol": 1,
     "schemaSha256": "7e11903fdccc3e456993551b30bbbf7c26e62093e9c37ba81fe09a473edefad2",
     "note": "Add OPERATION_INFERENCE_SUBMISSION_BUDGET_EXHAUSTED to the turn stop reasons for durable operation-wide request caps. The new reason is additive, so protocol stays 1."
+  },
+  {
+    "protocol": 1,
+    "schemaSha256": "af40b861ad86186d974ed1296a8c914567bde5c38c138b82c5e10d77a3a5d44b",
+    "note": "Add OPERATION_TOKEN_BUDGET_EXHAUSTED to turn results for the durable operation-wide request-token estimate ceiling; additive protocol v1 change."
   }
 ]

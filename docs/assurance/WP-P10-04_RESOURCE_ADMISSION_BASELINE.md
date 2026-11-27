@@ -2,7 +2,7 @@
 
 **Inspected revision:** `e65439de136af22ac3b99c14c843d706efa173b9` (`release/v1.3.0`)
 
-## Finding
+## Finding at inspected baseline
 
 The scheduler enforces resource slots and CPU/memory reservations within one durable operation. The inspected path does not share those reservations across distinct `OperationRunner` instances or operation IDs. Two operations can therefore each admit work against the same configured one-slot provider resource. This is a confirmed cross-operation admission gap, not evidence that the per-operation scheduler is unbounded.
 
@@ -62,7 +62,7 @@ HOME=/tmp node --import /home/mike/nexus-code/cli/node_modules/tsx/dist/loader.m
 
 **Control with `delete process.env.NEXUS_RECEIPTS` in the same harness:** `{"firstAdmission":"admitted","receiptsAfterFirst":1,"secondAdmission":"cloud request limit reached (NEXUS_CLOUD_MAX_REQUESTS=1; 1 recorded, 0 in flight)","totalsAfterFirst":1}`.
 
-**Result:** `FAIL` — the opt-out path bypasses the configured in-process request limit. This probe did not exercise provider inference or billing. The separate-process/restart reset follows from the process-static singleton and in-memory arrays; it was not represented as an executed cross-process experiment here.
+**Result:** `FAIL` — the opt-out path bypassed the configured in-process request limit at the historical baseline; the local remediation below closes that path. This probe did not exercise provider inference or billing. The separate-process/restart behavior is tested in the cross-process probe below.
 
 ### Local remediation evidence
 
@@ -72,14 +72,14 @@ On Node 24.11.1, `cli/test/provider_limits.test.ts` passed **10/10**, including 
 
 ## Post-merge integration status (measured 2026-11-26)
 
-The baseline finding above was reproduced at `e65439de` on 2026-11-25. The following changes are now present on `release/v1.3.1` at `03759986a7b22cfcfc3020bcc5bfcac0bf4999b6`; this supersedes the baseline's proposed next step to add cross-operation admission.
+The baseline finding above was reproduced at `e65439de` on 2026-11-25. The following changes are now present on `release/v1.3.1` at `5061a3e83ce6daf34f34785bd3753f11604ba77d`; this supersedes the baseline's proposed next step to add cross-operation admission.
 
 ### Implemented and verified
 
 - **Receipt opt-out no longer bypasses configured provider limits.** PR #829 merged the aggregate-only accounting fix as `65f7cdc9`. On the current release tree, `cli/src/usage.ts` retains private request/token/cost totals when `NEXUS_RECEIPTS=0`, while keeping detailed receipts hidden and unwritten. The totals are still process-local and are not durable across process restarts; this is not cross-process usage accounting.
 - **Inference-resource slots are admitted across operation IDs and Nexus processes on the same host/shared directory.** PR #830 merged as `b5dc77b73871fdfeda9576c592b48a8c74ad340b`. `SharedResourceAdmission` is used after the existing per-operation scheduler and before dispatch. Capacity is operator-owned (`NEXUS_MAX_SHARED_RESOURCE_UNITS`, default 1, bounded to 1–64); workspace declarations may lower it but cannot raise it. Identity is canonicalized and hashed, including provider/account/model or pool scope without persisting endpoint credentials. Kernel locks hold active slots until executor settlement or process exit; inconsistent or corrupt admission state fails closed. PR CI run `45671930702` and CodeQL run `45671930709` passed on the merge commit. `operation_resource_admission.test.ts` covers independent runners, simultaneous processes, capacity conflicts, cancellation, process crash release, corrupted state, and no dispatch on admission failure.
 - **Language-server process slots are shared across Nexus clients using the same credential home.** PR #831 merged as `ffddb53a796dd407fbf83f1a60a8a25d3818374d`. A supervisor retains the admission descriptor so the slot remains held if the Nexus parent exits while the server is alive. PR CI run `45681423228` and CodeQL run `45681423318` passed on the merge commit. The focused lifecycle test uses a fake server; the process-death case is skipped on Windows.
-- **The current release head is green.** Post-merge CI run `45861996625` and CodeQL run `45861996502` both passed on `03759986a7b22cfcfc3020bcc5bfcac0bf4999b6`.
+- **The current release head is green.** Post-merge CI run `45896185332` and CodeQL run `45896185330` both passed on `5061a3e83ce6daf34f34785bd3753f11604ba77d`.
 
 ### Remaining P10-04 scope
 
@@ -93,3 +93,28 @@ These merges close the reproduced cross-operation provider-slot gap and add same
 - Docker PID/tmpfs limits, unattended-job queue/output bounds, and retention GC retain their narrower per-container, per-runner, or cleanup-target scope from the baseline inventory. They do not establish a host-wide resource ceiling.
 
 The next P10-04 implementation decision is therefore not whether to add another scheduler. It is which remaining resource classes need an operator-owned, measurable cross-session bound, and which can be handled by existing per-operation, per-container, or cleanup controls. Any new bound must preserve user data, fail before the protected side effect, and state its enforcement scope. Do not claim host-wide CPU/memory containment without OS enforcement or exact provider-spend containment without authoritative provider accounting.
+
+### Cross-process provider-limit probe (2026-11-26)
+
+**Inspected revision:** `5061a3e83ce6daf34f34785bd3753f11604ba77d`; `cli/src/usage.ts` has blob `ff414f866048f39cbc9e8bcc31268f94d0a7aae2`.
+
+**Hypothesis:** If `NEXUS_CLOUD_MAX_REQUESTS=1` is intended to bound usage across concurrent or resumed Nexus processes sharing a credential home, the second process must observe the first process's completed request before admission.
+
+**Setup:** On Node 24.11.1, two separate Node processes each constructed a fresh `UsageLedger`, used the same isolated temporary `HOME` and workspace, admitted one cloud request with `maxRequests=1`, and recorded a synthetic receipt. The endpoint was `https://example.invalid`; no provider request, credential, network access, or live workspace was used. `NEXUS_RECEIPTS` remained enabled so each process wrote its receipt to the same workspace file.
+
+**Observed:** Both processes returned `admitted`; each new process saw one in-memory receipt after its own request; the shared receipt file contained two lines. Expected host-aggregate behavior would deny the second admission. The experiment therefore confirms that the provider limit counters do not survive process boundaries even when receipt records are present on disk.
+
+**Classification:** `FAIL` against the P10-04 cross-session aggregate-resource requirement; `NOT TESTED` for provider billing or actual inference. This confirms the implementation scope only. Existing environment-limit semantics may be process-local by design; no time window or reset contract exists, so do not silently persist these totals across unrelated future invocations. Durable operation inference counters remain the existing task-scoped control and are separate from `UsageLedger` provider limits.
+
+**Reproduction:** From `cli/` with dependencies installed, run this exact isolated probe. It launches two independent Node processes against the same temporary home and workspace; it never calls the example endpoint.
+
+```sh
+probe_home=$(mktemp -d /var/tmp/nexus-p1004-XXXXXX)
+mkdir -p "$probe_home/workspace"
+for request in first second; do
+  HOME="$probe_home" XDG_CONFIG_HOME="$probe_home/.config" NEXUS_CLOUD_MAX_REQUESTS=1 PROBE_WORKSPACE="$probe_home/workspace" node --import tsx --input-type=module -e 'import { UsageLedger } from "./src/usage.ts"; const ledger = new UsageLedger(); const requestId = process.argv[1]; const admitted = ledger.admit(requestId, 10, false, "groq", "test-model"); if (admitted) throw new Error(admitted); ledger.record({at:new Date().toISOString(),requestId,role:"main",providerId:"groq",selectedModel:"test-model",endpointOrigin:"https://example.invalid",protocol:"test",disclosure:"cloud",outcome:"completed",usage:{inputTokens:1,outputTokens:1},usageConfidence:"provider",costConfidence:"unknown"}, process.env.PROBE_WORKSPACE); process.stdout.write(JSON.stringify({process:requestId,admission:admitted??"admitted",receiptsInNewProcess:ledger.all().length})+"\n")' "$request"
+done
+wc -l < "$probe_home/workspace/.nexus/inference_receipts.jsonl"
+```
+
+Observed on release `5061a3e`: each process printed `admission:"admitted"` and `receiptsInNewProcess:1`; the final line count was `2`.

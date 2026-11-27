@@ -16,7 +16,8 @@
  *      persisted fingerprint-stall policy/state; older builds must refuse records that depend on that limit. v8
  *      adds a bounded active-wall-time budget and its durable accounting; older builds must refuse records that rely on it. v9
  *      adds a finite operation-wide inference-submission cap and durable request accounting; legacy history is marked
- *      unknown and must be explicitly reset before the operation can resume.
+ *      unknown and must be explicitly reset before the operation can resume. v10 adds cumulative request-token
+ *      estimates; older operations establish their initial amount from complete persisted token usage.
  *      The optional `activeStartTicks` (driver start time) was added to v7 additively: no version bump, because a build
  *      that ignores it only loses the recycled-pid check. A record without it loads and reads as unknown driver identity (paused).
  *   3. A record from a newer build is refused. It is not corrupt: a build that wrote it can still read it, and
@@ -36,7 +37,7 @@ import {
 export { DEFAULT_OPERATION_INFERENCE_SUBMISSIONS, MAX_OPERATION_ACTIVE_MS, MAX_OPERATION_INFERENCE_SUBMISSIONS } from "./operation_budget_constants.js";
 
 /** The operation document version this build writes. Independent of the task-store envelope version. */
-export const CURRENT_OPERATION_SCHEMA_VERSION = 9;
+export const CURRENT_OPERATION_SCHEMA_VERSION = 10;
 
 /** The operation document version every released 1.0.0 build wrote. */
 export const LEGACY_OPERATION_SCHEMA_VERSION = 1;
@@ -327,6 +328,10 @@ export function validateOperationState(state: DurableOperationState): void {
   }
   if (typeof state.historyKnown !== "boolean") {
     throw new InvalidOperationStateError(`operation ${state.id}: historyKnown must be a boolean`);
+  }
+  if (state.tokenReservations !== undefined &&
+      (!Number.isSafeInteger(state.tokenReservations) || state.tokenReservations < 0 || state.tokenReservations > MAX_TOTAL_TOKENS)) {
+    throw new InvalidOperationStateError(`operation ${state.id}: tokenReservations must be a safe integer from 0 to ${MAX_TOTAL_TOKENS} (got ${String(state.tokenReservations)})`);
   }
   if (state.integrations !== undefined) {
     if (!Array.isArray(state.integrations)) throw new InvalidOperationStateError(`operation ${state.id}: integrations is not an array`);

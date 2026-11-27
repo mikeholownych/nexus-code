@@ -53,6 +53,8 @@ export type TurnReason =
   | "INFERENCE_SUBMISSION_BUDGET_EXHAUSTED"
   /** The durable operation's shared inference request ceiling is spent. */
   | "OPERATION_INFERENCE_SUBMISSION_BUDGET_EXHAUSTED"
+  /** The durable operation's request-token estimate cannot admit another provider request. */
+  | "OPERATION_TOKEN_BUDGET_EXHAUSTED"
   /** Continued turn: the wall-clock budget is spent. */
   | "TIME_BUDGET_EXHAUSTED"
   /** Continued turn: no progress for the configured number of steps, or bounded recovery from a repeated action failed. */
@@ -619,6 +621,9 @@ export function summarizeTurn(t: TurnResult): { heading: string; line: string } 
     }
     if (t.reason === "OPERATION_INFERENCE_SUBMISSION_BUDGET_EXHAUSTED") {
       return { heading: "OPERATION INFERENCE BUDGET EXHAUSTED", line: `execution=LIMIT_REACHED outcome=NOT_ESTABLISHED (${t.detail ?? "durable operation inference submission limit reached"})` };
+    }
+    if (t.reason === "OPERATION_TOKEN_BUDGET_EXHAUSTED") {
+      return { heading: "OPERATION TOKEN ESTIMATE LIMIT REACHED", line: `execution=LIMIT_REACHED outcome=NOT_ESTABLISHED (${t.detail ?? "durable operation token estimate limit reached"})` };
     }
     return { heading: "STEP LIMIT REACHED", line: `execution=LIMIT_REACHED outcome=NOT_ESTABLISHED (${t.steps.used}/${t.steps.max} steps)` };
   }
