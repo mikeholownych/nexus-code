@@ -9,11 +9,22 @@ import { buildApplyPreview } from "./core/harness/apply_preview.js";
 
 function out(obj: unknown, json = false): void {
   if (json) {
-    console.log(JSON.stringify(obj, null, 2));
+    process.stdout.write(JSON.stringify(obj, null, 2) + "\n");
     return;
   }
-  if (typeof obj === "string") console.log(obj);
-  else console.log(JSON.stringify(obj, null, 2));
+  if (typeof obj === "string") process.stdout.write(obj + "\n");
+  else process.stdout.write(JSON.stringify(obj, null, 2) + "\n");
+}
+
+async function withJsonStdout<T>(json: boolean, fn: () => Promise<T>): Promise<T> {
+  if (!json) return fn();
+  const orig = process.stdout.write.bind(process.stdout);
+  (process.stdout.write as any) = ((chunk: any, enc?: any, cb?: any) => process.stderr.write(chunk, enc, cb));
+  try {
+    return await fn();
+  } finally {
+    process.stdout.write = orig as any;
+  }
 }
 
 function storeFrom(opts: { stateDir?: string }): HarnessStore {
@@ -60,6 +71,7 @@ export function registerHarnessCommands(program: Command): void {
     .option("--nexus-model <id>", "Model for --nexus-agent (provider/model or model id)")
     .option("--nexus-endpoint <url>", "Endpoint for --nexus-agent")
     .option("--nexus-api-key <key>", "API key for --nexus-agent (prefer env/config; avoid in shell history)")
+    .option("--nexus-max-steps <n>", "Max agent steps for --nexus-agent (default 8)", (v) => parseInt(v, 10))
     .option("--nexus-propose", "Use Nexus model proposal adapter for round>1 candidate generation (isolated, no live mutation)")
     .option("--nexus-propose-model <id>", "Model for --nexus-propose (defaults to --nexus-model/NEXUS_MODEL)")
     .option("--nexus-propose-endpoint <url>", "Endpoint for --nexus-propose (defaults to --nexus-endpoint/NEXUS_ENDPOINT)")
@@ -77,13 +89,14 @@ export function registerHarnessCommands(program: Command): void {
         model: opts.nexusModel || process.env.NEXUS_MODEL || "gpt-4o-mini",
         endpoint: opts.nexusEndpoint || process.env.NEXUS_ENDPOINT || process.env.OPENAI_BASE_URL || "http://127.0.0.1:11434/v1",
         apiKey: opts.nexusApiKey || process.env.NEXUS_API_KEY || process.env.OPENAI_API_KEY,
+        maxSteps: Number.isFinite(opts.nexusMaxSteps) ? opts.nexusMaxSteps : undefined,
       } : undefined;
       const nexusProposalConfig = opts.nexusPropose ? {
         model: opts.nexusProposeModel || opts.nexusModel || process.env.NEXUS_MODEL || "gpt-4o-mini",
         endpoint: opts.nexusProposeEndpoint || opts.nexusEndpoint || process.env.NEXUS_ENDPOINT || process.env.OPENAI_BASE_URL || "http://127.0.0.1:11434/v1",
         apiKey: opts.nexusProposeApiKey || opts.nexusApiKey || process.env.NEXUS_API_KEY || process.env.OPENAI_API_KEY,
       } : undefined;
-      const run = await orch.run(id, {
+      const run = await withJsonStdout(!!opts.json, () => orch.run(id, {
         store,
         mock: !!opts.mock,
         real: !!opts.real,
@@ -95,7 +108,7 @@ export function registerHarnessCommands(program: Command): void {
         candidatePath: candidatePaths[0],
         candidatePaths,
         allowUnsandboxedRealProbe: !!opts.allowUnsandboxedRealProbe,
-      });
+      }));
       out(opts.json ? run : `Run ${statusLine(run)}${run.reason ? `\nreason: ${run.reason}` : ""}${run.nextAction ? `\nnext: ${run.nextAction}` : ""}`, opts.json);
       if (run.status !== "COMPLETED") process.exitCode = 1;
     });

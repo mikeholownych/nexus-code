@@ -24,7 +24,7 @@ describe("harness nexus real-model e2e (env-gated)", () => {
       store,
       nexusAgent: true,
       nexusPropose: false,
-      nexusAgentConfig: { model: model!, endpoint: endpoint!, apiKey, maxSteps: 4, sandbox: "auto", network: false },
+      nexusAgentConfig: { model: model!, endpoint: endpoint!, apiKey, maxSteps: 8, sandbox: "auto", network: false },
     });
     assert.ok(["COMPLETED", "BLOCKED", "FAILED"].includes(done.status));
     assert.notEqual(done.status, "FAILED"); // should be COMPLETED or BLOCKED by policy/sandbox, not crash
