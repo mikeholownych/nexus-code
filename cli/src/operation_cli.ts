@@ -10,6 +10,8 @@
  * --no-resume). /team operations are ordinary operations and use the same commands.
  */
 import * as fs from "node:fs";
+import { userInfo } from "node:os";
+import { createInterface } from "node:readline/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Command } from "commander";
@@ -26,9 +28,10 @@ import { parseActiveMinutesCap, parseInferenceSubmissionCap, parseTokenCap, setO
 import { withDerivedPause } from "./core/driver_identity.js";
 import { buildOperationView, renderOperationView, renderReplay, watchOperation } from "./operation_view.js";
 import { ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "./core/operation_git.js";
-import { operationVerificationDefinitionDigest, parseOperationVerificationChecks, type OperationVerificationCheck } from "./core/operation_verification.js";
+import { operationVerificationDefinitionDigest, parseOperationVerificationChecks, recordOperationVerificationWaiver, type OperationVerificationCheck } from "./core/operation_verification.js";
 import { ContextCheckpointError, createContextCheckpoint, listContextCheckpoints, restoreContextCheckpoint } from "./core/operation_checkpoints.js";
 import { safeTerminal } from "./ui.js";
+import { isWorkspaceTrusted } from "./workspace_trust.js";
 import { credentialFingerprint, ResourceRegistry, type ResourceDescriptor } from "./core/resources.js";
 import { createOperationAccountIdentity } from "./core/account_identity.js";
 import { credentialStorageHome, operatorSetting } from "./client.js";
@@ -443,6 +446,43 @@ export function registerOperationCommands(program: Command): void {
       }
       if (options.resume === false) return void printStatus(state, store, path.resolve(options.workspace ?? process.cwd()));
       await drive(state, config, store, Boolean(options.discover), Boolean(options.json), { entry: "existing", resumeAfterDecision: true });
+    }));
+
+  op.command("waive-verification")
+    .argument("<id>", "Blocked operation id")
+    .argument("<attempt>", "Full verification attempt ID from the rejected candidate")
+    .argument("<check>", "Required check ID")
+    .argument("<commit>", "Full candidate commit from the rejection")
+    .requiredOption("--reason <text>", "Operator reason recorded in the waiver")
+    .option("-w, --workspace <path>", "Workspace directory (default: current directory)")
+    .description("Record a deliberate waiver for one failed check on an exact candidate")
+    .action(operationAction(async (id: string, attemptId: string, checkId: string, commit: string, options: any) => {
+      const config = buildConfig(options);
+      if (config.readOnly || config.approvalMode === "read-only" || config.dryRun || !isWorkspaceTrusted(config.workspace)) {
+        throw new OperationSpecError("Recording a verifier waiver requires a trusted writable workspace.");
+      }
+      if (!process.stdin.isTTY || !process.stderr.isTTY) {
+        throw new OperationSpecError("Confirm the verification waiver from an interactive terminal.");
+      }
+      const terminal = createInterface({ input: process.stdin, output: process.stderr });
+      try {
+        const prompt = safeTerminal(`Waive check ${checkId} for attempt ${attemptId} on candidate ${commit}? Type waive to confirm.`);
+        if (await terminal.question(`${prompt} `) !== "waive") throw new OperationSpecError("Verification waiver was not confirmed.");
+      } finally {
+        terminal.close();
+      }
+      const store = new OperationStore(config.workspace);
+      const release = store.acquire(id);
+      try {
+        const state = store.load(id);
+        const waiver = recordOperationVerificationWaiver(state, {
+          attemptId, checkId, commit, actor: userInfo().username, reason: options.reason,
+        });
+        store.save(state);
+        console.log(safeTerminal(`Recorded waiver for check ${checkId} on ${commit}. Use the existing retry decision for unit ${waiver.unitId} to continue.`));
+      } finally {
+        release();
+      }
     }));
 
   op.command("status")

@@ -107,7 +107,7 @@ export function replReadOnlyAllowed(command: string, args: string): boolean {
   }
   if (name === "checkpoint") return value === "diff" || value.startsWith("diff ");
   if (name === "worktree") return isReadOnlyWorktreeArgs(value);
-  if (name === "knowledge" && (value === "suggestions" || /^audit\s+operation:[a-z0-9_-][a-z0-9._-]{0,159}$/.test(value) || /^show-suggestion\s+[a-f0-9]{64}$/.test(value))) return true;
+  if (name === "knowledge" && (value === "suggestions" || /^show-source\s+\S+$/.test(value) || /^audit\s+operation:[a-z0-9_-][a-z0-9._-]{0,159}$/.test(value) || /^show-suggestion\s+[a-f0-9]{64}$/.test(value))) return true;
   if (name === "plan" || name === "knowledge") {
     return !value || value === "list" || value === "show" || value === "get";
   }

@@ -513,6 +513,15 @@ test("an operator waiver accepts only the retained exact failed candidate and is
   let loaded = store.load(state.id);
   const candidate = loaded.git?.retainedVerificationCandidates?.[0];
   assert.ok(candidate);
+  assert.throws(() => execFileSync(process.execPath, [
+    path.join(cliDir, "dist", "index.js"), "operation", "waive-verification",
+    state.id, candidate.attemptId, candidate.checkId, candidate.commit, "--reason", "Known environment failure", "-w", root,
+  ], {
+    cwd: cliDir, encoding: "utf8",
+    env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), NEXUS_STATE_DIR: home, NEXUS_TRUST_WORKSPACE: "1" },
+    stdio: ["ignore", "pipe", "pipe"],
+  }), (error: any) => error.status === 2 && /interactive terminal/.test(error.stderr));
+  assert.equal(store.load(state.id).git?.verificationWaivers, undefined);
   const { recordOperationVerificationWaiver } = await import("../src/core/operation_verification.js");
   const request = { attemptId: candidate.attemptId, checkId: "smoke", actor: "test-operator", reason: "Known environment failure" };
   assert.throws(() => recordOperationVerificationWaiver(loaded, { ...request, commit: "0".repeat(40) }), /no matching/);
