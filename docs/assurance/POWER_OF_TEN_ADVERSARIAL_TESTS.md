@@ -104,3 +104,31 @@ From a clean checkout of the audited revision, install CLI dependencies with `np
 **Observed:** The focused command passed 22/22 tests (1 receipt-persistence failure-injection test and 21 audit-export tests). The test confirms all identity fields, no verifier-source sentinel in the receipt, failure-closed acceptance, and identity retention through `recordCandidateAndReceipt` and audit export. An initial implementation placement was caught because completion cleared `changeBaseline` before receipt construction; moving the verifier-definition digest capture before that state clear made the assertion pass. TypeScript build, Rust core build, and `git diff --check` passed. Hosted checks are not yet complete.
 
 **Classification:** PASS for the tested local receipt creation/persistence/export behavior on this host; NOT TESTED for Windows identity formatting, old receipt migration across version upgrades, externally signed or immutable copies, or independent approval. Do not describe the local receipt as tamper-proof against the sole maintainer.
+
+## 7. Follow-up validation: process-crash execution and provider-request accounting (2026-11-27)
+
+**Source revision:** `91e9633cbaee9f6a9dca00cacf94f50e25c1b97c` (`release/v1.3.1`, after PRs #894 and #895).
+
+### Completed shell siblings
+
+**Hypothesis:** Killing Nexus while a side-effecting tool is in flight could replay an already completed sibling or repeat an effect whose result was not durably recorded.
+
+**Setup:** `cli/test/p10_process_crash_recovery.test.ts` starts a separate Nexus process against the local fake gateway and disposable workspace. The provider returns two ordered `run_command` calls: one completes and records a marker; the next writes a second marker and stays running. The test sends `SIGKILL` to Nexus and the owned shell process, then resumes the same task and checks the final markers and tool results. It also retains a single in-flight call case.
+
+**Expected safe behavior:** The completed sibling result remains recorded; the in-flight sibling is surfaced as unknown; neither marker is duplicated after resume.
+
+**Observed:** The focused test passed 2/2 on Node 24.11.1 with the worktree-local Rust core built. Required checks passed on PR #894; post-merge CI `45947491306` and CodeQL `45947491736` passed on `5509e1f59ccced4f4e470cdd2ba5006bd73dcd77`. No live inference was used.
+
+**Classification:** PASS for this ordered `run_command` process-crash case on the hosted platform and tested local runtime. NOT TESTED for host/power loss or arbitrary other tools and external side effects.
+
+### Provider response lost during process crash
+
+**Hypothesis:** A provider request received by the server but unanswered before process death could be resubmitted on resume, even after increasing the configured inference limit.
+
+**Setup:** `cli/test/p10_provider_crash_recovery.test.ts` runs a local fake HTTP gateway that records a chat request and deliberately leaves its response open. After the request arrives, the test kills Nexus, resumes the same durable task with a larger configured limit, and records the request count and resumed result. This uses no paid or live provider.
+
+**Expected safe behavior:** The original reservation remains charged, so resume does not submit a duplicate request. The provider's actual completion or billing remains unknown.
+
+**Observed:** The test passed 1/1 on Node 22.23.5 and Node 24.11.1; the CLI build and `git diff --check` passed. Required checks passed on PR #895; post-merge CI `45951101344` and CodeQL `45951101366` passed on `91e9633cbaee9f6a9dca00cacf94f50e25c1b97c`. The recovered result was `INFERENCE_SUBMISSION_BUDGET_EXHAUSTED`, and the fake gateway received exactly one request.
+
+**Classification:** PASS for preserving the saved submission limit and preventing a duplicate request when the one-call allowance is exhausted. The recovery API does not label the provider request `interrupted` or persist an explicit unknown-provider-outcome record. This does not prove that the provider completed the request, that it was billed once, or that a larger remaining budget would safely recover all provider paths. Those cases remain NOT TESTED.
