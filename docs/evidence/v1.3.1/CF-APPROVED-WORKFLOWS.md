@@ -24,3 +24,11 @@ XERJ's etcd API transaction and immutable revision references informed compare-u
 ## Open qualification
 
 Release-branch CI, comparative evaluation, and the remaining acceptance criteria in the implementation plan still require evidence. The report claims deterministic fixture results only.
+
+## Cancellation, recovery, and scored regressions
+
+- Real verifier processes now stop on cancellation or deadline. Integration restores the prior branch tip and emits no accepted receipt when a required run is cancelled. A verifier's own exit 124 remains a failure. The supervisor records actual deadline expiry as a timeout.
+- The scored evaluation exposed a replay after a corrupt operation was quarantined. Approval now reserves its operation identity durably under the plan and operation guards before creating worktrees or starting units. If the operation record is later missing, another approval refuses to dispatch it. Restoring the original record is the recovery path.
+- The Node 24 regression command `node --import tsx --test --test-concurrency=1 test/claude_features_eval.test.ts test/batch_plan_execution.test.ts test/batch_plan_acceptance.test.ts` passed all 36 tests with an isolated home. The matrix measured 9/9 candidate acceptance decisions, 1/9 verified completions, 0/1 false completions on the explicit false-claim case, 4/4 fault reconciliations, 6/6 evidence records, and 2/2 corrupt-record replay refusals. Separate rows scored graph admission, knowledge controls, and resource eligibility. The fixture outcomes do not measure comparative coding quality. The Node 22 run of the matrix, semantic-conflict, approved-execution, and knowledge-command files passed all 49 tests.
+- Knowledge records retain definitive freshness invalidations across restart and source reverts. Missing source evidence remains unknown. Typed operations preserve attempt identity in knowledge provenance.
+- The current approval flow has no waiver bound to a retained failed integration candidate. Required verification failures continue to block acceptance. A waiver would need a retained exact candidate and its own operator approval receipt.
