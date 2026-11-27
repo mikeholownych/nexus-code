@@ -47,4 +47,18 @@ describe("harness mock run", () => {
     assert.equal(done.status, "BLOCKED");
     assert.match(done.reason || "", /--mock/i);
   });
+
+  it("does not create a promotion report when the probe budget is exhausted", async () => {
+    const { tmp, base, suitePath } = mkFixture();
+    const store = new HarnessStore({ rootDir: path.join(tmp, "state") });
+    const orch = new HarnessOrchestrator(store);
+    const run = await orch.init({ taskSuitePath: suitePath, basePath: base, store, maxProbes: 1 });
+
+    const done = await orch.run(run.id, { store, mock: true });
+
+    assert.equal(done.status, "BLOCKED");
+    assert.match(done.reason || "", /probe budget exhausted/i);
+    assert.equal(done.promotionReportId, undefined);
+    assert.equal(store.loadReport(done.id), undefined);
+  });
 });
