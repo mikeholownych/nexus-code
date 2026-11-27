@@ -9,10 +9,11 @@ function integrationCheck(check: PlanCheck, unitId?: string) {
     id,
     purpose: check.expectation,
     command: check.command,
-    requirement: check.required ? "required" as const : "advisory" as const,
+    requirement: check.when ? "conditional" as const : check.required ? "required" as const : "advisory" as const,
     cwd: check.cwd,
     timeoutMs: check.timeoutSeconds * 1000,
     unitId,
+    ...(check.when ? { when: check.when } : {}),
   };
 }
 

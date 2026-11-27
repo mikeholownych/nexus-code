@@ -40,3 +40,12 @@ test("batch validation rejects unrecognized fields rather than silently ignoring
     /unknown unit 'one' key 'permissions'/,
   );
 });
+
+test("ordinary batch files cannot silently discard approved-plan checks", () => {
+  assert.throws(() => validateBatchSpec({
+    objective: "Inspect a repository",
+    units: [{ id: "read", prompt: "Read the repository" }],
+    git: { isolate: true },
+    verificationChecks: [{ id: "check", purpose: "Verify", command: "npm test", requirement: "required" }],
+  }), /typed verification checks require an accepted plan/);
+});

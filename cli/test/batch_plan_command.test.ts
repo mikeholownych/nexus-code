@@ -42,7 +42,7 @@ test("batch planning saves an inspectable proposal without creating a batch", as
   assert.match((await executeBatchCommand("list", config)).output, /No batches/);
 });
 
-test("batch planning refuses execution and read-only draft creation before inference", async () => {
+test("batch planning refuses execution and read-only draft creation and execution before inference", async () => {
   const config: HarnessConfig = {
     workspace: process.cwd(), endpoint: "http://127.0.0.1:1", model: "test-planner",
     shell: "bash", maxSteps: 1, temperature: 0, readOnly: true,
@@ -53,7 +53,7 @@ test("batch planning refuses execution and read-only draft creation before infer
   assert.match(readOnly.output, /cannot save/);
   const accept = await executeBatchCommand("plan accept draft digest", config, undefined, undefined, dependencies);
   assert.equal(accept.success, false);
-  assert.match(accept.output, /execution is unavailable/);
+  assert.match(accept.output, /cannot execute an approved plan/);
 });
 
 test("an operator can import a revised draft without executing it", async (t) => {

@@ -10,7 +10,7 @@ import type { HarnessConfig } from "./types.js";
 const PROPOSAL_CONTRACT = [
   "Propose a bounded Nexus batch work graph for the operator's objective. Return only one JSON object.",
   "Use version:1, objective, acceptanceCriteria, checks, risks, assumptions, blockers, and units.",
-  "Checks are objects with id, command, cwd, expectation, timeoutSeconds (1–300), and required.",
+  "Checks are objects with id, command, cwd, expectation, timeoutSeconds (1–300), and required. A required check may additionally use when: {changedPaths: [paths]} to run only after matching changes.",
   "Units have id, title, objective, role, required, dependsOn, mode (read or write), scope, acceptanceCriteria, checks, outputs, and handoffs.",
   "Use read mode for researcher or reviewer, and write mode for architect, implementer, or tester. Handoffs are dependency IDs.",
   "Read scope may be '.', while write scope must name narrower paths.",

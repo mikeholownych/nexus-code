@@ -11,7 +11,7 @@ export interface BatchCommandResult {
   output: string;
 }
 
-const PLAN_USAGE = "Usage: /batch plan <objective> | plan show|review <draft-id> | plan import <file> [previous-draft-id]";
+const PLAN_USAGE = "Usage: /batch plan <objective> | plan show|review <draft-id> | plan accept <draft-id> <digest> | plan import <file> [previous-draft-id]";
 
 interface BatchPlanDependencies {
   propose?: typeof generateBatchPlanProposal;
@@ -38,18 +38,25 @@ async function executePlanCommand(
   words: string[],
   config: HarnessConfig,
   signal: AbortSignal | undefined,
+  onEvent: ((event: OperationEvent) => void) | undefined,
   dependencies: BatchPlanDependencies,
 ): Promise<BatchCommandResult> {
-  if (words[0] === "accept") {
-    return { success: false, output: "Plan execution is unavailable until the required verification gates are enabled." };
-  }
   const action = words[0];
-  if ((["show", "review"].includes(action) && words.length !== 2) ||
+  if ((action === "accept" && words.length !== 3) ||
+      (["show", "review"].includes(action) && words.length !== 2) ||
       (action === "import" && (words.length < 2 || words.length > 3))) {
     return { success: false, output: PLAN_USAGE };
   }
   try {
     const store = new BatchPlanStore(config.workspace);
+    if (action === "accept") {
+      if (config.readOnly || config.approvalMode === "read-only" || config.dryRun) {
+        throw new Error("This mode cannot execute an approved plan.");
+      }
+      const runner = new BatchOrchestrator(config, { signal, onEvent, maxInProcessWaitMs: 60_000 });
+      const result = await runner.runAcceptedPlan(store, words[1], words[2]);
+      return { success: result.status === "COMPLETE", output: renderBatchResult(result) };
+    }
     let draft: BatchPlanDraft;
     if (words[0] === "show") {
       draft = store.read(words[1]);
@@ -105,7 +112,7 @@ export async function executeBatchCommand(
   const words = parseBatchWords(args);
   const first = words[0]?.toLowerCase();
   if (first === "plan" && words.length > 1) {
-    return executePlanCommand(words.slice(1), config, signal, dependencies);
+    return executePlanCommand(words.slice(1), config, signal, onEvent, dependencies);
   }
   const operation = new BatchOrchestrator(config, {
     signal,

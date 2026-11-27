@@ -43,7 +43,7 @@ export function readOnlySlashAllowed(command: string, args: string): boolean {
   if (name === "checkpoint") return value === "diff" || value.startsWith("diff ");
   if (name === "worktree") return isReadOnlyWorktreeArgs(value);
   if (name === "batch") return /^(?:plan\s+show)(?:\s|$)/.test(value);
-  if (name === "knowledge") return !value || /^(?:suggestions|show-suggestion)(?:\s|$)/.test(value);
+  if (name === "knowledge") return !value || /^(?:suggestions|show-suggestion|audit)(?:\s|$)/.test(value);
   if (name === "plan" || name === "requirements") return !value;
   if (name === "skill") return !value || !/^(init)(?:\s|$)/.test(value);
   if (name === "theme") return !value;

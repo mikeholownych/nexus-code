@@ -32,6 +32,7 @@ export interface PlanCheck {
   expectation: string;
   timeoutSeconds: number;
   required: boolean;
+  when?: { changedPaths: string[] };
 }
 
 export interface BatchPlanUnit {
@@ -153,14 +154,20 @@ function workspacePath(label: string, value: unknown, workspace: string | undefi
 
 function checks(label: string, value: unknown, workspace: string | undefined): PlanCheck[] {
   const parsed = items(label, value, MAX_CHECKS).map((item) => {
-    const check = strictObject(label, item, ["id", "command", "cwd", "expectation", "timeoutSeconds", "required"]);
+    const check = strictObject(label, item, ["id", "command", "cwd", "expectation", "timeoutSeconds", "required"], ["when"]);
+    const required = boolean(`${label}.required`, check.required);
+    const condition = check.when === undefined ? undefined : strictObject(`${label}.when`, check.when, ["changedPaths"]);
+    if (condition && !required) throw new Error(`${label} conditional checks must be required when applicable`);
+    const changedPaths = condition && distinct(`${label}.when.changedPaths`, items(`${label}.when.changedPaths`, condition.changedPaths, 32, 1)
+      .map((value) => workspacePath(`${label}.when.changedPaths`, value, workspace, true))).sort();
     return {
       id: text(`${label}.id`, check.id, 64, UNIT_ID),
       command: prose(`${label}.command`, check.command, 1000),
       cwd: workspacePath(`${label}.cwd`, check.cwd, workspace, true),
       expectation: prose(`${label}.expectation`, check.expectation),
       timeoutSeconds: integer(`${label}.timeoutSeconds`, check.timeoutSeconds, 1, 300),
-      required: boolean(`${label}.required`, check.required),
+      required,
+      ...(changedPaths ? { when: { changedPaths } } : {}),
     };
   });
   distinct(`${label} ids`, parsed.map((check) => check.id));
@@ -261,8 +268,8 @@ function normalizeBatchPlan(value: unknown, root?: string): BatchPlan {
     blockers: proseList("blockers", input.blockers),
     units: items("units", input.units, MAX_UNITS, 1).map((unit) => parseUnit(unit, root)),
   };
-  if (!plan.checks.some((check) => check.required)) throw new Error("plan needs a required final check");
-  if (plan.units.some((unit) => unit.required && unit.mode === "write" && !unit.checks.some((check) => check.required))) {
+  if (!plan.checks.some((check) => check.required && !check.when)) throw new Error("plan needs a required final check");
+  if (plan.units.some((unit) => unit.required && unit.mode === "write" && !unit.checks.some((check) => check.required && !check.when))) {
     throw new Error("required write units need at least one required check");
   }
   // Exercise the same structural contract without exposing a runnable spec or asking the scheduler to act.
