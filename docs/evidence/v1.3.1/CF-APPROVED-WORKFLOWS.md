@@ -23,7 +23,7 @@ XERJ's etcd API transaction and immutable revision references informed compare-u
 
 ## Open qualification
 
-Release-branch CI, comparative evaluation, and the remaining acceptance criteria in the implementation plan still require evidence. The report claims deterministic fixture results only.
+The approved-workflow follow-up has passed required PR checks and post-merge release CI. Comparative evaluation and the remaining acceptance criteria in the implementation plan still require evidence; this report claims deterministic fixture results only.
 
 ## Cancellation, recovery, and scored regressions
 
@@ -45,7 +45,7 @@ Release-branch CI, comparative evaluation, and the remaining acceptance criteria
 
 - The final focused Node 24 command ran `batch_plan_provider`, `batch_plan_acceptance`, `batch_plan_execution`, `knowledge_provider`, `knowledge_operation_evidence`, `knowledge_archive_evidence`, `convergence_scheduler_properties`, `operation_merged_checks`, and `claude_features_eval` serially with a throwaway home. The CLI build and all 81 tests passed.
 - The material-input lane passed 81 tests on each of Node 22 and 24. Tests changed ignored inputs without changing the Git commit, mutated a declared input from a verifier, refused an out-of-scope link, and invalidated an exact-candidate waiver after a material-only change. Typed knowledge inspection rejects the corresponding stale evidence.
-- The foundation landed at `040527f5` after both required matrices and Linux packaging passed. This follow-up includes that merge commit. Post-merge release CI and follow-up PR qualification are pending.
+- The foundation landed at `040527f5` after both required matrices and Linux packaging passed. Follow-up PR #902 merged as `a02d1d17bc6524f783cc3eab7d8f69a0c7277104`; post-merge release CI run [45990530443](https://github.com/mikeholownych/nexus-code/actions/runs/45990530443) and CodeQL run [45990530608](https://github.com/mikeholownych/nexus-code/actions/runs/45990530608) both passed on that commit. Comparative evaluation and remaining acceptance evidence are still pending.
 
 ## Shell audit qualification
 
