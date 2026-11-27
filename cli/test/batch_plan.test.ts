@@ -96,3 +96,37 @@ test("parses model output strictly and retains routing provenance in the immutab
   fs.writeFileSync(file, JSON.stringify({ ...draft, provenance: { ...provenance, disclosure: "local" } }));
   assert.throws(() => store.read(draft.id), /digest/);
 });
+
+test("stores an advisory review only against its observed plan and a distinct model", (t) => {
+  const { workspace, state } = fixture(t);
+  const store = new BatchPlanStore(workspace, state);
+  const planner = { resourceId: "planner", model: "one", disclosure: "local" } as const;
+  const reviewer = { resourceId: "reviewer", model: "two", disclosure: "local" } as const;
+  const draft = store.create(plan(), planner);
+  assert.equal(store.readReview(draft.id), undefined);
+  const review = {
+    findings: [{ category: "acceptance", unitId: "test", summary: "Cover the zero-input case", blocking: true }],
+    uncertainty: ["The fixture contents were not supplied"],
+  };
+  assert.throws(() => store.recordReview(draft.id, "a".repeat(64), reviewer, review), /digest/);
+  assert.throws(() => store.recordReview(draft.id, draft.digest, { ...reviewer, model: "ONE" }, review), /distinct/);
+  assert.throws(() => store.recordReview(draft.id, draft.digest, { ...reviewer, resourceId: "planner" }, review), /distinct/);
+  assert.throws(() => store.recordReview(draft.id, draft.digest, reviewer, { ...review, approved: true }), /unknown key 'approved'/);
+  assert.throws(() => store.recordReview(draft.id, draft.digest, reviewer, {
+    ...review, findings: [{ ...review.findings[0], unitId: "missing" }],
+  }), /unknown unit/);
+  const saved = store.recordReview(draft.id, draft.digest, reviewer, review);
+  assert.equal(saved.planDigest, draft.digest);
+  assert.deepEqual(saved.findings, review.findings);
+  assert.deepEqual(new BatchPlanStore(workspace, state).readReview(draft.id), saved);
+  assert.equal(store.readReview(store.create(plan(), planner).id), undefined);
+  assert.throws(() => store.recordReview(store.create(plan()).id, draft.digest, reviewer, review), /digest/);
+});
+
+test("rejects protected model content with no draft created", (t) => {
+  const { workspace, state } = fixture(t);
+  const input = plan();
+  input.checks = [{ ...check, command: "TOKEN=sk-abcdefghijklmnopqrstuvwxyz0123456789ABCD npm test" }];
+  assert.throws(() => new BatchPlanStore(workspace, state).create(input), /protected content/);
+  assert.equal(fs.existsSync(state), false);
+});

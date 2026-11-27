@@ -2,13 +2,14 @@
 import { createHash, randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { isDistinctPlanReviewer, type BatchPlanReview, validatePlanReview } from "./batch_plan_review.js";
 import { validateBatchSpec } from "./batch_spec.js";
-import { credentialStorageHome } from "./client.js";
 import { redactForPersistence } from "./core/persistence_protection.js";
 import { isReadOnlyRole, ROLE_PROFILES, type AgentRole } from "./core/roles.js";
 import type { WorkRequirements } from "./core/resources.js";
 import { integer, oneOf, readPrivateJson, strictObject, text, timestamp, writePrivateJson } from "./core/runner_store.js";
 import { realpathAllowingMissing } from "./core/socket_files.js";
+import { defaultTaskStateDir } from "./core/state.js";
 import { parseStrictJson } from "./core/strict_json.js";
 import { isPathWithin } from "./path_within.js";
 
@@ -291,16 +292,16 @@ export class BatchPlanStore {
   private readonly workspace: string;
   private readonly directory: string;
 
-  constructor(workspace: string, stateRoot = path.join(credentialStorageHome(), ".local/state/nexus/batch-plans")) {
+  constructor(workspace: string, stateRoot = path.join(path.dirname(defaultTaskStateDir()), "batch-plans")) {
     this.workspace = fs.realpathSync(workspace);
     this.directory = path.join(path.resolve(stateRoot), sha256(this.workspace));
   }
 
-  private file(id: string): string {
+  private file(id: string, kind: "draft" | "review" = "draft"): string {
     text("draft id", id, 29, DRAFT_ID);
     const resolved = realpathAllowingMissing(this.directory);
     if (isPathWithin(resolved, this.workspace)) throw new Error("batch plan state must be outside the workspace");
-    return path.join(resolved, `${id}.json`);
+    return path.join(resolved, kind === "review" ? `${id}.review.json` : `${id}.json`);
   }
 
   create(value: unknown, provenance?: BatchPlanProvenance): BatchPlanDraft {
@@ -341,4 +342,48 @@ export class BatchPlanStore {
     if (draftDigest(snapshot) !== digest) throw new Error("batch plan draft digest mismatch");
     return { ...snapshot, digest };
   }
+
+  recordReview(id: string, planDigest: string, provenance: BatchPlanProvenance, modelOutput: unknown): BatchPlanReview {
+    const draft = this.read(id);
+    if (draft.digest !== planDigest) throw new Error("batch plan review digest does not match the draft");
+    const reviewer = parseProvenance(provenance);
+    if (!reviewer || !draft.provenance || !isDistinctPlanReviewer(draft.provenance, { id: reviewer.resourceId, model: reviewer.model })) {
+      throw new Error("batch plan review requires a known planner and a distinct reviewer resource and model");
+    }
+    const snapshot: Omit<BatchPlanReview, "digest"> = {
+      version: 1,
+      planDigest,
+      provenance: reviewer,
+      reviewedAt: new Date().toISOString(),
+      ...validatePlanReview(modelOutput, draft.plan),
+    };
+    const review = { ...snapshot, digest: sha256(JSON.stringify(snapshot)) };
+    writePrivateJson(this.file(id, "review"), review);
+    return review;
+  }
+
+  readReview(id: string): BatchPlanReview | undefined {
+    const draft = this.read(id);
+    const raw = readPrivateJson(this.file(id, "review"), { label: "Batch plan review" });
+    if (raw === undefined) return undefined;
+    const record = strictObject("recorded plan review", raw, [
+      "version", "planDigest", "provenance", "reviewedAt", "findings", "uncertainty", "digest",
+    ]);
+    if (record.version !== 1 || record.planDigest !== draft.digest) throw new Error("batch plan review digest does not match the draft");
+    const provenance = parseProvenance(record.provenance);
+    if (!provenance || !draft.provenance || !isDistinctPlanReviewer(draft.provenance, { id: provenance.resourceId, model: provenance.model })) {
+      throw new Error("batch plan review requires a known planner and a distinct reviewer resource and model");
+    }
+    const snapshot: Omit<BatchPlanReview, "digest"> = {
+      version: 1,
+      planDigest: draft.digest,
+      provenance,
+      reviewedAt: timestamp("plan review time", record.reviewedAt),
+      ...validatePlanReview({ findings: record.findings, uncertainty: record.uncertainty }, draft.plan),
+    };
+    const digest = text("plan review digest", record.digest, 64, SHA256);
+    if (sha256(JSON.stringify(snapshot)) !== digest) throw new Error("batch plan review digest mismatch");
+    return { ...snapshot, digest };
+  }
+
 }
