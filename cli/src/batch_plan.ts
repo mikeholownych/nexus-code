@@ -90,6 +90,7 @@ export interface BatchPlanDraft {
   digest: string;
   createdAt: string;
   plan: BatchPlan;
+  requestedObjective?: string;
   provenance?: BatchPlanProvenance;
   base?: BatchPlanBase;
 }
@@ -343,6 +344,16 @@ function parseProvenance(value: unknown): BatchPlanProvenance | undefined {
   return provenance;
 }
 
+function parseRequestedObjective(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  const objective = text("requested objective", value, 32_000);
+  if (!objective.trim() || /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(objective) ||
+      redactForPersistence(objective) !== objective) {
+    throw new Error("The requested objective contains protected content or unsupported controls.");
+  }
+  return objective;
+}
+
 function recordDigest(record: object): string {
   return sha256(JSON.stringify(record));
 }
@@ -432,8 +443,9 @@ export class BatchPlanStore {
     return withStateStoreGuard(directory, work);
   }
 
-  create(value: unknown, provenance?: BatchPlanProvenance): BatchPlanDraft {
+  create(value: unknown, provenance?: BatchPlanProvenance, requestedObjective?: string): BatchPlanDraft {
     const parsedProvenance = parseProvenance(provenance);
+    const original = parseRequestedObjective(requestedObjective);
     const plan = validateBatchPlan(value, this.workspace);
     const id = `plan-${randomUUID()}`;
     // Non-Git and empty Git workspaces may still hold inspectable proposals.
@@ -445,6 +457,7 @@ export class BatchPlanStore {
       workspace: this.workspace,
       createdAt: new Date().toISOString(),
       plan,
+      ...(original === undefined ? {} : { requestedObjective: original }),
       ...(parsedProvenance === undefined ? {} : { provenance: parsedProvenance }),
       ...(base === undefined ? {} : { base }),
     };
@@ -460,7 +473,7 @@ export class BatchPlanStore {
   }
 
   private parseDraft(id: string, raw: unknown, checkPaths: boolean): BatchPlanDraft {
-    const record = strictObject("plan draft", raw, ["version", "id", "workspace", "digest", "createdAt", "plan"], ["provenance", "base"]);
+    const record = strictObject("plan draft", raw, ["version", "id", "workspace", "digest", "createdAt", "plan"], ["requestedObjective", "provenance", "base"]);
     if (record.version !== 1 || record.id !== id || record.workspace !== this.workspace) {
       throw new Error("batch plan draft is incompatible with this workspace or id");
     }
@@ -468,12 +481,14 @@ export class BatchPlanStore {
     const plan = normalizeBatchPlan(record.plan, checkPaths ? this.workspace : undefined);
     const base = record.base === undefined ? undefined : parsePlanBase(record.base);
     const provenance = parseProvenance(record.provenance);
+    const original = parseRequestedObjective(record.requestedObjective);
     const snapshot: Omit<BatchPlanDraft, "digest"> = {
       version: 1,
       id,
       workspace: this.workspace,
       createdAt: timestamp("draft time", record.createdAt),
       plan,
+      ...(original === undefined ? {} : { requestedObjective: original }),
       ...(provenance === undefined ? {} : { provenance }),
       ...(base === undefined ? {} : { base }),
     };

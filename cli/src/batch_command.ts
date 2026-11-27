@@ -74,14 +74,14 @@ async function executePlanCommand(
       } else if (action === "import") {
         const previous = words[2] ? store.read(words[2]) : undefined;
         const plan = parseBatchPlan(readBatchInputFile(words[1], config.workspace), config.workspace);
-        draft = store.create(plan, previous?.provenance);
+        draft = store.create(plan, previous?.provenance, previous?.requestedObjective);
       } else {
         const propose = dependencies.propose ?? generateBatchPlanProposal;
         const input = words.join(" ").trim();
         if (!input) throw new Error(PLAN_USAGE);
         const { plan, provenance } = await propose(input, config, signal);
         signal?.throwIfAborted();
-        draft = store.create(plan, provenance);
+        draft = store.create(plan, provenance, input);
       }
     }
     const review = store.readReview(draft.id);

@@ -26,15 +26,17 @@ test("batch planning saves an inspectable proposal without creating a batch", as
       acceptanceCriteria: ["Identify the package manager"], checks: [], outputs: ["Report"], handoffs: [],
     }],
   };
-  const outcome = await executeBatchCommand('plan "Inspect project conventions"', config, undefined, undefined, {
+  const requestedObjective = "Find out how this repository runs tests";
+  const outcome = await executeBatchCommand(`plan "${requestedObjective}"`, config, undefined, undefined, {
     async propose(input) {
-      assert.equal(input, plan.objective);
+      assert.equal(input, requestedObjective);
       return { plan, provenance: { resourceId: "primary", model: "test-planner", disclosure: "local" } };
     },
   });
   assert.equal(outcome.success, true, outcome.output);
   assert.match(outcome.output, /Proposal saved/);
   const envelope = JSON.parse(outcome.output.slice(outcome.output.indexOf("\n") + 1));
+  assert.equal(envelope.requestedObjective, requestedObjective);
   assert.equal(envelope.plan.units[0].id, "inspect");
   assert.equal(envelope.plan.checks[0].command, plan.checks[0].command);
   assert.equal(envelope.provenance.model, "test-planner");
