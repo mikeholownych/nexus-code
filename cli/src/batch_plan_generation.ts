@@ -33,7 +33,7 @@ export async function generateBatchPlanReview(draft: BatchPlanDraft, config: Har
   const deadline = signal ? AbortSignal.any([signal, timeout]) : timeout;
   deadline.throwIfAborted();
   if (!draft.provenance) throw new Error("An independent review requires known planner provenance.");
-  const input = JSON.stringify(draft.plan);
+  const input = JSON.stringify({ requestedObjective: draft.requestedObjective, plan: draft.plan });
   const { clients, resources } = proposalClients(BATCH_PLAN_REVIEW_CONTRACT, input, config, "batch-plan-reviewer");
   const planner = draft.provenance;
   const attempted = new Set<string>();

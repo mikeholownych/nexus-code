@@ -102,7 +102,7 @@ test("production planning and independent review route locally and leave the wor
   assert.equal(cloud.requests.length, 0);
   const reviewRequest = reviewer.requests[0] as { model: string; messages: Array<{ role: string; content: string }>; tools?: unknown[] };
   assert.equal(reviewRequest.model, "distinct-review-fixture");
-  assert.deepEqual(JSON.parse(reviewRequest.messages[1].content), draft.plan);
+  assert.deepEqual(JSON.parse(reviewRequest.messages[1].content), { requestedObjective: plan.objective, plan: draft.plan });
   assert.deepEqual(reviewRequest.tools ?? [], []);
   assert.deepEqual(readdirSync(workspace), ["README.md"]);
   assert.match((await executeBatchCommand("list", config)).output, /No batches/);
