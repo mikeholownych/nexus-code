@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { ensurePrivateDir } from "../durable_file.js";
 import { isSandboxAvailable, wrapSandboxedCommand } from "../../sandbox.js";
+import { writeProbeArtifacts } from "./probe_artifacts.js";
 import type { ProbeResult } from "./types.js";
 import type { ProbeAdapter, ProbeInput } from "./probe_adapter.js";
 
@@ -64,7 +65,7 @@ export class RealProbeAdapter implements ProbeAdapter {
         const sandboxed = wrapSandboxedCommand(cmd, candidateWork, { mode: "auto", network: false });
         const useSandbox = sandboxed.sandboxed && !!sandboxed.argv?.length;
         if (!useSandbox && !this.opts.allowUnsandboxed) {
-          return {
+          const blocked: ProbeResult = {
             schemaVersion: 1,
             id: `hprobe_${randomUUID()}`,
             runId: input.runId,
@@ -80,6 +81,7 @@ export class RealProbeAdapter implements ProbeAdapter {
               "real probe blocked: OS sandbox required; rerun only with explicit owner-approved --allow-unsandboxed-real-probe",
             ],
           };
+          return input.store ? writeProbeArtifacts(input.store, blocked, { stderr: blocked.observations.join("\n") + "\n" }) : blocked;
         }
         observations.push(useSandbox ? `os_sandbox=${sandboxed.engine}` : "os_sandbox=UNSANDBOXED_EXPLICIT_OVERRIDE");
         const r = useSandbox
@@ -103,6 +105,10 @@ export class RealProbeAdapter implements ProbeAdapter {
         observations.push(`verifier_exit=${String(r.status)}`);
         if (r.error) observations.push(`error:${r.error.message}`);
         score = r.status === 0 ? 1 : 0;
+        const out = (r.stdout ?? "") + ((r.stderr ?? "") ? `\n[stderr]\n${r.stderr}` : "");
+        (observations as any)._stdout = r.stdout ?? "";
+        (observations as any)._stderr = r.stderr ?? "";
+        (observations as any)._cmdOut = out;
       } else if (input.case.expected?.artifactPath) {
         const p = path.resolve(candidateWork, input.case.expected.artifactPath);
         const rel = path.relative(candidateWork, p);
@@ -120,7 +126,10 @@ export class RealProbeAdapter implements ProbeAdapter {
       }
 
       const endedAt = new Date().toISOString();
-      return {
+      const stdout = String((observations as any)._stdout ?? "");
+      const stderr = String((observations as any)._stderr ?? (observations as any)._cmdOut ?? "");
+      const cleanObs = observations.filter((o) => typeof o === "string");
+      const result: ProbeResult = {
         schemaVersion: 1,
         id: `hprobe_${randomUUID()}`,
         runId: input.runId,
@@ -130,11 +139,12 @@ export class RealProbeAdapter implements ProbeAdapter {
         startedAt,
         endedAt,
         metrics: { wallClockMs: Date.now() - start, tokens: 0, toolErrors, verifierPass, score },
-        artifacts: { stdoutRef: undefined, stderrRef: undefined },
-        observations,
+        artifacts: {},
+        observations: cleanObs,
       };
+      return input.store ? writeProbeArtifacts(input.store, result, { stdout: stdout || cleanObs.join("\n") + "\n", stderr }) : result;
     } catch (err) {
-      return {
+      const result: ProbeResult = {
         schemaVersion: 1,
         id: `hprobe_${randomUUID()}`,
         runId: input.runId,
@@ -147,6 +157,7 @@ export class RealProbeAdapter implements ProbeAdapter {
         artifacts: {},
         observations: [`error:${err instanceof Error ? err.message : String(err)}`],
       };
+      return input.store ? writeProbeArtifacts(input.store, result, { stderr: result.observations.join("\n") + "\n" }) : result;
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
     }

@@ -337,7 +337,7 @@ export class HarnessOrchestrator {
             if (run.actualUsage.probes + 1 > run.budgets.maxProbes) {
               run.status = "BLOCKED"; run.reason = "HIR probe budget exhausted"; run.nextAction = "Increase maxProbes or reduce suite/candidates/rounds."; break;
             }
-            b = await adapter.run({ runId: run.id, candidateId: "base", candidatePath: baseTree, case: c, timeoutMs: run.budgets.maxProbeWallClockMs });
+            b = await adapter.run({ runId: run.id, candidateId: "base", candidatePath: baseTree, case: c, timeoutMs: run.budgets.maxProbeWallClockMs, store });
             baseProbeByCase.set(c.id, b);
             store.saveProbe(b);
             run.probeIds.push(b.id);
@@ -349,7 +349,7 @@ export class HarnessOrchestrator {
           if (run.actualUsage.probes + 1 > run.budgets.maxProbes) {
             run.status = "BLOCKED"; run.reason = "HIR probe budget exhausted"; run.nextAction = "Increase maxProbes or reduce suite/candidates/rounds."; break;
           }
-          const p = await adapter.run({ runId: run.id, candidateId: candidate.id, candidatePath: candidateTree, case: c, timeoutMs: run.budgets.maxProbeWallClockMs });
+          const p = await adapter.run({ runId: run.id, candidateId: candidate.id, candidatePath: candidateTree, case: c, timeoutMs: run.budgets.maxProbeWallClockMs, store });
           candProbes.push(p);
           baseProbes.push(b);
           store.saveProbe(p);

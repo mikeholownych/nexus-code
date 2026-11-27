@@ -4,6 +4,8 @@ import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { ensurePrivateDir } from "../durable_file.js";
+import { HarnessStore } from "./store.js";
+import { writeProbeArtifacts } from "./probe_artifacts.js";
 import type { HirTaskCase, ProbeResult } from "./types.js";
 
 export interface ProbeInput {
@@ -12,6 +14,7 @@ export interface ProbeInput {
   candidatePath: string;
   case: HirTaskCase;
   timeoutMs: number;
+  store?: HarnessStore;
 }
 
 export interface ProbeAdapter {
@@ -73,7 +76,7 @@ export class MockProbeAdapter implements ProbeAdapter {
       }
 
       const endedAt = new Date().toISOString();
-      return {
+      const result: ProbeResult = {
         schemaVersion: 1,
         id: `hprobe_${randomUUID()}`,
         runId: input.runId,
@@ -86,8 +89,9 @@ export class MockProbeAdapter implements ProbeAdapter {
         artifacts: {},
         observations,
       };
+      return input.store ? writeProbeArtifacts(input.store, result, { stdout: observations.join("\n") + "\n" }) : result;
     } catch (err) {
-      return {
+      const result: ProbeResult = {
         schemaVersion: 1,
         id: `hprobe_${randomUUID()}`,
         runId: input.runId,
@@ -100,6 +104,7 @@ export class MockProbeAdapter implements ProbeAdapter {
         artifacts: {},
         observations: [`error:${err instanceof Error ? err.message : String(err)}`],
       };
+      return input.store ? writeProbeArtifacts(input.store, result, { stderr: result.observations.join("\n") + "\n" }) : result;
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
     }
