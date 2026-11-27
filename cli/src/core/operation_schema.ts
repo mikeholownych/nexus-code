@@ -379,6 +379,7 @@ export function validateOperationState(state: DurableOperationState): void {
           !validMergedCheckRun(run, true) || run.command !== checks?.[index]?.command || checks?.[index]?.status !== "PASSED")
         || (binding.typedChecks !== undefined && (
           !Array.isArray(binding.typedChecks) || binding.typedChecks.length > MAX_INTEGRATION_CHECKS
+          || typeof binding.attemptId !== "string" || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(binding.attemptId)
           || binding.typedChecks.some((check) =>
             !check || typeof check.id !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(check.id)
             || typeof check.definitionSha256 !== "string" || !/^[a-f0-9]{64}$/.test(check.definitionSha256)

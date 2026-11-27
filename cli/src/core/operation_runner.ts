@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { HarnessConfig } from "../types.js";
 import { realRecoveryClock, type RecoveryClock } from "./provider_recovery.js";
-import { ConvergenceScheduler, type Assignment, type Decision, type DurableOperationState, type IntegrationVerificationBinding, type MergedCheck, type OperationEvent, type OperationMessage, type UnitRunResult, type WorkUnit } from "./operation.js";
+import { ConvergenceScheduler, type Assignment, type Decision, type DurableOperationState, type IntegrationVerificationBinding, type IntegrationVerificationIntent, type MergedCheck, type OperationEvent, type OperationMessage, type UnitRunResult, type WorkUnit } from "./operation.js";
 import { markDelivered, publishMessage, undeliveredFor } from "./operation_messages.js";
 import { OperationGit, ensureIntegrationWorktree, type OperationGitPlan } from "./operation_git.js";
 import { REQUIREMENTS_CAPABILITY, READ_OBJECTIVE_CAPABILITY } from "./objective.js";
@@ -185,6 +185,7 @@ export class OperationRunner {
       ? new OperationGit(planFromState(state), state.git, {
           integrations: () => this.state.integrations ?? [],
           sandbox: opts.executor.integrationPolicy?.().sandbox,
+          onVerificationStart: (unitId, intent) => this.persistVerificationIntent(unitId, intent),
         })
       : undefined;
   }
@@ -1258,6 +1259,17 @@ export class OperationRunner {
     this.git?.disposeAllUnits();
     this.save();
     return this.state;
+  }
+
+  private persistVerificationIntent(unitId: string, intent: IntegrationVerificationIntent): void {
+    const previousEvents = this.state.events.slice();
+    this.scheduler.emit("VERIFICATION_STARTED", `Prepared ${intent.checks.length} checks on candidate ${intent.commit.slice(0, 12)}.`, { unitId, detail: { ...intent } });
+    try {
+      this.save();
+    } catch (error) {
+      this.state.events = previousEvents;
+      throw error;
+    }
   }
 
   private save(): void {

@@ -376,6 +376,80 @@ test("a verification receipt that fails to persist requires fresh evidence on re
   assert.equal(fs.readFileSync(marker, "utf8"), "check\ncheck\n");
 });
 
+test("typed verification persists intent before running and correlates passing evidence on retry", async (t) => {
+  const root = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-check-intent-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new OperationStore(root, path.join(home, "tasks"), home);
+  const state = operation(root, ["u1"], "op-check-intent");
+  const marker = path.join(home, "marker");
+  const quotedMarker = "'" + marker.replaceAll("'", "'\\''") + "'";
+  const command = "touch " + quotedMarker;
+  state.git!.verificationChecks = [{
+    id: "smoke", unitId: "u1", purpose: "run approved smoke check",
+    command, requirement: "required", cwd: ".", timeoutMs: 1000,
+  }];
+  const executor: WorkUnitExecutor = {
+    integrationPolicy: () => ({ verifier: command }),
+    async run(_unit, _resource, ctx) {
+      write(ctx.workspace!, "u1.txt", "one\n");
+      return { kind: "completed", summary: "done", outcome: "NOT_REQUIRED" };
+    },
+  };
+  let failed = false;
+  await new OperationRunner(state, {
+    executor, clock: clock(), persist: (s) => {
+      if (!failed && s.events.some((event) => event.type === "VERIFICATION_STARTED")) {
+        failed = true;
+        throw new Error("fixture could not persist verification intent");
+      }
+      store.save(s);
+    },
+  }).run();
+  assert.equal(failed, true);
+  assert.equal(fs.existsSync(marker), false);
+  const loaded = store.load(state.id);
+  assert.equal(loaded.status, "BLOCKED");
+  assert.equal(loaded.events.some((event) => event.type === "VERIFICATION_STARTED"), false);
+
+  const retry = new OperationRunner(loaded, { executor, clock: clock(), persist: (s) => store.save(s) });
+  retry.scheduler.resolve(loaded.blocked!.decisions[0].id, "1");
+  assert.equal((await retry.run()).status, "COMPLETE");
+  const stored = store.load(state.id);
+  const binding = stored.integrations![0].verificationBinding!;
+  const intent = stored.events.find((event) => event.type === "VERIFICATION_STARTED");
+  assert.equal(binding.attemptId, intent?.detail?.attemptId);
+  assert.equal(binding.commit, intent?.detail?.commit);
+  assert.equal(binding.typedChecks?.[0].status, "PASSED");
+  const status = execFileSync(process.execPath, ["--import", "tsx", path.join(cliDir, "src/index.ts"), "operation", "status", state.id, "-w", root], {
+    cwd: cliDir, encoding: "utf8",
+    env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), XDG_DATA_HOME: path.join(home, ".local", "share"), NEXUS_STATE_DIR: home, NO_COLOR: "1" },
+  });
+  assert.match(status, /smoke \[required\] \(unit u1\): PASSED on/);
+});
+
+test("resume blocks typed checks when the current operator verifier changes", async (t) => {
+  const root = repo();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const state = operation(root, ["u1"], "op-check-unauthorized");
+  state.git!.verificationChecks = [{
+    id: "smoke", unitId: "u1", purpose: "check tracked input",
+    command: "test -f file.txt", requirement: "required", cwd: ".", timeoutMs: 1000,
+  }];
+  let invoked = false;
+  const runner = new OperationRunner(state, {
+    clock: clock(), persist: () => {},
+    executor: { integrationPolicy: () => ({ verifier: "true" }), async run() {
+      invoked = true;
+      return { kind: "completed", summary: "done", outcome: "NOT_REQUIRED" };
+    } },
+  });
+  assert.equal((await runner.run()).status, "BLOCKED");
+  assert.equal(invoked, false);
+  assert.match(state.blocked?.decisions[0]?.question ?? "", /current operator-authorized verifier/);
+});
+
 test("operation status --json shows the verified receipt and the rejection", async (t) => {
   const root = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pa2-home-"));

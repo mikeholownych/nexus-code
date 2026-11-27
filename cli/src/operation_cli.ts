@@ -26,7 +26,7 @@ import { parseActiveMinutesCap, parseInferenceSubmissionCap, parseTokenCap, setO
 import { withDerivedPause } from "./core/driver_identity.js";
 import { buildOperationView, renderOperationView, renderReplay, watchOperation } from "./operation_view.js";
 import { ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "./core/operation_git.js";
-import { parseOperationVerificationChecks, type OperationVerificationCheck } from "./core/operation_verification.js";
+import { operationVerificationDefinitionDigest, parseOperationVerificationChecks, type OperationVerificationCheck } from "./core/operation_verification.js";
 import { ContextCheckpointError, createContextCheckpoint, listContextCheckpoints, restoreContextCheckpoint } from "./core/operation_checkpoints.js";
 import { safeTerminal } from "./ui.js";
 import { credentialFingerprint, ResourceRegistry, type ResourceDescriptor } from "./core/resources.js";
@@ -265,6 +265,18 @@ function printStatus(op: DurableOperationState, store: OperationStore, workspace
       u.status === "COMPLETE" ? ` — on ${u.result!.resourceId}` :
       u.assignment ? ` — ${u.assignment.resourceId}` : "";
     console.log(`  ${safeTerminal(u.status).padEnd(22)} ${safeTerminal(u.title)}${pc.dim(safeTerminal(extra))}`);
+  }
+  const definitions = op.git?.verificationChecks ?? [];
+  if (definitions.length) {
+    const binding = op.integrations?.at(-1)?.verificationBinding;
+    console.log("  Verification checks");
+    for (const check of definitions) {
+      const observed = binding?.typedChecks?.find((outcome) =>
+        outcome.id === check.id && outcome.definitionSha256 === operationVerificationDefinitionDigest(check));
+      const scope = check.unitId ? ` (unit ${safeTerminal(check.unitId)})` : "";
+      const status = observed && binding ? `${observed.status} on ${binding.commit.slice(0, 12)}` : "PENDING";
+      console.log(`    ${safeTerminal(check.id)} [${check.requirement}]${scope}: ${safeTerminal(status)}`);
+    }
   }
   if (op.status === "PAUSED" && op.pauseReason) console.log(pc.yellow(`Paused: ${safeTerminal(op.pauseReason)}`));
   if (op.wait) console.log(pc.yellow(`Waiting until ${safeTerminal(op.wait.wakeAt)}: ${safeTerminal(op.wait.reason)}`));

@@ -236,6 +236,7 @@ export type OperationEventType =
   | "DECISION_APPLIED"
   | "CONCURRENCY_LIMIT"
   | "INTEGRATION_QUEUED"
+  | "VERIFICATION_STARTED"
   | "INTEGRATION_SKIPPED"
   | "OPERATION_MESSAGE"
   | "OPERATION_MESSAGE_DROPPED"
@@ -416,7 +417,15 @@ export interface TypedCheckOutcome {
   detail?: string;
 }
 
+export interface IntegrationVerificationIntent {
+  attemptId: string;
+  commit: string;
+  worktree: string;
+  checks: Array<{ id: string; definitionSha256: string; applicable: boolean }>;
+}
+
 export interface IntegrationVerificationBinding {
+  attemptId?: string;
   commit: string;
   worktree: string;
   runs: MergedCheckRun[];

@@ -280,6 +280,43 @@ test("typed receipts bind alternate cwd, conditional applicability and unit owne
   assert.match(f.ops.completionVerificationProblem(f.receipts) ?? "", /required checks/);
 });
 
+test("a later integration reruns required checks from previously accepted units", async () => {
+  const f = fixture();
+  f.state.verificationChecks = [{
+    id: "first-check", unitId: "u1", purpose: "keep the created marker",
+    command: "test -f marker.txt", requirement: "required", cwd: ".", timeoutMs: 1000,
+  }];
+  write(f.prepare("u1"), "marker.txt", "required\n");
+  const first = await f.integrate("u1");
+  assert.ok(first.kind === "integrated");
+  const tip = f.ops.currentTip();
+  fs.rmSync(path.join(f.prepare("u2"), "marker.txt"));
+
+  const second = await f.integrate("u2");
+  assert.ok(second.kind === "failed");
+  assert.match(second.reason, /first-check/);
+  assert.equal(second.verificationBinding?.typedChecks?.[0].status, "FAILED");
+  assertUntouched(f, tip);
+});
+
+test("typed verification does not execute in aliased check directories", async () => {
+  const f = fixture();
+  const tree = f.prepare("u1");
+  write(tree, "checks/marker.txt", "required\n");
+  fs.symlinkSync("checks", path.join(tree, "alias"), "dir");
+  f.state.verificationChecks = [{
+    id: "alias-check", purpose: "check from specified directory",
+    command: "test -f marker.txt", requirement: "required", cwd: "alias", timeoutMs: 1000,
+  }];
+  const tip = f.ops.currentTip();
+
+  const result = await f.integrate("u1");
+  assert.ok(result.kind === "failed");
+  assert.match(result.reason, /cwd is unavailable or resolves through a symlink/);
+  assert.equal(result.verificationBinding?.typedChecks?.[0].run, undefined);
+  assertUntouched(f, tip);
+});
+
 test("integration requires complete verifier output even when the command exits successfully", async () => {
   const f = fixture();
   f.state.integrationVerifiers = ["node -e 'process.stdout.write(Buffer.alloc(4 * 1024 * 1024 + 1, 10))'"];

@@ -34,6 +34,7 @@ import {
 import type {
   IntegrationReceipt,
   IntegrationVerificationBinding,
+  IntegrationVerificationIntent,
   MergedCheck,
   MergedCheckRun,
   TypedCheckOutcome,
@@ -203,7 +204,12 @@ export class OperationGit {
   constructor(
     private readonly plan: OperationGitPlan,
     private readonly state: OperationGitState,
-    private readonly options: { verifyTimeoutSecs?: number; sandbox?: boolean | string; integrations?: () => readonly IntegrationReceipt[] } = {},
+    private readonly options: {
+      verifyTimeoutSecs?: number;
+      sandbox?: boolean | string;
+      integrations?: () => readonly IntegrationReceipt[];
+      onVerificationStart?: (unitId: string, intent: IntegrationVerificationIntent) => void;
+    } = {},
   ) {
     this.hooksDir = path.join(plan.baseDir, "no-hooks");
   }
@@ -448,7 +454,7 @@ export class OperationGit {
         const clean = this.integrationIntegrity(commit, tip);
         if (!clean.ok) return { kind: "failed", reason: `${clean.reason}${inPlace}` };
       }
-      const posthoc = hasChecks ? this.runChecks(checks, typedChecks, commit, tip) : undefined;
+      const posthoc = hasChecks ? this.runChecks(checks, typedChecks, unit.id, commit, tip) : undefined;
       const integrity = posthoc ? this.integrationIntegrity(commit, tip) : undefined;
       if (posthoc && (posthoc.integrityFailure || (integrity && !integrity.ok))) {
         const reason = posthoc.integrityFailure ?? integrity?.reason ?? "integration verification changed the integration history";
@@ -515,7 +521,7 @@ export class OperationGit {
       const restoration = this.restoreIntegration(tip);
       return { kind: "failed", ...takeover, reason: restoration ? `${takeover.reason}; ${restoration}` : takeover.reason };
     }
-    const verification = hasChecks ? this.runChecks(checks, typedChecks, commit, mergedTip) : undefined;
+    const verification = hasChecks ? this.runChecks(checks, typedChecks, unit.id, commit, mergedTip) : undefined;
     const integrity = verification ? this.integrationIntegrity(commit, mergedTip) : undefined;
     if (verification && (verification.failed || verification.typedFailure || verification.integrityFailure || (integrity && !integrity.ok))) {
       // The merge is mechanically clean but the merged tree does not pass a verifier: undo it.
@@ -789,6 +795,7 @@ export class OperationGit {
   private runChecks(
     checks: ReadonlyArray<{ command: string; owners: string[] }>,
     definitions: readonly OperationVerificationCheck[],
+    unitId: string,
     commit: string,
     expectedTip: string,
   ): {
@@ -818,13 +825,31 @@ export class OperationGit {
     binding.typedChecks = typedChecks;
     const changed = this.verificationChangedPaths(definitions, expectedTip);
     if (!changed) return { ran, binding, typedFailure: "could not establish the changed paths for conditional verification" };
-    for (const definition of definitions) {
-      const identity = { id: definition.id, definitionSha256: operationVerificationDefinitionDigest(definition) };
-      if (!operationVerificationApplies(definition, changed)) {
+    const attemptId = randomUUID();
+    const planned = definitions.map((definition) => ({
+      id: definition.id,
+      definitionSha256: operationVerificationDefinitionDigest(definition),
+      applicable: operationVerificationApplies(definition, changed),
+    }));
+    try {
+      this.options.onVerificationStart?.(unitId, { attemptId, commit: expectedTip, worktree: binding.worktree, checks: planned });
+    } catch {
+      return { ran, binding, typedFailure: "could not persist verification intent; no typed check was started" };
+    }
+    binding.attemptId = attemptId;
+    for (const [index, definition] of definitions.entries()) {
+      const { id, definitionSha256, applicable } = planned[index];
+      const identity = { id, definitionSha256 };
+      if (!applicable) {
         typedChecks.push({ ...identity, status: "SKIPPED" });
         continue;
       }
-      const outcome = this.verifyMerged(definition.command, definition);
+      let outcome: ReturnType<OperationGit["verifyMerged"]>;
+      try {
+        outcome = this.verifyMerged(definition.command, definition);
+      } catch {
+        outcome = { ok: false, status: "ENVIRONMENT", reason: "the verifier process or its output capture could not be completed" };
+      }
       const detail = outcome.reason ? formatDiagnosticForOutput(outcome.reason).slice(0, 512) : undefined;
       typedChecks.push({ ...identity, status: outcome.status, ...(outcome.run ? { run: outcome.run } : {}), ...(detail ? { detail } : {}) });
       const integrity = this.integrationIntegrity(commit, expectedTip);
