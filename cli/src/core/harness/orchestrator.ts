@@ -448,7 +448,7 @@ export class HarnessOrchestrator {
       roundRecord.completedAt = nowIso();
       roundRecord.status = (run.status as string) === "BLOCKED" ? "BLOCKED" : "COMPLETED";
       store.saveRun(run);
-      recordEvent(store, run.id, "hir.round.completed", `Round ${round} completed`, { round, candidates: roundRecord.candidateIds.length, probes: roundRecord.probeIds.length, blocked: (run.status as string) === "BLOCKED" });
+      recordEvent(store, run.id, "hir.round.completed", `Round ${round} completed`, { round, candidates: roundRecord.candidateIds.length, probes: roundRecord.probeIds.length, blocked: (run.status as string) === "BLOCKED", probeConcurrency });
       if ((run.status as string) === "BLOCKED") break;
       const roundHasBetter = decisions.some((d) => d.round === round && d.scorecard.some((s) => s.dimension === "correctness" && s.verdict === "better"));
       if (roundHasBetter) {
