@@ -6,6 +6,7 @@ import "./helpers/leak_guard.js";
  * verifier processes; the executor is scripted (no model, no network).
  */
 import { test } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -448,6 +449,44 @@ test("resume blocks typed checks when the current operator verifier changes", as
   assert.equal((await runner.run()).status, "BLOCKED");
   assert.equal(invoked, false);
   assert.match(state.blocked?.decisions[0]?.question ?? "", /current operator-authorized verifier/);
+});
+
+test("aborting a running integration verifier cancels its process and leaves no accepted receipt", async (t) => {
+  const root = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-check-cancel-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new OperationStore(root, path.join(home, "tasks"), home);
+  const state = operation(root, ["u1"], "op-check-cancel");
+  const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+  const started = path.join(home, "started");
+  const escaped = path.join(home, "after-delay");
+  const command = "touch " + quote(started) + "; sleep 2; touch " + quote(escaped);
+  state.git!.verificationChecks = [{
+    id: "smoke", purpose: "record bounded process run", command, requirement: "required", cwd: ".", timeoutMs: 5000,
+  }];
+  const tip = git(state.git!.integrationWorktree, ["rev-parse", "HEAD"]);
+  const controller = new AbortController();
+  const executor: WorkUnitExecutor = {
+    integrationPolicy: () => ({ verifier: command }),
+    async run(_unit, _resource, ctx) {
+      write(ctx.workspace!, "u1.txt", "one\n");
+      return { kind: "completed", summary: "done", outcome: "NOT_REQUIRED" };
+    },
+  };
+  const running = new OperationRunner(state, { executor, clock: clock(), persist: (s) => store.save(s) }).run(controller.signal);
+  const deadline = Date.now() + 5_000;
+  while (!fs.existsSync(started) && Date.now() < deadline) await delay(10);
+  controller.abort();
+
+  assert.equal((await running).status, "CANCELLED");
+  assert.equal(fs.existsSync(escaped), false);
+  const stored = store.load(state.id);
+  assert.deepEqual(stored.integrations ?? [], []);
+  const rejection = stored.events.find((event) => event.type === "INTEGRATION_REJECTED");
+  const binding = rejection?.detail?.verificationBinding as NonNullable<DurableOperationState["integrations"]>[number]["verificationBinding"];
+  assert.equal(binding?.typedChecks?.[0]?.status, "CANCELLED");
+  assert.equal(git(state.git!.integrationWorktree, ["rev-parse", "HEAD"]), tip);
 });
 
 test("operation status --json shows the verified receipt and the rejection", async (t) => {

@@ -389,7 +389,7 @@ export interface MergedCheck {
   /** Whose verifier this is: unit ids, or `operator` for a verifier pinned for the operation. */
   owners: string[];
   /** ENVIRONMENT: a command, sandbox, or evidence capture could not be completed. */
-  status: "PASSED" | "FAILED" | "ENVIRONMENT" | "TIMED_OUT";
+  status: "PASSED" | "FAILED" | "ENVIRONMENT" | "TIMED_OUT" | "CANCELLED";
   /** The same command on the tree before the merge, run only after a failure to decide whether the merge caused it. */
   baseline?: "PASSED" | "FAILED";
   /** The bounded output capture was incomplete. */

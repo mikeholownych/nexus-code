@@ -14,7 +14,7 @@
  * and each earlier unit's), not only the integrating unit's own. A unit whose merge breaks one of them is refused and
  * the branch is put back; so is a unit that changes verification files earlier integrated work brought in.
  */
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -22,12 +22,13 @@ import * as path from "node:path";
 import { trustedGitArgs } from "../git.js";
 import { ensureGitExclude } from "./git_exclude.js";
 import { GIT_SAFE, attributesTree, driverRefusal, safeGitEnv, snapshotSupport } from "./specialist_inputs.js";
-import { environmentHint, runVerifierShell, verifierTimeoutSecs } from "../tester.js";
+import { buildVerifierEnvironment, environmentHint, verifierTimeoutSecs } from "../tester.js";
 import { sandboxNetworkEnabled } from "../sandbox.js";
 import { SecurityManager } from "../security.js";
 import { printable } from "../worktrunk/git.js";
 import { sandboxedVerifierCommand, usableSandboxEngine } from "./verify.js";
 import { formatDiagnosticForOutput } from "../ui.js";
+import { runProbeProcess } from "./harness/probe_process.js";
 import {
   MAX_INTEGRATION_CHECKS, operationVerificationApplies, operationVerificationDefinitionDigest, type OperationVerificationCheck,
 } from "./operation_verification.js";
@@ -132,6 +133,7 @@ export interface IntegrationEvidence {
   tests?: { command: string; status: string; hasExecutedTests: boolean; definitionBound?: false };
   /** The operation's receipts so far: their verifiers are re-run on the merged tree. Never copied onto the receipt. */
   integrated?: readonly IntegrationReceipt[];
+  signal?: AbortSignal;
 }
 
 function evidenceFields(evidence: IntegrationEvidence): Pick<IntegrationReceipt, "sequence" | "candidate" | "tests"> {
@@ -370,6 +372,8 @@ export class OperationGit {
     result: Extract<UnitRunResult, { kind: "completed" }>,
     evidence: IntegrationEvidence = {},
   ): Promise<IntegrateResult> {
+    const { signal } = evidence;
+    if (signal?.aborted) return { kind: "failed", reason: "integration cancelled before verification" };
     const entry = this.state.units[unit.id];
     if (!entry) return { kind: "failed", reason: `unit ${unit.id} has no worktree recorded` };
     if (entry.integratedCommit) {
@@ -454,7 +458,7 @@ export class OperationGit {
         const clean = this.integrationIntegrity(commit, tip);
         if (!clean.ok) return { kind: "failed", reason: `${clean.reason}${inPlace}` };
       }
-      const posthoc = hasChecks ? this.runChecks(checks, typedChecks, unit.id, commit, tip) : undefined;
+      const posthoc = hasChecks ? await this.runChecks(checks, typedChecks, unit.id, commit, tip, signal) : undefined;
       const integrity = posthoc ? this.integrationIntegrity(commit, tip) : undefined;
       if (posthoc && (posthoc.integrityFailure || (integrity && !integrity.ok))) {
         const reason = posthoc.integrityFailure ?? integrity?.reason ?? "integration verification changed the integration history";
@@ -521,12 +525,12 @@ export class OperationGit {
       const restoration = this.restoreIntegration(tip);
       return { kind: "failed", ...takeover, reason: restoration ? `${takeover.reason}; ${restoration}` : takeover.reason };
     }
-    const verification = hasChecks ? this.runChecks(checks, typedChecks, unit.id, commit, mergedTip) : undefined;
+    const verification = hasChecks ? await this.runChecks(checks, typedChecks, unit.id, commit, mergedTip, signal) : undefined;
     const integrity = verification ? this.integrationIntegrity(commit, mergedTip) : undefined;
     if (verification && (verification.failed || verification.typedFailure || verification.integrityFailure || (integrity && !integrity.ok))) {
       // The merge is mechanically clean but the merged tree does not pass a verifier: undo it.
       const restoration = this.restoreIntegration(tip);
-      const undone = !restoration && integrity?.ok && verification.failed ? this.attribute(unit, verification.failed, tip, commit, earlier) : undefined;
+      const undone = !restoration && integrity?.ok && verification.failed && !signal?.aborted ? await this.attribute(unit, verification.failed, tip, commit, earlier, signal) : undefined;
       const reason = undone?.reason ?? verification.integrityFailure ?? integrity?.reason ?? verification.typedFailure ?? verification.failed?.detail ?? "integration verification failed";
       return {
         kind: "failed",
@@ -792,23 +796,24 @@ export class OperationGit {
   }
 
   /** Run the checks in order on the tree the integration worktree holds; stop at the first that does not pass. */
-  private runChecks(
+  private async runChecks(
     checks: ReadonlyArray<{ command: string; owners: string[] }>,
     definitions: readonly OperationVerificationCheck[],
     unitId: string,
     commit: string,
     expectedTip: string,
-  ): {
+    signal?: AbortSignal,
+  ): Promise<{
     ran: MergedCheck[];
     binding: IntegrationVerificationBinding;
     failed?: { check: MergedCheck; detail: string };
     typedFailure?: string;
     integrityFailure?: string;
-  } {
+  }> {
     const ran: MergedCheck[] = [];
     const binding: IntegrationVerificationBinding = { commit: expectedTip, worktree: this.plan.integrationWorktree, runs: [] };
     for (const { command, owners } of checks) {
-      const outcome = this.verifyMerged(command);
+      const outcome = await this.verifyMerged(command, undefined, signal);
       const check: MergedCheck = {
         command, owners, status: outcome.status,
         ...(outcome.sandbox ? { sandbox: outcome.sandbox } : {}),
@@ -844,9 +849,9 @@ export class OperationGit {
         typedChecks.push({ ...identity, status: "SKIPPED" });
         continue;
       }
-      let outcome: ReturnType<OperationGit["verifyMerged"]>;
+      let outcome: Awaited<ReturnType<OperationGit["verifyMerged"]>>;
       try {
-        outcome = this.verifyMerged(definition.command, definition);
+        outcome = await this.verifyMerged(definition.command, definition, signal);
       } catch {
         outcome = { ok: false, status: "ENVIRONMENT", reason: "the verifier process or its output capture could not be completed" };
       }
@@ -854,10 +859,11 @@ export class OperationGit {
       typedChecks.push({ ...identity, status: outcome.status, ...(outcome.run ? { run: outcome.run } : {}), ...(detail ? { detail } : {}) });
       const integrity = this.integrationIntegrity(commit, expectedTip);
       if (!integrity.ok) return { ran, binding, integrityFailure: integrity.reason ?? "integration verification changed the integration worktree" };
-      if (!outcome.ok && definition.requirement !== "advisory") {
+      if (!outcome.ok && (definition.requirement !== "advisory" || outcome.status === "CANCELLED")) {
         return { ran, binding, typedFailure: `required check '${definition.id}' failed: ${detail ?? outcome.status}` };
       }
     }
+    if (signal?.aborted) return { ran, binding, typedFailure: "integration verification was cancelled" };
     return { ran, binding };
   }
 
@@ -866,7 +872,10 @@ export class OperationGit {
    * sandbox through the wrapper `nexus verify` uses (the operation's other worktrees hidden, the host read-only), or on
    * the host when the session has no sandbox. A sandbox that cannot be built is a result, never a reason to run outside it.
    */
-  private verifyMerged(command: string, definition?: OperationVerificationCheck): { ok: boolean; reason?: string; status: MergedCheck["status"]; sandbox?: "bwrap" | "docker"; outputTruncated?: true; run?: MergedCheckRun } {
+  private async verifyMerged(command: string, definition?: OperationVerificationCheck, signal?: AbortSignal): Promise<{
+    ok: boolean; reason?: string; status: MergedCheck["status"]; sandbox?: "bwrap" | "docker"; outputTruncated?: true; run?: MergedCheckRun;
+  }> {
+    if (signal?.aborted) return { ok: false, status: "CANCELLED", reason: "integration verification was cancelled" };
     const deadlineMs = Math.min((this.options.verifyTimeoutSecs ?? verifierTimeoutSecs()) * 1000, definition?.timeoutMs ?? Infinity);
     const root = this.plan.integrationWorktree;
     let directory = root;
@@ -905,24 +914,25 @@ export class OperationGit {
       line = confined.command;
     }
     const startedAt = new Date().toISOString();
-    const ran = runVerifierShell(line, directory, deadlineMs);
+    const process = await runProbeProcess("bash", ["-c", line], {
+      cwd: directory, timeoutMs: deadlineMs, env: buildVerifierEnvironment(), signal, dockerContainerName: containerName,
+      maxCombinedOutputBytes: 4 * 1024 * 1024,
+    });
+    const output = [process.error, process.stdout, process.stderr].filter(Boolean).join("\n");
     const run: MergedCheckRun = {
       command,
       startedAt,
       completedAt: new Date().toISOString(),
       timeoutMs: deadlineMs,
-      exitCode: ran.exitCode,
-      outputSha256: createHash("sha256").update(ran.output).digest("hex"),
-      outputTruncated: ran.truncated,
+      exitCode: process.status,
+      outputSha256: createHash("sha256").update(output).digest("hex"),
+      outputTruncated: Boolean(process.outputTruncated),
     };
-    // Killing the Docker client at the deadline leaves its container running: remove it by name.
-    if (containerName && (ran.timedOut || ran.exitCode === null)) spawnSync("docker", ["rm", "--force", containerName], { stdio: "ignore", timeout: 30_000 });
-    const capture = {
-      run,
-      ...(engine ? { sandbox: engine } : {}),
-      ...(ran.truncated ? { outputTruncated: true as const } : {}),
-    };
-    if (ran.truncated && !ran.timedOut) {
+    const capture = { run, ...(engine ? { sandbox: engine } : {}), ...(process.outputTruncated ? { outputTruncated: true as const } : {}) };
+    if (process.cancelled || signal?.aborted) {
+      return { ok: false, status: "CANCELLED", ...capture, reason: "integration verification was cancelled" };
+    }
+    if (process.outputTruncated && !process.timedOut) {
       return {
         ok: false,
         status: "ENVIRONMENT",
@@ -930,22 +940,22 @@ export class OperationGit {
         reason: `integration verification could not retain its evidence on the merged tree (output truncated): ${command}`,
       };
     }
-    if (ran.success) return { ok: true, status: "PASSED", ...capture };
-    const tail = ran.output.trim().split("\n").slice(-6).join("\n");
-    if (!ran.timedOut && (ran.exitCode === 126 || ran.exitCode === 127)) {
+    if (!process.timedOut && !process.error && process.status === 0) return { ok: true, status: "PASSED", ...capture };
+    const tail = output.trim().split("\n").slice(-6).join("\n");
+    if (!process.timedOut && (process.status === 126 || process.status === 127)) {
       return {
         ok: false,
         status: "ENVIRONMENT",
         ...capture,
-        reason: `integration verification could not run on the merged tree (exit ${ran.exitCode}): ${command}\n${environmentHint()}` + (tail ? `\n${tail}` : ""),
+        reason: `integration verification could not run on the merged tree (exit ${process.status}): ${command}\n${environmentHint()}` + (tail ? `\n${tail}` : ""),
       };
     }
     return {
       ok: false,
-      status: ran.timedOut ? "TIMED_OUT" : "FAILED",
+      status: process.timedOut ? "TIMED_OUT" : "FAILED",
       ...capture,
       reason:
-        `integration verification failed on the merged tree: ${command}${ran.timedOut ? " (timed out)" : ""}` +
+        `integration verification failed on the merged tree: ${command}${process.timedOut ? " (timed out)" : ""}` +
         (tail ? `\n${tail}` : ""),
     };
   }
@@ -958,13 +968,14 @@ export class OperationGit {
    * its environment) was already broken and the unit is not blamed, though it still cannot be verified and is not
    * integrated.
    */
-  private attribute(
+  private async attribute(
     unit: WorkUnit,
     failed: { check: MergedCheck; detail: string },
     tip: string,
     commit: string,
     earlier: readonly IntegrationReceipt[],
-  ): { reason: string; conflictWith?: string[] } {
+    signal?: AbortSignal,
+  ): Promise<{ reason: string; conflictWith?: string[] }> {
     const { check, detail } = failed;
     const others = check.owners.filter((owner) => owner !== unit.id);
     if (check.status === "ENVIRONMENT") return { reason: detail };
@@ -980,7 +991,7 @@ export class OperationGit {
         conflictWith: unseen,
       };
     }
-    check.baseline = this.verifyMerged(check.command).ok ? "PASSED" : "FAILED";
+    check.baseline = (await this.verifyMerged(check.command, undefined, signal)).ok ? "PASSED" : "FAILED";
     // Whatever the baseline run wrote or moved is dropped again.
     const restoration = this.restoreIntegration(tip);
     const left = restoration ? `; ${restoration}` : "";

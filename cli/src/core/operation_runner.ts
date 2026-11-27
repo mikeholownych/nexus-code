@@ -743,7 +743,7 @@ export class OperationRunner {
         this.reportPreservedWorktrees([unit.id]);
         return result;
       }
-      return this.enqueueIntegration(unit, result);
+      return this.enqueueIntegration(unit, result, signal);
     } catch (err: any) {
       if (signal?.aborted) return { kind: "cancelled" };
       if (err instanceof OperationInferenceAdmissionError) {
@@ -1011,18 +1011,18 @@ export class OperationRunner {
    * worktree, so merges happen one at a time. The returned promise resolves with what the unit's completion becomes
    * (the original result on success, or a decision-bearing failure).
    */
-  private enqueueIntegration(unit: WorkUnit, result: Extract<UnitRunResult, { kind: "completed" }>): Promise<UnitRunResult> {
+  private enqueueIntegration(unit: WorkUnit, result: Extract<UnitRunResult, { kind: "completed" }>, signal?: AbortSignal): Promise<UnitRunResult> {
     this.scheduler.emit("INTEGRATION_QUEUED", `${unit.id} queued for integration.`, { unitId: unit.id });
     const job = async (): Promise<UnitRunResult> => {
       const current = this.scheduler.unit(unit.id);
-      if (current.dropped || this.state.status === "CANCELLED") {
+      if (current.dropped || this.state.status === "CANCELLED" || signal?.aborted) {
         this.scheduler.emit("INTEGRATION_SKIPPED", `${unit.id} was not integrated: it is ${current.dropped ? "dropped" : "cancelled"}.`, {
           unitId: unit.id,
           detail: { reason: current.dropped ? "dropped" : "cancelled" },
         });
         return { kind: "cancelled" };
       }
-      return this.integrateUnit(unit, result);
+      return this.integrateUnit(unit, result, signal);
     };
     const next = this.integrationChain.then(job, job);
     this.integrationChain = next.then(
@@ -1063,7 +1063,7 @@ export class OperationRunner {
   }
 
   /** Merges one completed unit into the operation branch and records the receipt, or returns the blocking decision. */
-  private async integrateUnit(unit: WorkUnit, result: Extract<UnitRunResult, { kind: "completed" }>): Promise<UnitRunResult> {
+  private async integrateUnit(unit: WorkUnit, result: Extract<UnitRunResult, { kind: "completed" }>, signal?: AbortSignal): Promise<UnitRunResult> {
     const candidate = this.candidateFor(unit);
     const tests = result.verification
       ? { command: result.verification.command, status: result.verification.status, hasExecutedTests: result.verification.hasExecutedTests, ...(result.verification.definitionBound === false ? { definitionBound: false as const } : {}) }
@@ -1072,6 +1072,7 @@ export class OperationRunner {
     const previousUnit = gitState.units[unit.id];
     const integration = await this.git!.integrate(unit, result, {
       sequence: (this.state.integrations?.length ?? 0) + 1,
+      signal,
       integrated: this.state.integrations ?? [],
       ...(candidate ? { candidate } : {}),
       ...(tests ? { tests } : {}),

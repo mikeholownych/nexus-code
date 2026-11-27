@@ -317,6 +317,25 @@ test("typed verification does not execute in aliased check directories", async (
   assertUntouched(f, tip);
 });
 
+test("integration distinguishes elapsed deadlines from a verifier's exit 124", async () => {
+  const cases = [
+    { command: "sleep 1", timeoutMs: 60, status: "TIMED_OUT" },
+    { command: "exit 124", timeoutMs: 1000, status: "FAILED" },
+  ];
+  for (const { command, timeoutMs, status } of cases) {
+    const f = fixture();
+    f.prepare("u1");
+    f.state.verificationChecks = [{
+      id: "test", purpose: "record verifier status", command, requirement: "required", cwd: ".", timeoutMs,
+    }];
+    const tip = f.ops.currentTip();
+    const result = await f.integrate("u1");
+    assert.ok(result.kind === "failed");
+    assert.equal(result.verificationBinding?.typedChecks?.[0]?.status, status);
+    assertUntouched(f, tip);
+  }
+});
+
 test("integration requires complete verifier output even when the command exits successfully", async () => {
   const f = fixture();
   f.state.integrationVerifiers = ["node -e 'process.stdout.write(Buffer.alloc(4 * 1024 * 1024 + 1, 10))'"];

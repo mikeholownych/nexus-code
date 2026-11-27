@@ -22,6 +22,7 @@ export interface ProbeProcessResult {
   cancelled: boolean;
   stdout: string;
   stderr: string;
+  outputTruncated?: true;
 }
 
 function signalProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
@@ -53,7 +54,7 @@ function signalProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
 export function runProbeProcess(
   file: string,
   args: string[],
-  options: { cwd: string; timeoutMs: number; signal?: AbortSignal; env?: NodeJS.ProcessEnv; dockerContainerName?: string },
+  options: { cwd: string; timeoutMs: number; signal?: AbortSignal; env?: NodeJS.ProcessEnv; dockerContainerName?: string; maxCombinedOutputBytes?: number },
 ): Promise<ProbeProcessResult> {
   if (options.signal?.aborted) {
     return Promise.resolve({ status: null, signal: null, timedOut: false, cancelled: true, stdout: "", stderr: "" });
@@ -73,15 +74,20 @@ export function runProbeProcess(
       return;
     }
 
+    let outputTruncated = false;
+    let combinedRemaining = options.maxCombinedOutputBytes;
     const capture = (stream: NodeJS.ReadableStream | null): (() => string) => {
       const chunks: Buffer[] = [];
       let length = 0;
       stream?.on("data", (chunk: Buffer | string) => {
         const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        if (length >= OUTPUT_LIMIT) return;
-        const kept = buffer.subarray(0, OUTPUT_LIMIT - length);
+        const remaining = combinedRemaining ?? OUTPUT_LIMIT - length;
+        const kept = buffer.subarray(0, remaining);
+        if (kept.length < buffer.length) outputTruncated = true;
+        if (!kept.length) return;
         chunks.push(kept);
         length += kept.length;
+        if (combinedRemaining !== undefined) combinedRemaining -= kept.length;
       });
       return () => Buffer.concat(chunks).toString("utf8");
     };
@@ -114,7 +120,7 @@ export function runProbeProcess(
       clearTimeout(timer);
       if (killTimer) clearTimeout(killTimer);
       options.signal?.removeEventListener("abort", onAbort);
-      if (options.dockerContainerName && (termination || result.error)) {
+      if (options.dockerContainerName && (termination || result.error || result.status === null)) {
         // Killing the Docker CLI does not stop its container. Name it at launch and remove it on abort/deadline.
         spawnSync("docker", ["rm", "--force", options.dockerContainerName], { stdio: "ignore", timeout: 5_000, env: scrubProbeEnv() });
       }
@@ -124,6 +130,7 @@ export function runProbeProcess(
         cancelled: termination === "cancelled",
         stdout: stdout(),
         stderr: stderr(),
+        ...(outputTruncated ? { outputTruncated: true } : {}),
       });
     };
 

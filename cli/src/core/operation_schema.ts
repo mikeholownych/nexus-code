@@ -49,7 +49,7 @@ export const LEGACY_OPERATION_SCHEMA_VERSION = 1;
 
 const OPERATION_STATUSES = new Set(["RUNNING", "WAITING", "BLOCKED", "PAUSED", "COMPLETE", "CANCELLED"]);
 const WORK_UNIT_STATUSES = new Set(["RUNNABLE", "RUNNING", "PARKED", "WAITING_ON_DEPENDENCY", "COMPLETE", "BLOCKED"]);
-const MERGED_CHECK_STATUSES = new Set(["PASSED", "FAILED", "ENVIRONMENT", "TIMED_OUT"]);
+const MERGED_CHECK_STATUSES = new Set(["PASSED", "FAILED", "ENVIRONMENT", "TIMED_OUT", "CANCELLED"]);
 function validMergedCheckRun(run: MergedCheckRun, passed: boolean): boolean {
   return Boolean(run && typeof run.command === "string" && run.command.trim()
     && typeof run.startedAt === "string" && Number.isFinite(Date.parse(run.startedAt))
