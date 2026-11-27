@@ -10,12 +10,14 @@ import { executeQualityCommand } from "../src/quality_command.js";
 import { setWorkspaceTrusted } from "../src/workspace_trust.js";
 import type { HarnessConfig } from "../src/types.js";
 import { makeRepo, startGateway } from "./helpers/fixtures.js";
+import { isolateGitConfig } from "./helpers/isolate_git_config.js";
 
 function config(workspace: string, endpoint: string): HarnessConfig {
   return { workspace, endpoint, model: "fixture", maxSteps: 2, shell: "bash", temperature: 0 };
 }
 
 function trustedRepo(t: TestContext) {
+  isolateGitConfig(t);
   const workspace = makeRepo({ "app.js": "export const size = 2;\n" });
   setWorkspaceTrusted(workspace, true);
   t.after(() => {
@@ -146,4 +148,62 @@ test("simplify requires a currently verified candidate and cannot edit it", asyn
   fs.writeFileSync(path.join(worktree, "app.js"), "changed after acceptance\n");
   assert.equal((await executeQualityCommand("simplify", completed.id, settings)).success, false);
   assert.equal(fixture.requests.length, 2);
+});
+
+test("an advisor can review an explicit plan or diff and cancellation sends no request", async (t) => {
+  const workspace = trustedRepo(t);
+  const diff = "diff --git a/app.js b/app.js\n--- a/app.js\n+++ b/app.js\n@@ -1 +1 @@\n-export const size = 2;\n+export const size = 3;\n";
+  fs.writeFileSync(path.join(workspace, "selected changes.patch"), diff);
+  const draft = new BatchPlanStore(workspace).create({
+    version: 1, objective: "Document release steps", acceptanceCriteria: ["Document added"],
+    checks: [{ id: "final", command: "git diff --quiet", cwd: ".", timeoutSeconds: 1, required: true, expectation: "Clean review" }],
+    risks: [], assumptions: [], blockers: [],
+    units: [{
+      id: "read", title: "Inspect", objective: "Inspect documentation", role: "researcher", required: true, dependsOn: [],
+      mode: "read", scope: ["."], acceptanceCriteria: ["List release files"], checks: [], outputs: ["Review notes"], handoffs: [],
+    }],
+  });
+  const provider = await startGateway((_, body) => {
+    const input = JSON.parse(body.messages[1].content);
+    return { kind: "text", content: JSON.stringify({
+      ...advice, findings: [{ ...advice.findings[0], references: [input.sources[0].id] }],
+    }) };
+  });
+  t.after(() => provider.close());
+  const settings = config(workspace, provider.url);
+  const cancelled = await executeQualityCommand("advisor", "task No request after cancellation", settings, AbortSignal.abort());
+  assert.equal(cancelled.success, false);
+  assert.equal(provider.requests.length, 0);
+  const plan = await executeQualityCommand("advisor", `plan ${draft.id}`, settings);
+  assert.equal(plan.success, true, plan.output);
+  assert.match(plan.output, /selected-plan/);
+  const reviewed = await executeQualityCommand("advisor", 'diff "selected changes.patch"', settings);
+  assert.equal(reviewed.success, true, reviewed.output);
+  assert.match(reviewed.output, /selected-diff/);
+  const request = provider.requests[1] as { messages: Array<{ content: string }> };
+  assert.deepEqual(JSON.parse(request.messages[1].content).sources, [{ id: "selected-diff", content: diff }]);
+  assert.equal(fs.readFileSync(path.join(workspace, "selected changes.patch"), "utf8"), diff);
+  assert.equal(provider.requests.length, 2);
+});
+
+test("advisor freeform task and failure text reaches the provider verbatim", async (t) => {
+  const workspace = trustedRepo(t);
+  const provider = await startGateway((_, body) => {
+    const input = JSON.parse(body.messages[1].content);
+    return { kind: "text", content: JSON.stringify({
+      ...advice, findings: [{ ...advice.findings[0], references: [input.sources[0].id] }],
+    }) };
+  });
+  t.after(() => provider.close());
+  const settings = config(workspace, provider.url);
+  const text = "  Preserve user's C:\\raw and \"quotes\".\nA second line follows.  ";
+  for (const kind of ["task", "failure"]) {
+    const outcome = await executeQualityCommand("advisor", `${kind} ${text}`, settings);
+    assert.equal(outcome.success, true, outcome.output);
+  }
+  const requests = provider.requests as Array<{ messages: Array<{ content: string }> }>;
+  assert.deepEqual(requests.map((request) => JSON.parse(request.messages[1].content).sources[0]), [
+    { id: "selected-task", content: text },
+    { id: "selected-failure", content: text },
+  ]);
 });

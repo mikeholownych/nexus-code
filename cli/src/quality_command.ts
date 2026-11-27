@@ -105,26 +105,32 @@ function selectedDiff(workspace: string, name: string): string {
   }
 }
 
-function advisorSource(words: string[], config: HarnessConfig): ReviewSource {
-  const [kind, ...input] = words;
-  if (!input.length) throw new Error(ADVISOR_USAGE);
+function advisorArgs(args: string): { independent: boolean; kind: string; input: string } {
+  const prefix = /^\s*(?:(--independent)\s+)?(task|failure|diff|plan)\s/u.exec(args);
+  const input = prefix && args.slice(prefix[0].length);
+  if (!prefix || !input || !input.trim()) throw new Error(ADVISOR_USAGE);
+  return { independent: Boolean(prefix[1]), kind: prefix[2], input };
+}
+
+function advisorSource(kind: string, input: string, config: HarnessConfig): ReviewSource {
   if (kind === "task" || kind === "failure") {
     return {
-      sources: [{ id: `selected-${kind}`, content: input.join(" ") }],
+      sources: [{ id: `selected-${kind}`, content: input }],
       origin: { resourceId: "primary", model: config.model, disclosure: "local" },
     };
   }
-  if (input.length !== 1 || (kind !== "plan" && kind !== "diff")) throw new Error(ADVISOR_USAGE);
+  const selectors = parseBatchWords(input);
+  if (selectors.length !== 1) throw new Error(ADVISOR_USAGE);
   requireTrusted(config.workspace);
   if (kind === "plan") {
-    const draft = new BatchPlanStore(config.workspace).read(input[0]);
+    const draft = new BatchPlanStore(config.workspace).read(selectors[0]);
     return {
       sources: [{ id: "selected-plan", content: JSON.stringify({ requestedObjective: draft.requestedObjective, plan: draft.plan }) }],
       origin: draft.provenance,
     };
   }
   return {
-    sources: [{ id: "selected-diff", content: selectedDiff(config.workspace, input[0]) }],
+    sources: [{ id: "selected-diff", content: selectedDiff(config.workspace, selectors[0]) }],
     origin: { resourceId: "primary", model: config.model, disclosure: "local" },
   };
 }
@@ -291,9 +297,9 @@ export async function executeQualityCommand(
 ): Promise<{ success: boolean; output: string }> {
   try {
     signal?.throwIfAborted();
-    const words = parseBatchWords(args);
-    const independent = kind === "advisor" && words[0] === "--independent";
-    const source = kind === "advisor" ? advisorSource(independent ? words.slice(1) : words, config) : simplificationSource(words, config);
+    const advisor = kind === "advisor" ? advisorArgs(args) : undefined;
+    const independent = advisor?.independent ?? false;
+    const source = advisor ? advisorSource(advisor.kind, advisor.input, config) : simplificationSource(parseBatchWords(args), config);
     const input = JSON.stringify({ sources: source.sources, ...(source.eligiblePaths && { eligiblePaths: source.eligiblePaths }) });
     if (Buffer.byteLength(input) > MAX_SOURCE_BYTES) throw new Error("The selected review input exceeds the size limit.");
     assertNoSensitivePersistenceContent(input, "quality review input");
@@ -311,7 +317,7 @@ export async function executeQualityCommand(
     assertNoSensitivePersistenceContent(model, "reviewer model display");
     const heading = kind === "simplify" ? "Simplification proposals" : independent ? "Independent advice" : "Advisory review";
     const output = [
-      `${heading} · ${model} (${provenance.disclosure})`,
+      `${heading} · ${model} (${provenance.disclosure}, resource ${provenance.resourceId})`,
       ...(provenance.fallbackFrom ? [`Fallback from ${provenance.fallbackFrom}.`] : []),
       ...(source.candidate ? [`Verified candidate ${source.candidate}.`] : []),
       ...(source.omitted ? [`Excluded ${source.omitted} diff entries under workspace policy.`] : []),
