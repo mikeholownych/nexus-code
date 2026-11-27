@@ -83,6 +83,32 @@ test("an unanswered RPC retires its worker and does not leave pending calls behi
   }
 });
 
+test("a per-tool deadline retires a hung RPC worker and reports its outcome as unknown", { skip: process.platform === "win32", timeout: 12_000 }, async () => {
+  const name = "NEXUS_TOOL_TIMEOUT_SECS_READ_FILE";
+  const saved = process.env[name];
+  process.env[name] = "1";
+  const bridge = new RustCoreBridge(workspace, "bash", fakeCore, false, false, false);
+  try {
+    const channel = (bridge as any).channels.primary;
+    const result = await (bridge as any).executeViaRpc("read_file", { path: "per-tool-deadline.txt" });
+    assert.equal(result.success, false);
+    assert.equal(result.timedOut, true);
+    assert.equal(result.outcomeUnknown, true);
+    assert.match(result.error, /timed out after 6s/);
+
+    const worker = channel.retiring;
+    assert.ok(worker, "a timed-out worker must be retired rather than reused");
+    const exited = once(worker, "exit");
+    await exited;
+    assert.equal(channel.process, null);
+    assert.equal(channel.pending.size, 0);
+  } finally {
+    bridge.shutdown();
+    if (saved === undefined) delete process.env[name];
+    else process.env[name] = saved;
+  }
+});
+
 test("cancelling a non-command RPC stops the worker and marks its result unknown", { skip: process.platform === "win32", timeout: 10_000 }, async () => {
   const bridge = new RustCoreBridge(workspace, "bash", fakeCore, false, false, false);
   try {

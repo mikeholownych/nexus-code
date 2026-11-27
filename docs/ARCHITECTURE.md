@@ -35,6 +35,8 @@ The core engine is implemented in Rust 2024 edition and compiled into an optimiz
 - **`search.rs`**: Fast ripgrep search using `ignore` and `grep` crates, regex symbol extraction across multi-language ASTs, and Unicode file tree formatting (`file_tree`).
 - **`runner.rs`**: Child process execution and process ownership tracking via `ProcessRegistry`. Tracks process group IDs (`pgid`) mapped to request IDs. Implements `cancel` RPC (`SIGTERM` then `SIGKILL` after 2s), PTY `pgid` killing, shutdown sweeps on stdin EOF, `SIGTERM`, `SIGHUP` and `SIGINT` with Linux `PR_SET_PDEATHSIG` parent-death cleanup, background services registry, bounded head/tail output ring buffers (RSS ≤ 64 MB for 400 MB output), timeout clamping to `NEXUS_MAX_TOOL_TIMEOUT_SECS` (default 1,800s, hard maximum 86,400s), and destructive pattern detection (`is_dangerous_command`).
 
+Rust RPC calls can set an operator-chosen per-tool timeout with `NEXUS_TOOL_TIMEOUT_SECS_<TOOL>` (uppercase RPC method suffix, for example `NEXUS_TOOL_TIMEOUT_SECS_READ_FILE`). A valid value from 1 to 86,400 seconds becomes that tool's default and cap; request-level values can shorten it. `NEXUS_MAX_TOOL_TIMEOUT_SECS` remains the global hard ceiling and wins when lower. If a non-command RPC reaches its deadline, the bridge retires its shared Rust worker and reports the in-flight result as unknown; this setting does not govern in-process TypeScript handlers or model API requests.
+
 ---
 
 ## 2. TypeScript Orchestration Layer (`cli/`)

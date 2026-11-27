@@ -561,22 +561,45 @@ export const RUN_COMMAND_DEFAULT_TIMEOUT_SECS = 60;
 /** Extra time the bridge waits beyond the runner's own deadline (kill grace + reply), so the runner's structured result wins. */
 export const RPC_GRACE_SECS = 5;
 const RPC_DEFAULT_TIMEOUT_MS = 35_000;
+const RPC_DEFAULT_TIMEOUT_SECS = RPC_DEFAULT_TIMEOUT_MS / 1000 - RPC_GRACE_SECS;
 /** Keep bridge timers within Node's supported timeout range and command waits within one day. */
 export const MAX_TOOL_TIMEOUT_SECS = 86_400;
 const DEFAULT_MAX_TOOL_TIMEOUT_SECS = 1_800;
 
 /** Maximum allowed tool timeout in seconds per REQ-SEC-107 (default 1800). */
-export function maxToolTimeoutSecs(): number {
+export function maxToolTimeoutSecs(toolName?: string): number {
   const env = process.env.NEXUS_MAX_TOOL_TIMEOUT_SECS;
-  if (!env || !/^\d+$/.test(env)) return DEFAULT_MAX_TOOL_TIMEOUT_SECS;
-  let parsed: bigint;
-  try {
-    parsed = BigInt(env);
-  } catch {
-    return DEFAULT_MAX_TOOL_TIMEOUT_SECS;
+  let globalMaximum = DEFAULT_MAX_TOOL_TIMEOUT_SECS;
+  if (env && /^\d+$/.test(env)) {
+    try {
+      const parsed = BigInt(env);
+      if (parsed >= 1n) globalMaximum = parsed > BigInt(MAX_TOOL_TIMEOUT_SECS) ? MAX_TOOL_TIMEOUT_SECS : Number(parsed);
+    } catch {
+      // Invalid operator values retain the existing finite default.
+    }
   }
-  if (parsed < 1n) return DEFAULT_MAX_TOOL_TIMEOUT_SECS;
-  return parsed > BigInt(MAX_TOOL_TIMEOUT_SECS) ? MAX_TOOL_TIMEOUT_SECS : Number(parsed);
+  const perTool = toolName ? configuredToolTimeoutSecs(toolName) : undefined;
+  return perTool === undefined ? globalMaximum : Math.min(globalMaximum, perTool);
+}
+
+/** Per-tool settings define that tool's default and cap; the global maximum remains a hard ceiling. */
+function toolTimeoutEnvName(toolName: string): string {
+  return `NEXUS_TOOL_TIMEOUT_SECS_${toolName.toUpperCase()}`;
+}
+
+function configuredToolTimeoutSecs(toolName: string): number | undefined {
+  if (!/^[a-z][a-z0-9_]*$/.test(toolName)) return undefined;
+  const value = process.env[toolTimeoutEnvName(toolName)];
+  if (!value || !/^\d+$/.test(value)) return undefined;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= MAX_TOOL_TIMEOUT_SECS ? parsed : undefined;
+}
+
+function timeoutClampSetting(toolName: string): string {
+  const perTool = configuredToolTimeoutSecs(toolName);
+  return perTool !== undefined && perTool < maxToolTimeoutSecs()
+    ? toolTimeoutEnvName(toolName)
+    : "NEXUS_MAX_TOOL_TIMEOUT_SECS";
 }
 
 /**
@@ -584,17 +607,20 @@ export function maxToolTimeoutSecs(): number {
  * outer timer is strictly longer; other tool deadlines are validated and capped before they reach Node's timer.
  */
 export function rpcDeadlines(toolName: string, args: Record<string, any>): { runnerSecs?: number; bridgeMs: number } {
+  const maxSecs = maxToolTimeoutSecs(toolName);
+  const configuredDefault = configuredToolTimeoutSecs(toolName);
   if (toolName === "run_command") {
-    const rawSecs = typeof args.timeout_secs === "number" && args.timeout_secs > 0 ? args.timeout_secs : RUN_COMMAND_DEFAULT_TIMEOUT_SECS;
-    const maxSecs = maxToolTimeoutSecs();
+    const rawSecs = Number.isSafeInteger(args.timeout_secs) && args.timeout_secs > 0
+      ? args.timeout_secs
+      : configuredDefault ?? RUN_COMMAND_DEFAULT_TIMEOUT_SECS;
     const runnerSecs = Math.min(rawSecs, maxSecs);
     return { runnerSecs, bridgeMs: (runnerSecs + RPC_GRACE_SECS) * 1000 };
   }
   const requestedSecs = args.timeout_secs;
-  const validSecs = Number.isSafeInteger(requestedSecs) && requestedSecs > 0
-    ? Math.min(requestedSecs, maxToolTimeoutSecs())
-    : undefined;
-  return { bridgeMs: validSecs === undefined ? RPC_DEFAULT_TIMEOUT_MS : (validSecs + RPC_GRACE_SECS) * 1000 };
+  const rawSecs = Number.isSafeInteger(requestedSecs) && requestedSecs > 0
+    ? requestedSecs
+    : configuredDefault ?? RPC_DEFAULT_TIMEOUT_SECS;
+  return { bridgeMs: (Math.min(rawSecs, maxSecs) + RPC_GRACE_SECS) * 1000 };
 }
 
 const READ_ONLY_COMMAND_MAX_OUTPUT_BYTES = 32_000;
@@ -1810,9 +1836,9 @@ export class RustCoreBridge {
     // execute through the host shell environment.
     let clampedNotice = "";
     if (toolName === "run_command") {
-      const maxSecs = maxToolTimeoutSecs();
+      const maxSecs = maxToolTimeoutSecs(toolName);
       if (typeof args.timeout_secs === "number" && args.timeout_secs > maxSecs) {
-        clampedNotice = `[Notice: timeout_secs clamped from ${args.timeout_secs} to ${maxSecs} (NEXUS_MAX_TOOL_TIMEOUT_SECS)]\n`;
+        clampedNotice = `[Notice: timeout_secs clamped from ${args.timeout_secs} to ${maxSecs} (${timeoutClampSetting(toolName)})]\n`;
         args.timeout_secs = maxSecs;
       }
       if (!args.shell) {
