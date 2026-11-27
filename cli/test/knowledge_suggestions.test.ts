@@ -4,16 +4,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
+import { isolateGitConfig } from "./helpers/isolate_git_config.js";
 import { KnowledgeGraph } from "../src/knowledge.js";
 import { KnowledgeSuggestions, type KnowledgeEvidence } from "../src/knowledge_suggestions.js";
 
 function fixture(t: TestContext) {
+  isolateGitConfig(t);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-knowledge-suggestion-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const worktree = path.join(root, "checkout");
   fs.mkdirSync(worktree);
   const git = (...args: string[]) => execFileSync("git", ["-C", worktree, ...args], { stdio: "ignore" });
-  git("init");
+  git("init", "--template=");
   fs.writeFileSync(path.join(worktree, "package.json"), "{}");
   git("add", "package.json");
   git("-c", "user.name=Nexus Fixture", "-c", "user.email=nexus@example.invalid", "commit", "-m", "fixture");
