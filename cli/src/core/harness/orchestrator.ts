@@ -15,6 +15,8 @@ import { composeDecision } from "./compose.js";
 import { buildPromotionReport, renderPromotionReportMd } from "./report.js";
 import { draftLibraryEntriesFromReport } from "./library.js";
 import { recordEvidence, recordEvent } from "./events.js";
+import { reflectCandidate } from "./reflection.js";
+import { NoopProposalAdapter, type ProposalAdapter } from "./proposal_adapter.js";
 import { assertValid, validateHirRun } from "./schema.js";
 import type { HarnessCandidate, HarnessImprovementRun, ProbeResult, ScorecardEntry } from "./types.js";
 
@@ -41,6 +43,7 @@ export interface HirRunOptions {
   candidatePath?: string; // explicit candidate; may be passed repeatedly by CLI
   candidatePaths?: string[];
   adapter?: ProbeAdapter;
+  proposalAdapter?: ProposalAdapter;
   allowUnsandboxedRealProbe?: boolean;
   nexusAgentConfig?: { model: string; endpoint: string; apiKey?: string; maxSteps?: number; temperature?: number; sandbox?: "auto" | "bwrap" | "docker" | "none"; network?: boolean };
 }
@@ -203,6 +206,7 @@ export class HarnessOrchestrator {
     }
     const adapter = opts.adapter
       ?? (opts.nexusAgent ? new NexusAgentProbeAdapter({ resolveConfig: () => opts.nexusAgentConfig }) : opts.real ? new RealProbeAdapter({ allowUnsandboxed }) : new MockProbeAdapter());
+    const proposalAdapter = opts.proposalAdapter ?? new NoopProposalAdapter();
     const baseManifest = store.loadBaseManifest(run.baseHarnessId);
     const suite = store.loadTaskSuite(run.taskSuiteRef);
     const started = Date.now();
@@ -249,7 +253,16 @@ export class HarnessOrchestrator {
         recordEvent(store, run.id, "hir.warning", "Candidate budget exhausted before round", { round, totalCandidateBudget });
         break;
       }
-      const roundInputs = round === 1 ? uniqueRequested : [baseTree];
+      let roundInputs = round === 1 ? uniqueRequested : [baseTree];
+      if (round > 1) {
+        const proposals = await proposalAdapter.propose({ run, suite, baseTree, round, priorCandidates: candidates.map((c) => ({ id: c.id, treeRef: c.treeRef, diffRef: c.diffRef })), priorProbes: run.probeIds.map((id) => { try { return store.loadProbe(id); } catch { return undefined; } }).filter(Boolean) as ProbeResult[], priorScorecards: allScorecards });
+        if (proposals.length > 0) {
+          roundInputs = proposals.map((p) => path.resolve(p.candidatePath));
+          recordEvent(store, run.id, "hir.proposals", `Round ${round} received ${proposals.length} proposal(s)`, { round, proposals: proposals.map((p) => ({ candidatePath: p.candidatePath, source: p.source, rationale: p.rationale, targetWeaknesses: p.targetWeaknesses })) });
+        } else {
+          recordEvent(store, run.id, "hir.proposals.empty", `Round ${round} had no proposals; using baseline self-candidate`, { round });
+        }
+      }
       const capped = roundInputs.slice(0, Math.min(run.budgets.maxCandidatesPerRound, remaining));
       if (round === 1 && uniqueRequested.length > capped.length) {
         recordEvent(store, run.id, "hir.warning", "Candidate inputs capped by budgets", { requested: uniqueRequested.length, used: capped.length, maxCandidatesPerRound: run.budgets.maxCandidatesPerRound, maxRounds: run.budgets.maxRounds });
@@ -368,6 +381,9 @@ export class HarnessOrchestrator {
         const decision = composeDecision(candidate.id, scorecard);
         decisions.push({ candidateId: candidate.id, round, decision, scorecard });
         recordEvidence(store, run.id, { kind: "comparison", subjectId: candidate.id, summary: `decision=${decision.recommendation}`, refs: [], confidence: "medium", deterministic: true });
+        const reflection = reflectCandidate({ candidateId: candidate.id, round, recommendation: decision.recommendation, scorecard, probes: candProbes });
+        recordEvidence(store, run.id, { kind: "reflection", subjectId: candidate.id, summary: `reflection ${decision.recommendation}; strengths=${reflection.strengths.length}; weaknesses=${reflection.weaknesses.length}`, refs: reflection.evidenceIds, confidence: "medium", deterministic: false });
+        recordEvent(store, run.id, "hir.reflection", `Reflection for ${candidate.id}`, reflection as unknown as Record<string, unknown>);
         if (run.status === "BLOCKED") break;
       }
       roundRecord.completedAt = nowIso();
