@@ -222,6 +222,21 @@ test("the head cannot choose its own verifier: a rewritten scripts.test is not r
   });
 });
 
+test("verify reports incomplete verifier output without issuing a passing verdict", async () => {
+  const files = { ...BASE_FILES, [TEST_FILE]: `console.log(" ".repeat(4 * 1024 * 1024));\n${TEST_FULL}` };
+  await withRepos([files], async (repo) => {
+    const base = head(repo);
+    const good = commit(repo, GOOD);
+    const run = await runCli(["-w", repo, "--base", base, "--head", good, ...DELIVERABLE, "-y", "--json"]);
+    const doc = consumeResult(run);
+    assert.equal(doc.verdict, "UNVERIFIED");
+    assert.equal(doc.reason, "VERIFIER_FAILED");
+    assert.match(doc.detail, /output truncated/);
+    assert.equal(doc.runs[0]?.outputTruncated, true);
+    assert.equal(run.code, 1);
+  });
+});
+
 test("--verifier 'echo ok' executes no test: UNVERIFIED; base equal to head: NOTHING_TO_VERIFY; neither exits 0", async () => {
   await withRepos([BASE_FILES], async (repo) => {
     const base = head(repo);

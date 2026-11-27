@@ -43,6 +43,7 @@ import { SensitivePersistenceError } from "./core/persistence_protection.js";
 import { persistableEndpoint } from "./core/endpoint_identity.js";
 import { executeBatchCommand } from "./batch_command.js";
 import { executeGoalCommand } from "./goal_command.js";
+import { isKnowledgeSuggestionCommand } from "./knowledge_command.js";
 import { executeLoopCommand } from "./loop_command.js";
 import { routeSlash } from "./slash/router.js";
 import type { SlashHost } from "./slash/catalog.js";
@@ -106,12 +107,13 @@ export function replReadOnlyAllowed(command: string, args: string): boolean {
   }
   if (name === "checkpoint") return value === "diff" || value.startsWith("diff ");
   if (name === "worktree") return isReadOnlyWorktreeArgs(value);
+  if (name === "knowledge" && (value === "suggestions" || /^show-suggestion\s+[a-f0-9]{64}$/.test(value))) return true;
   if (name === "plan" || name === "knowledge") {
     return !value || value === "list" || value === "show" || value === "get";
   }
   if (name === "skill") return !value || !/^init(?:\s|$)/.test(value);
   if (name === "theme") return !value;
-  if (name === "batch") return /^(?:status|list|validate|results)(?:\s|$)/.test(value);
+  if (name === "batch") return /^(?:status|list|validate|results)(?:\s|$)/.test(value) || /^plan\s+show(?:\s|$)/.test(value);
   if (name === "goal") {
     if (/^requirements\s+(?:accept|descope)(?:\s|$)/.test(value)) return false;
     return /^(?:status(?:\s|$)|list$|show\s+\S|requirements(?:\s|$)|evidence(?:\s|$))/.test(value);
@@ -426,7 +428,7 @@ export class InteractiveRepl {
     console.log(`  ${pc.bold(pc.yellow("/stage [reset]"))}       Inspect and stage individual diff hunks`);
     console.log(`  ${pc.bold(pc.yellow("/worktree [status|discard|list|path|switch|remove|copy-ignored|prune|merge [<target>]]"))} Manage isolated ephemeral and named git worktrees (a bare merge is the speculative one)`);
     console.log(`  ${pc.bold(pc.yellow("/tdd <issue>"))}         [experimental] Execute strict RED-GREEN-REFACTOR TDD cycle`);
-    console.log(`  ${pc.bold(pc.yellow("/knowledge [set|del]"))} Manage persistent project knowledge graph`);
+    console.log(`  ${pc.bold(pc.yellow("/knowledge [set|delete|suggest|suggestions]"))} Manage persistent project knowledge graph`);
     console.log(`  ${pc.bold(pc.yellow("/browse <url>"))}        Verify URL in headless browser driver`);
     console.log(`  ${pc.bold(pc.yellow("/git"))}                Show current git status and modified files`);
     console.log(`  ${pc.bold(pc.yellow("/sessions"))}           List past saved sessions`);
@@ -438,7 +440,7 @@ export class InteractiveRepl {
     console.log(`  ${pc.bold(pc.yellow("/mcp [add|resources|prompts]"))} Manage MCP servers, tools, resources, and prompts`);
     console.log(`  ${pc.bold(pc.yellow("/plugins"))}            List loaded custom plugins and lifecycle hooks`);
     console.log(`  ${pc.bold(pc.yellow("/team <role|full> <task>"))} Multi-agent collaborative team orchestration`);
-    console.log(`  ${pc.bold(pc.yellow("/batch <spec-file> | run|validate|status|list|pause|resume|cancel|results"))} Bounded durable work batches`);
+    console.log(`  ${pc.bold(pc.yellow("/batch <spec-file> | plan|run|validate|status|list|pause|resume|cancel|results"))} Bounded durable work batches`);
     console.log(`  ${pc.bold(pc.yellow("/goal <objective> | status|list|show|pause|resume|cancel|requirements|evidence"))} Durable objective with verification and independent review`);
     console.log(`  ${pc.bold(pc.yellow("/loop [--until <condition>] [--max-iterations <n>] [--max-duration <duration>] <objective> | status|list|pause|resume|stop|reconcile"))} Bounded durable iteration loop with deterministic verification`);
     console.log(`  ${pc.bold(pc.yellow("/image <path> [prompt]"))} Ingest multi-modal image into vision model`);
@@ -1220,6 +1222,17 @@ export class InteractiveRepl {
             console.log();
             continue;
           } else if (cmd === "knowledge") {
+            if (isKnowledgeSuggestionCommand(arg)) {
+              const host = { app: this.app, mode: () => this.agent.getApprovalMode() } as unknown as SlashHost;
+              this.operationAbort = new AbortController();
+              try {
+                const outcome = await routeSlash(host, cmd, arg, this.operationAbort.signal);
+                if (outcome.kind === "reply") console.log(`${outcome.success ? "" : pc.yellow("✖ ")}${outcome.output}\n`);
+              } finally {
+                this.operationAbort = undefined;
+              }
+              continue;
+            }
             const kg = this.agent.getKnowledgeGraph();
             const subparts = arg.split(/\s+/).filter(Boolean);
             const subact = subparts[0]?.toLowerCase() || "list";

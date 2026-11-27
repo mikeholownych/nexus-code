@@ -286,6 +286,96 @@ test("the session's sandbox setting reaches the merged-tree checks: one that can
   assert.match(state.units[0].blocked!.decision.question, /sandbox \(no-such-engine\) cannot confine a command on this host, so the check was not run/);
 });
 
+test("resume requires the stored verifier binding to match the current integration candidate", async (t) => {
+  const root = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pa2-home-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new OperationStore(root, path.join(home, "tasks"), home);
+  const state = operation(root, ["u1"], "op-pa2-binding");
+  const executor: WorkUnitExecutor = {
+    integrationPolicy: () => ({ verifier: "test -f file.txt" }),
+    async run(_unit, _resource, ctx) {
+      write(ctx.workspace!, "u1.txt", "one\n");
+      return { kind: "completed", summary: "done", outcome: "NOT_REQUIRED" };
+    },
+  };
+  await new OperationRunner(state, { executor, clock: clock(), persist: (s) => store.save(s) }).run();
+  assert.equal(state.status, "COMPLETE");
+
+  // Persist the state at the boundary before the operation's final terminal transition.
+  state.status = "RUNNING";
+  store.save(state);
+  const loaded = store.load(state.id);
+  const receipt = loaded.integrations![0];
+  const binding = receipt.verificationBinding!;
+  const worktree = loaded.git!.integrationWorktree;
+  assert.equal(binding.commit, receipt.integratedCommit);
+  assert.equal(binding.worktree, worktree);
+  const tampered = structuredClone(loaded);
+  tampered.integrations![0].verificationBinding!.worktree = root;
+  assert.throws(() => migrateOperationState(tampered), /invalid verification binding/);
+  tampered.git = undefined;
+  Reflect.deleteProperty(tampered.integrations![0].verificationBinding!, "worktree");
+  assert.throws(() => migrateOperationState(tampered), /invalid verification binding/);
+  git(worktree, ["-c", "user.name=N", "-c", "user.email=n@l", "commit", "--allow-empty", "-qm", "later candidate"]);
+  const restarted = await new OperationRunner(loaded, {
+    executor: { async run() { throw new Error("completed units should not rerun"); } },
+    clock: clock(),
+    persist: (s) => store.save(s),
+  }).run();
+  assert.equal(restarted.status, "BLOCKED");
+  assert.match(restarted.blocked?.decisions[0]?.question ?? "", /no passing verifier evidence.*current integration candidate/);
+
+  git(worktree, ["reset", "--hard", binding.commit]);
+  const restored = new OperationRunner(store.load(state.id), {
+    executor: { async run() { throw new Error("completed units should not rerun"); } },
+    clock: clock(),
+    persist: (s) => store.save(s),
+  });
+  restored.scheduler.resolve(restarted.blocked!.decisions[0].id, "1");
+  assert.equal((await restored.run()).status, "COMPLETE");
+});
+
+test("a verification receipt that fails to persist requires fresh evidence on retry", async (t) => {
+  const root = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pa2-home-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new OperationStore(root, path.join(home, "tasks"), home);
+  const state = operation(root, ["u1"], "op-pa2-evidence-write-failure");
+  const marker = path.join(home, "verification-attempts");
+  const quotedMarker = "'" + marker.replaceAll("'", "'\\''") + "'";
+  const command = "printf '%s\\n' check >> " + quotedMarker;
+  const executor: WorkUnitExecutor = {
+    integrationPolicy: () => ({ verifier: command }),
+    async run(_unit, _resource, ctx) {
+      write(ctx.workspace!, "u1.txt", "one\n");
+      return { kind: "completed", summary: "done", outcome: "NOT_REQUIRED" };
+    },
+  };
+  let failedWrite = false;
+  await new OperationRunner(state, {
+    executor, clock: clock(), persist: (s) => {
+      if (s.integrations?.length && !failedWrite) {
+        failedWrite = true;
+        throw new Error("fixture could not persist verification receipt");
+      }
+      store.save(s);
+    },
+  }).run();
+
+  assert.equal(failedWrite, true);
+  const loaded = store.load(state.id);
+  assert.equal(loaded.status, "BLOCKED");
+  assert.equal(loaded.integrations?.length ?? 0, 0);
+  assert.equal(loaded.events.some((event) => event.type === "WORK_INTEGRATED"), false);
+  const retry = new OperationRunner(loaded, { executor, clock: clock(), persist: (s) => store.save(s) });
+  retry.scheduler.resolve(loaded.blocked!.decisions[0].id, "1");
+  assert.equal((await retry.run()).status, "COMPLETE");
+  assert.equal(fs.readFileSync(marker, "utf8"), "check\ncheck\n");
+});
+
 test("operation status --json shows the verified receipt and the rejection", async (t) => {
   const root = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pa2-home-"));

@@ -520,6 +520,13 @@ export class OperationRunner {
         await this.revalidator.revalidate(signal);
         continue;
       }
+      if (d.kind === "complete") {
+        const verificationProblem = this.git?.completionVerificationProblem(this.state.integrations ?? []);
+        if (verificationProblem) {
+          this.blockOnGit(verificationProblem);
+          return this.state;
+        }
+      }
       if (d.kind === "complete" && this.state.policy.maxTotalTokens !== undefined) {
         // The pre-dispatch check protects the next batch, but a final batch has no next dispatch to trigger it.
         // Never report completion when its measured usage exceeded the cap or its final usage is unavailable.
@@ -537,9 +544,9 @@ export class OperationRunner {
       this.scheduler.finish(d);
       // A blocked operation keeps its unit worktrees: the retry/restart remedies run the unit again in them.
       if (d.kind === "complete") {
-      this.reportPreservedWorktrees();
-      this.git?.disposeAllUnits();
-    }
+        this.reportPreservedWorktrees();
+        this.git?.disposeAllUnits();
+      }
       this.save();
       return this.state;
     }
@@ -1041,6 +1048,8 @@ export class OperationRunner {
     const tests = result.verification
       ? { command: result.verification.command, status: result.verification.status, hasExecutedTests: result.verification.hasExecutedTests, ...(result.verification.definitionBound === false ? { definitionBound: false as const } : {}) }
       : undefined;
+    const gitState = this.state.git!;
+    const previousUnit = gitState.units[unit.id];
     const integration = await this.git!.integrate(unit, result, {
       sequence: (this.state.integrations?.length ?? 0) + 1,
       integrated: this.state.integrations ?? [],
@@ -1084,7 +1093,17 @@ export class OperationRunner {
     }
     // ALREADY_INTEGRATED means a receipt for this unit already exists; appending a second one would double-count it.
     if (integration.receipt.verification !== "ALREADY_INTEGRATED") {
-      this.state.integrations = [...(this.state.integrations ?? []), integration.receipt];
+      const previousReceipts = this.state.integrations;
+      this.state.integrations = [...(previousReceipts ?? []), integration.receipt];
+      try {
+        this.save();
+      } catch (error) {
+        // The Git merge may already exist. Keep it available for the existing post-hoc verification path and
+        // restore acceptance state so a later scheduler save cannot promote this failed persistence attempt.
+        this.state.integrations = previousReceipts;
+        gitState.units[unit.id] = previousUnit;
+        throw error;
+      }
     }
     this.scheduler.emit(
       "WORK_INTEGRATED",

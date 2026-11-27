@@ -383,12 +383,31 @@ export interface MergedCheck {
   command: string;
   /** Whose verifier this is: unit ids, or `operator` for a verifier pinned for the operation. */
   owners: string[];
-  /** ENVIRONMENT: the command could not be started (exit 126/127), or the session's sandbox could not be built. */
+  /** ENVIRONMENT: a command, sandbox, or evidence capture could not be completed. */
   status: "PASSED" | "FAILED" | "ENVIRONMENT" | "TIMED_OUT";
   /** The same command on the tree before the merge, run only after a failure to decide whether the merge caused it. */
   baseline?: "PASSED" | "FAILED";
+  /** The bounded output capture was incomplete. */
+  outputTruncated?: true;
   /** The engine that confined the run; absent when the session has no sandbox configured. */
   sandbox?: "bwrap" | "docker";
+}
+
+/** Bounded verifier capture bound to an integration worktree and its exact committed candidate. */
+export interface MergedCheckRun {
+  command: string;
+  startedAt: string;
+  completedAt: string;
+  timeoutMs: number;
+  exitCode: number | null;
+  outputSha256: string;
+  outputTruncated: boolean;
+}
+
+export interface IntegrationVerificationBinding {
+  commit: string;
+  worktree: string;
+  runs: MergedCheckRun[];
 }
 
 /** What was integrated, and the evidence the merge was accepted with. */
@@ -412,6 +431,8 @@ export interface IntegrationReceipt {
   ownerId?: string;
   /** Every verifier run on the merged tree before this receipt was written, in the order run (PA-2). */
   mergedChecks?: MergedCheck[];
+  /** Present for captured runs. Older receipts are readable without this binding. */
+  verificationBinding?: IntegrationVerificationBinding;
 }
 
 export interface DurableOperationState {

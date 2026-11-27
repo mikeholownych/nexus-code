@@ -773,6 +773,11 @@ export class LocalLlmClient {
     return this.lastUsageReport;
   }
 
+  /** Model identifier reported by the provider for the most recent request, when supplied. */
+  public getLastEffectiveModel(): string | undefined {
+    return this.pending?.effectiveModel;
+  }
+
   /** Whether the connection supports native tool calling (Responses, Anthropic, or OpenAI-compatible accepting tools). */
   public supportsNativeTools(): boolean {
     if (wireProtocol(this.conn.protocol).nativeTools) return true;
@@ -1118,7 +1123,7 @@ export class LocalLlmClient {
   }
 
   /** One forced refresh-and-retry when a signed-in provider answers 401 (its token was revoked or rotated). */
-  private async withOAuthRetry<T>(url: string, requestId: string, run: () => Promise<T>): Promise<T> {
+  private async retryProviderRequestAfter401<T>(url: string, requestId: string, run: () => Promise<T>): Promise<T> {
     try {
       return await run();
     } catch (err) {
@@ -1761,7 +1766,7 @@ export class LocalLlmClient {
   ): Promise<ChatMessage> {
     await this.reverifyExpiredKind(signal);
     const response = await this.withReceipt(requestId, purpose, () =>
-      this.withOAuthRetry(this.endpoint, requestId, () => this.withParameterRetry(() => this.chatCompletionOnce(messages, tools, requestId, signal))),
+      this.retryProviderRequestAfter401(this.endpoint, requestId, () => this.withParameterRetry(() => this.chatCompletionOnce(messages, tools, requestId, signal))),
     );
     return this.askAgainForNativeCall(response, messages, tools, signal);
   }
@@ -1785,7 +1790,7 @@ export class LocalLlmClient {
       const requestId = randomUUID();
       try {
         const answer = await this.withReceipt(requestId, "tool-call-retry", () =>
-          this.withOAuthRetry(this.endpoint, requestId, () => this.withParameterRetry(() => this.chatCompletionOnce(corrected, tools, requestId, signal, toolChoice))),
+          this.retryProviderRequestAfter401(this.endpoint, requestId, () => this.withParameterRetry(() => this.chatCompletionOnce(corrected, tools, requestId, signal, toolChoice))),
         );
         usages.push(this.lastUsageReport);
         return answer;
@@ -1988,7 +1993,7 @@ export class LocalLlmClient {
   ): Promise<ChatMessage> {
     await this.reverifyExpiredKind(signal);
     const response = await this.withReceipt(requestId, undefined, () =>
-      this.withOAuthRetry(this.endpoint, requestId, () =>
+      this.retryProviderRequestAfter401(this.endpoint, requestId, () =>
         this.withParameterRetry(() => this.chatCompletionStreamOnce(messages, tools, onToken, requestId, signal)),
       ),
     );

@@ -154,6 +154,12 @@ test("structural invariants name the field and the unit", () => {
     ["persisted stall counter beyond policy", (op) => { (op.units[0] as any).failureStalls = { "cause|reason:x": { count: 4, lastAt: "2026-10-31T12:00:00.000Z", reason: "failure" } }; }, /failureStalls\['cause\|reason:x'\] is invalid/],
     ["bad resource slot", (op) => { op.resources[0].maxConcurrentUnits = 99; }, /resource 'primary'.maxConcurrentUnits/],
     ["bad receipt", (op) => { op.integrations = [{ unitId: "impl" } as any]; }, /missing its unitId or integratedCommit/],
+    ["truncated passing merged check", (op) => {
+      op.integrations = [{
+        unitId: "impl", integratedCommit: "commit",
+        mergedChecks: [{ command: "npm test", owners: ["operator"], status: "PASSED", outputTruncated: true }],
+      } as any];
+    }, /invalid files, tests or mergedChecks/],
   ];
   for (const [label, mutate, expected] of cases) {
     const op = JSON.parse(JSON.stringify(base)) as DurableOperationState;

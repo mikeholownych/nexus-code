@@ -219,6 +219,47 @@ test("the operator's pinned verifier runs on every merge, and a unit that breaks
   assertUntouched(f, tip);
 });
 
+test("a no-change unit still requires the operator verifier on the current integration candidate", async () => {
+  const f = fixture();
+  f.state.integrationVerifiers = ["test -f expected.txt"];
+  f.prepare("u1");
+  const tip = f.ops.currentTip();
+
+  const outcome = await f.integrate("u1");
+  assert.ok(outcome.kind === "failed");
+  assert.match(outcome.reason, /integration verification failed/);
+  assertUntouched(f, tip);
+});
+
+test("a successful merged check records the exact candidate and bounded execution evidence", async () => {
+  const f = fixture();
+  f.state.integrationVerifiers = ["test -f file.txt"];
+  f.prepare("u1");
+  const tip = f.ops.currentTip();
+
+  const outcome = await f.integrate("u1");
+  assert.ok(outcome.kind === "nothing");
+  const { verificationBinding } = outcome.receipt;
+  assert.equal(verificationBinding?.commit, tip);
+  assert.equal(verificationBinding?.worktree, f.integrationWorktree);
+  assert.deepEqual(verificationBinding?.runs.map((run) => [run.command, run.exitCode]), [["test -f file.txt", 0]]);
+  assert.ok(verificationBinding?.runs.every((run) => /^[a-f0-9]{64}$/.test(run.outputSha256)));
+});
+
+test("integration requires complete verifier output even when the command exits successfully", async () => {
+  const f = fixture();
+  f.state.integrationVerifiers = ["node -e 'process.stdout.write(Buffer.alloc(4 * 1024 * 1024 + 1, 10))'"];
+  write(f.prepare("u1"), "u1.txt", "one\n");
+  const tip = f.ops.currentTip();
+
+  const outcome = await f.integrate("u1");
+  assert.ok(outcome.kind === "failed");
+  assert.match(outcome.reason, /output truncated/);
+  assert.equal(outcome.checks?.[0]?.status, "ENVIRONMENT");
+  assert.equal(outcome.checks?.[0]?.outputTruncated, true);
+  assertUntouched(f, tip);
+});
+
 test("a check that already fails before the merge is reported and not attributed to the new unit", async () => {
   const f = fixture();
   const marker = path.join(f.outside, "broken");

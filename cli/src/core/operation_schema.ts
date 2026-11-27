@@ -349,9 +349,26 @@ export function validateOperationState(state: DurableOperationState): void {
         || (receipt.tests !== undefined && (!receipt.tests || typeof receipt.tests.command !== "string"))
         || (checks !== undefined && (!Array.isArray(checks) || checks.some((check) =>
           !check || typeof check.command !== "string" || !MERGED_CHECK_STATUSES.has(check.status)
-          || !Array.isArray(check.owners) || check.owners.some((owner) => typeof owner !== "string"))));
+          || !Array.isArray(check.owners) || check.owners.some((owner) => typeof owner !== "string")
+          || (check.outputTruncated !== undefined && (check.outputTruncated !== true || check.status === "PASSED")))));
       if (damaged) {
         throw new InvalidOperationStateError(`operation ${state.id}: the integration receipt of '${receipt.unitId}' has invalid files, tests or mergedChecks`);
+      }
+      const binding = receipt.verificationBinding;
+      if (binding !== undefined && (
+        !binding || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(binding.commit)
+        || binding.commit !== receipt.integratedCommit
+        || typeof binding.worktree !== "string" || !binding.worktree || binding.worktree !== state.git?.integrationWorktree
+        || !Array.isArray(binding.runs) || !checks?.length || binding.runs.length !== checks.length
+        || binding.runs.some((run, index) =>
+          !run || run.command !== checks[index].command || checks[index].status !== "PASSED"
+          || typeof run.startedAt !== "string" || !Number.isFinite(Date.parse(run.startedAt))
+          || typeof run.completedAt !== "string" || !Number.isFinite(Date.parse(run.completedAt))
+          || !Number.isSafeInteger(run.timeoutMs) || run.timeoutMs < 1
+          || run.exitCode !== 0 || typeof run.outputSha256 !== "string" || !/^[a-f0-9]{64}$/.test(run.outputSha256)
+          || run.outputTruncated !== false)
+      )) {
+        throw new InvalidOperationStateError(`operation ${state.id}: the integration receipt of '${receipt.unitId}' has an invalid verification binding`);
       }
     }
   }

@@ -29,4 +29,4 @@ fi
 args=()
 if [[ -n "${NEXUS_RUNNER_ENDPOINT:-}" ]]; then args+=(--endpoint "$NEXUS_RUNNER_ENDPOINT"); fi
 if [[ -n "${NEXUS_RUNNER_MODEL:-}" ]]; then args+=(--model "$NEXUS_RUNNER_MODEL"); fi
-"$nexus_bin" job start --prompt "Read README.md and report its first line. Do not modify files." --verifier "git status --short" --wait "${args[@]}"
+"$nexus_bin" job start --prompt "Read README.md and report its first line. Do not modify files." --verifier "test -s README.md" --wait "${args[@]}"

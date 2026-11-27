@@ -1,4 +1,8 @@
-import { BatchOrchestrator, batchStatus, parseBatchWords, readBatchSpecFile, renderBatchResult } from "./batch.js";
+import { BatchOrchestrator, batchStatus, parseBatchWords, readBatchInputFile, readBatchSpecFile, renderBatchResult } from "./batch.js";
+import { BatchPlanStore, parseBatchPlan, type BatchPlanDraft } from "./batch_plan.js";
+import { generateBatchPlanProposal, generateBatchPlanReview } from "./batch_plan_generation.js";
+import { visibleControls } from "./file_diff.js";
+import { formatDiagnosticForOutput, safeTerminal } from "./ui.js";
 import type { OperationEvent } from "./core/operation.js";
 import type { HarnessConfig } from "./types.js";
 
@@ -7,8 +11,16 @@ export interface BatchCommandResult {
   output: string;
 }
 
+const PLAN_USAGE = "Usage: /batch plan <objective> | plan show|review <draft-id> | plan import <file> [previous-draft-id]";
+
+interface BatchPlanDependencies {
+  propose?: typeof generateBatchPlanProposal;
+  review?: typeof generateBatchPlanReview;
+}
+
 const USAGE = [
   "Usage: /batch <spec-file> | run <spec-file> | validate <spec-file>",
+  PLAN_USAGE,
   "       /batch status [id] | list | pause [id] | resume [id] | cancel [id] | results [id]",
 ].join("\n");
 
@@ -22,15 +34,79 @@ function listOutput(config: HarnessConfig): string {
   return batches.map((batch) => `${batch.id}  ${batchStatus(batch)}  ${batch.objective}`).join("\n");
 }
 
+async function executePlanCommand(
+  words: string[],
+  config: HarnessConfig,
+  signal: AbortSignal | undefined,
+  dependencies: BatchPlanDependencies,
+): Promise<BatchCommandResult> {
+  if (words[0] === "accept") {
+    return { success: false, output: "Plan execution is unavailable until the required verification gates are enabled." };
+  }
+  const action = words[0];
+  if ((["show", "review"].includes(action) && words.length !== 2) ||
+      (action === "import" && (words.length < 2 || words.length > 3))) {
+    return { success: false, output: PLAN_USAGE };
+  }
+  try {
+    const store = new BatchPlanStore(config.workspace);
+    let draft: BatchPlanDraft;
+    if (words[0] === "show") {
+      draft = store.read(words[1]);
+    } else {
+      if (config.readOnly || config.approvalMode === "read-only" || config.dryRun) {
+        throw new Error("This mode cannot save a plan draft.");
+      }
+      signal?.throwIfAborted();
+      if (action === "review") {
+        draft = store.read(words[1]);
+        const reviewPlan = dependencies.review ?? generateBatchPlanReview;
+        const { review, provenance } = await reviewPlan(draft, config, signal);
+        signal?.throwIfAborted();
+        store.recordReview(draft.id, draft.digest, provenance, review);
+      } else if (action === "import") {
+        const previous = words[2] ? store.read(words[2]) : undefined;
+        const plan = parseBatchPlan(readBatchInputFile(words[1], config.workspace), config.workspace);
+        draft = store.create(plan, previous?.provenance);
+      } else {
+        const propose = dependencies.propose ?? generateBatchPlanProposal;
+        const input = words.join(" ").trim();
+        if (!input) throw new Error(PLAN_USAGE);
+        const { plan, provenance } = await propose(input, config, signal);
+        signal?.throwIfAborted();
+        draft = store.create(plan, provenance);
+      }
+    }
+    const review = store.readReview(draft.id);
+    const normalized = JSON.stringify({
+      ...draft,
+      workspace: safeTerminal(draft.workspace),
+      ...(review ? { review } : {}),
+    }, null, 2)
+      // The generic terminal formatter recognizes literal \r and \u escape spellings.
+      // Use JSON's equivalent code point form for a literal backslash.
+      .replace(/\\\\/g, "\\u005c")
+      .split("\n").map(visibleControls).join("\n");
+    const status = review ? "Advisory review recorded." : "Proposal saved for review.";
+    return { success: true, output: `${status}\n${normalized}` };
+  } catch (error) {
+    return { success: false, output: formatDiagnosticForOutput(error) };
+  }
+}
+
 /** Shared by the REPL and sidecar so both interfaces drive the same durable operation records. */
 export async function executeBatchCommand(
   args: string,
   config: HarnessConfig,
   signal?: AbortSignal,
   onEvent?: (event: OperationEvent) => void,
+  dependencies: BatchPlanDependencies = {},
 ): Promise<BatchCommandResult> {
   const words = parseBatchWords(args);
   const first = words[0]?.toLowerCase();
+  if (first === "plan" && words.length > 1) {
+    return executePlanCommand(words.slice(1), config, signal, dependencies);
+  }
   const operation = new BatchOrchestrator(config, {
     signal,
     onEvent,
