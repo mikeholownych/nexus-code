@@ -16,6 +16,7 @@ const PROPOSAL_CONTRACT = [
   "Read scope may be '.', while write scope must name narrower paths.",
   "For an independent unit reviewer, set independentReview and list prior dependencies under requires.independentOf.",
   "Use workspace-relative paths and declare every unit scope. Order overlapping writes and keep independent work parallel.",
+  "For parallel execution, optionally provide execution: {maxConcurrentUnits, executionBudget:{cpuMilli,memoryBytes}} and executionResources:{cpuMilli,memoryBytes} for each unit.",
   "Provide a required final check and at least one required check for each required write unit.",
   "Use string arrays for criteria, risks, assumptions, blockers, paths, dependency IDs, and outputs.",
   "Record unresolved acceptance questions as blockers. Do not claim work has run or been verified.",

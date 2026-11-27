@@ -267,7 +267,7 @@ export class BatchOrchestrator {
     );
     const operation = newOperation(
       acceptance.operationId, draft.plan.objective, mapped.units, resources,
-      this.options.now?.() ?? Date.now(), { ...mergeOperationPolicy(this.config.operationPolicy, undefined), maxConcurrentUnits: 1 },
+      this.options.now?.() ?? Date.now(), { ...mergeOperationPolicy(this.config.operationPolicy, undefined), maxConcurrentUnits: 1, ...mapped.policy },
     );
     const gitPlan = planOperationGit(this.config.workspace, operation.id, acceptance.base.commit);
     if (gitPlan.repoRoot !== draft.workspace) throw new Error("Plan execution requires the repository root.");

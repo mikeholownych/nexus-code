@@ -7,6 +7,8 @@ import { isDistinctPlanReviewer, type BatchPlanReview, validatePlanReview } from
 import { validateBatchSpec } from "./batch_spec.js";
 import { redactForPersistence } from "./core/persistence_protection.js";
 import { isReadOnlyRole, ROLE_PROFILES, type AgentRole } from "./core/roles.js";
+import type { ExecutionResourceRequest } from "./core/operation.js";
+import { validateExecutionResources } from "./core/operation_schema.js";
 import type { WorkRequirements } from "./core/resources.js";
 import { assertPrivateDir, integer, oneOf, readPrivateJson, strictObject, text, timestamp, writePrivateJson } from "./core/runner_store.js";
 import { realpathAllowingMissing } from "./core/socket_files.js";
@@ -50,6 +52,7 @@ export interface BatchPlanUnit {
   handoffs: string[];
   independentReview?: boolean;
   requires?: WorkRequirements;
+  executionResources?: ExecutionResourceRequest;
 }
 
 export interface BatchPlan {
@@ -61,6 +64,7 @@ export interface BatchPlan {
   assumptions: string[];
   blockers: string[];
   units: BatchPlanUnit[];
+  execution?: { maxConcurrentUnits: number; executionBudget: ExecutionResourceRequest };
 }
 
 export interface BatchPlanProvenance {
@@ -184,11 +188,17 @@ function requirements(label: string, value: unknown): WorkRequirements {
   };
 }
 
+function executionResources(label: string, value: unknown): ExecutionResourceRequest {
+  const request = strictObject(label, value, ["cpuMilli", "memoryBytes"]);
+  validateExecutionResources("batch plan", label, request);
+  return { cpuMilli: request.cpuMilli, memoryBytes: request.memoryBytes };
+}
+
 function parseUnit(value: unknown, workspace: string | undefined): BatchPlanUnit {
   const unit = strictObject("plan unit", value, [
     "id", "title", "objective", "role", "required", "dependsOn", "mode", "scope",
     "acceptanceCriteria", "checks", "outputs", "handoffs",
-  ], ["independentReview", "requires"]);
+  ], ["independentReview", "requires", "executionResources"]);
   const id = text("unit id", unit.id, 64, UNIT_ID);
   const role = text(`unit '${id}' role`, unit.role, 64) as AgentRole;
   if (!Object.hasOwn(ROLE_PROFILES, role)) throw new Error(`unit '${id}' has an unknown role`);
@@ -222,6 +232,7 @@ function parseUnit(value: unknown, workspace: string | undefined): BatchPlanUnit
     handoffs,
     ...(independentReview === undefined ? {} : { independentReview }),
     ...(requires === undefined ? {} : { requires }),
+    ...(unit.executionResources === undefined ? {} : { executionResources: executionResources(`${label}.executionResources`, unit.executionResources) }),
   };
 }
 
@@ -256,8 +267,9 @@ export function validateBatchPlan(value: unknown, workspace: string): BatchPlan 
 }
 
 function normalizeBatchPlan(value: unknown, root?: string): BatchPlan {
-  const input = strictObject("plan", value, ["version", "objective", "acceptanceCriteria", "checks", "risks", "assumptions", "blockers", "units"]);
+  const input = strictObject("plan", value, ["version", "objective", "acceptanceCriteria", "checks", "risks", "assumptions", "blockers", "units"], ["execution"]);
   if (input.version !== 1) throw new Error("unsupported batch plan version");
+  const parallel = input.execution === undefined ? undefined : strictObject("plan execution", input.execution, ["maxConcurrentUnits", "executionBudget"]);
   const plan: BatchPlan = {
     version: 1,
     objective: prose("objective", input.objective, 4000),
@@ -267,6 +279,10 @@ function normalizeBatchPlan(value: unknown, root?: string): BatchPlan {
     assumptions: proseList("assumptions", input.assumptions),
     blockers: proseList("blockers", input.blockers),
     units: items("units", input.units, MAX_UNITS, 1).map((unit) => parseUnit(unit, root)),
+    ...(parallel ? { execution: {
+      maxConcurrentUnits: integer("plan execution.maxConcurrentUnits", parallel.maxConcurrentUnits, 2, MAX_UNITS),
+      executionBudget: executionResources("plan execution.executionBudget", parallel.executionBudget),
+    } } : {}),
   };
   if (!plan.checks.some((check) => check.required && !check.when)) throw new Error("plan needs a required final check");
   if (plan.units.some((unit) => unit.required && unit.mode === "write" && !unit.checks.some((check) => check.required && !check.when))) {
@@ -275,6 +291,7 @@ function normalizeBatchPlan(value: unknown, root?: string): BatchPlan {
   // Exercise the same structural contract without exposing a runnable spec or asking the scheduler to act.
   validateBatchSpec({
     objective: plan.objective,
+    ...(plan.execution ? { policy: plan.execution, git: { isolate: true } } : {}),
     units: plan.units.map((unit) => ({
       id: unit.id,
       title: unit.title,
@@ -283,6 +300,7 @@ function normalizeBatchPlan(value: unknown, root?: string): BatchPlan {
       required: unit.required,
       dependsOn: unit.dependsOn,
       requires: unit.requires,
+      executionResources: unit.executionResources,
       ...(unit.mode === "write" ? { authorizedScope: unit.scope } : {}),
     })),
   });

@@ -26,6 +26,7 @@ export function batchPlanExecution(plan: BatchPlan) {
     required: unit.required,
     dependsOn: unit.dependsOn,
     requires: unit.requires,
+    executionResources: unit.executionResources,
     ...(unit.mode === "write" ? { authorizedScope: unit.scope } : {}),
     prompt: [
       unit.objective,
@@ -40,6 +41,7 @@ export function batchPlanExecution(plan: BatchPlan) {
   }));
   return {
     units,
+    policy: plan.execution,
     verificationChecks: [
       ...plan.checks.map((check) => integrationCheck(check)),
       ...plan.units.flatMap((unit) => unit.checks.map((check) => integrationCheck(check, unit.id))),

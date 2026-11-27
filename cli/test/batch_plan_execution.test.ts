@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BatchOrchestrator, type BatchRunnerOptions } from "../src/batch.js";
@@ -112,4 +112,80 @@ test("changed-path conditions survive plan normalization and operation mapping",
     () => validateBatchPlan({ ...plan, checks: [conditional] }, process.cwd()),
     /required final check/,
   );
+});
+
+test("parallel plans retain operator-reviewed execution reservations", () => {
+  const executionResources = { cpuMilli: 100, memoryBytes: 64 * 1024 * 1024 };
+  const execution = { maxConcurrentUnits: 2, executionBudget: { cpuMilli: 200, memoryBytes: 128 * 1024 * 1024 } };
+  const candidate = { ...plan, execution, units: plan.units.map((unit) => ({ ...unit, executionResources })) };
+  const reviewed = validateBatchPlan(candidate, process.cwd());
+  assert.deepEqual(batchPlanExecution(reviewed).policy, execution);
+  assert.deepEqual(batchPlanExecution(reviewed).units.map((unit) => unit.executionResources), [executionResources, executionResources]);
+  assert.throws(() => validateBatchPlan({ ...candidate, units: plan.units }, process.cwd()), /explicit cpuMilli and memoryBytes/);
+});
+
+test("approved parallel write units run in separate worktrees and integrate the verified result", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "nexus-parallel-plan-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const workspace = join(root, "repo");
+  mkdirSync(workspace);
+  const git = (...args: string[]) => execFileSync("git", ["-C", workspace, ...args], { stdio: "ignore" });
+  git("init", "--template=");
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "fixture@example.invalid");
+  writeFileSync(join(workspace, "README.md"), "Fixture");
+  git("add", "README.md");
+  git("commit", "-m", "fixture");
+  setWorkspaceTrusted(workspace, true);
+  t.after(() => setWorkspaceTrusted(workspace, false));
+
+  const command = "test -s README.md";
+  const check = { ...plan.checks[0], command };
+  const executionResources = { cpuMilli: 100, memoryBytes: 64 * 1024 * 1024 };
+  const plans = new BatchPlanStore(workspace, join(root, "drafts"));
+  const draft = plans.create({
+    ...plan, checks: [check],
+    execution: { maxConcurrentUnits: 2, executionBudget: { cpuMilli: 200, memoryBytes: 128 * 1024 * 1024 } },
+    units: ["left", "right"].map((id) => ({
+      ...plan.units[1],
+      id, dependsOn: [], handoffs: [], scope: [`${id}.md`], checks: [check], executionResources,
+    })),
+  });
+  const resources = ["resource-a", "resource-b"].map((id) => ({
+    id, endpoint: "http://127.0.0.1:1", model: id, provider: id, capabilities: [],
+  }));
+  const config = {
+    workspace, endpoint: resources[0].endpoint, model: resources[0].model, maxSteps: 1,
+    temperature: 0, shell: "bash", batchVerifierCommands: [command],
+  };
+  const worktrees = new Set<string>();
+  let release!: () => void;
+  const both = new Promise<void>((resolve) => { release = resolve; });
+  const deadline = AbortSignal.timeout(5_000);
+  const batch = new BatchOrchestrator(config, {
+    resources,
+    signal: deadline,
+    store: new OperationStore(workspace, join(root, "operations")),
+    executor: {
+      async run(unit, _resource, context) {
+        assert.ok(context.workspace);
+        worktrees.add(context.workspace);
+        if (worktrees.size === 2) release();
+        await Promise.race([both, new Promise<void>((resolve) => deadline.addEventListener("abort", () => resolve(), { once: true }))]);
+        deadline.throwIfAborted();
+        writeFileSync(join(context.workspace, `${unit.id}.md`), `Documentation for ${unit.id}`);
+        return { kind: "completed", summary: "Wrote documentation.", outcome: "NOT_REQUIRED" };
+      },
+      integrationPolicy: () => ({ verificationCommands: [command] }),
+    },
+  });
+  const result = await batch.runAcceptedPlan(plans, draft.id, draft.digest);
+  assert.equal(worktrees.size, 2);
+  assert.equal(result.status, "COMPLETE");
+  const integration = result.operation.git!.integrationWorktree;
+  for (const file of ["left.md", "right.md"]) {
+    assert.equal(existsSync(join(workspace, file)), false);
+    assert.equal(existsSync(join(integration, file)), true);
+  }
+  assert.equal(result.operation.integrations?.at(-1)?.verificationBinding?.typedChecks?.length, 3);
 });
