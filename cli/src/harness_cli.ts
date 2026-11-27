@@ -31,12 +31,23 @@ export function registerHarnessCommands(program: Command): void {
     .requiredOption("--task-suite <path>", "Task suite JSON file")
     .requiredOption("--base <path>", "Base harness directory or profile path")
     .option("--base-kind <kind>", "fixture|path|profile", "path")
+    .option("--max-rounds <n>", "Maximum rounds (default 1)", (v) => parseInt(v, 10))
+    .option("--max-candidates-per-round <n>", "Maximum candidates per round (default 4)", (v) => parseInt(v, 10))
+    .option("--max-probes <n>", "Maximum probes (default 8)", (v) => parseInt(v, 10))
     .option("--state-dir <path>", "Harness state root (defaults to NEXUS_STATE_DIR/harness or ~/.nexus/harness)")
     .option("--json", "Emit JSON")
     .action(async (opts) => {
       const store = storeFrom(opts);
       const orch = new HarnessOrchestrator(store);
-      const run = await orch.init({ taskSuitePath: opts.taskSuite, basePath: opts.base, baseKind: opts.baseKind, store });
+      const run = await orch.init({
+        taskSuitePath: opts.taskSuite,
+        basePath: opts.base,
+        baseKind: opts.baseKind,
+        store,
+        maxRounds: Number.isFinite(opts.maxRounds) ? opts.maxRounds : undefined,
+        maxCandidatesPerRound: Number.isFinite(opts.maxCandidatesPerRound) ? opts.maxCandidatesPerRound : undefined,
+        maxProbes: Number.isFinite(opts.maxProbes) ? opts.maxProbes : undefined,
+      });
       out(opts.json ? run : `Created ${statusLine(run)}\n${run.nextAction ?? ""}`.trim(), opts.json);
     });
 
