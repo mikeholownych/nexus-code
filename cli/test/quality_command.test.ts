@@ -6,6 +6,7 @@ import test, { type TestContext } from "node:test";
 import "./helpers/leak_guard.js";
 import { BatchOrchestrator } from "../src/batch.js";
 import { BatchPlanStore } from "../src/batch_plan.js";
+import { defaultTaskStateDir } from "../src/core/state.js";
 import { executeQualityCommand } from "../src/quality_command.js";
 import { setWorkspaceTrusted } from "../src/workspace_trust.js";
 import type { HarnessConfig } from "../src/types.js";
@@ -131,7 +132,14 @@ test("simplify requires a currently verified candidate and cannot edit it", asyn
   const completed = await batch.runAcceptedPlan(plans, draft.id, draft.digest);
   assert.equal(completed.status, "COMPLETE");
   const worktree = completed.operation.git!.integrationWorktree;
+  const recordPath = path.join(defaultTaskStateDir(), `${completed.id}.json`);
+  const raw = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+  raw.operation.git.integrationBranch = "[REDACTED:HIGH_ENTROPY_STRING]";
+  const legacy = JSON.stringify(raw);
+  fs.writeFileSync(recordPath, legacy, { mode: 0o600 });
   const result = await executeQualityCommand("simplify", completed.id, settings);
+  assert.equal(fs.readFileSync(recordPath, "utf8"), legacy);
+
   assert.equal(result.success, true, result.output);
   assert.match(result.output, /Both aliases produce the same value/);
   assert.match(result.output, /required checks again/);

@@ -8,7 +8,7 @@ import { InferenceError } from "./client.js";
 import { extractModifiedFilesFromDiff } from "./core/independent_review.js";
 import { gitSlug, OperationGit, type OperationGitPlan } from "./core/operation_git.js";
 import { migrateOperationState } from "./core/operation_schema.js";
-import { assertNoSensitivePersistenceContent, isLinkedWorktreeDir } from "./core/persistence_protection.js";
+import { assertNoSensitivePersistenceContent, isLinkedWorktreeDir, resolveOperationIntegrationBranch } from "./core/persistence_protection.js";
 import { requestJsonProposal } from "./core/proposal_inference.js";
 import { inferenceProvenance, proposalClients, requestLocalFirstProposal } from "./core/proposal_resources.js";
 import { assertPrivateDir, oneOf, readPrivateJson, strictObject, text } from "./core/runner_store.js";
@@ -162,21 +162,22 @@ function acceptedCandidate(workspace: string, id: string) {
   const expectedTree = path.join(baseDir, "integration");
   if (repo.cwd !== workspace || stored.repoRoot !== workspace || stored.baseDir !== baseDir ||
     stored.integrationWorktree !== expectedTree || !COMMIT.test(stored.baseCommit) ||
-    stored.integrationBranch !== `nexus/op-${key}/integration` ||
     !isLinkedWorktreeDir(expectedTree, repo.commonDir) || fs.realpathSync(expectedTree) !== expectedTree ||
     !inspectWorkspaceGitSafety(expectedTree).safe) throw stale("The integration worktree identity could not be confirmed.");
+  const integrationBranch = resolveOperationIntegrationBranch(id, stored);
+  if (!integrationBranch) throw stale("The integration branch identity could not be confirmed.");
   const plan: OperationGitPlan = {
     key, repoRoot: workspace, baseRef: stored.baseRef, baseCommit: stored.baseCommit,
-    integrationBranch: stored.integrationBranch, integrationWorktree: expectedTree, baseDir,
+    integrationBranch, integrationWorktree: expectedTree, baseDir,
   };
-  const integration = new OperationGit(plan, stored);
+  const integration = new OperationGit(plan, { ...stored, integrationBranch });
   const required = new Set(operation.units.filter((unit) => unit.required !== false).map((unit) => unit.id));
   const problem = integration.completionVerificationProblem(operation.integrations ?? [], required);
   if (problem) throw stale(problem);
   const current = currentEntry(openRepo(expectedTree));
   const receipt = [...(operation.integrations ?? [])].reverse().find((entry) => entry.integratedCommit === current?.head);
   const binding = receipt?.verificationBinding;
-  if (!current || current.branch !== stored.integrationBranch || !binding || binding.commit !== current.head ||
+  if (!current || current.branch !== integrationBranch || !binding || binding.commit !== current.head ||
     (stored.verificationChecks?.length && !binding.typedChecks?.some((check) => check.status === "PASSED"))
     || binding.typedChecks?.some((check) => check.status === "WAIVED")) throw stale("There is no passing current receipt without a waiver.");
   return { plan, receipt: binding, commit: current.head };

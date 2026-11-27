@@ -35,6 +35,12 @@ export function validateBranchName(name: string): string | undefined {
   return undefined;
 }
 
+/** Filesystem- and ref-safe name; the hash keeps two ids that sanitise the same apart. */
+export function gitSlug(value: string): string {
+  const clean = value.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "unit";
+  return `${clean}-${crypto.createHash("sha256").update(value).digest("hex").slice(0, 8)}`;
+}
+
 /** A file-system-safe name for a branch: `[A-Za-z0-9._-]` only, no leading dot or dash, bounded length. */
 export function sanitizeBranch(branch: string): string {
   const flat = branch.replace(/[\/\\]+/g, "-");

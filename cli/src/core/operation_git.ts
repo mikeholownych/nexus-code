@@ -16,6 +16,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { gitSlug } from "../worktrunk/paths.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -61,11 +62,7 @@ function gitResult(cwd: string, args: string[]): { ok: boolean; stdout: string; 
   }
 }
 
-/** Filesystem- and ref-safe name; the hash keeps two ids that sanitise the same apart. */
-export function gitSlug(value: string): string {
-  const clean = value.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "unit";
-  return `${clean}-${createHash("sha256").update(value).digest("hex").slice(0, 8)}`;
-}
+export { gitSlug } from "../worktrunk/paths.js";
 
 export interface OperationGitPlan {
   key: string;
