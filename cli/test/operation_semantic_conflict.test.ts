@@ -342,7 +342,8 @@ test("a verification receipt that fails to persist requires fresh evidence on re
   const store = new OperationStore(root, path.join(home, "tasks"), home);
   const state = operation(root, ["u1"], "op-pa2-evidence-write-failure");
   const marker = path.join(home, "verification-attempts");
-  const command = "printf '%s\n' check >> " + JSON.stringify(marker);
+  const quotedMarker = "'" + marker.replaceAll("'", "'\\''") + "'";
+  const command = "printf '%s\\n' check >> " + quotedMarker;
   const executor: WorkUnitExecutor = {
     integrationPolicy: () => ({ verifier: command }),
     async run(_unit, _resource, ctx) {
