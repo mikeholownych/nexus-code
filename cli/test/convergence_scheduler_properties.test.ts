@@ -85,3 +85,37 @@ test("scheduler event callback failures produce bounded debug diagnostics", () =
   assert.equal(JSON.stringify(diagnostics).includes("do not log"), false);
   assert.equal(state.events.at(-1)?.type, "WORK_STARTED", "observer failure must not undo the scheduler event");
 });
+
+test("operator decisions cannot rewrite an approved plan or override reviewer independence", () => {
+  const r: ResourceDescriptor = {
+    id: "one-resource", model: "same-model", provider: "fixture",
+    endpoint: "http://127.0.0.1:1", capabilities: [],
+  };
+  const op = newOperation("batch-reviewed", "Approve a scoped change", [
+    { id: "writer", prompt: "Implement the approved task" },
+    { id: "reviewer", prompt: "Review the approved task", dependsOn: ["writer"], requires: { independentOf: ["writer"] } },
+  ], [r], Date.now());
+  op.git = {
+    isolate: true, repoRoot: "/fixture", baseRef: "HEAD", baseCommit: "a".repeat(40),
+    integrationBranch: "fixture", integrationWorktree: "/fixture/integration", baseDir: "/fixture/worktrees",
+    units: {}, acceptedPlanDigest: "a".repeat(64),
+  };
+  op.units[0].modelsUsed = ["same-model"];
+  const unit = op.units[1];
+  const scheduler = new ConvergenceScheduler(op, new ResourceRegistry(op.resources, op.conditions), Date.now);
+  scheduler.block(unit, {
+    cause: "NO_QUALIFIED_RESOURCE", reason: "no distinct reviewer", question: "Choose a path",
+    options: [
+      { action: { kind: "revise" }, label: "revise" },
+      { action: { kind: "accept_no_change" }, label: "accept without a reviewer" },
+      { action: { kind: "assign", resourceId: r.id, overriding: [] }, label: "use the writer's model" },
+      { action: { kind: "retry" }, label: "retry" },
+    ],
+  });
+  const decision = unit.blocked!.decision;
+  assert.deepEqual(decision.options.map(({ action }) => action.kind), ["retry", "cancel_operation"]);
+  // A previously saved decision is also subject to current approval authority.
+  decision.options.push({ id: "old", label: "old revise", action: { kind: "revise" } });
+  assert.throws(() => scheduler.resolve(decision.id, "old", "Do different work"), /revised draft/);
+  assert.equal(unit.prompt, "Review the approved task");
+});

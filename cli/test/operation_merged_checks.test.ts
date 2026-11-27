@@ -233,7 +233,8 @@ test("a no-change unit still requires the operator verifier on the current integ
 
 test("a successful merged check records the exact candidate and bounded execution evidence", async () => {
   const f = fixture();
-  f.state.integrationVerifiers = ["test -f file.txt"];
+  const command = "test -f file.txt && printf 'accepted output\\n'";
+  f.state.integrationVerifiers = [command];
   f.prepare("u1");
   const tip = f.ops.currentTip();
 
@@ -242,8 +243,204 @@ test("a successful merged check records the exact candidate and bounded executio
   const { verificationBinding } = outcome.receipt;
   assert.equal(verificationBinding?.commit, tip);
   assert.equal(verificationBinding?.worktree, f.integrationWorktree);
-  assert.deepEqual(verificationBinding?.runs.map((run) => [run.command, run.exitCode]), [["test -f file.txt", 0]]);
+  assert.deepEqual(verificationBinding?.runs.map((run) => [run.command, run.exitCode]), [[command, 0]]);
+  assert.equal(verificationBinding?.runs[0].outputPreview, "accepted output");
   assert.ok(verificationBinding?.runs.every((run) => /^[a-f0-9]{64}$/.test(run.outputSha256)));
+});
+
+test("typed required checks gate no-change completion and advisory failures remain visible", async () => {
+  const f = fixture();
+  f.prepare("u1");
+  f.state.verificationChecks = [
+    { id: "advisory", purpose: "optional smoke", command: "false", requirement: "advisory", cwd: ".", timeoutMs: 1000 },
+    { id: "required", purpose: "expected input", command: "test -f expected.txt", requirement: "required", cwd: ".", timeoutMs: 1000 },
+  ];
+  const tip = f.ops.currentTip();
+  const result = await f.integrate("u1");
+  assert.ok(result.kind === "failed");
+  assert.match(result.reason, /required/);
+  assertUntouched(f, tip);
+});
+
+test("typed receipts bind alternate cwd, conditional applicability and unit ownership to the exact tree", async () => {
+  const f = fixture();
+  const tree = f.prepare("u1");
+  write(tree, "checks/marker.txt", "included\n");
+  f.state.verificationChecks = [
+    { id: "skip", purpose: "only edited docs", command: "false", requirement: "conditional", cwd: ".", timeoutMs: 1000, when: { changedPaths: ["docs"] } },
+    { id: "unit", unitId: "u1", purpose: "verify marker", command: "test -f marker.txt", requirement: "conditional", cwd: "checks", timeoutMs: 1000, when: { changedPaths: ["checks"] } },
+    { id: "note", purpose: "record advisory failure", command: "false", requirement: "advisory", cwd: ".", timeoutMs: 1000 },
+  ];
+  const result = await f.integrate("u1");
+  assert.ok(result.kind === "integrated");
+  const binding = result.receipt.verificationBinding;
+  assert.equal(binding?.commit, result.receipt.integratedCommit);
+  assert.deepEqual(binding?.typedChecks?.map((check) => [check.id, check.status]), [["skip", "SKIPPED"], ["unit", "PASSED"], ["note", "FAILED"]]);
+  assert.equal(f.ops.completionVerificationProblem(f.receipts), undefined);
+
+  f.state.verificationChecks[1] = { ...f.state.verificationChecks[1], timeoutMs: 2000 };
+  assert.match(f.ops.completionVerificationProblem(f.receipts) ?? "", /required checks/);
+});
+
+test("a later integration reruns required checks from previously accepted units", async () => {
+  const f = fixture();
+  f.state.verificationChecks = [{
+    id: "first-check", unitId: "u1", purpose: "keep the created marker",
+    command: "test -f marker.txt", requirement: "required", cwd: ".", timeoutMs: 1000,
+  }];
+  write(f.prepare("u1"), "marker.txt", "required\n");
+  const first = await f.integrate("u1");
+  assert.ok(first.kind === "integrated");
+  const tip = f.ops.currentTip();
+  fs.rmSync(path.join(f.prepare("u2"), "marker.txt"));
+
+  const second = await f.integrate("u2");
+  assert.ok(second.kind === "failed");
+  assert.match(second.reason, /first-check/);
+  assert.equal(second.verificationBinding?.typedChecks?.[0].status, "FAILED");
+  assertUntouched(f, tip);
+});
+
+test("typed verification does not execute in aliased check directories", async () => {
+  const f = fixture();
+  const tree = f.prepare("u1");
+  write(tree, "checks/marker.txt", "required\n");
+  fs.symlinkSync("checks", path.join(tree, "alias"), "dir");
+  f.state.verificationChecks = [{
+    id: "alias-check", purpose: "check from specified directory",
+    command: "test -f marker.txt", requirement: "required", cwd: "alias", timeoutMs: 1000,
+  }];
+  const tip = f.ops.currentTip();
+
+  const result = await f.integrate("u1");
+  assert.ok(result.kind === "failed");
+  assert.match(result.reason, /cwd is unavailable or resolves through a symlink/);
+  assert.equal(result.verificationBinding?.typedChecks?.[0].run, undefined);
+  assertUntouched(f, tip);
+});
+
+test("integration distinguishes elapsed deadlines from a verifier's exit 124", async () => {
+  const cases = [
+    { command: "sleep 1", timeoutMs: 60, status: "TIMED_OUT" },
+    { command: "exit 124", timeoutMs: 1000, status: "FAILED" },
+  ];
+  for (const { command, timeoutMs, status } of cases) {
+    const f = fixture();
+    f.prepare("u1");
+    f.state.verificationChecks = [{
+      id: "test", purpose: "record verifier status", command, requirement: "required", cwd: ".", timeoutMs,
+    }];
+    const tip = f.ops.currentTip();
+    const result = await f.integrate("u1");
+    assert.ok(result.kind === "failed");
+    assert.equal(result.verificationBinding?.typedChecks?.[0]?.status, status);
+    assert.equal(Boolean(f.state.retainedVerificationCandidates?.length), status === "FAILED");
+    assertUntouched(f, tip);
+  }
+});
+
+test("a waiver cannot follow a changed unit commit", async () => {
+  const f = fixture();
+  const tree = f.prepare("u1");
+  write(tree, "edit.txt", "original candidate\n");
+  f.state.verificationChecks = [{
+    id: "smoke", purpose: "record failed expected result", command: "false", requirement: "required", cwd: ".", timeoutMs: 1000,
+  }];
+  const originalTip = f.ops.currentTip();
+  const first = await f.integrate("u1");
+  assert.equal(first.kind, "failed");
+  const candidate = f.state.retainedVerificationCandidates?.[0];
+  assert.ok(candidate);
+  f.state.verificationWaivers = [{
+    ...candidate, id: "e2408467-07de-4962-9fed-597778f16627", actor: "test operator",
+    reason: "Scoped approval to the original candidate", approvedAt: new Date().toISOString(),
+  }];
+
+  write(tree, "edit.txt", "changed candidate\n");
+  const result = await f.integrate("u1");
+  assert.ok(result.kind === "failed");
+  assert.equal(result.verificationBinding?.typedChecks?.[0]?.status, "FAILED");
+  assert.notEqual(result.verificationBinding?.commit, candidate.commit);
+  assertUntouched(f, originalTip);
+});
+
+test("a typed receipt cannot certify changed ignored dependency bytes on the same Git commit", async () => {
+  const f = fixture();
+  fs.appendFileSync(path.join(f.root, ".git/info/exclude"), "\nnode_modules/\n");
+  const dependency = path.join(f.integrationWorktree, "node_modules", "dep.js");
+  write(f.integrationWorktree, "node_modules/dep.js", "old dependency\n");
+  f.state.verificationChecks = [{
+    id: "check", purpose: "verify candidate dependency", command: "test -s node_modules/dep.js",
+    requirement: "required", cwd: ".", timeoutMs: 1000,
+  }];
+  write(f.prepare("u1"), "code.js", "verified candidate\n");
+
+  const passed = await f.integrate("u1");
+  assert.ok(passed.kind === "integrated");
+  assert.match(passed.receipt.verificationBinding?.materialInputsSha256 ?? "", /^[a-f0-9]{64}$/);
+  assert.equal(f.ops.completionVerificationProblem(f.receipts), undefined);
+  fs.writeFileSync(dependency, "same filepath, different bytes\n");
+  assert.equal(git(f.integrationWorktree, ["status", "--porcelain"]), "");
+  assert.equal(f.ops.currentTip(), passed.receipt.integratedCommit);
+  assert.match(f.ops.completionVerificationProblem(f.receipts) ?? "", /material input/i);
+});
+
+test("a verifier changing a declared ignored input cannot publish a passing receipt", async () => {
+  const f = fixture();
+  fs.appendFileSync(path.join(f.root, ".git/info/exclude"), "\nfixtures-cache/\n");
+  write(f.integrationWorktree, "fixtures-cache/value", "original input");
+  f.state.verificationChecks = [{
+    id: "check", purpose: "verify a declared input", command: "printf changed > fixtures-cache/value",
+    requirement: "required", cwd: ".", timeoutMs: 1000, materialInputs: ["fixtures-cache"],
+  }];
+  write(f.prepare("u1"), "code.js", "candidate\n");
+  const tip = f.ops.currentTip();
+  const result = await f.integrate("u1");
+  assert.ok(result.kind === "failed");
+  assert.match(result.reason, /material input/i);
+  assert.equal(f.receipts.length, 0);
+  assertUntouched(f, tip);
+});
+
+test("a verification waiver is ineligible after its material inputs change", async () => {
+  const f = fixture();
+  fs.appendFileSync(path.join(f.root, ".git/info/exclude"), "\nnode_modules/\n");
+  write(f.integrationWorktree, "node_modules/dep.js", "first dependency\n");
+  write(f.prepare("u1"), "code.js", "unchanged candidate\n");
+  f.state.verificationChecks = [{
+    id: "check", purpose: "record actual failure", command: "false", requirement: "required", cwd: ".", timeoutMs: 1000,
+  }];
+  const rejected = await f.integrate("u1");
+  assert.equal(rejected.kind, "failed");
+  const failure = f.state.retainedVerificationCandidates?.[0];
+  assert.ok(failure?.materialInputsSha256);
+  f.state.verificationWaivers = [{
+    ...failure, id: "8ebffa4f-eb38-4f07-9cf2-91a6b5edabc9", actor: "test operator",
+    reason: "Waived with original dependency inputs", approvedAt: new Date().toISOString(),
+  }];
+  write(f.integrationWorktree, "node_modules/dep.js", "new dependency\n");
+  const retry = await f.integrate("u1");
+  assert.ok(retry.kind === "failed");
+  assert.equal(retry.verificationBinding?.commit, failure.commit);
+  assert.notEqual(retry.verificationBinding?.materialInputsSha256, failure.materialInputsSha256);
+  assert.equal(retry.verificationBinding?.typedChecks?.[0]?.status, "FAILED");
+});
+
+test("verification material links outside the bound inputs fail closed", async () => {
+  const f = fixture();
+  fs.appendFileSync(path.join(f.root, ".git/info/exclude"), "\nnode_modules/\n");
+  write(f.outside, "dep.js", "external input\n");
+  fs.mkdirSync(path.join(f.integrationWorktree, "node_modules"));
+  fs.symlinkSync(path.join(f.outside, "dep.js"), path.join(f.integrationWorktree, "node_modules", "link.js"));
+  f.state.verificationChecks = [{
+    id: "check", purpose: "refuse an unbound input link", command: "true", requirement: "required", cwd: ".", timeoutMs: 1000,
+  }];
+  write(f.prepare("u1"), "code.js", "candidate\n");
+  const tip = f.ops.currentTip();
+  const result = await f.integrate("u1");
+  assert.ok(result.kind === "failed");
+  assert.match(result.reason, /outside the bound input scope/);
+  assertUntouched(f, tip);
 });
 
 test("integration requires complete verifier output even when the command exits successfully", async () => {

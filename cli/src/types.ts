@@ -108,6 +108,7 @@ export interface HarnessConfig {
   /** A diagnostic run works on a snapshot of a failing candidate: its diagnosis completes it, so no completion verifier runs. */
   diagnosticRun?: boolean;
   worktreeBranch?: string;   // Run in a named worktree for this branch instead of nexus/<task-id> (implies worktree; kept, never auto-merged)
+  batchVerifierCommands?: readonly string[]; // Additional operator-authorized commands for reviewed batch checks
   authoritativeVerifierCommand?: string; // Explicit trusted verifier: gates every task completion and authorizes automatic worktree merge
   /** Workspace-relative deliverable paths declared by the operator before the task starts. */
   trustedDeliverableFiles?: string[];

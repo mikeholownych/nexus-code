@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { HarnessConfig } from "../types.js";
 import { realRecoveryClock, type RecoveryClock } from "./provider_recovery.js";
-import { ConvergenceScheduler, type Assignment, type Decision, type DurableOperationState, type MergedCheck, type OperationEvent, type OperationMessage, type UnitRunResult, type WorkUnit } from "./operation.js";
+import { ConvergenceScheduler, type Assignment, type Decision, type DurableOperationState, type IntegrationVerificationBinding, type IntegrationVerificationIntent, type MergedCheck, type OperationEvent, type OperationMessage, type UnitRunResult, type WorkUnit } from "./operation.js";
 import { markDelivered, publishMessage, undeliveredFor } from "./operation_messages.js";
 import { OperationGit, ensureIntegrationWorktree, type OperationGitPlan } from "./operation_git.js";
 import { REQUIREMENTS_CAPABILITY, READ_OBJECTIVE_CAPABILITY } from "./objective.js";
@@ -80,7 +80,7 @@ export interface WorkUnitExecutor {
    * Isolated operations (PA-2): the operator's verifier, pinned for the operation and run on every merged tree, and
    * the session's sandbox setting, which confines those runs as it confines the units' own commands.
    */
-  integrationPolicy?(): { verifier?: string; sandbox?: boolean | string };
+  integrationPolicy?(): { verifier?: string; sandbox?: boolean | string; verificationCommands?: readonly string[] };
   /** Side-effect-free reachability check used to revalidate endpoint-scope conditions on wake. */
   probe?(resource: ResourceDescriptor, signal?: AbortSignal): Promise<{ available: boolean; failure?: InferenceFailure }>;
   /** Re-reads provider catalogs, if enabled. */
@@ -185,6 +185,7 @@ export class OperationRunner {
       ? new OperationGit(planFromState(state), state.git, {
           integrations: () => this.state.integrations ?? [],
           sandbox: opts.executor.integrationPolicy?.().sandbox,
+          onVerificationStart: (unitId, intent) => this.persistVerificationIntent(unitId, intent),
         })
       : undefined;
   }
@@ -327,6 +328,14 @@ export class OperationRunner {
     if (this.state.status === "PAUSED") return this.state;
     if (this.state.status === "COMPLETE" || this.state.status === "CANCELLED") {
       this.git?.disposeAllUnits();
+      return this.state;
+    }
+    const definitions = this.state.git?.verificationChecks;
+    const verificationPolicy = this.opts.executor.integrationPolicy?.();
+    const allowedCommands = new Set(verificationPolicy?.verificationCommands);
+    if (verificationPolicy?.verifier) allowedCommands.add(verificationPolicy.verifier.trim());
+    if (definitions?.some((check) => !allowedCommands.has(check.command))) {
+      this.blockOnGit("A typed check does not match the current operator-authorized verifier command.");
       return this.state;
     }
     this.pinIntegrationVerifier();
@@ -521,7 +530,12 @@ export class OperationRunner {
         continue;
       }
       if (d.kind === "complete") {
-        const verificationProblem = this.git?.completionVerificationProblem(this.state.integrations ?? []);
+        if (this.state.git?.acceptedPlanDigest && this.state.units.some((unit) => unit.required !== false && (unit.dropped || unit.status !== "COMPLETE"))) {
+          this.blockOnGit("A required unit in the accepted plan is missing or incomplete.");
+          return this.state;
+        }
+        const requiredUnits = new Set(this.state.units.filter((unit) => !unit.dropped && unit.required !== false).map((unit) => unit.id));
+        const verificationProblem = this.git?.completionVerificationProblem(this.state.integrations ?? [], requiredUnits);
         if (verificationProblem) {
           this.blockOnGit(verificationProblem);
           return this.state;
@@ -729,7 +743,7 @@ export class OperationRunner {
         this.reportPreservedWorktrees([unit.id]);
         return result;
       }
-      return this.enqueueIntegration(unit, result);
+      return this.enqueueIntegration(unit, result, signal);
     } catch (err: any) {
       if (signal?.aborted) return { kind: "cancelled" };
       if (err instanceof OperationInferenceAdmissionError) {
@@ -997,18 +1011,18 @@ export class OperationRunner {
    * worktree, so merges happen one at a time. The returned promise resolves with what the unit's completion becomes
    * (the original result on success, or a decision-bearing failure).
    */
-  private enqueueIntegration(unit: WorkUnit, result: Extract<UnitRunResult, { kind: "completed" }>): Promise<UnitRunResult> {
+  private enqueueIntegration(unit: WorkUnit, result: Extract<UnitRunResult, { kind: "completed" }>, signal?: AbortSignal): Promise<UnitRunResult> {
     this.scheduler.emit("INTEGRATION_QUEUED", `${unit.id} queued for integration.`, { unitId: unit.id });
     const job = async (): Promise<UnitRunResult> => {
       const current = this.scheduler.unit(unit.id);
-      if (current.dropped || this.state.status === "CANCELLED") {
+      if (current.dropped || this.state.status === "CANCELLED" || signal?.aborted) {
         this.scheduler.emit("INTEGRATION_SKIPPED", `${unit.id} was not integrated: it is ${current.dropped ? "dropped" : "cancelled"}.`, {
           unitId: unit.id,
           detail: { reason: current.dropped ? "dropped" : "cancelled" },
         });
         return { kind: "cancelled" };
       }
-      return this.integrateUnit(unit, result);
+      return this.integrateUnit(unit, result, signal);
     };
     const next = this.integrationChain.then(job, job);
     this.integrationChain = next.then(
@@ -1025,7 +1039,7 @@ export class OperationRunner {
   private pinIntegrationVerifier(): void {
     const verifier = this.opts.executor.integrationPolicy?.().verifier?.trim();
     const git = this.state.git;
-    if (!git?.isolate || !verifier || git.integrationVerifiers?.includes(verifier)) return;
+    if (!git?.isolate || !verifier || git.verificationChecks?.length || git.integrationVerifiers?.includes(verifier)) return;
     git.integrationVerifiers = [...(git.integrationVerifiers ?? []), verifier];
   }
 
@@ -1033,17 +1047,23 @@ export class OperationRunner {
    * PA-2: a refused merge is recorded as its own event, naming the integrated units it collides with and the checks
    * the runner ran. Returns the clause that names those units in the operator's decision.
    */
-  private recordRejection(unit: WorkUnit, reason: string, detail: { conflictWith?: string[]; checks?: MergedCheck[]; files?: string[] }): string {
+  private recordRejection(unit: WorkUnit, reason: string, detail: { conflictWith?: string[]; checks?: MergedCheck[]; verificationBinding?: IntegrationVerificationBinding; files?: string[] }): string {
     const others = detail.conflictWith ?? [];
     this.scheduler.emit("INTEGRATION_REJECTED", `${unit.id} was not integrated: ${reason.split("\n")[0]}`, {
       unitId: unit.id,
-      detail: { unitId: unit.id, conflictWith: others, ...(detail.checks ? { checks: detail.checks } : {}), ...(detail.files ? { files: detail.files } : {}) },
+      detail: {
+        unitId: unit.id,
+        conflictWith: others,
+        ...(detail.checks ? { checks: detail.checks } : {}),
+        ...(detail.verificationBinding ? { verificationBinding: detail.verificationBinding } : {}),
+        ...(detail.files ? { files: detail.files } : {}),
+      },
     });
     return others.length ? ` (${unit.id} against integrated ${others.join(", ")})` : "";
   }
 
   /** Merges one completed unit into the operation branch and records the receipt, or returns the blocking decision. */
-  private async integrateUnit(unit: WorkUnit, result: Extract<UnitRunResult, { kind: "completed" }>): Promise<UnitRunResult> {
+  private async integrateUnit(unit: WorkUnit, result: Extract<UnitRunResult, { kind: "completed" }>, signal?: AbortSignal): Promise<UnitRunResult> {
     const candidate = this.candidateFor(unit);
     const tests = result.verification
       ? { command: result.verification.command, status: result.verification.status, hasExecutedTests: result.verification.hasExecutedTests, ...(result.verification.definitionBound === false ? { definitionBound: false as const } : {}) }
@@ -1052,6 +1072,7 @@ export class OperationRunner {
     const previousUnit = gitState.units[unit.id];
     const integration = await this.git!.integrate(unit, result, {
       sequence: (this.state.integrations?.length ?? 0) + 1,
+      signal,
       integrated: this.state.integrations ?? [],
       ...(candidate ? { candidate } : {}),
       ...(tests ? { tests } : {}),
@@ -1242,6 +1263,17 @@ export class OperationRunner {
     this.git?.disposeAllUnits();
     this.save();
     return this.state;
+  }
+
+  private persistVerificationIntent(unitId: string, intent: IntegrationVerificationIntent): void {
+    const previousEvents = this.state.events.slice();
+    this.scheduler.emit("VERIFICATION_STARTED", `Prepared ${intent.checks.length} checks on candidate ${intent.commit.slice(0, 12)}.`, { unitId, detail: { ...intent } });
+    try {
+      this.save();
+    } catch (error) {
+      this.state.events = previousEvents;
+      throw error;
+    }
   }
 
   private save(): void {

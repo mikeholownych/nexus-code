@@ -14,7 +14,7 @@
  * and each earlier unit's), not only the integrating unit's own. A unit whose merge breaks one of them is refused and
  * the branch is put back; so is a unit that changes verification files earlier integrated work brought in.
  */
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -22,15 +22,24 @@ import * as path from "node:path";
 import { trustedGitArgs } from "../git.js";
 import { ensureGitExclude } from "./git_exclude.js";
 import { GIT_SAFE, attributesTree, driverRefusal, safeGitEnv, snapshotSupport } from "./specialist_inputs.js";
-import { environmentHint, runVerifierShell, verifierTimeoutSecs } from "../tester.js";
+import { buildVerifierEnvironment, environmentHint, runCancellableVerifierShell, verifierTimeoutSecs } from "../tester.js";
 import { sandboxNetworkEnabled } from "../sandbox.js";
 import { SecurityManager } from "../security.js";
 import { printable } from "../worktrunk/git.js";
 import { sandboxedVerifierCommand, usableSandboxEngine } from "./verify.js";
+import { formatDiagnosticForOutput } from "../ui.js";
+import { verificationMaterialDigest, verificationWorkingDirectory } from "./operation_verification_material.js";
+import {
+  MAX_INTEGRATION_CHECKS, isWaivableCheckFailure, matchingVerificationWaiver, operationVerificationApplies, operationVerificationDefinitionDigest, type OperationVerificationCheck,
+} from "./operation_verification.js";
+import { MAX_VERIFICATION_OUTPUT_PREVIEW } from "./operation.js";
 import type {
   IntegrationReceipt,
+  IntegrationVerificationBinding,
+  IntegrationVerificationIntent,
   MergedCheck,
   MergedCheckRun,
+  TypedCheckOutcome,
   OperationGitState,
   OperationGitUnit,
   UnitRunResult,
@@ -110,13 +119,13 @@ export function newOperationGitState(plan: OperationGitPlan): OperationGitState 
 }
 
 /** Distinct verifier commands one merge may run (D-PA2-3). A larger set is refused whole, never cut short. */
-export const MAX_INTEGRATION_CHECKS = 16;
+export { MAX_INTEGRATION_CHECKS } from "./operation_verification.js";
 
 /** `conflictWith`: the integrated units whose work the refused unit collides with, when that is known. */
 export type IntegrateResult =
   | { kind: "integrated" | "nothing"; receipt: IntegrationReceipt }
   | { kind: "conflict"; files: string[]; tip: string; conflictWith?: string[] }
-  | { kind: "failed"; reason: string; checks?: MergedCheck[]; conflictWith?: string[] };
+  | { kind: "failed"; reason: string; checks?: MergedCheck[]; verificationBinding?: IntegrationVerificationBinding; conflictWith?: string[] };
 
 /** What the runner observed about the unit it is integrating; omitted fields are omitted from the receipt. */
 export interface IntegrationEvidence {
@@ -125,6 +134,7 @@ export interface IntegrationEvidence {
   tests?: { command: string; status: string; hasExecutedTests: boolean; definitionBound?: false };
   /** The operation's receipts so far: their verifiers are re-run on the merged tree. Never copied onto the receipt. */
   integrated?: readonly IntegrationReceipt[];
+  signal?: AbortSignal;
 }
 
 function evidenceFields(evidence: IntegrationEvidence): Pick<IntegrationReceipt, "sequence" | "candidate" | "tests"> {
@@ -197,17 +207,22 @@ export class OperationGit {
   constructor(
     private readonly plan: OperationGitPlan,
     private readonly state: OperationGitState,
-    private readonly options: { verifyTimeoutSecs?: number; sandbox?: boolean | string; integrations?: () => readonly IntegrationReceipt[] } = {},
+    private readonly options: {
+      verifyTimeoutSecs?: number;
+      sandbox?: boolean | string;
+      integrations?: () => readonly IntegrationReceipt[];
+      onVerificationStart?: (unitId: string, intent: IntegrationVerificationIntent) => void;
+    } = {},
   ) {
     this.hooksDir = path.join(plan.baseDir, "no-hooks");
   }
 
   private inIntegration(args: string[]): { ok: boolean; stdout: string; stderr: string } {
-    return gitResult(this.plan.integrationWorktree, [...this.pin, ...args]);
+    return gitResult(this.plan.integrationWorktree, [...this.pin, "--no-replace-objects", ...args]);
   }
 
   currentTip(): string {
-    return git(this.plan.integrationWorktree, [...this.pin, "rev-parse", "HEAD"]);
+    return git(this.plan.integrationWorktree, [...this.pin, "--no-replace-objects", "rev-parse", "HEAD"]);
   }
 
   /**
@@ -224,23 +239,97 @@ export class OperationGit {
     return problems;
   }
 
-  completionVerificationProblem(receipts: readonly IntegrationReceipt[]): string | undefined {
-    const required = this.state.integrationVerifiers;
-    if (!required?.length) return undefined;
+  completionVerificationProblem(receipts: readonly IntegrationReceipt[], requiredUnitIds?: ReadonlySet<string>): string | undefined {
+    const required = this.state.integrationVerifiers ?? [];
+    const definitions = this.state.verificationChecks ?? [];
+    if (!required.length && !definitions.length) return undefined;
     try {
       this.pin = trustedGitArgs(this.plan.integrationWorktree);
       const tip = this.currentTip();
-      const hasProof = receipts.some((receipt) =>
-        receipt.integratedCommit === tip && receipt.verificationBinding?.commit === tip
-        && receipt.verificationBinding.worktree === this.plan.integrationWorktree
-        && required.every((command) =>
-          receipt.mergedChecks?.some((check) => check.command === command && check.status === "PASSED" && check.owners.includes("operator"))
-          && receipt.verificationBinding?.runs.some((run) => run.command === command && run.exitCode === 0 && !run.outputTruncated)));
-      if (!hasProof) return "There is no passing verifier evidence for the current integration candidate and required checks.";
+      const completed = new Set(receipts.map((receipt) => receipt.unitId));
+      if (definitions.some((check) => check.requirement !== "advisory" && check.unitId && !completed.has(check.unitId)
+        && (!requiredUnitIds || requiredUnitIds.has(check.unitId)))) {
+        return "There is no passing verifier evidence for a required unit on the current integration candidate.";
+      }
+      const checks = this.activeVerificationChecks(receipts);
+      if (!required.length && !checks.length) return undefined;
+      const changed = this.verificationChangedPaths(checks, tip);
+      if (!changed) return "The changed paths for the required checks could not be established.";
+      const applicable = checks.filter((check) => operationVerificationApplies(check, changed));
+      const materialInputsSha256 = checks.length ? verificationMaterialDigest(this.plan.integrationWorktree, applicable) : undefined;
+      const hasProof = receipts.some((receipt) => {
+        const proof = receipt.verificationBinding;
+        return receipt.integratedCommit === tip && proof?.commit === tip && proof.worktree === this.plan.integrationWorktree
+          && (materialInputsSha256 === undefined || proof.materialInputsSha256 === materialInputsSha256)
+          && required.every((command) =>
+            receipt.mergedChecks?.some((check) => check.command === command && check.status === "PASSED" && check.owners.includes("operator"))
+            && proof.runs.some((run) => run.command === command && run.exitCode === 0 && !run.outputTruncated))
+          && checks.every((check) => proof.typedChecks?.some((result) =>
+            result.id === check.id && result.definitionSha256 === operationVerificationDefinitionDigest(check)
+            && (!operationVerificationApplies(check, changed) ? result.status === "SKIPPED"
+              : check.requirement === "advisory" ? result.status !== "SKIPPED"
+                : result.status === "WAIVED" ? result.waiverId === matchingVerificationWaiver(this.state.verificationWaivers, result, proof)?.id && Boolean(result.waiverId)
+                : result.status === "PASSED" && result.run?.command === check.command
+                  && result.run.exitCode === 0 && !result.run.outputTruncated && result.run.timeoutMs <= check.timeoutMs)));
+      });
+      if (!hasProof) {
+        if (materialInputsSha256 && receipts.some((receipt) =>
+          receipt.integratedCommit === tip && receipt.verificationBinding?.materialInputsSha256 !== materialInputsSha256)) {
+          return "Verification material inputs changed or the previous evidence did not bind them.";
+        }
+        return "There is no passing verifier evidence for the current integration candidate and required checks.";
+      }
       return this.integrationIntegrity(tip, tip).reason;
     } catch {
       return "The integration worktree could not be read to confirm its verification evidence.";
     }
+  }
+
+  private activeVerificationChecks(receipts: readonly IntegrationReceipt[], integrating?: string): OperationVerificationCheck[] {
+    const units = new Set(receipts.map((receipt) => receipt.unitId));
+    if (integrating !== undefined) units.add(integrating);
+    return (this.state.verificationChecks ?? []).filter((check) => !check.unitId || units.has(check.unitId));
+  }
+
+  private verificationCandidateRef(unitId: string): string {
+    return `refs/nexus/verification/${this.plan.key}/${gitSlug(unitId)}`;
+  }
+
+  private retainFailedVerification(unitId: string, baseTip: string, unitCommit: string, binding: IntegrationVerificationBinding): string {
+    const failed = binding.typedChecks?.at(-1);
+    const definition = this.state.verificationChecks?.find((check) => check.id === failed?.id);
+    if (!binding.attemptId || !isWaivableCheckFailure(failed) || !definition || definition.requirement === "advisory") return "";
+    const ref = this.verificationCandidateRef(unitId);
+    if (!this.inIntegration([...this.mechanicalGitConfig(), "update-ref", ref, binding.commit]).ok) return "\nCould not retain the failed candidate for operator review.";
+    this.state.retainedVerificationCandidates = [
+      ...(this.state.retainedVerificationCandidates ?? []).filter((candidate) => candidate.unitId !== unitId),
+      {
+        attemptId: binding.attemptId, commit: binding.commit, worktree: binding.worktree, baseTip, unitCommit, unitId,
+        ...(binding.materialInputsSha256 ? { materialInputsSha256: binding.materialInputsSha256 } : {}),
+        checkId: failed.id, definitionSha256: failed.definitionSha256,
+      },
+    ];
+    return `\nRetained candidate ${binding.commit} from attempt ${binding.attemptId} (check '${failed.id}').`;
+  }
+
+  /** Reapply only a retained, reviewed merge of the same two commits. A changed parent requires fresh checks. */
+  private waivedMergeCandidate(unitId: string, baseTip: string, unitCommit: string): string | undefined {
+    const possible = this.state.verificationWaivers?.filter((waiver) =>
+      waiver.unitId === unitId && waiver.baseTip === baseTip && waiver.unitCommit === unitCommit && waiver.commit !== baseTip);
+    if (!possible?.length) return undefined;
+    const ref = this.inIntegration(["rev-parse", "--verify", this.verificationCandidateRef(unitId)]);
+    if (!ref.ok) return undefined;
+    const candidate = ref.stdout.trim();
+    if (!possible.some((waiver) => waiver.commit === candidate)) return undefined;
+    const parents = this.inIntegration(["rev-list", "--parents", "-n", "1", candidate, "--"]);
+    if (!parents.ok || parents.stdout.trim() !== `${candidate} ${baseTip} ${unitCommit}`) return undefined;
+    return candidate;
+  }
+
+  private verificationChangedPaths(checks: readonly OperationVerificationCheck[], tip: string): string[] | undefined {
+    if (!checks.some((check) => check.requirement === "conditional")) return [];
+    const diff = this.inIntegration(["diff", "--no-ext-diff", "--no-renames", "--name-only", "-z", this.plan.baseCommit, tip, "--"]);
+    return diff.ok ? diff.stdout.split("\0").filter(Boolean) : undefined;
   }
 
   /**
@@ -329,8 +418,13 @@ export class OperationGit {
     result: Extract<UnitRunResult, { kind: "completed" }>,
     evidence: IntegrationEvidence = {},
   ): Promise<IntegrateResult> {
+    const { signal } = evidence;
+    if (signal?.aborted) return { kind: "failed", reason: "integration cancelled before verification" };
     const entry = this.state.units[unit.id];
     if (!entry) return { kind: "failed", reason: `unit ${unit.id} has no worktree recorded` };
+    if (this.state.retainedVerificationCandidates) {
+      this.state.retainedVerificationCandidates = this.state.retainedVerificationCandidates.filter((candidate) => candidate.unitId !== unit.id);
+    }
     if (entry.integratedCommit) {
       return {
         kind: "nothing",
@@ -391,8 +485,10 @@ export class OperationGit {
     const tip = this.currentTip();
     const earlier = (evidence.integrated ?? this.options.integrations?.() ?? []).filter((receipt) => receipt.unitId !== unit.id);
     const checks = this.integrationChecks(unit, result, earlier);
-    const tooMany = checks.length > MAX_INTEGRATION_CHECKS
-      ? `the merged tree would need ${checks.length} distinct verifier commands (the limit is ${MAX_INTEGRATION_CHECKS}) and none may be skipped; ` +
+    const typedChecks = this.activeVerificationChecks(earlier, unit.id);
+    const hasChecks = checks.length > 0 || typedChecks.length > 0;
+    const tooMany = checks.length + typedChecks.length > MAX_INTEGRATION_CHECKS
+      ? `the merged tree would need ${checks.length + typedChecks.length} distinct verifier commands (the limit is ${MAX_INTEGRATION_CHECKS}) and none may be skipped; ` +
         "give the operation one --authoritative-verifier that covers its units"
       : undefined;
     // A branch already contained in the integration tip (crash after the merge) is recorded, not merged twice.
@@ -407,21 +503,28 @@ export class OperationGit {
         : undefined;
       const takeover = before ? this.verificationTakeover(unit, before, tip, earlier) : undefined;
       if (takeover) return { kind: "failed", ...takeover, reason: `${takeover.reason}${inPlace}` };
-      if (checks.length) {
+      if (hasChecks) {
         const clean = this.integrationIntegrity(commit, tip);
         if (!clean.ok) return { kind: "failed", reason: `${clean.reason}${inPlace}` };
       }
-      const posthoc = checks.length ? this.runChecks(checks, commit, tip) : undefined;
+      const posthoc = hasChecks ? await this.runChecks(checks, typedChecks, unit.id, commit, tip, signal) : undefined;
       const integrity = posthoc ? this.integrationIntegrity(commit, tip) : undefined;
       if (posthoc && (posthoc.integrityFailure || (integrity && !integrity.ok))) {
         const reason = posthoc.integrityFailure ?? integrity?.reason ?? "integration verification changed the integration history";
         const restoration = this.restoreIntegration(tip);
-        return { kind: "failed", reason: restoration ? `${reason}; ${restoration}` : reason, checks: posthoc.ran };
+        return {
+          kind: "failed", reason: restoration ? `${reason}; ${restoration}` : reason, checks: posthoc.ran,
+          ...(posthoc.binding.typedChecks ? { verificationBinding: posthoc.binding } : {}),
+        };
       }
       if (posthoc) this.cleanIntegrationWorktree();
-      if (posthoc?.failed) {
+      if (posthoc?.failed || posthoc?.typedFailure) {
         // Do not record this as integrated: a retry must re-check the merged tree (and may add the missing work).
-        return { kind: "failed", reason: `${posthoc.failed.detail}${inPlace}`, checks: posthoc.ran };
+        const retained = posthoc.typedFailure && !signal?.aborted ? this.retainFailedVerification(unit.id, tip, commit, posthoc.binding) : "";
+        return {
+          kind: "failed", reason: `${posthoc.typedFailure ?? posthoc.failed?.detail}${inPlace}${retained}`, checks: posthoc.ran,
+          ...(posthoc.binding.typedChecks ? { verificationBinding: posthoc.binding } : {}),
+        };
       }
       this.state.units[unit.id] = { ...entry, integratedCommit: tip };
       return {
@@ -436,13 +539,14 @@ export class OperationGit {
           outcome: result.outcome,
           summary: result.summary,
           verification: posthoc
-            ? (result.verification?.definitionBound === false ? "PASSED_POSTHOC_UNBOUND" : "PASSED_POSTHOC")
+            ? (posthoc.binding.typedChecks?.some((check) => check.status === "WAIVED") ? "WAIVED"
+              : result.verification?.definitionBound === false ? "PASSED_POSTHOC_UNBOUND" : "PASSED_POSTHOC")
             : noChanges ? "NO_CHANGES" : "ALREADY_MERGED",
           ...(entry.ownerId ? { ownerId: entry.ownerId } : {}),
           ...evidenceFields(evidence),
           ...(posthoc ? {
             mergedChecks: posthoc.ran,
-            verificationBinding: { commit: tip, worktree: this.plan.integrationWorktree, runs: posthoc.runs },
+            verificationBinding: posthoc.binding,
           } : {}),
         },
       };
@@ -456,11 +560,13 @@ export class OperationGit {
 
     // Integration is mechanical: no commit hooks or signing, because the merged tree is re-verified instead. The unit's
     // own commit uses the same settings so a signing prompt cannot hang a headless operation.
-    const merged = this.inIntegration([
-      ...this.mechanicalGitConfig(),
-      "merge", "--no-ff", "--no-verify", "-m", `nexus: integrate ${unit.id} — ${unit.title}`, entry.branch,
-    ]);
+    const waived = this.waivedMergeCandidate(unit.id, tip, commit);
+    const args = waived
+      ? ["--ff-only", "--no-verify", waived]
+      : ["--no-ff", "--no-verify", "-m", `nexus: integrate ${unit.id} — ${unit.title}`, entry.branch];
+    const merged = this.inIntegration([...this.mechanicalGitConfig(), "merge", ...args]);
     if (!merged.ok) {
+      if (waived) return { kind: "failed", reason: "the retained waived candidate could not be restored exactly" };
       const conflicted = this.inIntegration(["diff", "--name-only", "--diff-filter=U"]).stdout
         .split("\n").map((line) => line.trim()).filter(Boolean).sort();
       this.inIntegration(["merge", "--abort"]);
@@ -475,17 +581,20 @@ export class OperationGit {
       const restoration = this.restoreIntegration(tip);
       return { kind: "failed", ...takeover, reason: restoration ? `${takeover.reason}; ${restoration}` : takeover.reason };
     }
-    const verification = checks.length ? this.runChecks(checks, commit, mergedTip) : undefined;
+    const verification = hasChecks ? await this.runChecks(checks, typedChecks, unit.id, commit, mergedTip, signal) : undefined;
     const integrity = verification ? this.integrationIntegrity(commit, mergedTip) : undefined;
-    if (verification && (verification.failed || verification.integrityFailure || (integrity && !integrity.ok))) {
+    if (verification && (verification.failed || verification.typedFailure || verification.integrityFailure || (integrity && !integrity.ok))) {
       // The merge is mechanically clean but the merged tree does not pass a verifier: undo it.
       const restoration = this.restoreIntegration(tip);
-      const undone = !restoration && integrity?.ok && verification.failed ? this.attribute(unit, verification.failed, tip, commit, earlier) : undefined;
-      const reason = undone?.reason ?? verification.integrityFailure ?? integrity?.reason ?? verification.failed?.detail ?? "integration verification failed";
+      const undone = !restoration && integrity?.ok && verification.failed && !signal?.aborted ? await this.attribute(unit, verification.failed, tip, commit, earlier, signal) : undefined;
+      const reason = undone?.reason ?? verification.integrityFailure ?? integrity?.reason ?? verification.typedFailure ?? verification.failed?.detail ?? "integration verification failed";
+      const retained = !restoration && integrity?.ok && verification.typedFailure && !signal?.aborted
+        ? this.retainFailedVerification(unit.id, tip, commit, verification.binding) : "";
       return {
         kind: "failed",
-        reason: restoration ? `${reason}; ${restoration}` : reason,
+        reason: restoration ? `${reason}; ${restoration}` : reason + retained,
         checks: verification.ran,
+        ...(verification.binding.typedChecks ? { verificationBinding: verification.binding } : {}),
         ...(undone?.conflictWith ? { conflictWith: undone.conflictWith } : {}),
       };
     }
@@ -503,12 +612,15 @@ export class OperationGit {
       files,
       outcome: result.outcome,
       summary: result.summary,
-      verification: verification ? (result.verification?.definitionBound === false ? "PASSED_UNBOUND" : "PASSED") : "NOT_RUN",
+      verification: verification
+        ? (verification.binding.typedChecks?.some((check) => check.status === "WAIVED") ? "WAIVED"
+          : result.verification?.definitionBound === false ? "PASSED_UNBOUND" : "PASSED")
+        : "NOT_RUN",
       ...(entry.ownerId ? { ownerId: entry.ownerId } : {}),
       ...evidenceFields(evidence),
       ...(verification ? {
         mergedChecks: verification.ran,
-        verificationBinding: { commit: mergedTip, worktree: this.plan.integrationWorktree, runs: verification.runs },
+        verificationBinding: verification.binding,
       } : {}),
     };
     this.state.units[unit.id] = { ...entry, integratedCommit };
@@ -745,27 +857,108 @@ export class OperationGit {
   }
 
   /** Run the checks in order on the tree the integration worktree holds; stop at the first that does not pass. */
-  private runChecks(
+  private async runChecks(
     checks: ReadonlyArray<{ command: string; owners: string[] }>,
+    definitions: readonly OperationVerificationCheck[],
+    unitId: string,
     commit: string,
     expectedTip: string,
-  ): { ran: MergedCheck[]; runs: MergedCheckRun[]; failed?: { check: MergedCheck; detail: string }; integrityFailure?: string } {
+    signal?: AbortSignal,
+  ): Promise<{
+    ran: MergedCheck[];
+    binding: IntegrationVerificationBinding;
+    failed?: { check: MergedCheck; detail: string };
+    typedFailure?: string;
+    integrityFailure?: string;
+  }> {
     const ran: MergedCheck[] = [];
-    const runs: MergedCheckRun[] = [];
+    const binding: IntegrationVerificationBinding = { commit: expectedTip, worktree: this.plan.integrationWorktree, runs: [] };
+    const changed = this.verificationChangedPaths(definitions, expectedTip);
+    if (!changed) return { ran, binding, typedFailure: "could not establish the changed paths for conditional verification" };
+    const applicable = definitions.filter((check) => operationVerificationApplies(check, changed));
+    const currentMaterial = () => verificationMaterialDigest(binding.worktree, applicable);
+    if (definitions.length) {
+      try {
+        binding.materialInputsSha256 = currentMaterial();
+      } catch (error) {
+        return { ran, binding, typedFailure: `could not bind verification material inputs: ${formatDiagnosticForOutput(error)}` };
+      }
+    }
+    const materialProblem = (): string | undefined => {
+      if (!binding.materialInputsSha256) return undefined;
+      try {
+        return currentMaterial() === binding.materialInputsSha256 ? undefined : "verification changed a bound material input";
+      } catch (error) {
+        return `could not recheck verification material inputs: ${formatDiagnosticForOutput(error)}`;
+      }
+    };
     for (const { command, owners } of checks) {
-      const outcome = this.verifyMerged(command);
+      const outcome = await this.verifyMerged(command, undefined, signal);
       const check: MergedCheck = {
         command, owners, status: outcome.status,
         ...(outcome.sandbox ? { sandbox: outcome.sandbox } : {}),
         ...(outcome.outputTruncated ? { outputTruncated: true } : {}),
       };
       ran.push(check);
-      if (outcome.run) runs.push(outcome.run);
-      if (!outcome.ok) return { ran, runs, failed: { check, detail: outcome.reason ?? "integration verification failed" } };
+      if (outcome.run) binding.runs.push(outcome.run);
+      const changedMaterial = materialProblem();
+      if (changedMaterial) return { ran, binding, integrityFailure: changedMaterial };
+      if (!outcome.ok) return { ran, binding, failed: { check, detail: outcome.reason ?? "integration verification failed" } };
       const integrity = this.integrationIntegrity(commit, expectedTip);
-      if (!integrity.ok) return { ran, runs, integrityFailure: integrity.reason ?? "integration verification changed the integration history" };
+      if (!integrity.ok) return { ran, binding, integrityFailure: integrity.reason ?? "integration verification changed the integration history" };
     }
-    return { ran, runs };
+    if (!binding.materialInputsSha256) return { ran, binding };
+    const typedChecks: TypedCheckOutcome[] = [];
+    binding.typedChecks = typedChecks;
+    const attemptId = randomUUID();
+    const planned = definitions.map((definition) => ({
+      id: definition.id,
+      definitionSha256: operationVerificationDefinitionDigest(definition),
+      applicable: operationVerificationApplies(definition, changed),
+    }));
+    try {
+      this.options.onVerificationStart?.(unitId, {
+        attemptId, commit: expectedTip, worktree: binding.worktree, checks: planned, materialInputsSha256: binding.materialInputsSha256,
+      });
+    } catch {
+      return { ran, binding, typedFailure: "could not persist verification intent; no typed check was started" };
+    }
+    binding.attemptId = attemptId;
+    for (const [index, definition] of definitions.entries()) {
+      const { id, definitionSha256, applicable } = planned[index];
+      const identity = { id, definitionSha256 };
+      if (!applicable) {
+        typedChecks.push({ ...identity, status: "SKIPPED" });
+        continue;
+      }
+      const waiver = matchingVerificationWaiver(this.state.verificationWaivers, identity, binding);
+      if (waiver) {
+        typedChecks.push({ ...identity, status: "WAIVED", waiverId: waiver.id });
+        continue;
+      }
+      let outcome: Awaited<ReturnType<OperationGit["verifyMerged"]>>;
+      try {
+        outcome = await this.verifyMerged(definition.command, definition, signal);
+      } catch {
+        outcome = { ok: false, status: "ENVIRONMENT", reason: "the verifier process or its output capture could not be completed" };
+      }
+      const detail = outcome.reason ? formatDiagnosticForOutput(outcome.reason).slice(0, 512) : undefined;
+      const changedMaterial = materialProblem();
+      const diagnostic = (changedMaterial ?? detail)?.slice(0, 512);
+      typedChecks.push({
+        ...identity, status: changedMaterial ? "ENVIRONMENT" : outcome.status,
+        ...(outcome.run ? { run: outcome.run } : {}), ...(diagnostic ? { detail: diagnostic } : {}),
+      });
+      if (changedMaterial) return { ran, binding, integrityFailure: changedMaterial };
+      const integrity = this.integrationIntegrity(commit, expectedTip);
+      if (!integrity.ok) return { ran, binding, integrityFailure: integrity.reason ?? "integration verification changed the integration worktree" };
+      if (!outcome.ok && (definition.requirement !== "advisory" || outcome.status === "CANCELLED")) {
+        return { ran, binding, typedFailure: `required check '${definition.id}' failed: ${detail ?? outcome.status}` };
+      }
+    }
+    if (signal?.aborted) return { ran, binding, typedFailure: "integration verification was cancelled" };
+    const changedMaterial = materialProblem();
+    return changedMaterial ? { ran, binding, integrityFailure: changedMaterial } : { ran, binding };
   }
 
   /**
@@ -773,9 +966,16 @@ export class OperationGit {
    * sandbox through the wrapper `nexus verify` uses (the operation's other worktrees hidden, the host read-only), or on
    * the host when the session has no sandbox. A sandbox that cannot be built is a result, never a reason to run outside it.
    */
-  private verifyMerged(command: string): { ok: boolean; reason?: string; status: MergedCheck["status"]; sandbox?: "bwrap" | "docker"; outputTruncated?: true; run?: MergedCheckRun } {
-    const deadlineMs = (this.options.verifyTimeoutSecs ?? verifierTimeoutSecs()) * 1000;
-    const directory = this.plan.integrationWorktree;
+  private async verifyMerged(command: string, definition?: OperationVerificationCheck, signal?: AbortSignal): Promise<{
+    ok: boolean; reason?: string; status: MergedCheck["status"]; sandbox?: "bwrap" | "docker"; outputTruncated?: true; run?: MergedCheckRun;
+  }> {
+    if (signal?.aborted) return { ok: false, status: "CANCELLED", reason: "integration verification was cancelled" };
+    const deadlineMs = Math.min((this.options.verifyTimeoutSecs ?? verifierTimeoutSecs()) * 1000, definition?.timeoutMs ?? Infinity);
+    const root = this.plan.integrationWorktree;
+    const directory = verificationWorkingDirectory(root, definition?.cwd ?? ".");
+    if (!directory) return { ok: false, status: "ENVIRONMENT", reason: "verification cwd is unavailable or resolves through a symlink" };
+    // A named commit must refer to its physical object during both integration and the check.
+    const verifierEnvironment = { ...buildVerifierEnvironment(), GIT_NO_REPLACE_OBJECTS: "1" };
     const asked = this.options.sandbox === true ? "auto" : this.options.sandbox;
     let line = command;
     let engine: "bwrap" | "docker" | undefined;
@@ -789,33 +989,38 @@ export class OperationGit {
       });
       if (!engine) return unavailable(`the session's sandbox (${asked}) cannot confine a command on this host`);
       containerName = engine === "docker" ? `nexus-integration-${randomUUID()}` : undefined;
+      const sandboxCommand = directory === root ? command : "cd '" + directory.replaceAll("'", "'\\''") + "' && " + command;
       const confined = sandboxedVerifierCommand(
-        command, directory,
+        sandboxCommand, root,
         { engine, network: sandboxNetworkEnabled(), scratch: this.plan.baseDir, readOnlyDirs: [] },
-        { containerName },
+        { containerName, environment: verifierEnvironment },
       );
       if ("unavailable" in confined) return unavailable(`the ${engine} sandbox could not be built (${confined.unavailable})`);
       line = confined.command;
     }
     const startedAt = new Date().toISOString();
-    const ran = runVerifierShell(line, directory, deadlineMs);
+    const process = await runCancellableVerifierShell(line, {
+      cwd: directory, timeoutMs: deadlineMs, env: verifierEnvironment, signal, dockerContainerName: containerName,
+      maxCombinedOutputBytes: 4 * 1024 * 1024,
+    });
+    const output = [process.error, process.stdout, process.stderr].filter(Boolean).join("\n");
+    const rendered = formatDiagnosticForOutput(output).trim();
     const run: MergedCheckRun = {
       command,
       startedAt,
       completedAt: new Date().toISOString(),
       timeoutMs: deadlineMs,
-      exitCode: ran.exitCode,
-      outputSha256: createHash("sha256").update(ran.output).digest("hex"),
-      outputTruncated: ran.truncated,
+      exitCode: process.status,
+      outputSha256: createHash("sha256").update(output).digest("hex"),
+      outputTruncated: Boolean(process.outputTruncated),
+      outputPreview: rendered.slice(-MAX_VERIFICATION_OUTPUT_PREVIEW),
+      ...(rendered.length > MAX_VERIFICATION_OUTPUT_PREVIEW ? { outputPreviewOmitted: true as const } : {}),
     };
-    // Killing the Docker client at the deadline leaves its container running: remove it by name.
-    if (containerName && (ran.timedOut || ran.exitCode === null)) spawnSync("docker", ["rm", "--force", containerName], { stdio: "ignore", timeout: 30_000 });
-    const capture = {
-      run,
-      ...(engine ? { sandbox: engine } : {}),
-      ...(ran.truncated ? { outputTruncated: true as const } : {}),
-    };
-    if (ran.truncated && !ran.timedOut) {
+    const capture = { run, ...(engine ? { sandbox: engine } : {}), ...(process.outputTruncated ? { outputTruncated: true as const } : {}) };
+    if (process.cancelled || signal?.aborted) {
+      return { ok: false, status: "CANCELLED", ...capture, reason: "integration verification was cancelled" };
+    }
+    if (process.outputTruncated && !process.timedOut) {
       return {
         ok: false,
         status: "ENVIRONMENT",
@@ -823,22 +1028,22 @@ export class OperationGit {
         reason: `integration verification could not retain its evidence on the merged tree (output truncated): ${command}`,
       };
     }
-    if (ran.success) return { ok: true, status: "PASSED", ...capture };
-    const tail = ran.output.trim().split("\n").slice(-6).join("\n");
-    if (!ran.timedOut && (ran.exitCode === 126 || ran.exitCode === 127)) {
+    if (!process.timedOut && !process.error && process.status === 0) return { ok: true, status: "PASSED", ...capture };
+    const tail = run.outputPreview!.split("\n").slice(-6).join("\n");
+    if (!process.timedOut && (process.status === 126 || process.status === 127)) {
       return {
         ok: false,
         status: "ENVIRONMENT",
         ...capture,
-        reason: `integration verification could not run on the merged tree (exit ${ran.exitCode}): ${command}\n${environmentHint()}` + (tail ? `\n${tail}` : ""),
+        reason: `integration verification could not run on the merged tree (exit ${process.status}): ${command}\n${environmentHint()}` + (tail ? `\n${tail}` : ""),
       };
     }
     return {
       ok: false,
-      status: ran.timedOut ? "TIMED_OUT" : "FAILED",
+      status: process.timedOut ? "TIMED_OUT" : "FAILED",
       ...capture,
       reason:
-        `integration verification failed on the merged tree: ${command}${ran.timedOut ? " (timed out)" : ""}` +
+        `integration verification failed on the merged tree: ${command}${process.timedOut ? " (timed out)" : ""}` +
         (tail ? `\n${tail}` : ""),
     };
   }
@@ -851,13 +1056,14 @@ export class OperationGit {
    * its environment) was already broken and the unit is not blamed, though it still cannot be verified and is not
    * integrated.
    */
-  private attribute(
+  private async attribute(
     unit: WorkUnit,
     failed: { check: MergedCheck; detail: string },
     tip: string,
     commit: string,
     earlier: readonly IntegrationReceipt[],
-  ): { reason: string; conflictWith?: string[] } {
+    signal?: AbortSignal,
+  ): Promise<{ reason: string; conflictWith?: string[] }> {
     const { check, detail } = failed;
     const others = check.owners.filter((owner) => owner !== unit.id);
     if (check.status === "ENVIRONMENT") return { reason: detail };
@@ -873,7 +1079,7 @@ export class OperationGit {
         conflictWith: unseen,
       };
     }
-    check.baseline = this.verifyMerged(check.command).ok ? "PASSED" : "FAILED";
+    check.baseline = (await this.verifyMerged(check.command, undefined, signal)).ok ? "PASSED" : "FAILED";
     // Whatever the baseline run wrote or moved is dropped again.
     const restoration = this.restoreIntegration(tip);
     const left = restoration ? `; ${restoration}` : "";

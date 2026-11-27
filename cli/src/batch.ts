@@ -7,17 +7,23 @@ import { parseBoundaryRules } from "./core/boundary_rules.js";
 import { newOperation, type DurableOperationState, type OperationEvent } from "./core/operation.js";
 import {
   AgentWorkUnitExecutor,
+  OperationExistsError,
   OperationRunner,
   OperationStore,
   driveOperation,
   type WorkUnitExecutor,
 } from "./core/operation_runner.js";
 import { ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "./core/operation_git.js";
-import type { ResourceDescriptor } from "./core/resources.js";
+import { ResourceRegistry, type ResourceDescriptor } from "./core/resources.js";
 import { credentialStorageHome } from "./client.js";
 import { mergeOperationPolicy } from "./config.js";
 import { validateBatchSpec, type BatchSpecification } from "./batch_spec.js";
 import { normalizeResources, type OperationSpec } from "./operation_cli.js";
+import type { BatchPlanAcceptance, BatchPlanStore } from "./batch_plan.js";
+import { batchPlanExecution } from "./batch_plan_execution.js";
+import { parseOperationVerificationChecks } from "./core/operation_verification.js";
+import { realpathAllowingMissing } from "./core/socket_files.js";
+import { isWorkspaceTrusted } from "./workspace_trust.js";
 import type { HarnessConfig } from "./types.js";
 
 export type BatchStatus = "RUNNING" | "WAITING" | "PAUSED" | "COMPLETE" | "PARTIAL" | "BLOCKED" | "CANCELLED" | "FAILED";
@@ -146,6 +152,18 @@ export function renderBatchResult(result: BatchResult): string {
     if (unit.result?.summary) lines.push(`    ${unit.result.summary}`);
     if (unit.blocked?.reason) lines.push(`    blocked: ${unit.blocked.reason}`);
   }
+  const checks = result.operation.git?.verificationChecks;
+  if (checks?.length) {
+    const latest = [...(result.operation.integrations ?? [])].reverse().find((receipt) => receipt.verificationBinding?.typedChecks?.length);
+    const binding = latest?.verificationBinding;
+    lines.push("", binding ? `Checks on candidate ${binding.commit}:` : "Verification checks:");
+    for (const check of checks) {
+      const outcome = binding?.typedChecks?.find((item) => item.id === check.id);
+      const scope = check.unitId ? `unit ${check.unitId}` : "integration";
+      lines.push(`  ${check.purpose} (${scope}, ${check.requirement}): ${outcome?.status ?? "PENDING"}`);
+      if (outcome?.detail) lines.push(`    ${outcome.detail}`);
+    }
+  }
   if (result.operation.wait) lines.push("", `Waiting until ${result.operation.wait.wakeAt}: ${result.operation.wait.reason}`);
   if (result.status !== "COMPLETE" && result.status !== "CANCELLED") lines.push("", `Resume with: /batch resume ${result.id}`);
   return lines.join("\n");
@@ -214,6 +232,82 @@ export class BatchOrchestrator {
       entry: "new",
     });
     return { id: result.id, status: batchStatus(result), operation: result };
+  }
+
+  async runAcceptedPlan(plans: BatchPlanStore, draftId: string, digest: string, reviewDigest?: string): Promise<BatchResult> {
+    if (this.config.readOnly || this.config.approvalMode === "read-only" || this.config.dryRun) {
+      throw new Error("This mode cannot execute an approved plan.");
+    }
+    if (!isWorkspaceTrusted(this.config.workspace)) throw new Error("Plan execution requires a trusted workspace.");
+    this.options.signal?.throwIfAborted();
+    const prior = plans.readAcceptance(draftId);
+    const draft = prior?.draft ?? plans.read(draftId);
+    if (draft.workspace !== fs.realpathSync(this.config.workspace)) throw new Error("Plan belongs to a different workspace.");
+    if (draft.digest !== digest) throw new Error("Plan approval must name the exact displayed draft digest.");
+    const mapped = batchPlanExecution(draft.plan);
+    const checks = parseOperationVerificationChecks(mapped.verificationChecks);
+    const allowed = new Set(this.config.batchVerifierCommands);
+    if (this.config.authoritativeVerifierCommand) allowed.add(this.config.authoritativeVerifierCommand.trim());
+    if (checks.some((check) => !allowed.has(check.command))) {
+      throw new Error("Every plan check must use an operator-configured verifier command.");
+    }
+    const existingResult = (acceptance: BatchPlanAcceptance): BatchResult => {
+      const existing = this.results(acceptance.operationId);
+      if (existing.operation.git?.acceptedPlanDigest !== acceptance.digest) {
+        throw new Error("The operation ID is already in use by a different plan.");
+      }
+      return existing;
+    };
+    if (prior && this.store.has(prior.operationId)) return existingResult(plans.accept(draftId, digest, reviewDigest));
+    const resources = this.options.resources ?? normalizeResources(
+      { objective: draft.plan.objective, units: mapped.units },
+      this.config,
+      createOperationAccountIdentity(credentialStorageHome()),
+    );
+    const registry = new ResourceRegistry(resources);
+    const candidates = new Map(mapped.units.map((unit) => [
+      unit.id, registry.select(unit.requires ?? {}).qualified.map(({ resource }) => resource),
+    ]));
+    for (const unit of mapped.units.filter((entry) => entry.required !== false)) {
+      const eligible = candidates.get(unit.id)!.some((candidate) =>
+        (unit.requires?.independentOf ?? []).every((source) =>
+          candidates.get(source)?.some((resource) => resource.model !== candidate.model)));
+      if (!eligible) throw new Error(`For unit '${unit.id}', no configured resource meets the approved requirements.`);
+    }
+    const acceptance = plans.accept(draftId, digest, reviewDigest);
+    const operation = newOperation(
+      acceptance.operationId, draft.plan.objective, mapped.units, resources,
+      this.options.now?.() ?? Date.now(), { ...mergeOperationPolicy(this.config.operationPolicy, undefined), maxConcurrentUnits: 1, ...mapped.policy },
+    );
+    const gitPlan = planOperationGit(this.config.workspace, operation.id, acceptance.base.commit);
+    if (gitPlan.repoRoot !== draft.workspace) throw new Error("Plan execution requires the repository root.");
+    operation.git = {
+      ...newOperationGitState(gitPlan),
+      verificationChecks: checks,
+      acceptedPlanDigest: acceptance.digest,
+    };
+    try {
+      const result = await driveOperation(operation, {
+        store: this.store,
+        executor: this.executor,
+        workspace: this.config.workspace,
+        signal: this.options.signal,
+        onEvent: this.options.onEvent,
+        maxInProcessWaitMs: this.options.maxInProcessWaitMs,
+        entry: "new",
+        prepare: () => {
+          this.options.signal?.throwIfAborted();
+          if (realpathAllowingMissing(gitPlan.integrationWorktree) !== gitPlan.integrationWorktree) {
+            throw new Error("Plan execution refuses a redirected integration worktree.");
+          }
+          plans.reserveAdmission(acceptance);
+        },
+      });
+      return { id: result.id, status: batchStatus(result), operation: result };
+    } catch (error) {
+      if (error instanceof OperationExistsError) return existingResult(acceptance);
+      throw error;
+    }
   }
 
   async resume(id?: string): Promise<BatchResult> {

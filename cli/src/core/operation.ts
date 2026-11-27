@@ -1,3 +1,4 @@
+import type { OperationVerificationCheck, RetainedVerificationCandidate, VerificationWaiver } from "./operation_verification.js";
 /**
  * Convergence scheduling: an operation is a set of work units with dependencies, driven toward its objective.
  *
@@ -235,6 +236,8 @@ export type OperationEventType =
   | "DECISION_APPLIED"
   | "CONCURRENCY_LIMIT"
   | "INTEGRATION_QUEUED"
+  | "VERIFICATION_STARTED"
+  | "VERIFICATION_WAIVED"
   | "INTEGRATION_SKIPPED"
   | "OPERATION_MESSAGE"
   | "OPERATION_MESSAGE_DROPPED"
@@ -331,6 +334,13 @@ export interface OperationGitState {
   units: Record<string, OperationGitUnit>;
   /** Operator verifiers pinned for the operation: each runs on every merged tree. Only ever added to (PA-2). */
   integrationVerifiers?: string[];
+  /** Operator-accepted definitions for the isolated candidate. */
+  verificationChecks?: OperationVerificationCheck[];
+  acceptedPlanDigest?: string;
+  /** The most recent declared-check failure retained per integrating unit. */
+  retainedVerificationCandidates?: RetainedVerificationCandidate[];
+  /** Deliberate operator exceptions tied to exact failed candidates. */
+  verificationWaivers?: VerificationWaiver[];
 }
 
 /** A durable snapshot of a unit's conversation, restorable by the operator. */
@@ -384,7 +394,7 @@ export interface MergedCheck {
   /** Whose verifier this is: unit ids, or `operator` for a verifier pinned for the operation. */
   owners: string[];
   /** ENVIRONMENT: a command, sandbox, or evidence capture could not be completed. */
-  status: "PASSED" | "FAILED" | "ENVIRONMENT" | "TIMED_OUT";
+  status: "PASSED" | "FAILED" | "ENVIRONMENT" | "TIMED_OUT" | "CANCELLED";
   /** The same command on the tree before the merge, run only after a failure to decide whether the merge caused it. */
   baseline?: "PASSED" | "FAILED";
   /** The bounded output capture was incomplete. */
@@ -392,6 +402,8 @@ export interface MergedCheck {
   /** The engine that confined the run; absent when the session has no sandbox configured. */
   sandbox?: "bwrap" | "docker";
 }
+
+export const MAX_VERIFICATION_OUTPUT_PREVIEW = 2048;
 
 /** Bounded verifier capture bound to an integration worktree and its exact committed candidate. */
 export interface MergedCheckRun {
@@ -402,12 +414,36 @@ export interface MergedCheckRun {
   exitCode: number | null;
   outputSha256: string;
   outputTruncated: boolean;
+  /** Redacted tail for operator export. The digest covers captured output before this projection. */
+  outputPreview?: string;
+  outputPreviewOmitted?: true;
+}
+
+export interface TypedCheckOutcome {
+  id: string;
+  definitionSha256: string;
+  status: MergedCheck["status"] | "SKIPPED" | "WAIVED";
+  waiverId?: string;
+  run?: MergedCheckRun;
+  detail?: string;
+}
+
+export interface IntegrationVerificationIntent {
+  attemptId: string;
+  commit: string;
+  worktree: string;
+  materialInputsSha256: string;
+  checks: Array<{ id: string; definitionSha256: string; applicable: boolean }>;
 }
 
 export interface IntegrationVerificationBinding {
+  attemptId?: string;
+  /** Bounded physical inputs at verification time. Absent on legacy receipts. */
+  materialInputsSha256?: string;
   commit: string;
   worktree: string;
   runs: MergedCheckRun[];
+  typedChecks?: TypedCheckOutcome[];
 }
 
 /** What was integrated, and the evidence the merge was accepted with. */
@@ -420,7 +456,7 @@ export interface IntegrationReceipt {
   files: string[];
   outcome: string;
   summary: string;
-  verification: "PASSED" | "PASSED_POSTHOC" | "PASSED_UNBOUND" | "PASSED_POSTHOC_UNBOUND" | "NOT_RUN" | "ALREADY_INTEGRATED" | "ALREADY_MERGED" | "NO_CHANGES";
+  verification: "PASSED" | "PASSED_POSTHOC" | "PASSED_UNBOUND" | "PASSED_POSTHOC_UNBOUND" | "NOT_RUN" | "ALREADY_INTEGRATED" | "ALREADY_MERGED" | "NO_CHANGES" | "WAIVED";
   /** Content-addressed view of the merged unit's tree; absent when the worktree was already gone. */
   candidate?: { digest: string; scope: "tree" | "commit" };
   /** The unit's executed verifier, copied verbatim from its result; absent when the unit produced none. */

@@ -6,6 +6,7 @@ import "./helpers/leak_guard.js";
  * verifier processes; the executor is scripted (no model, no network).
  */
 import { test } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -376,6 +377,175 @@ test("a verification receipt that fails to persist requires fresh evidence on re
   assert.equal(fs.readFileSync(marker, "utf8"), "check\ncheck\n");
 });
 
+test("typed verification persists intent before running and correlates passing evidence on retry", async (t) => {
+  const root = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-check-intent-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new OperationStore(root, path.join(home, "tasks"), home);
+  const state = operation(root, ["u1"], "op-check-intent");
+  const marker = path.join(home, "marker");
+  const quotedMarker = "'" + marker.replaceAll("'", "'\\''") + "'";
+  const command = "touch " + quotedMarker;
+  state.git!.verificationChecks = [{
+    id: "smoke", unitId: "u1", purpose: "run approved smoke check",
+    command, requirement: "required", cwd: ".", timeoutMs: 1000,
+  }];
+  const executor: WorkUnitExecutor = {
+    integrationPolicy: () => ({ verifier: command }),
+    async run(_unit, _resource, ctx) {
+      write(ctx.workspace!, "u1.txt", "one\n");
+      return { kind: "completed", summary: "done", outcome: "NOT_REQUIRED" };
+    },
+  };
+  let failed = false;
+  await new OperationRunner(state, {
+    executor, clock: clock(), persist: (s) => {
+      if (!failed && s.events.some((event) => event.type === "VERIFICATION_STARTED")) {
+        failed = true;
+        throw new Error("fixture could not persist verification intent");
+      }
+      store.save(s);
+    },
+  }).run();
+  assert.equal(failed, true);
+  assert.equal(fs.existsSync(marker), false);
+  const loaded = store.load(state.id);
+  assert.equal(loaded.status, "BLOCKED");
+  assert.equal(loaded.events.some((event) => event.type === "VERIFICATION_STARTED"), false);
+
+  const retry = new OperationRunner(loaded, { executor, clock: clock(), persist: (s) => store.save(s) });
+  retry.scheduler.resolve(loaded.blocked!.decisions[0].id, "1");
+  assert.equal((await retry.run()).status, "COMPLETE");
+  const stored = store.load(state.id);
+  const binding = stored.integrations![0].verificationBinding!;
+  const intent = stored.events.find((event) => event.type === "VERIFICATION_STARTED");
+  assert.equal(binding.attemptId, intent?.detail?.attemptId);
+  assert.equal(binding.commit, intent?.detail?.commit);
+  assert.equal(binding.typedChecks?.[0].status, "PASSED");
+  const status = execFileSync(process.execPath, ["--import", "tsx", path.join(cliDir, "src/index.ts"), "operation", "status", state.id, "-w", root], {
+    cwd: cliDir, encoding: "utf8",
+    env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), XDG_DATA_HOME: path.join(home, ".local", "share"), NEXUS_STATE_DIR: home, NO_COLOR: "1" },
+  });
+  assert.match(status, /smoke \[required\] \(unit u1\): PASSED on/);
+});
+
+test("resume blocks typed checks when the current operator verifier changes", async (t) => {
+  const root = repo();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const state = operation(root, ["u1"], "op-check-unauthorized");
+  state.git!.verificationChecks = [{
+    id: "smoke", unitId: "u1", purpose: "check tracked input",
+    command: "test -f file.txt", requirement: "required", cwd: ".", timeoutMs: 1000,
+  }];
+  let invoked = false;
+  const runner = new OperationRunner(state, {
+    clock: clock(), persist: () => {},
+    executor: { integrationPolicy: () => ({ verifier: "true" }), async run() {
+      invoked = true;
+      return { kind: "completed", summary: "done", outcome: "NOT_REQUIRED" };
+    } },
+  });
+  assert.equal((await runner.run()).status, "BLOCKED");
+  assert.equal(invoked, false);
+  assert.match(state.blocked?.decisions[0]?.question ?? "", /current operator-authorized verifier/);
+});
+
+test("aborting a running integration verifier cancels its process and leaves no accepted receipt", async (t) => {
+  const root = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-check-cancel-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new OperationStore(root, path.join(home, "tasks"), home);
+  const state = operation(root, ["u1"], "op-check-cancel");
+  const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+  const started = path.join(home, "started");
+  const escaped = path.join(home, "after-delay");
+  const command = "touch " + quote(started) + "; sleep 2; touch " + quote(escaped);
+  state.git!.verificationChecks = [{
+    id: "smoke", purpose: "record bounded process run", command, requirement: "required", cwd: ".", timeoutMs: 5000,
+  }];
+  const tip = git(state.git!.integrationWorktree, ["rev-parse", "HEAD"]);
+  const controller = new AbortController();
+  const executor: WorkUnitExecutor = {
+    integrationPolicy: () => ({ verifier: command }),
+    async run(_unit, _resource, ctx) {
+      write(ctx.workspace!, "u1.txt", "one\n");
+      return { kind: "completed", summary: "done", outcome: "NOT_REQUIRED" };
+    },
+  };
+  const running = new OperationRunner(state, { executor, clock: clock(), persist: (s) => store.save(s) }).run(controller.signal);
+  const deadline = Date.now() + 5_000;
+  while (!fs.existsSync(started) && Date.now() < deadline) await delay(10);
+  controller.abort();
+
+  assert.equal((await running).status, "CANCELLED");
+  assert.equal(fs.existsSync(escaped), false);
+  const stored = store.load(state.id);
+  assert.deepEqual(stored.integrations ?? [], []);
+  const rejection = stored.events.find((event) => event.type === "INTEGRATION_REJECTED");
+  const binding = rejection?.detail?.verificationBinding as NonNullable<DurableOperationState["integrations"]>[number]["verificationBinding"];
+  assert.equal(binding?.typedChecks?.[0]?.status, "CANCELLED");
+  assert.equal(git(state.git!.integrationWorktree, ["rev-parse", "HEAD"]), tip);
+});
+
+test("an operator waiver accepts only the retained exact failed candidate and is not a passing check", async (t) => {
+  const root = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-check-waiver-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new OperationStore(root, path.join(home, "tasks"), home);
+  const state = operation(root, ["u1"], "op-check-waiver");
+  state.git!.verificationChecks = [{
+    id: "smoke", unitId: "u1", purpose: "check tracked input",
+    command: "false", requirement: "required", cwd: ".", timeoutMs: 1000,
+  }];
+  const executor: WorkUnitExecutor = {
+    integrationPolicy: () => ({ verifier: "false" }),
+    async run(_unit, _resource, ctx) {
+      write(ctx.workspace!, "u1.txt", "one\n");
+      return { kind: "completed", summary: "done", outcome: "NOT_REQUIRED" };
+    },
+  };
+  const options = { executor, clock: clock(), persist: (s: DurableOperationState) => store.save(s) };
+  await new OperationRunner(state, options).run();
+  assert.equal(state.status, "BLOCKED");
+  let loaded = store.load(state.id);
+  const candidate = loaded.git?.retainedVerificationCandidates?.[0];
+  assert.ok(candidate);
+  assert.throws(() => execFileSync(process.execPath, [
+    path.join(cliDir, "dist", "index.js"), "operation", "waive-verification",
+    state.id, candidate.attemptId, candidate.checkId, candidate.commit, "--reason", "Known environment failure", "-w", root,
+  ], {
+    cwd: cliDir, encoding: "utf8",
+    env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), NEXUS_STATE_DIR: home, NEXUS_TRUST_WORKSPACE: "1" },
+    stdio: ["ignore", "pipe", "pipe"],
+  }), (error: any) => error.status === 2 && /interactive terminal/.test(error.stderr));
+  assert.equal(store.load(state.id).git?.verificationWaivers, undefined);
+  const { recordOperationVerificationWaiver } = await import("../src/core/operation_verification.js");
+  const request = { attemptId: candidate.attemptId, checkId: "smoke", actor: "test-operator", reason: "Known environment failure" };
+  assert.throws(() => recordOperationVerificationWaiver(loaded, { ...request, commit: "0".repeat(40) }), /no matching/);
+  assert.throws(() => recordOperationVerificationWaiver(loaded, { ...request, commit: candidate.commit, reason: " " }), /reason/);
+  const waiver = recordOperationVerificationWaiver(loaded, { ...request, commit: candidate.commit });
+  assert.throws(() => recordOperationVerificationWaiver(loaded, { ...request, commit: candidate.commit }), /already waived/);
+  store.save(loaded);
+  loaded = store.load(state.id);
+  const retry = new OperationRunner(loaded, options);
+  retry.scheduler.resolve(loaded.blocked!.decisions[0].id, "1");
+  assert.equal((await retry.run()).status, "COMPLETE");
+
+  const stored = store.load(state.id);
+  const receipt = stored.integrations![0];
+  assert.equal(receipt.verification, "WAIVED");
+  assert.equal(receipt.integratedCommit, candidate.commit);
+  assert.equal(receipt.verificationBinding?.typedChecks?.[0].status, "WAIVED");
+  assert.equal(receipt.verificationBinding?.typedChecks?.[0].waiverId, waiver.id);
+  assert.equal(receipt.verificationBinding?.typedChecks?.[0].run, undefined);
+  assert.equal(stored.git?.verificationWaivers?.[0]?.actor, "test-operator");
+  assert.equal(stored.git?.verificationWaivers?.[0]?.reason, "Known environment failure");
+  assert.ok(stored.events.some((event) => event.type === "VERIFICATION_WAIVED" && event.detail?.id === waiver.id));
+});
+
 test("operation status --json shows the verified receipt and the rejection", async (t) => {
   const root = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pa2-home-"));
@@ -421,8 +591,8 @@ function v4Record(): Record<string, any> {
   return { ...JSON.parse(JSON.stringify(state)), schemaVersion: 4 };
 }
 
-test("schema: this build writes operation document version 10 and adds bounded request accounting to older records", () => {
-  assert.equal(CURRENT_OPERATION_SCHEMA_VERSION, 10);
+test("schema: this build writes operation document version 13 and adds bounded request accounting to older records", () => {
+  assert.equal(CURRENT_OPERATION_SCHEMA_VERSION, 13);
   const v4 = v4Record();
   v4.schemaVersion = 6;
   v4.origin = { kind: "job", jobId: "job-pa2", unattended: true };
@@ -432,7 +602,7 @@ test("schema: this build writes operation document version 10 and adds bounded r
   delete v4.policy.maxInferenceCalls;
   const before = JSON.parse(JSON.stringify(v4));
   const migrated = migrateOperationState(v4);
-  assert.equal(migrated.schemaVersion, 10);
+  assert.equal(migrated.schemaVersion, 13);
   assert.equal(migrated.inferenceCalls, 0);
   assert.equal(migrated.historyKnown, false, "pre-v9 inference usage is unknown");
   assert.equal(migrated.policy.maxInferenceCalls, 1_000);

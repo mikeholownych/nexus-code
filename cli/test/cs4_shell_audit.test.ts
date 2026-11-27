@@ -156,16 +156,20 @@ test("exit 127 on runTestSuite names the scrub and the passthrough setting", { s
   });
 });
 
-test("verifyMerged maps 126/127 to an environment failure and 1 to a candidate failure", () => {
+test("verifyMerged maps 126/127 to an environment failure and 1 to a candidate failure", async () => {
   const root = tmp();
-  const ops: any = new OperationGit({ integrationWorktree: root, baseDir: root } as any, {} as any);
-  const missing = ops.verifyMerged("cs4-no-such-tool");
+  const ops = new OperationGit({ integrationWorktree: root, baseDir: root } as any, {} as any);
+  const missing = await ops["verifyMerged"]("cs4-no-such-tool");
   assert.equal(missing.ok, false);
-  assert.match(missing.reason, /could not run on the merged tree \(exit 127\)/);
-  assert.match(missing.reason, /NEXUS_VERIFIER_ENV_PASSTHROUGH/);
-  const failed = ops.verifyMerged("exit 1");
-  assert.match(failed.reason, /integration verification failed on the merged tree/);
-  assert.equal(ops.verifyMerged("true").ok, true);
+  assert.match(missing.reason ?? "", /could not run on the merged tree \(exit 127\)/);
+  assert.match(missing.reason ?? "", /NEXUS_VERIFIER_ENV_PASSTHROUGH/);
+  const denied = await ops["verifyMerged"]("exit 126");
+  assert.equal(denied.status, "ENVIRONMENT");
+  assert.match(denied.reason ?? "", /could not run on the merged tree \(exit 126\)/);
+  const failed = await ops["verifyMerged"]("exit 1");
+  assert.equal(failed.status, "FAILED");
+  assert.match(failed.reason ?? "", /integration verification failed on the merged tree/);
+  assert.equal((await ops["verifyMerged"]("true")).ok, true);
 });
 
 test("output beyond the capture limit keeps the last bytes and says so", () => {
@@ -177,7 +181,7 @@ test("output beyond the capture limit keeps the last bytes and says so", () => {
   assert.match(r.output.trimEnd(), /SUMMARY-LINE$/);
 });
 
-test("the only shell-string call sites in src are the helper and two constant-command sites", () => {
+test("shell-string call sites stay in verifier helpers and constant-command sites", () => {
   const src = path.resolve(import.meta.dirname, "../src");
   const sites = new Map<string, number>();
   const walk = (dir: string) => {
@@ -192,8 +196,8 @@ test("the only shell-string call sites in src are the helper and two constant-co
     }
   };
   walk(src);
-  assert.deepEqual([...sites.entries()].sort(), [["ceri/runner.ts", 2], ["clipboard.ts", 1]]);
-  assert.equal((fs.readFileSync(path.join(src, "tester.ts"), "utf-8").match(/"-c", command/g) ?? []).length, 2);
+  assert.deepEqual([...sites.entries()].sort(), [["ceri/runner.ts", 2], ["clipboard.ts", 1], ["tester.ts", 1]]);
+  assert.equal((fs.readFileSync(path.join(src, "tester.ts"), "utf-8").match(/"-c", command/g) ?? []).length, 3);
   const runner = fs.readFileSync(path.join(src, "ceri/runner.ts"), "utf-8");
   for (const m of runner.matchAll(/execSync\(([^,)]*)/g)) assert.match(m[1], /^"[^"$`]*"$/, "ceri/runner.ts execSync takes a constant string");
 });

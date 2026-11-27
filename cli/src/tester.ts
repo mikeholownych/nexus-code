@@ -7,6 +7,7 @@ import { operatorSetting } from "./client.js";
 import { buildMcpEnvironment } from "./mcp.js";
 import { extractCompilerDiagnostics, Diagnostic } from "./diagnostics.js";
 import { pathEscapesRoot } from "./path_within.js";
+import { runProbeProcess } from "./core/harness/probe_process.js";
 
 export interface TestRunResult {
   command: string;
@@ -682,6 +683,14 @@ export function environmentHint(): string {
     (withheld.length ? ` Set here but not passed: ${withheld.join(", ")}.` : "");
 }
 
+/** Run an approved verifier line with operation cancellation and bounded evidence capture. */
+export function runCancellableVerifierShell(
+  command: string,
+  options: Parameters<typeof runProbeProcess>[2] & { env: NodeJS.ProcessEnv },
+) {
+  return runProbeProcess("bash", ["-c", command], options);
+}
+
 let timeoutBinary: boolean | undefined;
 function hasTimeoutBinary(): boolean {
   timeoutBinary ??= spawnSync("timeout", ["--version"], { stdio: "ignore" }).status === 0;
@@ -701,9 +710,11 @@ export function runVerifierShell(command: string, cwd: string, timeoutMs: number
   try {
     const wrapped = hasTimeoutBinary();
     const started = Date.now();
+    // Preserve SIGKILL status (137) when the wrapper enforces the deadline. Default wrapper status 124 can
+    // also be an intentional exit code from the verifier itself.
     const ran = spawnSync(
       wrapped ? "timeout" : "bash",
-      wrapped ? ["-s", "KILL", `${Math.max(timeoutMs, 1) / 1000}s`, "bash", "-c", command] : ["-c", command],
+      wrapped ? ["--preserve-status", "-s", "KILL", `${Math.max(timeoutMs, 1) / 1000}s`, "bash", "-c", command] : ["-c", command],
       { cwd, env: buildVerifierEnvironment(), stdio: ["ignore", fd, fd], timeout: timeoutMs + 5000, killSignal: "SIGKILL" },
     );
     const size = fs.fstatSync(fd).size;

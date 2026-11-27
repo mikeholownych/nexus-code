@@ -26,15 +26,17 @@ test("batch planning saves an inspectable proposal without creating a batch", as
       acceptanceCriteria: ["Identify the package manager"], checks: [], outputs: ["Report"], handoffs: [],
     }],
   };
-  const outcome = await executeBatchCommand('plan "Inspect project conventions"', config, undefined, undefined, {
+  const requestedObjective = "Find out how this repository runs tests";
+  const outcome = await executeBatchCommand(`plan "${requestedObjective}"`, config, undefined, undefined, {
     async propose(input) {
-      assert.equal(input, plan.objective);
+      assert.equal(input, requestedObjective);
       return { plan, provenance: { resourceId: "primary", model: "test-planner", disclosure: "local" } };
     },
   });
   assert.equal(outcome.success, true, outcome.output);
   assert.match(outcome.output, /Proposal saved/);
   const envelope = JSON.parse(outcome.output.slice(outcome.output.indexOf("\n") + 1));
+  assert.equal(envelope.requestedObjective, requestedObjective);
   assert.equal(envelope.plan.units[0].id, "inspect");
   assert.equal(envelope.plan.checks[0].command, plan.checks[0].command);
   assert.equal(envelope.provenance.model, "test-planner");
@@ -42,7 +44,7 @@ test("batch planning saves an inspectable proposal without creating a batch", as
   assert.match((await executeBatchCommand("list", config)).output, /No batches/);
 });
 
-test("batch planning refuses execution and read-only draft creation before inference", async () => {
+test("batch planning refuses execution and read-only draft creation and execution before inference", async () => {
   const config: HarnessConfig = {
     workspace: process.cwd(), endpoint: "http://127.0.0.1:1", model: "test-planner",
     shell: "bash", maxSteps: 1, temperature: 0, readOnly: true,
@@ -53,7 +55,7 @@ test("batch planning refuses execution and read-only draft creation before infer
   assert.match(readOnly.output, /cannot save/);
   const accept = await executeBatchCommand("plan accept draft digest", config, undefined, undefined, dependencies);
   assert.equal(accept.success, false);
-  assert.match(accept.output, /execution is unavailable/);
+  assert.match(accept.output, /cannot execute an approved plan/);
 });
 
 test("an operator can import a revised draft without executing it", async (t) => {

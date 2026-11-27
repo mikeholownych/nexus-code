@@ -1,5 +1,5 @@
 /** Batch specifications deliberately use the existing `nexus operation` JSON format. */
-import { validateOperationSpec } from "./operation_cli.js";
+import { validateOperationSpec, type OperationSpec } from "./operation_cli.js";
 import { newOperation, type OperationPolicy, type WorkUnitSpec } from "./core/operation.js";
 import type { ResourceDescriptor } from "./core/resources.js";
 import type { BoundaryRules } from "./core/boundary_rules.js";
@@ -22,6 +22,9 @@ export interface BatchSpecification {
  */
 export function validateBatchSpec(spec: unknown): BatchSpecification {
   validateOperationSpec(spec);
+  if ((spec as OperationSpec).verificationChecks !== undefined) {
+    throw new Error("typed verification checks require an accepted plan");
+  }
   const batch = spec as BatchSpecification;
   // A resource list is provider configuration and is validated by validateOperationSpec; an empty list here keeps
   // validation independent of the current provider and does not perform discovery or inference.

@@ -11,6 +11,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { VERIFY_EXIT_CODES, VERIFY_REASONS, verifyExitCode, verifyExitNameFor, verifyVerdictFor, type VerifyReason } from "../src/verify_contract.js";
 import { VERIFY_MAX_TREE_FILES, VERIFY_RECORDED_ENVIRONMENT, verifyChange } from "../src/core/verify.js";
+import { runVerifierShell } from "../src/tester.js";
 import {
   BAD, BASE_FILES, BASE_VERIFIER_DIGEST, CLI_DIR, DELIVERABLE, GOOD, MATH_BROKEN, PACKAGE, TEST_FILE, TEST_FULL, TEST_WEAKENED,
   commit, consume, consumeResult, git, head, runCli, withRepos, writeFiles,
@@ -55,6 +56,16 @@ test("the manual's verify exit-code table is the exported table", () => {
     cells.slice(2).map(([code, name, when]) => ({ code: Number(code), name: name.replace(/`/g, ""), when })),
     VERIFY_EXIT_CODES.map((row) => ({ ...row })),
   );
+});
+
+test("standalone verifier deadlines distinguish a killed command from an explicit exit 124", (t) => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-verify-deadline-"));
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  const expired = runVerifierShell("sleep 1", cwd, 60);
+  assert.equal(expired.timedOut, true);
+  const failed = runVerifierShell("exit 124", cwd, 1000);
+  assert.equal(failed.timedOut, false);
+  assert.equal(failed.exitCode, 124);
 });
 
 test("every reason has a verdict and an exit-code row; only VERIFIED exits 0", () => {

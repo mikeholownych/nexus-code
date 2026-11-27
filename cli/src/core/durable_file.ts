@@ -250,11 +250,16 @@ export interface ArchiveRead<M> {
 /**
  * Reads an archive file. With `committed`, only lines of those compactions (and of legacy lines without an id) are
  * returned; the rest are counted as uncommitted. Without it, every readable line is returned.
+ * An optional byte limit uses an owner-only regular file descriptor and bounds the read even if the file grows.
  */
-export function readArchiveLines<M>(file: string, committed?: ReadonlySet<string>): ArchiveRead<M> {
+export function readArchiveLines<M>(
+  file: string,
+  committed?: ReadonlySet<string>,
+  options?: { privateByteLimit: number },
+): ArchiveRead<M> {
   let raw = "";
   try {
-    raw = fs.readFileSync(file, "utf8");
+    raw = options ? readBoundedPrivateArchive(file, options.privateByteLimit) : fs.readFileSync(file, "utf8");
   } catch {
     return { messages: [], unreadableLines: 0, uncommittedLines: 0, missingCompactions: committed ? [...committed] : [] };
   }
@@ -268,6 +273,10 @@ export function readArchiveLines<M>(file: string, committed?: ReadonlySet<string
     let parsed: ArchiveLine<M>;
     try {
       parsed = JSON.parse(line);
+      if (!parsed || typeof parsed !== "object" || !Object.hasOwn(parsed, "message")) {
+        unreadableLines++;
+        continue;
+      }
     } catch {
       unreadableLines++;
       continue;
@@ -287,4 +296,26 @@ export function readArchiveLines<M>(file: string, committed?: ReadonlySet<string
   }
   const missingCompactions = committed ? [...committed].filter((id) => !seen.has(id)) : [];
   return { messages, unreadableLines, uncommittedLines, missingCompactions, byCompaction };
+}
+
+function readBoundedPrivateArchive(file: string, limit: number): string {
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || (stat.mode & 0o077) !== 0 || stat.nlink !== 1 ||
+      (typeof process.geteuid === "function" && stat.uid !== process.geteuid()) || stat.size > limit) {
+      throw new Error("Archive is not a bounded private file");
+    }
+    const buffer = Buffer.allocUnsafe(stat.size + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const count = fs.readSync(fd, buffer, length, buffer.length - length, null);
+      if (!count) break;
+      length += count;
+    }
+    if (length !== stat.size) throw new Error("Archive size changed during the read");
+    return buffer.toString("utf8", 0, length);
+  } finally {
+    fs.closeSync(fd);
+  }
 }

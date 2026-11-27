@@ -335,6 +335,10 @@ export class ConvergenceScheduler {
   private overrideSelection(u: WorkUnit, now: number): ReturnType<ResourceRegistry["select"]> {
     const r = this.registry.get(u.override!.resourceId);
     if (!r) return { qualified: [], rejected: [{ resourceId: u.override!.resourceId, reasons: ["no longer configured"] }] };
+    if (this.state.git?.acceptedPlanDigest) {
+      const reasons = this.registry.qualifies(r, u.requires, this.excludedModels(u));
+      if (reasons.length) return { qualified: [], rejected: [{ resourceId: r.id, reasons }] };
+    }
     const eligibility = this.registry.eligibility(r, now);
     return { ...(eligibility.eligible ? { chosen: r } : {}), qualified: [{ resource: r, eligibility }], rejected: [] };
   }
@@ -351,6 +355,7 @@ export class ConvergenceScheduler {
       if (exclude.includes(r.id)) continue;
       if (u.requires.minTrust && this.registry.qualifies(r, { minTrust: u.requires.minTrust }, new Set()).length) continue;
       const overriding = this.registry.qualifies(r, u.requires, excluded);
+      if (this.state.git?.acceptedPlanDigest && overriding.length) continue;
       out.push({
         label: overriding.length ? `assign to ${r.id} despite: ${overriding.join(", ")}` : `assign to ${r.id}`,
         action: { kind: "assign", resourceId: r.id, overriding },
@@ -395,13 +400,29 @@ export class ConvergenceScheduler {
     };
   }
 
+  private approvedPlanDecisionProblem(unit: WorkUnit, action: DecisionAction): string | undefined {
+    if (!this.state.git?.acceptedPlanDigest) return undefined;
+    if (action.kind === "revise" || action.kind === "replace_task" || action.kind === "set_inputs" ||
+        action.kind === "lift_context_budget" || action.kind === "accept_no_change") {
+      return "This decision changes an approved plan. Create and explicitly accept a revised draft.";
+    }
+    if (action.kind === "assign") {
+      const resource = this.registry.get(action.resourceId);
+      if (!resource || this.registry.qualifies(resource, unit.requires, this.excludedModels(unit)).length) {
+        return "This resource does not meet the approved requirements. Choose a qualified resource or accept a revised draft.";
+      }
+    }
+    return undefined;
+  }
+
   block(u: WorkUnit, why: BlockSpec): void {
     u.status = "BLOCKED";
     delete u.parked;
     const terminal: OptionSpec = isRequired(u)
       ? { label: "stop the operation", action: { kind: "cancel_operation" } }
       : { label: "drop this advisory unit", action: { kind: "drop" } };
-    const options = [...why.options, terminal].map((o, i) => ({ id: String(i + 1), label: o.label, action: o.action }));
+    const allowed = why.options.filter(({ action }) => !this.approvedPlanDecisionProblem(u, action));
+    const options = [...allowed, terminal].map((o, i) => ({ id: String(i + 1), label: o.label, action: o.action }));
     const decision: EscalationDecision = { id: `${u.id}#${(u.decisions?.length ?? 0) + 1}`, unitId: u.id, cause: why.cause, question: why.question, options };
     u.blocked = { since: new Date(this.now()).toISOString(), reason: why.reason, decision };
     this.emit("WORK_BLOCKED", `${u.title} needs a decision: ${why.question}`, { unitId: u.id, detail: { reason: why.reason, cause: why.cause, decisionId: decision.id } });
@@ -450,6 +471,8 @@ export class ConvergenceScheduler {
       throw new DecisionRejected(`Option '${optionId}' was not offered for ${decisionId} (offered: ${decision.options.map((o) => `${o.id}=${o.label}`).join("; ")}).`);
     }
     const action = option.action;
+    const approvalProblem = this.approvedPlanDecisionProblem(u, action);
+    if (approvalProblem) throw new DecisionRejected(approvalProblem);
     const text = note?.trim();
     if (action.kind === "revise" && !text) throw new DecisionRejected("Revising a unit requires a note describing the revision.");
     if (action.kind === "replace_task" && !text) throw new DecisionRejected("Replacing a unit's task requires a note holding the new task.");

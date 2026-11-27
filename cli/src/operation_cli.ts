@@ -10,6 +10,8 @@
  * --no-resume). /team operations are ordinary operations and use the same commands.
  */
 import * as fs from "node:fs";
+import { userInfo } from "node:os";
+import { createInterface } from "node:readline/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Command } from "commander";
@@ -26,8 +28,10 @@ import { parseActiveMinutesCap, parseInferenceSubmissionCap, parseTokenCap, setO
 import { withDerivedPause } from "./core/driver_identity.js";
 import { buildOperationView, renderOperationView, renderReplay, watchOperation } from "./operation_view.js";
 import { ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "./core/operation_git.js";
+import { operationVerificationDefinitionDigest, parseOperationVerificationChecks, recordOperationVerificationWaiver, type OperationVerificationCheck } from "./core/operation_verification.js";
 import { ContextCheckpointError, createContextCheckpoint, listContextCheckpoints, restoreContextCheckpoint } from "./core/operation_checkpoints.js";
 import { safeTerminal } from "./ui.js";
+import { isWorkspaceTrusted } from "./workspace_trust.js";
 import { credentialFingerprint, ResourceRegistry, type ResourceDescriptor } from "./core/resources.js";
 import { createOperationAccountIdentity } from "./core/account_identity.js";
 import { credentialStorageHome, operatorSetting } from "./client.js";
@@ -64,6 +68,7 @@ export interface OperationSpec {
   git?: { isolate?: boolean; baseRef?: string };
   /** SI-5: boundary rules the review gate enforces on each candidate diff (core/boundary_rules.ts). */
   boundaries?: BoundaryRules;
+  verificationChecks?: OperationVerificationCheck[];
 }
 
 /**
@@ -80,7 +85,7 @@ export class OperationSpecError extends Error {
 // The spec is untrusted operator input. Unknown keys are rejected rather than ignored: a silently ignored
 // `git.publish` would leave the operator believing a PR will be opened, and a typo such as `depends` would drop a
 // dependency and run work out of order.
-const SPEC_KEYS = ["id", "objective", "units", "resources", "discoverCatalog", "policy", "git", "boundaries"] as const;
+const SPEC_KEYS = ["id", "objective", "units", "resources", "discoverCatalog", "policy", "git", "boundaries", "verificationChecks"] as const;
 const UNIT_KEYS = ["id", "title", "role", "prompt", "dependsOn", "requires", "required", "taskClass", "executionResources", "contextBudget", "inputs", "authorizedScope", "unresolvedAssumptions"] as const;
 const POLICY_KEYS = ["maxWaitMs", "unknownResumeBudget", "maxRunsPerUnit", "minWaitMs", "maxConcurrentUnits", "executionBudget"] as const;
 const EXECUTION_RESOURCE_KEYS = ["cpuMilli", "memoryBytes"] as const;
@@ -124,6 +129,18 @@ export function validateOperationSpec(spec: unknown): asserts spec is OperationS
     rejectUnknown("git", s.git, GIT_KEYS);
     if (s.git.isolate !== undefined && typeof s.git.isolate !== "boolean") throw new OperationSpecError("operation spec 'git.isolate' must be true or false");
     if (s.git.baseRef !== undefined && typeof s.git.baseRef !== "string") throw new OperationSpecError("operation spec 'git.baseRef' must be a string");
+  }
+  if (s.verificationChecks !== undefined) {
+    if (s.git?.isolate !== true) throw new OperationSpecError("typed verification checks require Git isolation");
+    try {
+      for (const check of parseOperationVerificationChecks(s.verificationChecks)) {
+        if (check.unitId && !s.units.some((unit: WorkUnitSpec | null) => unit?.id === check.unitId)) {
+          throw new Error("verificationChecks refers to an unknown work-unit id");
+        }
+      }
+    } catch (error) {
+      throw new OperationSpecError(error instanceof Error ? error.message : String(error));
+    }
   }
   if (s.boundaries !== undefined) {
     try {
@@ -252,6 +269,18 @@ function printStatus(op: DurableOperationState, store: OperationStore, workspace
       u.assignment ? ` — ${u.assignment.resourceId}` : "";
     console.log(`  ${safeTerminal(u.status).padEnd(22)} ${safeTerminal(u.title)}${pc.dim(safeTerminal(extra))}`);
   }
+  const definitions = op.git?.verificationChecks ?? [];
+  if (definitions.length) {
+    const binding = op.integrations?.at(-1)?.verificationBinding;
+    console.log("  Verification checks");
+    for (const check of definitions) {
+      const observed = binding?.typedChecks?.find((outcome) =>
+        outcome.id === check.id && outcome.definitionSha256 === operationVerificationDefinitionDigest(check));
+      const scope = check.unitId ? ` (unit ${safeTerminal(check.unitId)})` : "";
+      const status = observed && binding ? `${observed.status} on ${binding.commit.slice(0, 12)}` : "PENDING";
+      console.log(`    ${safeTerminal(check.id)} [${check.requirement}]${scope}: ${safeTerminal(status)}`);
+    }
+  }
   if (op.status === "PAUSED" && op.pauseReason) console.log(pc.yellow(`Paused: ${safeTerminal(op.pauseReason)}`));
   if (op.wait) console.log(pc.yellow(`Waiting until ${safeTerminal(op.wait.wakeAt)}: ${safeTerminal(op.wait.reason)}`));
   for (const d of op.blocked?.decisions ?? []) {
@@ -345,6 +374,9 @@ export function registerOperationCommands(program: Command): void {
         throw new OperationSpecError(`cannot read operation spec ${specPath}: ${String(error?.message ?? error)}`);
       }
       validateOperationSpec(spec);
+      if (spec.verificationChecks) {
+        throw new OperationSpecError("typed verification checks require the accepted batch plan entry point");
+      }
       const config = buildConfig(options);
       const store = new OperationStore(config.workspace);
       const id = spec.id ?? `op-${randomUUID().slice(0, 8)}`;
@@ -414,6 +446,43 @@ export function registerOperationCommands(program: Command): void {
       }
       if (options.resume === false) return void printStatus(state, store, path.resolve(options.workspace ?? process.cwd()));
       await drive(state, config, store, Boolean(options.discover), Boolean(options.json), { entry: "existing", resumeAfterDecision: true });
+    }));
+
+  op.command("waive-verification")
+    .argument("<id>", "Blocked operation id")
+    .argument("<attempt>", "Full verification attempt ID from the rejected candidate")
+    .argument("<check>", "Required check ID")
+    .argument("<commit>", "Full candidate commit from the rejection")
+    .requiredOption("--reason <text>", "Operator reason recorded in the waiver")
+    .option("-w, --workspace <path>", "Workspace directory (default: current directory)")
+    .description("Record a deliberate waiver for one failed check on an exact candidate")
+    .action(operationAction(async (id: string, attemptId: string, checkId: string, commit: string, options: any) => {
+      const config = buildConfig(options);
+      if (config.readOnly || config.approvalMode === "read-only" || config.dryRun || !isWorkspaceTrusted(config.workspace)) {
+        throw new OperationSpecError("Recording a verifier waiver requires a trusted writable workspace.");
+      }
+      if (!process.stdin.isTTY || !process.stderr.isTTY) {
+        throw new OperationSpecError("Confirm the verification waiver from an interactive terminal.");
+      }
+      const terminal = createInterface({ input: process.stdin, output: process.stderr });
+      try {
+        const prompt = safeTerminal(`Waive check ${checkId} for attempt ${attemptId} on candidate ${commit}? Type waive to confirm.`);
+        if (await terminal.question(`${prompt} `) !== "waive") throw new OperationSpecError("Verification waiver was not confirmed.");
+      } finally {
+        terminal.close();
+      }
+      const store = new OperationStore(config.workspace);
+      const release = store.acquire(id);
+      try {
+        const state = store.load(id);
+        const waiver = recordOperationVerificationWaiver(state, {
+          attemptId, checkId, commit, actor: userInfo().username, reason: options.reason,
+        });
+        store.save(state);
+        console.log(safeTerminal(`Recorded waiver for check ${checkId} on ${commit}. Use the existing retry decision for unit ${waiver.unitId} to continue.`));
+      } finally {
+        release();
+      }
     }));
 
   op.command("status")
