@@ -793,6 +793,8 @@ export async function executeToolCall(agent: any, input: ToolExecutionInput): Pr
   if (typeof (agent.plannerClient as any)?.setTaskId === "function") agent.plannerClient.setTaskId(effectiveTaskId);
   if (typeof (agent.coderClient as any)?.setTaskId === "function") agent.coderClient.setTaskId(effectiveTaskId);
   const operationSeq = ++agent.operationSeq;
+  let operationStartPersisted = false;
+  let operationStartFailure: string | undefined;
   // A run_command that may run work past the call: its own `background` or `service_name`, or a command that
   // backgrounds itself. Counted here, after approval (a denied call returned earlier and counts nothing): the turn is
   // then never lifted to "no change", because the process can still write after the turn ends.
@@ -802,8 +804,9 @@ export async function executeToolCall(agent: any, input: ToolExecutionInput): Pr
   const watchesObligations = Boolean(agent.objective?.obligations?.length);
   const diffTarget = (agent.observer?.onFileChange || watchesObligations) && !agent.config.dryRun ? editTarget(toolName, args, agent.config.workspace) : undefined;
   const before = diffTarget ? snapshot(diffTarget) : undefined;
-  if (agent.durable && agent.stateManager && durableTaskId) {
+  if (agent.durable && durableTaskId) {
     try {
+      if (!agent.stateManager) throw new Error("durable state manager is unavailable");
       agent.stateManager.recordOperationStart(durableTaskId, {
         invocationId: call.id,
         seq: operationSeq,
@@ -812,9 +815,11 @@ export async function executeToolCall(agent: any, input: ToolExecutionInput): Pr
         argsSummary: JSON.stringify(args).slice(0, 200),
         argsHash: argsFingerprint(toolName, args),
       });
+      operationStartPersisted = true;
       if (reissuesInterrupted) agent.interruptedCall = undefined;
     } catch (err: any) {
       agent.reportPersistenceFailure("operation_start", err);
+      operationStartFailure = redactSecrets(err instanceof Error ? err.message : String(err)).slice(0, 200) || "unknown persistence error";
     }
   }
 
@@ -825,7 +830,9 @@ export async function executeToolCall(agent: any, input: ToolExecutionInput): Pr
   // Subagents are intentionally non-durable, but their edits still need a
   // pre-change verifier snapshot so the parent cannot mistake an unbound
   // passing test run for independent verification.
-  if (FILE_EDIT_TOOLS.has(toolName) || agent.mayWrite(toolName)) {
+  const capability = agent.capabilityRegistry.getByToolName(toolName);
+  const mutating = capability?.mutating === true;
+  if (!operationStartFailure && (FILE_EDIT_TOOLS.has(toolName) || agent.mayWrite(toolName))) {
     await agent.captureChangeBaseline(onConfirm);
   }
   // A tool of a group not offered yet still runs (the model may know it from earlier); offer its group from now on.
@@ -836,21 +843,43 @@ export async function executeToolCall(agent: any, input: ToolExecutionInput): Pr
     : null;
   let receipt: ExecutionReceipt;
   try {
-    // activate_skill stamps attribution inside the handler; other tools inherit the current activation.
-    const priorAttr = toolName === "activate_skill" ? {} : skillAttr();
-    receipt = await agent.spine.execute(
-      {
+    if (operationStartFailure && mutating) {
+      // Without a durable intent record, a mutating tool could take effect and become unrecoverable after a crash.
+      // Keep the refusal in the ordinary receipt path while making clear that no handler was dispatched.
+      receipt = {
         invocationId: call.id,
         taskId: effectiveTaskId,
         actor,
         executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+        capabilityId: capability.id,
         toolName,
-        args,
-        stepIndex: currentStep,
-        skillAttribution: priorAttr,
-      },
-      context
-    );
+        targetResources: extractTargetResources(toolName, args),
+        success: false,
+        output: "",
+        error: `Not executed: the durable operation start could not be recorded${operationStartFailure ? ` (${operationStartFailure})` : ""}.`,
+        durationMs: 0,
+        candidateMutated: false,
+        status: "FAILED",
+        timestamp: new Date().toISOString(),
+        simulated: Boolean(agent.config.dryRun),
+      };
+    } else {
+      // activate_skill stamps attribution inside the handler; other tools inherit the current activation.
+      const priorAttr = toolName === "activate_skill" ? {} : skillAttr();
+      receipt = await agent.spine.execute(
+        {
+          invocationId: call.id,
+          taskId: effectiveTaskId,
+          actor,
+          executionDomain: actor === "subagent" ? "subagent" : "agent_orchestration",
+          toolName,
+          args,
+          stepIndex: currentStep,
+          skillAttribution: priorAttr,
+        },
+        context
+      );
+    }
     if (toolName === "activate_skill" && receipt.success) {
       receipt = { ...receipt, ...skillAttr() };
     }
@@ -879,7 +908,7 @@ export async function executeToolCall(agent: any, input: ToolExecutionInput): Pr
     }
   }
 
-  if (agent.durable && agent.stateManager && durableTaskId) {
+  if (agent.durable && agent.stateManager && durableTaskId && operationStartPersisted) {
     try {
       agent.stateManager.recordOperationEnd(durableTaskId, call.id, {
         success: receipt.success,
