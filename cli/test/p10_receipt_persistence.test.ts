@@ -27,7 +27,7 @@ test("candidate receipt persistence failure cannot yield verified acceptance", {
     'const test = require("node:test");',
     'const assert = require("node:assert/strict");',
     'const { add } = require("../math.js");',
-    '// VERIFIER_CONFIG_SENTINEL is represented by a digest, never copied into acceptance evidence.',
+    '// VERIFIER_CONFIG_SENTINEL must be represented by a digest, never copied into acceptance evidence.',
     'test("adds", () => assert.equal(add(2, 3), 5));',
     "",
   ].join("\n"));
@@ -36,12 +36,12 @@ test("candidate receipt persistence failure cannot yield verified acceptance", {
     stdio: "ignore",
   });
 
-  const gateway = await startGateway(() => ({
+  // Separate mutation from completion so verification observes the completed write deterministically.
+  const gateway = await startGateway((n) => ({
     kind: "tools",
-    calls: [
-      { name: "write_file", args: { path: "math.js", content: "exports.add = (a, b) => a + b;\n", overwrite: true } },
-      { name: "task_completed", args: { summary: "Implemented and verified addition." } },
-    ],
+    calls: n === 1
+      ? [{ name: "write_file", args: { path: "math.js", content: "exports.add = (a, b) => a + b;\n", overwrite: true } }]
+      : [{ name: "task_completed", args: { summary: "Implemented and verified addition." } }],
   }));
   const oldHome = process.env.HOME;
   process.env.HOME = home;
@@ -97,8 +97,8 @@ test("candidate receipt persistence failure cannot yield verified acceptance", {
     assert.ok(!JSON.stringify(attemptedReceipt.evidence).includes("VERIFIER_CONFIG_SENTINEL"), "verifier source is represented by a digest, not copied into the receipt");
     assert.equal(agent.getActiveValidationReceipt(), undefined, "an in-memory receipt cannot authorize a merge after its durable write failed");
     assert.equal(agent.candidateTracker.getActiveReceipt(), null, "the candidate tracker must invalidate the unpersisted receipt");
-    assert.ok(agent.getActiveWorktree(), "the speculative worktree remains available for recovery");
-    assert.equal(fs.readFileSync(path.join(repo, "math.js"), "utf8"), "exports.add = (a, b) => a - b;\n", "the failed receipt write must not auto-merge candidate code");
+    assert.equal(fs.readFileSync(path.join(repo, "math.js"), "utf8"), "exports.add = (a, b) => a - b;\n", "failed receipt persistence cannot auto-merge the candidate");
+    assert.ok(agent.getActiveWorktree(), "the unverifiable candidate worktree is retained for recovery");
   } finally {
     if (agent?.getActiveWorktree()) agent.discardActiveWorktree();
     agent?.shutdown();
