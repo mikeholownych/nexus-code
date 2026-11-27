@@ -149,3 +149,44 @@ test("the built-in target reader exposes only same-workspace operation metadata"
   assert.deepEqual(readOperationPollTarget(f.root, target, tasks), { recordedStatus: "WAITING" });
   assert.equal(JSON.parse(fs.readFileSync(targetPath, "utf8")).operation.objective, "private test fixture");
 });
+
+test("a pending local or global state restore makes the target observation unknown", (t) => {
+  const f = fixture(t);
+  const tasks = path.join(f.root, "tasks");
+  const control = path.join(f.root, "restore-control");
+  fs.mkdirSync(tasks, { mode: 0o700 });
+  fs.mkdirSync(control, { mode: 0o700 });
+  writePrivateJson(path.join(tasks, "op-fixture.json"), {
+    taskId: "op-fixture", workspace: f.root, operation: { id: "op-fixture", status: "COMPLETE" },
+  });
+  for (const marker of [path.join(tasks, ".nexus-restore.pending"), path.join(control, "active.json")]) {
+    writePrivateJson(marker, {});
+    assert.equal(readOperationPollTarget(f.root, target, tasks), undefined);
+    fs.rmSync(marker);
+  }
+  assert.deepEqual(readOperationPollTarget(f.root, target, tasks), { recordedStatus: "COMPLETE" });
+});
+
+test("a replacement workspace path cannot be polled or resume an older monitor", async (t) => {
+  const f = fixture(t);
+  const workspace = path.join(f.root, "workspace");
+  fs.mkdirSync(workspace);
+  const directory = path.join(f.root, "nexus-schedules-monitors");
+  const store = new PollStore(workspace, directory);
+  let calls = 0;
+  const monitor = new OperationMonitor(workspace, {
+    store,
+    clock: { now: f.clock.now, sleep: async (ms) => {
+      fs.renameSync(workspace, path.join(f.root, "original-workspace"));
+      fs.mkdirSync(workspace);
+      f.advance(ms);
+    } },
+    read: () => { calls += 1; return { recordedStatus: "RUNNING" }; },
+  });
+  const record = await monitor.start(request);
+  assert.equal(record.status, "WORKSPACE_CHANGED");
+  assert.equal(calls, 1);
+  const replacement = new PollStore(workspace, directory);
+  assert.deepEqual(replacement.list(), []);
+  assert.throws(() => replacement.load(record.id), /No matching poll/);
+});

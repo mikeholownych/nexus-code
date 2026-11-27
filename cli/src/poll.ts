@@ -8,6 +8,8 @@ import { realRecoveryClock, type RecoveryClock } from "./core/provider_recovery.
 import { assertPrivateDir, integer, oneOf, readPrivateJson, runnerRoot, strictObject, text, timestamp, writePrivateJson } from "./core/runner_store.js";
 import { defaultTaskStateDir } from "./core/state.js";
 import { CURRENT_STATE_SCHEMA_VERSION } from "./core/state_schema.js";
+import { assertNoPendingStateRestore } from "./core/state_restore.js";
+import { tryStateStoreGuard } from "./core/state_store_guard.js";
 
 export const MIN_POLL_INTERVAL_MS = 5_000;
 export const MAX_POLL_DURATION_MS = 24 * 60 * 60 * 1_000;
@@ -18,7 +20,7 @@ const MAX_MONITOR_RECORDS = 256;
 const OPERATION_RECORD_BYTES = 4 * 1024 * 1024;
 const POLL_ID = /^poll-[a-f0-9]{12}$/;
 const OPERATION_ID = /^(?!.*\.json$)[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/;
-const STATUSES = ["WAITING", "OBSERVED_TERMINAL", "MAX_CALLS", "DEADLINE", "CANCELLED", "CLOCK_CHANGED"] as const;
+const STATUSES = ["WAITING", "OBSERVED_TERMINAL", "MAX_CALLS", "DEADLINE", "CANCELLED", "CLOCK_CHANGED", "WORKSPACE_CHANGED"] as const;
 const OPERATION_STATUSES = ["RUNNING", "WAITING", "BLOCKED", "PAUSED", "COMPLETE", "CANCELLED"] as const;
 const UNKNOWN_REASONS = ["UNAVAILABLE", "INTERRUPTED"] as const;
 
@@ -48,6 +50,7 @@ export interface PollRecord {
   version: 1;
   id: string;
   workspace: string;
+  workspaceIdentity: string;
   target: PollTarget;
   intervalMs: number;
   maxCalls: number;
@@ -56,6 +59,16 @@ export interface PollRecord {
   nextDueAt: number;
   status: (typeof STATUSES)[number];
   attempts: PollAttempt[];
+}
+
+function directoryIdentity(directory: string): string | undefined {
+  try {
+    const stat = fs.lstatSync(directory, { bigint: true });
+    if (stat.isDirectory() && fs.realpathSync(directory) === directory) {
+      return `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`;
+    }
+  } catch { /* A missing or inaccessible directory cannot confirm its identity. */ }
+  return undefined;
 }
 
 function parseTarget(raw: unknown): PollTarget {
@@ -97,7 +110,7 @@ function lastSeenAt(record: PollRecord): number {
 
 function parseRecord(raw: unknown): PollRecord {
   const row = strictObject("Poll record", raw, [
-    "version", "id", "workspace", "target", "intervalMs", "maxCalls", "createdAt", "deadlineAt", "nextDueAt", "status", "attempts",
+    "version", "id", "workspace", "workspaceIdentity", "target", "intervalMs", "maxCalls", "createdAt", "deadlineAt", "nextDueAt", "status", "attempts",
   ]);
   if (row.version !== 1) throw new Error("Poll record version is unsupported.");
   const createdAt = integer("Poll creation time", row.createdAt, 0, MAX_TIME);
@@ -137,15 +150,28 @@ function parseRecord(raw: unknown): PollRecord {
   if (status === "MAX_CALLS" && attempts.length !== maxCalls) throw new Error("Poll call limit outcome has unused calls.");
   const workspace = text("Poll workspace", row.workspace, 4096);
   if (!path.isAbsolute(workspace)) throw new Error("Poll workspace must be an absolute path.");
-  return { version: 1, id: text("Poll id", row.id, 17, POLL_ID), workspace, target, intervalMs, maxCalls, createdAt, deadlineAt, nextDueAt, status, attempts };
+  const workspaceIdentity = text("Poll workspace identity", row.workspaceIdentity, 120, /^\d+:\d+:\d+$/);
+  return { version: 1, id: text("Poll id", row.id, 17, POLL_ID), workspace, workspaceIdentity, target, intervalMs, maxCalls, createdAt, deadlineAt, nextDueAt, status, attempts };
 }
 
 export class PollStore {
   readonly workspace: string;
+  readonly workspaceIdentity: string;
 
   // This prefix already has the schedule-store protection in security.ts.
   constructor(workspace: string, private readonly directory = path.join(runnerRoot(), "nexus-schedules-monitors")) {
     this.workspace = fs.realpathSync(workspace);
+    const identity = directoryIdentity(this.workspace);
+    if (!identity) throw new Error("Poll workspace identity could not be established.");
+    this.workspaceIdentity = identity;
+  }
+
+  workspaceIsCurrent(): boolean {
+    return directoryIdentity(this.workspace) === this.workspaceIdentity;
+  }
+
+  private sameWorkspace(record: PollRecord): boolean {
+    return record.workspace === this.workspace && record.workspaceIdentity === this.workspaceIdentity;
   }
 
   private file(id: string, suffix: "json" | "guard"): string {
@@ -155,7 +181,7 @@ export class PollStore {
 
   load(id: string): PollRecord {
     const record = this.read(id);
-    if (!record || record.workspace !== this.workspace) throw new Error("No matching poll in this workspace.");
+    if (!record || !this.sameWorkspace(record)) throw new Error("No matching poll in this workspace.");
     return record;
   }
 
@@ -184,7 +210,7 @@ export class PollStore {
         if (!POLL_ID.test(id)) continue;
         if (++records > MAX_MONITOR_RECORDS) throw new Error("Too many stored polls to list. Inspect by explicit poll id.");
         const record = this.read(id);
-        if (record?.workspace === this.workspace) rows.push(record);
+        if (record && this.sameWorkspace(record)) rows.push(record);
       }
     } finally {
       dir.closeSync();
@@ -203,7 +229,7 @@ export class PollStore {
   save(record: PollRecord): void {
     assertPrivateDir(this.directory);
     const validated = parseRecord(record);
-    if (validated.workspace !== this.workspace) throw new Error("Poll workspace does not match.");
+    if (!this.sameWorkspace(validated)) throw new Error("Poll workspace does not match.");
     writePrivateJson(this.file(validated.id, "json"), validated);
   }
 
@@ -218,11 +244,26 @@ export class PollStore {
 }
 
 /** The only production target: a bounded local read. Do not project prompts, command lines or resource details. */
-export function readOperationPollTarget(workspace: string, target: PollTarget, tasks = defaultTaskStateDir()): PollObservation | undefined {
+export function readOperationPollTarget(
+  workspace: string, target: PollTarget, tasks = defaultTaskStateDir(), workspaceIdentity = directoryIdentity(workspace),
+): PollObservation | undefined {
   try {
     const { operationId } = parseTarget(target);
-    assertPrivateDir(tasks);
-    const raw = readPrivateJson(path.join(tasks, `${operationId}.json`), { label: "Operation status target", limit: OPERATION_RECORD_BYTES });
+    const store = path.resolve(tasks);
+    assertPrivateDir(store);
+    const taskIdentity = directoryIdentity(store);
+    if (!taskIdentity || !workspaceIdentity || directoryIdentity(workspace) !== workspaceIdentity) return undefined;
+    const snapshot = tryStateStoreGuard(store, () => {
+      assertNoPendingStateRestore(store);
+      if (directoryIdentity(store) !== taskIdentity || directoryIdentity(workspace) !== workspaceIdentity) return undefined;
+      const raw = readPrivateJson(path.join(store, `${operationId}.json`), {
+        label: "Operation status target", limit: OPERATION_RECORD_BYTES,
+      });
+      assertNoPendingStateRestore(store);
+      if (directoryIdentity(store) !== taskIdentity || directoryIdentity(workspace) !== workspaceIdentity) return undefined;
+      return raw;
+    });
+    const raw = snapshot.acquired ? snapshot.value : undefined;
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
     const document = raw as Record<string, unknown>;
     if (document.taskId !== operationId || (document.workspacePath ?? document.workspace) !== workspace
@@ -252,7 +293,7 @@ export class OperationMonitor {
     this.store = runtime.store ?? new PollStore(workspace);
     if (this.store.workspace !== fs.realpathSync(workspace)) throw new Error("Poll store workspace does not match.");
     this.clock = runtime.clock ?? realRecoveryClock;
-    this.read = runtime.read ?? ((target) => readOperationPollTarget(this.store.workspace, target));
+    this.read = runtime.read ?? ((target) => readOperationPollTarget(this.store.workspace, target, undefined, this.store.workspaceIdentity));
   }
 
   async start(raw: PollRequest, signal?: AbortSignal): Promise<PollRecord> {
@@ -260,7 +301,7 @@ export class OperationMonitor {
     const { target, intervalMs, maxCalls, timeoutMs } = parseRequest(raw);
     const now = this.clock.now();
     const record: PollRecord = {
-      version: 1, id: `poll-${randomBytes(6).toString("hex")}`, workspace: this.store.workspace, target,
+      version: 1, id: `poll-${randomBytes(6).toString("hex")}`, workspace: this.store.workspace, workspaceIdentity: this.store.workspaceIdentity, target,
       intervalMs, maxCalls, createdAt: now, deadlineAt: now + timeoutMs, nextDueAt: now, status: "WAITING", attempts: [],
     };
     this.store.create(record);
@@ -273,7 +314,7 @@ export class OperationMonitor {
       const snapshot = this.store.load(id);
       const now = this.clock.now();
       const needsTransition = snapshot.status === "WAITING" && (snapshot.attempts.at(-1)?.status === "STARTED"
-        || snapshot.attempts.length === snapshot.maxCalls || now < lastSeenAt(snapshot)
+        || snapshot.attempts.length === snapshot.maxCalls || now < lastSeenAt(snapshot) || !this.store.workspaceIsCurrent()
         || now >= Math.min(snapshot.nextDueAt, snapshot.deadlineAt));
       // Idle timers only read the atomic snapshot. The kernel guard covers dispatch, not sleeping.
       const record = needsTransition ? this.store.lock(id, () => this.step(this.store.load(id), signal)) : snapshot;
@@ -318,6 +359,7 @@ export class OperationMonitor {
     const lastSeen = lastSeenAt(record);
     const reconciled = this.settleInterrupted(record, now);
     if (signal?.aborted) record.status = "CANCELLED";
+    else if (!this.store.workspaceIsCurrent()) record.status = "WORKSPACE_CHANGED";
     else if (now < lastSeen) record.status = "CLOCK_CHANGED";
     else if (now >= record.deadlineAt) record.status = "DEADLINE";
     else if (record.attempts.length === record.maxCalls) record.status = "MAX_CALLS";
@@ -339,12 +381,15 @@ export class OperationMonitor {
       observation = undefined;
     }
     const ended = this.clock.now();
+    const workspaceCurrent = this.store.workspaceIsCurrent();
+    if (!workspaceCurrent) observation = undefined;
     const finishedAt = Math.max(ended, now);
     record.attempts[record.attempts.length - 1] = observation
       ? { ...pending, status: "OBSERVED", finishedAt, observation }
       : { ...pending, status: "UNKNOWN", finishedAt, reason: "UNAVAILABLE" };
     record.nextDueAt = finishedAt + record.intervalMs;
     if (signal?.aborted) record.status = "CANCELLED";
+    else if (!workspaceCurrent) record.status = "WORKSPACE_CHANGED";
     else if (ended < now) record.status = "CLOCK_CHANGED";
     else if (ended >= record.deadlineAt) record.status = "DEADLINE";
     else if (terminal(observation)) record.status = "OBSERVED_TERMINAL";

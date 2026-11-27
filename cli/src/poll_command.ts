@@ -25,6 +25,7 @@ function render(record: PollRecord): string {
   }
   if (record.status === "OBSERVED_TERMINAL") lines.push("The poll observed a recorded terminal status for the target.");
   if (record.status === "CLOCK_CHANGED") lines.push("The clock moved backwards. Start a new poll when the clock is stable.");
+  if (record.status === "WORKSPACE_CHANGED") lines.push("The original workspace is unavailable or was replaced. No further target reads were made.");
   return lines.join("\n");
 }
 
