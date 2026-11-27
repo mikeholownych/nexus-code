@@ -87,12 +87,13 @@ test("completed operations provide scoped provenance and classify only captured 
   op.git.integrationVerifiers = [];
   op.git.verificationChecks = [definition];
   op.integrations[0].mergedChecks = [];
-  op.integrations[0].verificationBinding = { commit, worktree: integrationWorktree, runs: [], typedChecks: [typed] };
+  op.integrations[0].verificationBinding = { commit, worktree: integrationWorktree, runs: [], attemptId: "11111111-1111-4111-8111-111111111111", typedChecks: [typed] };
   persist();
   const typedProof = knowledgeOperationExcerpts(workspace, op.id).find((row) => row.evidence.source === "verified_evidence");
   assert.ok(typedProof);
   assert.deepEqual(resolveKnowledgeOperationEvidence(workspace, typedProof.ref), typedProof.evidence);
   assert.equal(JSON.parse(typedProof.content).checkId, "tests");
+  assert.equal(JSON.parse(typedProof.content).attemptId, "11111111-1111-4111-8111-111111111111");
   definition.purpose = "Mismatched definition";
   persist();
   assert.equal(resolveKnowledgeOperationEvidence(workspace, typedProof.ref), undefined);

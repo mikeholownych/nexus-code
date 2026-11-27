@@ -111,7 +111,7 @@ function typedVerificationExcerpt(record: SavedOperation, receiptIndex: number, 
     run.outputTruncated || !DIGEST.test(run.outputSha256) || !currentIntegrationMatches(record, receipt)) return undefined;
   const content = JSON.stringify({
     integratedCommit: binding.commit, unitId: receipt.unitId, checkId: definition.id,
-    definitionSha256: check.definitionSha256, requirement: definition.requirement, purpose: definition.purpose,
+    attemptId: binding.attemptId, definitionSha256: check.definitionSha256, requirement: definition.requirement, purpose: definition.purpose,
     command: run.command, completedAt: run.completedAt, outputSha256: run.outputSha256,
   });
   return excerpt(record, `operation/${record.op.id}/typed-verification/${receiptIndex}/${checkIndex}`, "verified_evidence", content);
