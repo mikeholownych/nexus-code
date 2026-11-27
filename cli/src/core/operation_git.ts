@@ -218,11 +218,11 @@ export class OperationGit {
   }
 
   private inIntegration(args: string[]): { ok: boolean; stdout: string; stderr: string } {
-    return gitResult(this.plan.integrationWorktree, [...this.pin, ...args]);
+    return gitResult(this.plan.integrationWorktree, [...this.pin, "--no-replace-objects", ...args]);
   }
 
   currentTip(): string {
-    return git(this.plan.integrationWorktree, [...this.pin, "rev-parse", "HEAD"]);
+    return git(this.plan.integrationWorktree, [...this.pin, "--no-replace-objects", "rev-parse", "HEAD"]);
   }
 
   /**
@@ -944,6 +944,8 @@ export class OperationGit {
         return { ok: false, status: "ENVIRONMENT", reason: "verification cwd is unavailable or resolves through a symlink" };
       }
     }
+    // A named commit must refer to its physical object during both integration and the check.
+    const verifierEnvironment = { ...buildVerifierEnvironment(), GIT_NO_REPLACE_OBJECTS: "1" };
     const asked = this.options.sandbox === true ? "auto" : this.options.sandbox;
     let line = command;
     let engine: "bwrap" | "docker" | undefined;
@@ -961,14 +963,14 @@ export class OperationGit {
       const confined = sandboxedVerifierCommand(
         sandboxCommand, root,
         { engine, network: sandboxNetworkEnabled(), scratch: this.plan.baseDir, readOnlyDirs: [] },
-        { containerName },
+        { containerName, environment: verifierEnvironment },
       );
       if ("unavailable" in confined) return unavailable(`the ${engine} sandbox could not be built (${confined.unavailable})`);
       line = confined.command;
     }
     const startedAt = new Date().toISOString();
     const process = await runProbeProcess("bash", ["-c", line], {
-      cwd: directory, timeoutMs: deadlineMs, env: buildVerifierEnvironment(), signal, dockerContainerName: containerName,
+      cwd: directory, timeoutMs: deadlineMs, env: verifierEnvironment, signal, dockerContainerName: containerName,
       maxCombinedOutputBytes: 4 * 1024 * 1024,
     });
     const output = [process.error, process.stdout, process.stderr].filter(Boolean).join("\n");
