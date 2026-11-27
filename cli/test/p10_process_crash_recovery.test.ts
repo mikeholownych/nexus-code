@@ -23,7 +23,7 @@ async function waitFor(description: string, check: () => boolean, timeoutMs = 10
   assert.fail(`timed out waiting for ${description}`);
 }
 
-test("a real process crash after a tool side effect does not silently replay the call", async () => {
+async function recoverAfterProcessCrash(includeCompletedSibling: boolean): Promise<{ effects: string; toolResults: string[] }> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-p10-crash-"));
   const home = path.join(root, "home");
   fs.mkdirSync(home, { recursive: true });
@@ -34,9 +34,14 @@ test("a real process crash after a tool side effect does not silently replay the
   const counter = path.join(root, "effects.txt");
   const commandPidFile = path.join(root, "command.pid");
   const taskIdFile = path.join(root, "task-id.txt");
-  const command = `printf '%s\\n' "$$" > '${commandPidFile}'; printf 'ran\\n' >> '${counter}'; if [ "$(wc -l < '${counter}')" -gt 1 ]; then exit 0; fi; exec sleep 60`;
-  const call = { name: "run_command", args: { command, timeout_secs: 120 } };
-  const gateway = await startGateway((n) => n <= 2 ? { kind: "tools", calls: [call] } : { kind: "text", content: "done" });
+  const completedCall = { name: "run_command", args: { command: `printf 'completed\\n' >> '${counter}'; printf 'completed\\n'` } };
+  const pendingLabel = includeCompletedSibling ? "pending" : "ran";
+  const pendingCommand = `printf '%s\\n' "$$" > '${commandPidFile}'; printf '${pendingLabel}\\n' >> '${counter}'; if [ "$(wc -l < '${counter}')" -gt ${includeCompletedSibling ? 2 : 1} ]; then exit 0; fi; exec sleep 60`;
+  const pendingCall = { name: "run_command", args: { command: pendingCommand, timeout_secs: 120 } };
+  const initialCalls = includeCompletedSibling ? [completedCall, pendingCall] : [pendingCall];
+  const gateway = await startGateway((n) => n === 1
+    ? { kind: "tools", calls: initialCalls }
+    : { kind: "text", content: "done" });
   const previousCwd = process.cwd();
   const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   let child: ReturnType<typeof spawn> | undefined;
@@ -78,7 +83,7 @@ test("a real process crash after a tool side effect does not silently replay the
     await waitFor("the side effect and running command pid", () => fs.existsSync(counter) && fs.existsSync(commandPidFile));
     commandPid = Number(fs.readFileSync(commandPidFile, "utf8").trim());
     assert.ok(Number.isSafeInteger(commandPid) && commandPid > 1, "fixture recorded its own command pid");
-    assert.equal(fs.readFileSync(counter, "utf8"), "ran\n");
+    assert.equal(fs.readFileSync(counter, "utf8"), includeCompletedSibling ? "completed\npending\n" : "ran\n");
 
     child.kill("SIGKILL");
     const killed = await childExit;
@@ -94,11 +99,11 @@ test("a real process crash after a tool side effect does not silently replay the
     assert.equal(recovery.interrupted, true, "restart identifies the durable operation left in flight");
     await resumed.runTurn("Continue.", undefined, { resume: true });
 
-    assert.equal(fs.readFileSync(counter, "utf8"), "ran\n", "the side effect was not repeated after recovery");
+    const effects = fs.readFileSync(counter, "utf8");
     const toolResults = gateway.requests.flatMap((request: any) => request.messages ?? [])
       .filter((message: any) => message.role === "tool")
       .map((message: any) => String(message.content));
-    assert.ok(toolResults.some((content) => /interrupted with an unknown outcome/.test(content)), JSON.stringify(toolResults));
+    return { effects, toolResults };
   } finally {
     if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     const recordedPid = commandPid ?? (fs.existsSync(commandPidFile) ? Number(fs.readFileSync(commandPidFile, "utf8").trim()) : undefined);
@@ -115,4 +120,17 @@ test("a real process crash after a tool side effect does not silently replay the
     if (previous.home === undefined) delete process.env.HOME; else process.env.HOME = previous.home;
     if (previous.xdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = previous.xdg;
   }
+}
+
+test("a real process crash after a tool side effect does not silently replay the call", async () => {
+  const { effects, toolResults } = await recoverAfterProcessCrash(false);
+  assert.equal(effects, "ran\n", "the side effect was not repeated after recovery");
+  assert.ok(toolResults.some((content) => /effects, if any, are unknown/.test(content)), JSON.stringify(toolResults));
+});
+
+test("a crash during a multi-tool response preserves a completed sibling and does not replay the unknown sibling", async () => {
+  const { effects, toolResults } = await recoverAfterProcessCrash(true);
+  assert.equal(effects, "completed\npending\n", "the completed sibling remains once and the unknown sibling is not repeated");
+  assert.ok(toolResults.some((content) => content.includes("completed")), JSON.stringify(toolResults));
+  assert.ok(toolResults.some((content) => /effects, if any, are unknown/.test(content)), JSON.stringify(toolResults));
 });
