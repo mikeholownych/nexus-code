@@ -460,7 +460,8 @@ export class OperationRunner {
               operationLease.release();
               continue;
             }
-            leases.push(operationLease, resourceLease);
+            // Release the provider-specific lock first, the reverse of acquisition, then return the aggregate slot.
+            leases.push(resourceLease, operationLease);
             admitted.push(assignment);
           }
         } catch (error) {
