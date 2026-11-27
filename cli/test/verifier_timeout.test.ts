@@ -79,6 +79,43 @@ describe("D3 timeout lifecycle", () => {
     }
   });
 
+  test("per-tool timeout settings provide a default and cap requests beneath the global ceiling", () => {
+    const names = [
+      "NEXUS_MAX_TOOL_TIMEOUT_SECS",
+      "NEXUS_TOOL_TIMEOUT_SECS_READ_FILE",
+      "NEXUS_TOOL_TIMEOUT_SECS_RUN_COMMAND",
+    ] as const;
+    const saved = new Map(names.map((name) => [name, process.env[name]]));
+    try {
+      process.env.NEXUS_MAX_TOOL_TIMEOUT_SECS = "1800";
+      process.env.NEXUS_TOOL_TIMEOUT_SECS_READ_FILE = "12";
+      process.env.NEXUS_TOOL_TIMEOUT_SECS_RUN_COMMAND = "10";
+
+      assert.equal(rpcDeadlines("read_file", {}).bridgeMs, 17_000, "the configured timeout is the default for that tool");
+      assert.equal(rpcDeadlines("read_file", { timeout_secs: 20 }).bridgeMs, 17_000, "requests cannot exceed that tool's configured timeout");
+      assert.equal(rpcDeadlines("read_file", { timeout_secs: 5 }).bridgeMs, 10_000, "a shorter per-request timeout remains effective");
+      assert.equal(rpcDeadlines("write_file", {}).bridgeMs, 35_000, "other tools retain their existing default");
+      assert.deepEqual(rpcDeadlines("run_command", {}), { runnerSecs: 10, bridgeMs: 15_000 });
+      assert.deepEqual(rpcDeadlines("run_command", { timeout_secs: 25 }), { runnerSecs: 10, bridgeMs: 15_000 });
+      assert.deepEqual(rpcDeadlines("run_command", { timeout_secs: 1.5 }), { runnerSecs: 10, bridgeMs: 15_000 }, "fractional command timeouts use the configured integer default");
+
+      process.env.NEXUS_MAX_TOOL_TIMEOUT_SECS = "7";
+      assert.equal(rpcDeadlines("read_file", {}).bridgeMs, 12_000, "the global setting remains the hard ceiling");
+      assert.deepEqual(rpcDeadlines("run_command", {}), { runnerSecs: 7, bridgeMs: 12_000 });
+
+      process.env.NEXUS_MAX_TOOL_TIMEOUT_SECS = "1800";
+      for (const invalid of ["0", "-1", "1.5", "12seconds", "86401", "9007199254740992"]) {
+        process.env.NEXUS_TOOL_TIMEOUT_SECS_READ_FILE = invalid;
+        assert.equal(rpcDeadlines("read_file", {}).bridgeMs, 35_000, `invalid per-tool value ${invalid} must not loosen or overflow the existing default`);
+      }
+    } finally {
+      for (const [name, value] of saved) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
   test("verifier result mapping: timeout, ordinary failure and success are three distinct states", async () => {
     const run = (payload: object) => runTestSuiteWithExecutor("/tmp", async () => ({ success: true, output: JSON.stringify(payload) }), "x");
     const timedOut = await run({ exit_code: null, timed_out: true, stdout: "before\n", stderr: "", duration_ms: 1000 });

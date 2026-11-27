@@ -89,6 +89,10 @@ describe("process bounds, read caps, and background services", { skip: resolveCo
   });
 
   test("run_command clamps timeout_secs above NEXUS_MAX_TOOL_TIMEOUT_SECS with notice", async () => {
+    const globalTimeout = process.env.NEXUS_MAX_TOOL_TIMEOUT_SECS;
+    const commandTimeout = process.env.NEXUS_TOOL_TIMEOUT_SECS_RUN_COMMAND;
+    process.env.NEXUS_MAX_TOOL_TIMEOUT_SECS = "1800";
+    delete process.env.NEXUS_TOOL_TIMEOUT_SECS_RUN_COMMAND;
     const repo = makeRepo();
     const bridge = new RustCoreBridge(repo);
     try {
@@ -98,9 +102,21 @@ describe("process bounds, read caps, and background services", { skip: resolveCo
         result.output.includes("[Notice: timeout_secs clamped from 5000 to 1800 (NEXUS_MAX_TOOL_TIMEOUT_SECS)]"),
         `Expected clamp notice in output, got: ${result.output}`
       );
+
+      process.env.NEXUS_TOOL_TIMEOUT_SECS_RUN_COMMAND = "17";
+      const perTool = await bridge.executeTool("run_command", { command: "echo 'per-tool bounded'", timeout_secs: 5000 });
+      assert.equal(perTool.success, true);
+      assert.ok(
+        perTool.output.includes("[Notice: timeout_secs clamped from 5000 to 17 (NEXUS_TOOL_TIMEOUT_SECS_RUN_COMMAND)]"),
+        `Expected per-tool clamp notice in output, got: ${perTool.output}`
+      );
     } finally {
       bridge.shutdown();
       fs.rmSync(repo, { recursive: true, force: true });
+      if (globalTimeout === undefined) delete process.env.NEXUS_MAX_TOOL_TIMEOUT_SECS;
+      else process.env.NEXUS_MAX_TOOL_TIMEOUT_SECS = globalTimeout;
+      if (commandTimeout === undefined) delete process.env.NEXUS_TOOL_TIMEOUT_SECS_RUN_COMMAND;
+      else process.env.NEXUS_TOOL_TIMEOUT_SECS_RUN_COMMAND = commandTimeout;
     }
   });
 

@@ -26,7 +26,7 @@ export const runCommandCapability: CanonicalCapability = {
           },
           "timeout_secs": {
             "type": "number",
-            "description": "Execution timeout in seconds (default: 60; clamped to NEXUS_MAX_TOOL_TIMEOUT_SECS, default 1800, hard maximum 86400)."
+            "description": "Execution timeout in seconds (default: 60, or NEXUS_TOOL_TIMEOUT_SECS_RUN_COMMAND when set; capped by NEXUS_MAX_TOOL_TIMEOUT_SECS, default 1800, hard maximum 86400)."
           },
           "shell": {
             "type": "string",
