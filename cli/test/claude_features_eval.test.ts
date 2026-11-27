@@ -193,7 +193,7 @@ function fixture(t: TestContext, command: string, fault: "receipt" | "stale" | "
     },
   });
   return {
-    originalHead, workspace, draft, plans, batch, store, stats, operationPath,
+    originalHead, workspace, draft, plans, batch, store, stats,
     reopen: () => new OperationStore(workspace, operationPath),
     reopenBatch: () => new BatchOrchestrator(config, { store: new OperationStore(workspace, operationPath), resources, executor }),
   };
@@ -269,6 +269,9 @@ test("reviewed workflow evaluation scores real candidate acceptance and receipt 
         assert.ok(world.store instanceof FaultingReceiptStore && world.store.intercepted);
         assert.equal(persisted.integrations?.length ?? 0, 0);
         assert.equal(binding, undefined);
+        const pending = persisted.events.findLast((event) => event.type === "VERIFICATION_STARTED");
+        assert.ok(pending?.detail?.attemptId, "the durable verification intent identifies the unrecorded outcome");
+        assert.ok(pending?.detail?.commit, "the unrecorded attempt remains bound to its candidate");
       }
       if (row.fault === "cancel") assert.equal(persisted.status, "CANCELLED");
       if (row.fault === "provider") assert.equal(persisted.units[0].blocked?.decision.cause, "EXECUTION_UNKNOWN");
