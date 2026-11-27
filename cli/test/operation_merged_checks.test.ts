@@ -233,7 +233,8 @@ test("a no-change unit still requires the operator verifier on the current integ
 
 test("a successful merged check records the exact candidate and bounded execution evidence", async () => {
   const f = fixture();
-  f.state.integrationVerifiers = ["test -f file.txt"];
+  const command = "test -f file.txt && printf 'accepted output\\n'";
+  f.state.integrationVerifiers = [command];
   f.prepare("u1");
   const tip = f.ops.currentTip();
 
@@ -242,7 +243,8 @@ test("a successful merged check records the exact candidate and bounded executio
   const { verificationBinding } = outcome.receipt;
   assert.equal(verificationBinding?.commit, tip);
   assert.equal(verificationBinding?.worktree, f.integrationWorktree);
-  assert.deepEqual(verificationBinding?.runs.map((run) => [run.command, run.exitCode]), [["test -f file.txt", 0]]);
+  assert.deepEqual(verificationBinding?.runs.map((run) => [run.command, run.exitCode]), [[command, 0]]);
+  assert.equal(verificationBinding?.runs[0].outputPreview, "accepted output");
   assert.ok(verificationBinding?.runs.every((run) => /^[a-f0-9]{64}$/.test(run.outputSha256)));
 });
 

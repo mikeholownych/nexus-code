@@ -32,6 +32,7 @@ import { runProbeProcess } from "./harness/probe_process.js";
 import {
   MAX_INTEGRATION_CHECKS, operationVerificationApplies, operationVerificationDefinitionDigest, type OperationVerificationCheck,
 } from "./operation_verification.js";
+import { MAX_VERIFICATION_OUTPUT_PREVIEW } from "./operation.js";
 import type {
   IntegrationReceipt,
   IntegrationVerificationBinding,
@@ -919,6 +920,7 @@ export class OperationGit {
       maxCombinedOutputBytes: 4 * 1024 * 1024,
     });
     const output = [process.error, process.stdout, process.stderr].filter(Boolean).join("\n");
+    const rendered = formatDiagnosticForOutput(output).trim();
     const run: MergedCheckRun = {
       command,
       startedAt,
@@ -927,6 +929,8 @@ export class OperationGit {
       exitCode: process.status,
       outputSha256: createHash("sha256").update(output).digest("hex"),
       outputTruncated: Boolean(process.outputTruncated),
+      outputPreview: rendered.slice(-MAX_VERIFICATION_OUTPUT_PREVIEW),
+      ...(rendered.length > MAX_VERIFICATION_OUTPUT_PREVIEW ? { outputPreviewOmitted: true as const } : {}),
     };
     const capture = { run, ...(engine ? { sandbox: engine } : {}), ...(process.outputTruncated ? { outputTruncated: true as const } : {}) };
     if (process.cancelled || signal?.aborted) {
@@ -941,7 +945,7 @@ export class OperationGit {
       };
     }
     if (!process.timedOut && !process.error && process.status === 0) return { ok: true, status: "PASSED", ...capture };
-    const tail = output.trim().split("\n").slice(-6).join("\n");
+    const tail = run.outputPreview!.split("\n").slice(-6).join("\n");
     if (!process.timedOut && (process.status === 126 || process.status === 127)) {
       return {
         ok: false,

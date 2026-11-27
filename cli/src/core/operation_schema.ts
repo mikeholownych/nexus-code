@@ -28,7 +28,7 @@
  * Migration is deliberately additive and lossless: the store writes a byte-identical `.pre-migration-vN` copy of the
  * whole record before the first write at a newer schema version (see `OperationStore.save`).
  */
-import { unresolvedAssumptionsProblem, type DurableOperationState, type MergedCheckRun, type OperationPolicy, type WorkUnit } from "./operation.js";
+import { MAX_VERIFICATION_OUTPUT_PREVIEW, unresolvedAssumptionsProblem, type DurableOperationState, type MergedCheckRun, type OperationPolicy, type WorkUnit } from "./operation.js";
 import { specialistInputsProblem } from "./specialist_profiles.js";
 import { parseBoundaryRules } from "./boundary_rules.js";
 import {
@@ -57,6 +57,8 @@ function validMergedCheckRun(run: MergedCheckRun, passed: boolean): boolean {
     && Number.isSafeInteger(run.timeoutMs) && run.timeoutMs > 0
     && (run.exitCode === null || Number.isSafeInteger(run.exitCode))
     && typeof run.outputSha256 === "string" && /^[a-f0-9]{64}$/.test(run.outputSha256)
+    && (run.outputPreview === undefined || (typeof run.outputPreview === "string" && run.outputPreview.length <= MAX_VERIFICATION_OUTPUT_PREVIEW))
+    && (run.outputPreviewOmitted === undefined || (run.outputPreviewOmitted === true && Boolean(run.outputPreview)))
     && typeof run.outputTruncated === "boolean" && (!passed || (run.exitCode === 0 && !run.outputTruncated)));
 }
 const DECISION_ACTION_KINDS = new Set([

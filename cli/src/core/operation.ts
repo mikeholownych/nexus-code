@@ -398,6 +398,8 @@ export interface MergedCheck {
   sandbox?: "bwrap" | "docker";
 }
 
+export const MAX_VERIFICATION_OUTPUT_PREVIEW = 2048;
+
 /** Bounded verifier capture bound to an integration worktree and its exact committed candidate. */
 export interface MergedCheckRun {
   command: string;
@@ -407,6 +409,9 @@ export interface MergedCheckRun {
   exitCode: number | null;
   outputSha256: string;
   outputTruncated: boolean;
+  /** Redacted tail for operator export. The digest covers captured output before this projection. */
+  outputPreview?: string;
+  outputPreviewOmitted?: true;
 }
 
 export interface TypedCheckOutcome {
