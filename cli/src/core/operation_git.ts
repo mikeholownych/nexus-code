@@ -740,7 +740,11 @@ export class OperationGit {
     const ran: MergedCheck[] = [];
     for (const { command, owners } of checks) {
       const outcome = this.verifyMerged(command);
-      const check: MergedCheck = { command, owners, status: outcome.status, ...(outcome.sandbox ? { sandbox: outcome.sandbox } : {}) };
+      const check: MergedCheck = {
+        command, owners, status: outcome.status,
+        ...(outcome.sandbox ? { sandbox: outcome.sandbox } : {}),
+        ...(outcome.outputTruncated ? { outputTruncated: true } : {}),
+      };
       ran.push(check);
       if (!outcome.ok) return { ran, failed: { check, detail: outcome.reason ?? "integration verification failed" } };
       const integrity = this.integrationIntegrity(commit, expectedTip);
@@ -754,7 +758,7 @@ export class OperationGit {
    * sandbox through the wrapper `nexus verify` uses (the operation's other worktrees hidden, the host read-only), or on
    * the host when the session has no sandbox. A sandbox that cannot be built is a result, never a reason to run outside it.
    */
-  private verifyMerged(command: string): { ok: boolean; reason?: string; status: MergedCheck["status"]; sandbox?: "bwrap" | "docker" } {
+  private verifyMerged(command: string): { ok: boolean; reason?: string; status: MergedCheck["status"]; sandbox?: "bwrap" | "docker"; outputTruncated?: true } {
     const deadlineMs = (this.options.verifyTimeoutSecs ?? verifierTimeoutSecs()) * 1000;
     const directory = this.plan.integrationWorktree;
     const asked = this.options.sandbox === true ? "auto" : this.options.sandbox;
@@ -781,21 +785,32 @@ export class OperationGit {
     const ran = runVerifierShell(line, directory, deadlineMs);
     // Killing the Docker client at the deadline leaves its container running: remove it by name.
     if (containerName && (ran.timedOut || ran.exitCode === null)) spawnSync("docker", ["rm", "--force", containerName], { stdio: "ignore", timeout: 30_000 });
-    const sandbox = engine ? { sandbox: engine } : {};
-    if (ran.success) return { ok: true, status: "PASSED", ...sandbox };
+    const capture = {
+      ...(engine ? { sandbox: engine } : {}),
+      ...(ran.truncated ? { outputTruncated: true as const } : {}),
+    };
+    if (ran.truncated && !ran.timedOut) {
+      return {
+        ok: false,
+        status: "ENVIRONMENT",
+        ...capture,
+        reason: `integration verification could not retain its evidence on the merged tree (output truncated): ${command}`,
+      };
+    }
+    if (ran.success) return { ok: true, status: "PASSED", ...capture };
     const tail = ran.output.trim().split("\n").slice(-6).join("\n");
     if (!ran.timedOut && (ran.exitCode === 126 || ran.exitCode === 127)) {
       return {
         ok: false,
         status: "ENVIRONMENT",
-        ...sandbox,
+        ...capture,
         reason: `integration verification could not run on the merged tree (exit ${ran.exitCode}): ${command}\n${environmentHint()}` + (tail ? `\n${tail}` : ""),
       };
     }
     return {
       ok: false,
       status: ran.timedOut ? "TIMED_OUT" : "FAILED",
-      ...sandbox,
+      ...capture,
       reason:
         `integration verification failed on the merged tree: ${command}${ran.timedOut ? " (timed out)" : ""}` +
         (tail ? `\n${tail}` : ""),

@@ -383,10 +383,12 @@ export interface MergedCheck {
   command: string;
   /** Whose verifier this is: unit ids, or `operator` for a verifier pinned for the operation. */
   owners: string[];
-  /** ENVIRONMENT: the command could not be started (exit 126/127), or the session's sandbox could not be built. */
+  /** ENVIRONMENT: a command, sandbox, or evidence capture could not be completed. */
   status: "PASSED" | "FAILED" | "ENVIRONMENT" | "TIMED_OUT";
   /** The same command on the tree before the merge, run only after a failure to decide whether the merge caused it. */
   baseline?: "PASSED" | "FAILED";
+  /** The bounded output capture was incomplete. */
+  outputTruncated?: true;
   /** The engine that confined the run; absent when the session has no sandbox configured. */
   sandbox?: "bwrap" | "docker";
 }

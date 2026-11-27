@@ -1127,6 +1127,9 @@ export async function verifyChange(request: VerifyRequest, operator: VerifyOpera
       };
       doc.runs.push(record);
       await checkpoint();
+      if (ran.truncated && !ran.timedOut) {
+        throw new Stop("VERIFIER_FAILED", `verification evidence is incomplete (output truncated during ${phase})`);
+      }
       return { ...ran, executedTests };
     };
 

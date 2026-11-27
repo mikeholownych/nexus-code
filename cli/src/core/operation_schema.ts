@@ -344,7 +344,8 @@ export function validateOperationState(state: DurableOperationState): void {
         || (receipt.tests !== undefined && (!receipt.tests || typeof receipt.tests.command !== "string"))
         || (checks !== undefined && (!Array.isArray(checks) || checks.some((check) =>
           !check || typeof check.command !== "string" || !MERGED_CHECK_STATUSES.has(check.status)
-          || !Array.isArray(check.owners) || check.owners.some((owner) => typeof owner !== "string"))));
+          || !Array.isArray(check.owners) || check.owners.some((owner) => typeof owner !== "string")
+          || (check.outputTruncated !== undefined && (check.outputTruncated !== true || check.status === "PASSED")))));
       if (damaged) {
         throw new InvalidOperationStateError(`operation ${state.id}: the integration receipt of '${receipt.unitId}' has invalid files, tests or mergedChecks`);
       }

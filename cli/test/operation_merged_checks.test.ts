@@ -219,6 +219,20 @@ test("the operator's pinned verifier runs on every merge, and a unit that breaks
   assertUntouched(f, tip);
 });
 
+test("integration requires complete verifier output even when the command exits successfully", async () => {
+  const f = fixture();
+  f.state.integrationVerifiers = ["node -e 'process.stdout.write(Buffer.alloc(4 * 1024 * 1024 + 1, 10))'"];
+  write(f.prepare("u1"), "u1.txt", "one\n");
+  const tip = f.ops.currentTip();
+
+  const outcome = await f.integrate("u1");
+  assert.ok(outcome.kind === "failed");
+  assert.match(outcome.reason, /output truncated/);
+  assert.equal(outcome.checks?.[0]?.status, "ENVIRONMENT");
+  assert.equal(outcome.checks?.[0]?.outputTruncated, true);
+  assertUntouched(f, tip);
+});
+
 test("a check that already fails before the merge is reported and not attributed to the new unit", async () => {
   const f = fixture();
   const marker = path.join(f.outside, "broken");
