@@ -287,10 +287,10 @@ export class BatchOrchestrator {
         entry: "new",
         prepare: () => {
           this.options.signal?.throwIfAborted();
-          plans.assertCurrentBase(acceptance);
           if (realpathAllowingMissing(gitPlan.integrationWorktree) !== gitPlan.integrationWorktree) {
             throw new Error("Plan execution refuses a redirected integration worktree.");
           }
+          plans.reserveAdmission(acceptance);
         },
       });
       return { id: result.id, status: batchStatus(result), operation: result };

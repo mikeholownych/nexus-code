@@ -396,7 +396,7 @@ export class BatchPlanStore {
     this.directory = path.join(path.resolve(stateRoot), sha256(this.workspace));
   }
 
-  private file(id: string, kind: "draft" | "review" | "acceptance" = "draft"): string {
+  private file(id: string, kind: "draft" | "review" | "acceptance" | "admission" = "draft"): string {
     text("draft id", id, 41, DRAFT_ID);
     const resolved = realpathAllowingMissing(this.directory);
     if (isPathWithin(resolved, this.workspace)) throw new Error("batch plan state must be outside the workspace");
@@ -563,6 +563,22 @@ export class BatchPlanStore {
     const digest = text("plan acceptance digest", record.digest, 64, SHA256);
     if (recordDigest(snapshot) !== digest) throw new Error("plan acceptance digest mismatch");
     return { ...snapshot, digest };
+  }
+
+  /** Reserve the operation before its runner can create worktrees or dispatch units. */
+  reserveAdmission(acceptance: BatchPlanAcceptance): void {
+    this.withPlanGuard(acceptance.draft.id, () => {
+      this.assertCurrentBase(acceptance);
+      const file = this.file(acceptance.draft.id, "admission");
+      if (readPrivateJson(file, { label: "Batch plan admission" }) !== undefined) {
+        throw new Error("The approved plan was already admitted. Restore its durable operation before resuming.");
+      }
+      writePrivateJson(file, {
+        version: 1,
+        operationId: acceptance.operationId,
+        acceptanceDigest: acceptance.digest,
+      });
+    });
   }
 
   /** Recheck a persisted decision before creating its worktree. Historical receipts remain readable after HEAD moves. */
