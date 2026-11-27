@@ -18,7 +18,7 @@ describe("nexus agent probe adapter", () => {
       const base = fs.mkdtempSync(path.join(os.tmpdir(), "hir-nx-core-"));
       fs.writeFileSync(path.join(base, "artifact.txt"), "ok\n");
       const store = new HarnessStore({ rootDir: path.join(base, "state") });
-      const adapter = new NexusAgentProbeAdapter({ resolveConfig: () => ({ model: "m", endpoint: "http://127.0.0.1:1/v1" }) });
+      const adapter = new NexusAgentProbeAdapter({ resolveConfig: () => ({ model: "m", endpoint: "http://127.0.0.1:1/v1" }), resolveCoreBinary: () => undefined });
       const res = await adapter.run({ runId: "r1", candidateId: "c1", candidatePath: base, case: { id: "case", description: "d", prompt: "p", expected: { artifactPath: "artifact.txt" } }, timeoutMs: 1000, store });
       assert.equal(res.status, "BLOCKED");
       assert.match(res.observations.join("\n"), /harness-core binary not found/);

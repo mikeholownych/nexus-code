@@ -27,6 +27,7 @@ export interface NexusAgentProbeOptions {
 export interface NexusAgentProbeAdapterOptions {
   createAgent?: (config: HarnessConfig, workspace: string) => { run: (prompt: string, signal?: AbortSignal) => Promise<TurnResult>; shutdown?: () => void };
   resolveConfig?: (input: ProbeInput) => NexusAgentProbeOptions | undefined;
+  resolveCoreBinary?: () => string | undefined;
 }
 
 function hasDeterministicOracle(input: ProbeInput): boolean {
@@ -54,7 +55,7 @@ export class NexusAgentProbeAdapter implements ProbeAdapter {
       }
 
       const cfg = this.opts.resolveConfig?.(input);
-      const coreBinaryPath = this.opts.createAgent ? undefined : resolveCoreBinary();
+      const coreBinaryPath = this.opts.createAgent ? undefined : (this.opts.resolveCoreBinary ?? resolveCoreBinary)();
       if (!this.opts.createAgent) {
         if (!cfg) {
           const blocked: ProbeResult = {
