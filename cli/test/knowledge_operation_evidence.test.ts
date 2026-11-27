@@ -63,6 +63,16 @@ test("completed operations provide scoped provenance and classify only captured 
     },
   });
   assert.equal(suggestion?.success, true);
+  const audit = await executeKnowledgeSuggestionCommand(`audit operation:${op.id}`, {
+    workspace, readOnly: true,
+  } as HarnessConfig);
+  assert.equal(audit?.success, true);
+  const audited = JSON.parse(audit!.output).records;
+  assert.equal(audited.length, 1);
+  assert.deepEqual(audited[0].evidence[0], { ref: proof.ref, ...proof.evidence });
+  assert.equal(audited[0].proposal, undefined);
+  const unrelated = await executeKnowledgeSuggestionCommand("audit operation:other", { workspace, readOnly: true } as HarnessConfig);
+  assert.deepEqual(JSON.parse(unrelated!.output), { records: [], omitted: 0 });
 
   fs.writeFileSync(path.join(integrationWorktree, "new-content"), "candidate changed");
   assert.equal(resolveKnowledgeOperationEvidence(workspace, proof.ref), undefined);

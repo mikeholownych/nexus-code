@@ -378,8 +378,14 @@ export class KnowledgeSuggestions {
 }
 
 /** Content-free operator audit projection. The full proposal stays in private state. */
-export function knowledgeSuggestionAudit(workspace: string, sessionId?: string): Array<Omit<KnowledgeSuggestion, "proposal">> {
+export function knowledgeSuggestionAudit(
+  workspace: string,
+  selection?: string | { operationId: string },
+): Array<Omit<KnowledgeSuggestion, "proposal">> {
+  const operationRef = typeof selection === "object" ? `operation/${selection.operationId}` : undefined;
   return new KnowledgeSuggestions(workspace, { readOnly: true }).list()
-    .filter((item) => !sessionId || item.evidence?.some(({ ref }) => ref.startsWith(`${sessionId}:`)))
+    .filter((item) => !selection || item.evidence?.some(({ ref }) => operationRef
+      ? ref === operationRef || ref.startsWith(`${operationRef}/`)
+      : ref.startsWith(`${selection}:`)))
     .map(({ proposal: _proposal, ...audit }) => audit);
 }
