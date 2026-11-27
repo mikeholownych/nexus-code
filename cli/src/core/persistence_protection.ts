@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { InformationFlowBoundary } from "./egress.js";
 import { WorkspacePath } from "./workspace_path.js";
-import { validateBranchName } from "../worktrunk/paths.js";
+import { gitSlug, validateBranchName } from "../worktrunk/paths.js";
 import { WORKTREE_BINDING_VERSION } from "./state_schema.js";
 import { readRegistry } from "../worktrunk/registry.js";
 import { openRepo } from "../worktrunk/repo.js";
@@ -223,6 +223,29 @@ function hasValidatedOperationGitPaths(value: { operation?: any }, selectedWorks
   }
 }
 
+/** Resolve the deterministic integration ref. Recover an old entropy marker only from the linked checkout. */
+export function resolveOperationIntegrationBranch(
+  id: string,
+  git: { repoRoot: string; baseDir: string; integrationWorktree: string; integrationBranch: string },
+): string | undefined {
+  const key = `op-${gitSlug(id)}`;
+  const base = path.join(git.repoRoot, ".nexus", "worktrees", key);
+  const branch = `nexus/${key}/integration`;
+  if (git.baseDir !== base || git.integrationWorktree !== path.join(base, "integration") ||
+      classifyPathComponents(branch).some((finding) => finding.classificationType !== "UNCERTAIN")) return undefined;
+  if (git.integrationBranch === branch) return branch;
+  if (git.integrationBranch !== "[REDACTED:HIGH_ENTROPY_STRING]") return undefined;
+  try {
+    const repo = openRepo(git.repoRoot);
+    if (repo.cwd === git.repoRoot &&
+        isLinkedWorktreeDir(git.integrationWorktree, repo.commonDir) &&
+        repo.entries.some((entry) => entry.path === git.integrationWorktree && entry.branch === branch)) return branch;
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
 /**
  * Protect a task-state record while preserving WorkspacePath values supplied by
  * the selected workspace model and operation Git paths validated against that
@@ -299,7 +322,11 @@ export function redactTaskStateForPersistence<T extends {
   }
 
   const preserveOperationGitPaths = hasValidatedOperationGitPaths(value as any, selectedWorkspace);
-  const operationGit = (value as any).operation?.git;
+  const operation = (value as any).operation;
+  const operationGit = operation?.git;
+  const integrationBranch = preserveOperationGitPaths && operation.id === value.taskId
+    ? resolveOperationIntegrationBranch(value.taskId, operationGit)
+    : undefined;
   const maskWorktreePath = Boolean(worktreePath && (typedPaths.length > 1 || classifyPathComponents(worktreePath).length > 0));
   // Mask validated path fields before classification, then restore their exact values.
   const masked = {
@@ -323,6 +350,7 @@ export function redactTaskStateForPersistence<T extends {
           repoRoot: OPERATION_GIT_PATH_PLACEHOLDER,
           baseDir: OPERATION_GIT_PATH_PLACEHOLDER,
           integrationWorktree: OPERATION_GIT_PATH_PLACEHOLDER,
+          ...(integrationBranch ? { integrationBranch: WORKTREE_BRANCH_PLACEHOLDER } : {}),
           units: Object.fromEntries(Object.entries(operationGit.units ?? {}).map(([id, unit]: [string, any]) => [
             id,
             { ...unit, worktree: OPERATION_GIT_PATH_PLACEHOLDER },
@@ -357,6 +385,7 @@ export function redactTaskStateForPersistence<T extends {
           repoRoot: operationGit.repoRoot,
           baseDir: operationGit.baseDir,
           integrationWorktree: operationGit.integrationWorktree,
+          ...(integrationBranch ? { integrationBranch } : {}),
           units: Object.fromEntries(Object.entries(protectedValue.operation.git.units ?? {}).map(([id, unit]: [string, any], index) => [
             id,
             { ...unit, worktree: (Object.values(operationGit.units ?? {})[index] as any).worktree },

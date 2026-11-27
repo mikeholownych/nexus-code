@@ -40,6 +40,7 @@ export function readOnlySlashAllowed(command: string, args: string): boolean {
   const name = spec?.name ?? command.trim().replace(/^\//, "").toLowerCase();
   const value = args.trim().toLowerCase();
   if (["help", "status", "tokens", "diff", "git", "checkpoints", "audit", "receipt", "details", "sessions", "exit", "mode", "clear", "history", "skills"].includes(name)) return true;
+  if (secondaryWorkflowReadOnlyAllowed(name, value)) return true;
   if (name === "checkpoint") return value === "diff" || value.startsWith("diff ");
   if (name === "worktree") return isReadOnlyWorktreeArgs(value);
   if (name === "batch") return /^(?:plan\s+show)(?:\s|$)/.test(value);
@@ -81,7 +82,7 @@ import {
   type ToolSummary,
 } from "./protocol.js";
 import { OSC52_MAX_BYTES } from "./clipboard.js";
-import { SlashHost, SlashOutcome, SlashSpec, errorText, findSlash, slashCatalog } from "./slash/catalog.js";
+import { SlashHost, SlashOutcome, SlashSpec, errorText, findSlash, secondaryWorkflowReadOnlyAllowed, slashCatalog } from "./slash/catalog.js";
 import { routeSlash } from "./slash/router.js";
 import { surfaceFacts } from "./surface_facts.js";
 import { buildCatalog } from "./model_catalog.js";
@@ -119,6 +120,7 @@ export class SidecarServer {
   private alwaysApprove = false;
   private activeTurn?: Promise<void>;
   private turnAbort?: AbortController;
+  private sideQuestionAbort?: AbortController;
   private pendingApproval?: { id: string; tool: string; settle: (approved: boolean) => void; event: SidecarEvent };
   /** Approvals are asked one at a time: a second request waits for the open one instead of replacing it. */
   private approvalTail: Promise<unknown> = Promise.resolve();
@@ -1001,6 +1003,19 @@ export class SidecarServer {
       this.queueCompaction(id, args.split(/\s+/).includes("--llm"));
       return;
     }
+    const name = findSlash(command)?.name;
+    if (name === "btw" && (this.sideQuestionAbort || this.activeSpec?.name === "btw")) {
+      this.emit({ type: "error", id, code: "BUSY", message: "A side question is already running." });
+      return;
+    }
+    if (this.activeTurn && !this.shutdownPromise && name === "btw") {
+      const controller = new AbortController();
+      this.sideQuestionAbort = controller;
+      void this.busySafeSlash(id, command, args, controller.signal).finally(() => {
+        this.sideQuestionAbort = undefined;
+      });
+      return;
+    }
     // Read-only diagnostics run beside a turn: they touch no conversation or workspace state the turn uses.
     if (this.activeTurn && !this.shutdownPromise && busySafe(command, args)) {
       void this.busySafeSlash(id, command, args);
@@ -1045,9 +1060,9 @@ export class SidecarServer {
     });
   }
 
-  private async busySafeSlash(id: string, command: string, args: string): Promise<void> {
+  private async busySafeSlash(id: string, command: string, args: string, signal = new AbortController().signal): Promise<void> {
     try {
-      const outcome = await routeSlash(this.slashHost(id), command, args, new AbortController().signal);
+      const outcome = await routeSlash(this.slashHost(id), command, args, signal);
       if (outcome.kind !== "reply") throw new Error(`/${command} cannot start a turn while another is running`);
       this.emit({
         type: "slash.result",
@@ -1364,6 +1379,7 @@ export class SidecarServer {
     for (const list of this.modelLists.values()) list.abort();
     this.shutdownPromise ??= (async () => {
       this.startupProbeAbort.abort();
+      this.sideQuestionAbort?.abort(new Error("sidecar shutdown"));
       this.turnAbort?.abort(new Error("sidecar shutdown"));
       await this.idle();
       this.app.shutdown();

@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readOnlySlashAllowed } from "../src/sidecar.js";
 import { replReadOnlyAllowed } from "../src/repl.js";
 
 test("read-only REPL allows inspection but refuses mutating slash commands", () => {
@@ -20,5 +21,17 @@ test("read-only REPL allows inspection but refuses mutating slash commands", () 
     ["doctor", "--fix --yes"], ["mcp", "list"], ["upgrade", "--check"], ["  init  ", ""],
   ]) {
     assert.equal(replReadOnlyAllowed(command, args), false, `/${command} ${args} must be refused`);
+  }
+});
+
+test("review workflows are read-only and poll writes require an editable session", () => {
+  for (const allowed of [readOnlySlashAllowed, replReadOnlyAllowed]) {
+    assert.equal(allowed("advisor", "task inspect this"), true);
+    assert.equal(allowed("simplify", "operation-1"), true);
+    assert.equal(allowed("btw", "what does this mean?"), true);
+    assert.equal(allowed("poll", "status monitor-1"), true);
+    assert.equal(allowed("poll", "start operation:op1"), false);
+    assert.equal(allowed("poll", "resume monitor-1"), false);
+    assert.equal(allowed("poll", "cancel monitor-1"), false);
   }
 });

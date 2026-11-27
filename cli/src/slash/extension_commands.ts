@@ -278,6 +278,32 @@ async function loop({ host, args, signal }: SlashContext): Promise<SlashOutcome>
   return reply("loop", [...log, ...(log.length ? [""] : []), result.output].join("\n"), result.success);
 }
 
+const advisor: SlashHandler = async ({ host, args, signal }) => {
+  const { executeQualityCommand } = await import("../quality_command.js");
+  const result = await executeQualityCommand("advisor", args, host.app.getConfig(), signal);
+  return reply("advisor", result.output, result.success);
+};
+
+const simplify: SlashHandler = async ({ host, args, signal }) => {
+  const { executeQualityCommand } = await import("../quality_command.js");
+  const result = await executeQualityCommand("simplify", args, host.app.getConfig(), signal);
+  return reply("simplify", result.output, result.success);
+};
+
+const btw: SlashHandler = async ({ host, args, signal }) => {
+  const config = { ...host.app.getConfig() };
+  const { executeSideQuestion } = await import("../side_question.js");
+  const result = await executeSideQuestion(args, config, signal);
+  return reply("btw", result.output, result.success);
+};
+
+const poll: SlashHandler = async ({ host, args, signal }) => {
+  const { executePollCommand } = await import("../poll_command.js");
+  const config = host.app.getConfig();
+  const result = await executePollCommand(args, { ...config, readOnly: config.readOnly || host.mode() === "read-only" }, signal);
+  return reply("poll", result.output, result.success);
+};
+
 async function harness({ host, args, signal }: SlashContext): Promise<SlashOutcome> {
   const result = await executeHarnessSlashCommand(args, host.app.getConfig(), signal);
   return reply("harness", result.output, result.success);
@@ -312,6 +338,10 @@ export const EXTENSION_HANDLERS: Record<string, SlashHandler> = {
   batch,
   goal,
   loop,
+  advisor,
+  simplify,
+  btw,
+  poll,
   harness,
   recover,
   "!": bang,

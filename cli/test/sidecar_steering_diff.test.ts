@@ -386,6 +386,41 @@ describe("activity, read-only doctor while busy, and saved state", () => {
     });
   });
 
+  test("a busy side question has a separate request and leaves the main turn and history alone", async () => {
+    const mainPrompt = "Explain the importer for the main task.";
+    const question = "What does this side-question marker mean?";
+    const answer = "A separate answer.";
+    await withSidecar(
+      (n) => n === 1
+        ? { kind: "text", content: "Main answer.", delayMs: 800 }
+        : { kind: "text", content: answer, delayMs: 100 },
+      async ({ app, server, events, send, gw }) => {
+        await send({ type: "prompt.submit", id: "t1", text: mainPrompt });
+        await waitUntil(() => gw.requests.length === 1, 10_000);
+        await send({ type: "slash", id: "s1", command: "btw", args: question });
+        await send({ type: "slash", id: "s2", command: "btw", args: "another side question" });
+        const duplicate = await waitForEvent(events, (e) => e.id === "s2");
+        assert.equal(duplicate.code, "BUSY");
+        const side = await waitForEvent(events, (e) => e.type === "slash.result" && e.id === "s1", 10_000);
+        assert.equal(side.success, true);
+        assert.match(side.output, /separate answer/i);
+        assert.ok(!events.some((e) => e.type === "turn.result"));
+        await server.idle();
+        assert.equal(events.filter((e) => e.type === "turn.result").length, 1);
+        assert.equal(gw.requests.length, 2);
+        assert.ok(JSON.stringify(gw.requests[1]).includes(question));
+        assert.ok(!JSON.stringify(gw.requests[1]).includes(mainPrompt));
+        assert.ok(!JSON.stringify(app.getMessages()).includes(question));
+        assert.ok(!JSON.stringify(app.getMessages()).includes(answer));
+        await send({ type: "slash", id: "history", command: "history", args: "" });
+        const history = await waitForEvent(events, (e) => e.type === "slash.result" && e.id === "history");
+        assert.ok(history.output.includes(mainPrompt));
+        assert.ok(!history.output.includes(question));
+        assert.ok(!history.output.includes(answer));
+      },
+    );
+  });
+
   test("the saved session carries plan, objective and history; export says whether it is complete", async () => {
     const objective = "Fix the importer.\n1. Reject empty names.\n2. Reject negatives.";
     const script = (n: number): Reply =>

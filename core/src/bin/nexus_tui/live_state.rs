@@ -2622,7 +2622,8 @@ impl LiveState {
             }
             Some(Invocation::Quit) => return Some(Action::Quit),
             Some(Invocation::Remote { command, args })
-                if command == "doctor" && !args.split_whitespace().any(|a| a == "--fix") =>
+                if command == "btw"
+                    || (command == "doctor" && !args.split_whitespace().any(|a| a == "--fix")) =>
             {
                 self.composer.take();
                 self.slash_seq += 1;
@@ -3717,6 +3718,21 @@ mod tests {
         type_text(&mut state, "/doctor --fix");
         assert_eq!(state.on_key(key(KeyCode::Enter)), None);
         assert_eq!(state.composer, "/doctor --fix");
+    }
+
+    #[test]
+    fn side_question_runs_while_busy_without_steering_or_replacing_the_pending_turn() {
+        let mut state = busy();
+        state.pending = Some("t1".into());
+        type_text(&mut state, "/btw remind me what this does");
+        assert!(matches!(
+            state.on_key(key(KeyCode::Enter)),
+            Some(Action::Send(Command::Slash { ref command, ref args, .. }))
+                if command == "btw" && args == "remind me what this does"
+        ));
+        assert_eq!(state.pending.as_deref(), Some("t1"));
+        assert!(state.session.busy);
+        assert!(state.steer_texts.is_empty());
     }
 
     #[test]

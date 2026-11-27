@@ -107,6 +107,41 @@ describe("slash router: session commands", () => {
     });
   });
 
+  test("the four secondary workflows are registered as cancellable replies", async () => {
+    await withRig(async ({ app, reply, saved }) => {
+      const before = structuredClone(app.getMessages());
+      for (const command of ["advisor", "simplify", "btw", "poll"]) {
+        assert.equal(findSlash(command)?.cancellable, true, command);
+        assert.equal(hasHandler(command), true, command);
+        const result = await reply(command);
+        assert.equal(result.success, false);
+        assert.match(result.output, new RegExp(`Usage: /${command}\\b`));
+      }
+      assert.deepEqual(app.getMessages(), before);
+      assert.deepEqual(saved, []);
+    });
+  });
+
+  test("polling is a separate durable reply whose status remains inspectable in read-only mode", async () => {
+    await withRig(async ({ host, reply, prompts, saved }) => {
+      const result = await reply("poll", "start operation:absent --interval 5s --timeout 1s --max-calls 1");
+      assert.equal(result.success, true, result.output);
+      assert.match(result.output, /MAX_CALLS/);
+      assert.match(result.output, /UNKNOWN/);
+      const id = result.output.match(/poll-[a-f0-9]{12}/)?.[0];
+      assert.ok(id);
+      host.setMode("read-only");
+      const status = await reply("poll", `status ${id}`);
+      assert.equal(status.success, true, status.output);
+      assert.equal(status.output, result.output);
+      const cancel = await reply("poll", `cancel ${id}`);
+      assert.equal(cancel.success, false);
+      assert.match(cancel.output, /cannot create, resume or cancel/);
+      assert.deepEqual(prompts, []);
+      assert.deepEqual(saved, []);
+    });
+  });
+
   test("unknown commands fail and point at /help", async () => {
     await withRig(async ({ reply }) => {
       const out = await reply("frobnicate");

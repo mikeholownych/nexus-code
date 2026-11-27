@@ -163,7 +163,7 @@ test("a future nested operation version is refused before load or save can rewri
   assert.equal(fs.statSync(file).mtimeMs, mtime, "save must not touch the future record's mtime");
 });
 
-test("operation Git paths round-trip exactly but sensitive path components are refused", (t) => {
+test("operation Git paths and refs round-trip exactly but sensitive path components are refused", (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-release-git-paths-"));
   t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: workspace });
@@ -174,7 +174,7 @@ test("operation Git paths round-trip exactly but sensitive path components are r
   execFileSync("git", ["commit", "-qm", "base"], { cwd: workspace });
 
   const store = new OperationStore(workspace, path.join(workspace, "tasks"), workspace);
-  const op = newOperation("op-paths", "preserve operation git paths", [{ id: "u1", prompt: "work" }], [resource], Date.now());
+  const op = newOperation("batch-plan-aa231273-22b8-46d4-a550-c72895e04eb0", "preserve operation git paths", [{ id: "u1", prompt: "work" }], [resource], Date.now());
   const plan = planOperationGit(workspace, op.id);
   op.git = newOperationGitState(plan);
   ensureIntegrationWorktree(plan, op.git);
@@ -184,6 +184,18 @@ test("operation Git paths round-trip exactly but sensitive path components are r
   assert.equal(loaded.git!.repoRoot, plan.repoRoot);
   assert.equal(loaded.git!.baseDir, plan.baseDir);
   assert.equal(loaded.git!.integrationWorktree, plan.integrationWorktree);
+  assert.equal(loaded.git!.integrationBranch, plan.integrationBranch);
+
+  // Older state could lose this exact Git ref to the entropy heuristic. Recover only from the linked worktree.
+  const file = store.manager.getStateFilePath(op.id);
+  const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  assert.equal(raw.operation.git.integrationBranch, plan.integrationBranch);
+  raw.operation.git.integrationBranch = "[REDACTED:HIGH_ENTROPY_STRING]";
+  const legacy = JSON.stringify(raw);
+  fs.writeFileSync(file, legacy, { mode: 0o600 });
+  assert.equal(store.loadForReplay(op.id).git!.integrationBranch, plan.integrationBranch);
+  assert.equal(fs.readFileSync(file, "utf8"), legacy);
+
 
   loaded.git!.repoRoot = path.join(workspace, `ghp_${"A".repeat(36)}`);
   assert.throws(() => store.save(loaded), /sensitive/i);
