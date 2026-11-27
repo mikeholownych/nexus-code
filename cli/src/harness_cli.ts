@@ -16,14 +16,14 @@ function out(obj: unknown, json = false): void {
   else process.stdout.write(JSON.stringify(obj, null, 2) + "\n");
 }
 
-async function withJsonStdout<T>(json: boolean, fn: () => Promise<T>): Promise<T> {
+export async function withJsonStdout<T>(json: boolean, fn: () => Promise<T>): Promise<T> {
   if (!json) return fn();
-  const orig = process.stdout.write.bind(process.stdout);
+  const originalWrite = process.stdout.write;
   (process.stdout.write as any) = ((chunk: any, enc?: any, cb?: any) => process.stderr.write(chunk, enc, cb));
   try {
     return await fn();
   } finally {
-    process.stdout.write = orig as any;
+    process.stdout.write = originalWrite;
   }
 }
 
