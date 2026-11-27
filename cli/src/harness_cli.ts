@@ -5,6 +5,7 @@ import pc from "picocolors";
 import { HarnessOrchestrator } from "./core/harness/orchestrator.js";
 import { HarnessStore } from "./core/harness/store.js";
 import { setLibraryEntryStatus } from "./core/harness/library.js";
+import { buildApplyPreview } from "./core/harness/apply_preview.js";
 
 function out(obj: unknown, json = false): void {
   if (json) {
@@ -137,6 +138,16 @@ export function registerHarnessCommands(program: Command): void {
       if (!report) throw new Error(`No report for ${id}`);
       if (opts.out) fs.writeFileSync(path.resolve(opts.out), fs.existsSync(store.reportMdPath(id)) ? fs.readFileSync(store.reportMdPath(id), "utf8") : JSON.stringify(report, null, 2));
       out(opts.json ? report : (fs.existsSync(store.reportMdPath(id)) ? fs.readFileSync(store.reportMdPath(id), "utf8") : JSON.stringify(report, null, 2)), opts.json);
+    });
+
+  harness.command("apply-preview <id>")
+    .description("Generate review-only apply preview artifacts (NO live mutation)")
+    .option("--state-dir <path>", "Harness state root")
+    .option("--json", "Emit JSON")
+    .action(async (id, opts) => {
+      const store = storeFrom(opts);
+      const preview = buildApplyPreview(store, id);
+      out(opts.json ? preview : `Apply preview (review-only, no live mutation)\nrun=${preview.runId}\nreport=${preview.reportId}\ncandidate=${preview.candidateId ?? "-"}\ndir=${preview.previewDir}\n${preview.files.map((f) => `- ${f}`).join("\n")}`, opts.json);
     });
 
   harness.command("cancel <id>")
