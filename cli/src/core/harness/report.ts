@@ -69,6 +69,14 @@ export function renderPromotionReportMd(report: PromotionReport): string {
     lines.push(`- [${s.label}] ${s.candidateId} ${s.caseId} ${s.dimension}: base=${JSON.stringify(s.baseValue)} candidate=${JSON.stringify(s.candidateValue)}${delta} verdict=${s.verdict}${conf}${advisory}`);
   }
   if (report.scorecard.length === 0) lines.push("- (no scorecard entries)");
+  const det = report.scorecard.filter((s) => s.label === "deterministic");
+  const adv = report.scorecard.filter((s) => s.label === "advisory");
+  const avg = (xs: typeof report.scorecard) => xs.length ? (xs.reduce((a, s) => a + (s.confidence ?? 0.5), 0) / xs.length) : 0;
+  lines.push("");
+  lines.push("## Confidence calibration");
+  lines.push(`- Deterministic entries: ${det.length} (avg confidence=${avg(det).toFixed(2)})`);
+  lines.push(`- Advisory entries: ${adv.length} (avg confidence=${avg(adv).toFixed(2)}; non-authoritative)`);
+  lines.push("- Calibration rule: deterministic verifier-backed evidence can be high confidence; advisory/heuristic/rubric evidence remains low confidence and requires operator review.");
   lines.push("");
   lines.push("## Apply Instructions");
   for (const i of report.applyInstructions) lines.push(`- ${i}`);
