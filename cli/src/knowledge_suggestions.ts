@@ -11,6 +11,7 @@ import { assertPrivateDir, readPrivateJson } from "./core/runner_store.js";
 import type { KnowledgeCategory } from "./knowledge.js";
 import { resolveKnowledgeOperationEvidence } from "./knowledge_operation_evidence.js";
 import { resolveKnowledgeSessionEvidence } from "./knowledge_session_evidence.js";
+import { originOf } from "./providers.js";
 import { isPathStrictlyWithin } from "./path_within.js";
 import { currentEntry, openRepo } from "./worktrunk/repo.js";
 
@@ -42,6 +43,17 @@ export interface KnowledgeEvidence {
 
 interface EvidenceReference extends KnowledgeEvidence { ref: string }
 
+export interface KnowledgeInferenceProvenance {
+  resourceId: string;
+  model: string;
+  disclosure: "local" | "cloud";
+  effectiveModel?: string;
+  fallbackFrom?: string;
+  policy: "local_preferred" | "operator_authorized_origin";
+  authorizedOrigin?: string;
+  fallbackReason?: "local_resource_failed" | "no_eligible_local_resource";
+}
+
 export interface KnowledgeProposal {
   key: string;
   value: string;
@@ -72,6 +84,7 @@ interface StoredSuggestion {
   actor?: string;
   decisions?: Array<{ state: SuggestionState; at: string; actor?: string }>;
   invalidation?: Invalidation;
+  inference?: KnowledgeInferenceProvenance;
 }
 
 export interface KnowledgeSuggestion extends StoredSuggestion {
@@ -187,6 +200,19 @@ function validInvalidation(value: Invalidation): boolean {
   return Object.values(SCOPE_CHANGES).includes(value.reason) && !("sourceIndex" in value);
 }
 
+function validInference(item: KnowledgeInferenceProvenance): boolean {
+  if (!item || typeof item !== "object" ||
+    !isText(item.resourceId, 120) || !isText(item.model, 240) ||
+    (item.effectiveModel !== undefined && !isText(item.effectiveModel, 240)) ||
+    (item.fallbackFrom !== undefined && !isText(item.fallbackFrom, 120))) return false;
+  if (item.disclosure === "local") {
+    return item.policy === "local_preferred" && item.authorizedOrigin === undefined && item.fallbackReason === undefined;
+  }
+  return item.disclosure === "cloud" && item.policy === "operator_authorized_origin" &&
+    isText(item.authorizedOrigin, 240) && originOf(item.authorizedOrigin) === item.authorizedOrigin &&
+    (item.fallbackReason === "local_resource_failed" || item.fallbackReason === "no_eligible_local_resource");
+}
+
 function validateStored(value: unknown): StoredSuggestion {
   const item = value as StoredSuggestion | null;
   if (!item || typeof item !== "object" || !isDigest(item.id) || !isDigest(item.contentDigest) || !STATES.includes(item.state) ||
@@ -194,6 +220,7 @@ function validateStored(value: unknown): StoredSuggestion {
     ![item.createdAt, item.updatedAt, item.expiresAt].every((v) => typeof v === "string" && Number.isFinite(Date.parse(v))) ||
     (item.actor !== undefined && !isText(item.actor, 120)) ||
     (item.invalidation !== undefined && !validInvalidation(item.invalidation)) ||
+    (item.inference !== undefined && !validInference(item.inference)) ||
     (item.decisions !== undefined && (!Array.isArray(item.decisions) || item.decisions.length > 4 ||
       item.decisions.some((decision) => !decision || !STATES.includes(decision.state) ||
         typeof decision.at !== "string" || !Number.isFinite(Date.parse(decision.at)) ||
@@ -232,9 +259,18 @@ export class KnowledgeSuggestions {
     return sha256(inspectScope(this.workspace));
   }
 
-  propose(input: unknown, binding?: { scope: string; evidence: ReadonlyMap<string, KnowledgeEvidence> }): KnowledgeSuggestion {
+  propose(input: unknown, binding?: {
+    scope: string;
+    evidence: ReadonlyMap<string, KnowledgeEvidence>;
+    inference?: KnowledgeInferenceProvenance;
+  }): KnowledgeSuggestion {
     const proposal = normalizeProposal(input);
     checkProtectedContent(proposal);
+    const inference = binding?.inference;
+    if (inference) {
+      if (!validInference(inference)) throw new Error("Invalid knowledge suggestion inference provenance");
+      checkProtectedContent(inference);
+    }
     return this.update((records, now) => {
       checkPathScopes(this.workspace, proposal.paths ?? []);
       const scope = inspectScope(this.workspace);
@@ -258,6 +294,7 @@ export class KnowledgeSuggestions {
       const createdAt = new Date(now).toISOString();
       const record: StoredSuggestion = {
         id, contentDigest, scope, proposal, evidence,
+        ...(inference ? { inference } : {}),
         state: "candidate", createdAt, updatedAt: createdAt, expiresAt: new Date(now + RETENTION_MS).toISOString(),
       };
       records.push(record);

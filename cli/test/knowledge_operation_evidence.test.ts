@@ -57,7 +57,7 @@ test("completed operations provide scoped provenance and classify only captured 
   assert.deepEqual(resolveKnowledgeOperationEvidence(workspace, proof.ref), proof.evidence);
   assert.equal(resolveKnowledgeOperationEvidence(integrationWorktree, proof.ref), undefined);
   const suggestion = await executeKnowledgeSuggestionCommand(`suggest operation:${op.id}`, {
-    workspace, endpoint: "http://127.0.0.1:1234/v1",
+    workspace, endpoint: "http://127.0.0.1:1234/v1", model: "fixture",
   } as HarnessConfig, {
     workspaceTrusted: true,
     generate: async (_contract, input) => {

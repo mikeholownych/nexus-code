@@ -1,11 +1,8 @@
 import * as os from "node:os";
-import { LocalLlmClient } from "./client.js";
-import { classifyLocality } from "./core/egress.js";
-import { requestJsonProposal } from "./core/proposal_inference.js";
+import { requestLocalFirstProposal } from "./core/proposal_resources.js";
 import { knowledgeOperationExcerpts, readKnowledgeOperationSource } from "./knowledge_operation_evidence.js";
 import { knowledgeSessionExcerpts, readKnowledgeSessionSource } from "./knowledge_session_evidence.js";
-import { KnowledgeSuggestions, knowledgeSuggestionAudit, type KnowledgeSuggestion } from "./knowledge_suggestions.js";
-import { disclosureClass } from "./providers.js";
+import { KnowledgeSuggestions, knowledgeSuggestionAudit, type KnowledgeInferenceProvenance, type KnowledgeSuggestion } from "./knowledge_suggestions.js";
 import type { HarnessConfig } from "./types.js";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
 
@@ -71,10 +68,6 @@ export async function executeKnowledgeSuggestionCommand(args: string, config: Ha
   if (action === "suggest") {
     if (readOnly) throw new Error("Read-only mode blocks generating knowledge suggestions.");
     if (!(options.workspaceTrusted ?? isWorkspaceTrusted(config.workspace))) throw new Error("Knowledge suggestions require a trusted workspace.");
-    if (config.provider || disclosureClass(config.endpoint, config.provider, config.cloudRoutedOrigins) !== "local" ||
-        !["HOST_LOCAL", "LOCAL_APPLIANCE"].includes(classifyLocality(config.endpoint).boundary)) {
-      throw new Error("Knowledge suggestions require a configured local inference endpoint.");
-    }
     if (!value) throw new Error("Usage: /knowledge suggest <saved-session-id|operation:id>");
     const scope = store.scopeFingerprint();
     const excerpts = value.startsWith("operation:")
@@ -83,11 +76,23 @@ export async function executeKnowledgeSuggestionCommand(args: string, config: Ha
     if (!excerpts.length) return { output: "The selected record has no eligible source excerpts.", success: false };
     const evidence = new Map(excerpts.map((excerpt) => [excerpt.ref, excerpt.evidence]));
     const input = JSON.stringify(excerpts.map(({ ref, content, evidence: source }) => ({ ref, content, source: source.source })));
-    const generate = options.generate ?? ((contract: string, text: string, signal?: AbortSignal) =>
-      requestJsonProposal(new LocalLlmClient({ ...config, pinEndpoint: true, readOnly: true }), contract, text, signal));
-    const candidate = await generate(CONTRACT, input, options.signal);
-    options.signal?.throwIfAborted();
-    if (candidate === null) return { output: "No reusable knowledge suggested for this record.", success: true };
+    const { proposal: candidate, provenance, authorizedOrigin, localFailed } = await requestLocalFirstProposal(CONTRACT, input, config, {
+      role: "knowledge-extraction",
+      qualification: "research",
+      requireAuthorizedOrigin: true,
+      noEligibleMessage: "No eligible resource is configured for local inference or explicitly authorized cloud knowledge extraction.",
+      request: options.generate,
+    }, options.signal);
+    const inference: KnowledgeInferenceProvenance = provenance.disclosure === "cloud"
+      ? {
+        ...provenance,
+        policy: "operator_authorized_origin",
+        authorizedOrigin,
+        fallbackReason: localFailed ? "local_resource_failed" : "no_eligible_local_resource",
+      }
+      : { ...provenance, policy: "local_preferred" };
+    const disclosure = inference.disclosure === "cloud" ? ` (authorized cloud resource ${inference.resourceId})` : "";
+    if (candidate === null) return { output: `No reusable knowledge suggested for this record${disclosure}.`, success: true };
     if (!candidate || typeof candidate !== "object" || Array.isArray(candidate) ||
       Object.keys(candidate).some((key) => !["key", "value", "category", "sourceRefs", "paths"].includes(key))) {
       throw new Error("The model returned an invalid knowledge suggestion.");
@@ -96,8 +101,8 @@ export async function executeKnowledgeSuggestionCommand(args: string, config: Ha
     if (!Array.isArray(refs) || refs.some((ref) => typeof ref !== "string" || !evidence.has(ref))) {
       throw new Error("The model referred to a record outside the selected sources.");
     }
-    const item = store.propose(candidate, { scope, evidence });
-    return { output: `${summary(item)}\nInspect with /knowledge show-suggestion ${item.id}`, success: true };
+    const item = store.propose(candidate, { scope, evidence, inference });
+    return { output: `${summary(item)}${disclosure}\nInspect with /knowledge show-suggestion ${item.id}`, success: true };
   }
   if (!value || !/^[a-f0-9]{64}$/.test(value)) throw new Error("This action requires the full knowledge suggestion ID.");
   if (action === "show-suggestion") {
