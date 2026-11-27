@@ -140,6 +140,7 @@ export const SLASH_COMMANDS: SlashSpec[] = [
   { name: "batch", usage: "/batch <spec-file> | run|validate <spec-file> | status|list|pause|resume|cancel|results [id]", summary: "Validate and run bounded durable work batches through the operation scheduler", cancellable: true },
   { name: "goal", usage: "/goal <objective> | status|list|show|pause|resume|cancel|requirements|evidence", summary: "Run and track a durable objective through verified team work", cancellable: true },
   { name: "loop", usage: "/loop [--until <condition>] [--max-iterations <n>] [--max-duration <duration>] <objective> | status|list|pause|resume|stop [id] | reconcile <id> --confirm-no-effect", summary: "Run a bounded, durable iteration loop with deterministic verification", cancellable: true },
+  { name: "harness", usage: "/harness init|run|status|show|report|cancel|library ...", summary: "Evidence-gated harness improvement runs (no live mutation)", cancellable: true },
   { name: "theme", usage: "/theme [name]", summary: "Show or save the colour theme" },
   { name: "recover", usage: "/recover [task-id]", summary: "Recover durable task state" },
   { name: "step", usage: "/step", summary: "Advance the active task by one single model/tool cycle and pause", cancellable: true },

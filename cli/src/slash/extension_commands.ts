@@ -8,6 +8,7 @@ import { recall } from "./session_commands.js";
 import { executeBatchCommand } from "../batch_command.js";
 import { executeGoalCommand } from "../goal_command.js";
 import { executeLoopCommand } from "../loop_command.js";
+import { executeHarnessSlashCommand } from "../harness_command.js";
 
 const IMAGE_PROMPT = "Please analyze this image, describe its contents, and provide relevant technical solutions.";
 const ROLES: string[] = TEAM_TARGET_ROLES;
@@ -270,6 +271,11 @@ async function loop({ host, args, signal }: SlashContext): Promise<SlashOutcome>
   return reply("loop", [...log, ...(log.length ? [""] : []), result.output].join("\n"), result.success);
 }
 
+async function harness({ host, args, signal }: SlashContext): Promise<SlashOutcome> {
+  const result = await executeHarnessSlashCommand(args, host.app.getConfig(), signal);
+  return reply("harness", result.output, result.success);
+}
+
 async function recover({ host, args }: SlashContext): Promise<SlashOutcome> {
   const result = await host.app.executeSlashCommand("recover", args);
   return reply("recover", result.output, result.success);
@@ -299,6 +305,7 @@ export const EXTENSION_HANDLERS: Record<string, SlashHandler> = {
   batch,
   goal,
   loop,
+  harness,
   recover,
   "!": bang,
 };
