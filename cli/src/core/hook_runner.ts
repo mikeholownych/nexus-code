@@ -7,8 +7,6 @@
  */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import * as os from "node:os";
-import * as path from "node:path";
 import { buildMcpEnvironment } from "../mcp.js";
 import type { HookDenialReason, HookEvent, HookSource } from "./hooks.js";
 import { ProcessTreeMemory } from "./process_identity.js";
@@ -16,22 +14,11 @@ import { parseStrictJson } from "./strict_json.js";
 import { withoutUnprintable } from "./printable.js";
 
 /**
- * Expand a leading `~/` in an argv command to an absolute path under the operator home.
- * Callers must expand before `runHookProcess`: the runner never joins `os.homedir()` into the
- * spawn executable (CodeQL js/shell-command-injection-from-environment).
+ * True for an argv program that names the home directory (`~` or `~/...`). Nexus does not expand it. Resolving
+ * it would make the spawn executable depend on `HOME` (CodeQL js/shell-command-injection-from-environment).
  */
-export function expandHookArgv(command: string[], home = os.homedir()): string[] | { problem: string } {
-  if (command.length === 0) return { problem: "hook command argv is empty" };
-  const exe = command[0]!;
-  if (exe !== "~" && !exe.startsWith("~/")) return command;
-  const homeRoot = path.resolve(home);
-  const rest = exe === "~" ? "" : exe.slice(2);
-  const resolved = path.resolve(homeRoot, rest);
-  const relative = path.relative(homeRoot, resolved);
-  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-    return { problem: `hook command '${exe}' escapes the home directory` };
-  }
-  return [resolved, ...command.slice(1)];
+export function isHomeRelativeArgv(exe: string): boolean {
+  return exe === "~" || exe.startsWith("~/");
 }
 
 export const HOOK_STDOUT_LIMIT = 64 * 1024;
@@ -117,14 +104,14 @@ export function runHookProcess(request: HookProcessRequest): Promise<HookProcess
         resolve({ exit: null, signal: null, stdout: "", stderr: "", failure: "spawn", detail: "hook command argv is empty", durationMs: 0 });
         return;
       }
-      if (exe === "~" || exe.startsWith("~/")) {
+      if (isHomeRelativeArgv(exe)) {
         resolve({
           exit: null,
           signal: null,
           stdout: "",
           stderr: "",
           failure: "spawn",
-          detail: "hook argv still starts with '~/'; expand with expandHookArgv before runHookProcess",
+          detail: "hook argv starts with '~'; Nexus does not expand it, so give the program's absolute path",
           durationMs: 0,
         });
         return;
