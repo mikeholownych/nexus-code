@@ -701,9 +701,11 @@ export function runVerifierShell(command: string, cwd: string, timeoutMs: number
   try {
     const wrapped = hasTimeoutBinary();
     const started = Date.now();
+    // Preserve SIGKILL status (137) when the wrapper enforces the deadline. Default wrapper status 124 can
+    // also be an intentional exit code from the verifier itself.
     const ran = spawnSync(
       wrapped ? "timeout" : "bash",
-      wrapped ? ["-s", "KILL", `${Math.max(timeoutMs, 1) / 1000}s`, "bash", "-c", command] : ["-c", command],
+      wrapped ? ["--preserve-status", "-s", "KILL", `${Math.max(timeoutMs, 1) / 1000}s`, "bash", "-c", command] : ["-c", command],
       { cwd, env: buildVerifierEnvironment(), stdio: ["ignore", fd, fd], timeout: timeoutMs + 5000, killSignal: "SIGKILL" },
     );
     const size = fs.fstatSync(fd).size;
