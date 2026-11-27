@@ -352,7 +352,8 @@ export function validateOperationState(state: DurableOperationState): void {
       const binding = receipt.verificationBinding;
       if (binding !== undefined && (
         !binding || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(binding.commit)
-        || binding.commit !== receipt.integratedCommit || binding.worktree !== state.git?.integrationWorktree
+        || binding.commit !== receipt.integratedCommit
+        || typeof binding.worktree !== "string" || !binding.worktree || binding.worktree !== state.git?.integrationWorktree
         || !Array.isArray(binding.runs) || !checks?.length || binding.runs.length !== checks.length
         || binding.runs.some((run, index) =>
           !run || run.command !== checks[index].command || checks[index].status !== "PASSED"

@@ -315,6 +315,9 @@ test("resume requires the stored verifier binding to match the current integrati
   const tampered = structuredClone(loaded);
   tampered.integrations![0].verificationBinding!.worktree = root;
   assert.throws(() => migrateOperationState(tampered), /invalid verification binding/);
+  tampered.git = undefined;
+  Reflect.deleteProperty(tampered.integrations![0].verificationBinding!, "worktree");
+  assert.throws(() => migrateOperationState(tampered), /invalid verification binding/);
   git(worktree, ["-c", "user.name=N", "-c", "user.email=n@l", "commit", "--allow-empty", "-qm", "later candidate"]);
   const restarted = await new OperationRunner(loaded, {
     executor: { async run() { throw new Error("completed units should not rerun"); } },
