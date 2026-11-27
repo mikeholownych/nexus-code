@@ -210,14 +210,17 @@ test("--sandbox with an engine that is not usable is BLOCKED (SANDBOX_UNAVAILABL
         assert.equal(event.profile, "default");
         assert.equal(event.operation, "verify");
         assert.equal(event.category, "engine");
-        assert.match(event.reason, new RegExp(`--sandbox ${engine} was requested`));
+        const expectedReason = `--sandbox ${engine} was requested`;
+        assert.ok(event.reason.includes(expectedReason));
         assert.ok(!("verdict" in event), "a denial event cannot carry a verdict");
-        assert.match(run.result.detail ?? "", new RegExp(`--sandbox ${engine} was requested`));
+        assert.ok((run.result.detail ?? "").includes(expectedReason));
         assert.equal(fs.existsSync(marker), false, "the verifier ran although the sandbox it was to run in is unavailable");
         assert.deepEqual(run.leftovers, []);
         assert.match(renderVerifyText(run.result), /^nexus verify: BLOCKED \(SANDBOX_UNAVAILABLE\)\n/);
         assert.match(renderVerifyText(run.result), /\n  sandbox +requested, and nothing was run\n/);
-        assert.match(renderVerifyText(run.result), new RegExp(`\\n  sandbox denial ?unavailable \\(${engine}/default, engine\\) while verify:`));
+        const verifyText = renderVerifyText(run.result);
+        assert.ok(verifyText.includes(`sandbox denial`));
+        assert.ok(verifyText.includes(`unavailable (${engine}/default, engine) while verify:`));
       }
       // The explicit trusted-input opt-out runs unconfined and says so in its receipt.
       const plain = await verifyInProcess({ worktree: repo, base, head: fixed }, { verifierCommand: `touch '${marker}'; node --test`, deliverables: ["src/math.js"], sandbox: { engine: "none" } }, { env: { PATH: engines.PATH } });

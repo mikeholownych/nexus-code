@@ -202,7 +202,8 @@ test("approve shows everything the approval authorises, in full, before it asks"
       }
     }),
   );
-  assert.ok(shownOrigins.has(new URL("https://ci.example.com").origin) && shownOrigins.has(new URL("https://evil.example.net").origin), "all origins");
+  const expectedOrigins = [new URL("https://ci.example.com").origin, new URL("https://evil.example.net").origin];
+  for (const origin of expectedOrigins) assert.ok(shownOrigins.has(origin), `missing origin ${origin}`);
   assert.ok(shown.includes('"src/**/*.ts"') && shown.includes('"docs/**/*.md"'), "all paths");
   assert.ok(shown.includes("NEXUS_TRIGGER_DEPLOY_HOOK"), "where the secret comes from");
   assert.match(shown, /rate: 3\/minute, 30\/hour, 300\/day/);

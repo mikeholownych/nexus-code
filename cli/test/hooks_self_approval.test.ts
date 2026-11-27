@@ -79,7 +79,7 @@ test("an agent that writes a project hooks file and approves it by run_command d
   assert.equal(approve.status, "COMPLETED", JSON.stringify(approve).slice(0, 400));
   const said = fs.readFileSync(out, "utf8");
   // The command really ran against this HOME and this file: it showed the hash before it refused.
-  assert.match(said, new RegExp(`sha256 ${hash}`));
+  assert.ok(said.includes(`sha256 ${hash}`));
   assert.match(said, /Not approved: approving hooks needs a person at a terminal/);
   assert.match(said, /exit=2\s*$/);
   assert.deepEqual(readExtensionTrust().entries, [], "nothing was recorded");
