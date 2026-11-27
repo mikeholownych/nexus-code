@@ -33,7 +33,7 @@ import { redactSecrets } from "./ui.js";
 import { classifyLocality, setLocalityAuthorityResolver } from "./core/egress.js";
 import { connectionFor, disclosureClass, promptCacheEnabled, operatorSettingKeyForAuth, type ResolvedConnection } from "./providers.js";
 import { ProviderStreamError, readSse, type NativeRequestInput, type NativeResult } from "./protocols/common.js";
-import { wireProtocol } from "./protocols/index.js";
+import { serializedOutputTokenLimit, wireProtocol } from "./protocols/index.js";
 import { GcpAuthError, gcpTokenSource, resolveVertexTarget, vertexPath } from "./protocols/gcp_adc.js";
 import { buildChatRequest, chatStreamParser, chatUsage, ChatErrorFrame, parseChatResponse, readChatStream } from "./protocols/openai_chat.js";
 import { UsageLedger, type UsageReport } from "./usage.js";
@@ -43,7 +43,7 @@ import { refreshStoredSignIn } from "./oauth_shared_refresh.js";
 import { providerDefinition } from "./providers.js";
 import { ServerKindCache } from "./core/server_kind_cache.js";
 import { persistableEndpoint } from "./core/endpoint_identity.js";
-import { admitCurrentInferenceSubmission } from "./core/inference_admission.js";
+import { admitCurrentInferenceSubmission, currentInferenceOutputTokenLimitRequired, OperationInferenceAdmissionError } from "./core/inference_admission.js";
 
 /** Longest a request waits for an expired server identity to be re-read before proceeding without it. */
 const REVERIFY_WAIT_MS = 1000;
@@ -279,10 +279,16 @@ const LOCAL_DROPPABLE_PARAMS = new Set(["max_tokens", "stream_options"]);
 
 /** The parameter a 400 answer names as unsupported ("Unsupported parameter: temperature", OpenAI `param`). */
 export function unsupportedParameter(message: string): string | undefined {
-  const named = /unsupported (?:parameter|value)[:\s'"`]+([a-z_]+)/i.exec(message)?.[1];
-  if (named) return named.toLowerCase();
-  if (/unsupported_parameter|not supported/i.test(message)) return /"param"\s*:\s*"([a-z_]+)"/i.exec(message)?.[1]?.toLowerCase();
+  const canonical = (name: string | undefined) => name?.replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase();
+  const named = /unsupported (?:parameter|value)[:\s'"`]+([a-zA-Z_]+)/i.exec(message)?.[1];
+  if (named) return canonical(named);
+  if (/unsupported_parameter|not supported/i.test(message)) return canonical(/"param"\s*:\s*"([a-zA-Z_]+)"/i.exec(message)?.[1]);
   return undefined;
+}
+
+function isOutputTokenLimitParameter(param: string | undefined): boolean {
+  const normalized = param?.toLowerCase().replace(/[^a-z]/g, "");
+  return normalized === "maxtokens" || normalized === "maxoutputtokens";
 }
 
 /** Cloud destinations announced in this process (the disclosure notice is shown once per origin). */
@@ -1045,6 +1051,12 @@ export class LocalLlmClient {
           continue;
         }
         const param = unsupportedParameter(err.message);
+        if (currentInferenceOutputTokenLimitRequired() && isOutputTokenLimitParameter(param)) {
+          throw new OperationInferenceAdmissionError(
+            "output_limit_unsupported",
+            `Provider '${this.conn.label}' rejected its required output-token limit parameter '${param}'; Nexus did not retry without the cap.`,
+          );
+        }
         const droppable = this.conn.providerId ? DROPPABLE_PARAMS : LOCAL_DROPPABLE_PARAMS;
         if (!param || !droppable.has(param) || this.unsupportedParams.has(param)) throw err;
         this.unsupportedParams.add(param);
@@ -1353,9 +1365,30 @@ export class LocalLlmClient {
     if (Number.isFinite(tokens) && tokens > 0) this.maxOutputTokens = Math.floor(tokens);
   }
 
-  /** Input-character estimate plus the configured output allowance used for operation token admission. */
-  private estimatedInferenceTokenReservation(payloadChars: number): number {
-    return Math.ceil(payloadChars / 4) + this.maxOutputTokens;
+  /** Input-character estimate used with the requested output allowance for durable operation token admission. */
+  private estimatedInferenceInputTokens(payloadChars: number): number {
+    return Math.ceil(payloadChars / 4);
+  }
+
+  /** Persist prompt estimate and return the maximum output allowance that fits the durable operation's remaining cap. */
+  private admitInferenceOutputTokens(payloadChars: number): { required: boolean; maxOutputTokens: number } {
+    const required = currentInferenceOutputTokenLimitRequired();
+    const admitted = admitCurrentInferenceSubmission(this.estimatedInferenceInputTokens(payloadChars), this.maxOutputTokens);
+    if (required && (!Number.isSafeInteger(admitted) || admitted! < 1)) {
+      throw new OperationInferenceAdmissionError("output_limit_unsupported", "A configured durable token budget did not produce a provider output-token limit; no provider request was sent.");
+    }
+    return { required, maxOutputTokens: admitted ?? this.maxOutputTokens };
+  }
+
+  private requireSerializedOutputTokenLimit(body: Record<string, unknown>, requestId: string, required: boolean, maxOutputTokens: number): void {
+    if (!required) return;
+    const serialized = serializedOutputTokenLimit(this.conn.protocol, body);
+    if (serialized === undefined || serialized > maxOutputTokens) {
+      throw new OperationInferenceAdmissionError(
+        "output_limit_unsupported",
+        `Provider '${this.conn.label}' cannot serialize the admitted output-token limit for ${this.conn.protocol}; no request was sent (request ${requestId}).`,
+      );
+    }
   }
 
   public getOutputAllowance(): number {
@@ -1795,7 +1828,7 @@ export class LocalLlmClient {
     if (this.conn.streamOnly) return this.chatCompletionStreamOnce(messages, tools, undefined, requestId, signal);
     return this.executeWithFailover("chatCompletion", async (currentEp) => {
       if (signal?.aborted) throw abortedError(requestId);
-      admitCurrentInferenceSubmission(this.estimatedInferenceTokenReservation(JSON.stringify(messages).length + JSON.stringify(tools).length));
+      const outputLimit = this.admitInferenceOutputTokens(JSON.stringify(messages).length + JSON.stringify(tools).length);
       const url = this.endpointUrl(currentEp, "/chat/completions");
       await this.prepareCredential(currentEp, requestId);
       this.preflight(currentEp, requestId, JSON.stringify(messages).length + JSON.stringify(tools).length);
@@ -1839,8 +1872,16 @@ export class LocalLlmClient {
       }
       outboundTools = adaptToolDefinitionsForServer(LocalLlmClient.serverKindCache.get(this.kindKey(currentEp)) ?? "unknown", outboundTools);
 
-      const payload: any = this.chatBody(false, outboundMessages, outboundTools, toolChoice).body;
+      const payload: any = this.chatBody(
+        false,
+        outboundMessages,
+        outboundTools,
+        toolChoice,
+        outputLimit.maxOutputTokens,
+        outputLimit.required || !this.conn.providerId,
+      ).body;
       this.omitUnsupported(payload);
+      this.requireSerializedOutputTokenLimit(payload, requestId, outputLimit.required, outputLimit.maxOutputTokens);
       this.applyToolGrammar(currentEp, requestId, payload, outboundTools);
 
       const watchdog = this.createWatchdog(signal, currentEp);
@@ -1922,16 +1963,16 @@ export class LocalLlmClient {
   }
 
   /** The chat request body for already egress-checked messages and tools (client-side params applied by the caller). */
-  private chatBody(stream: boolean, messages: ChatMessage[], tools: ToolDefinition[], toolChoice: "auto" | "required") {
+  private chatBody(stream: boolean, messages: ChatMessage[], tools: ToolDefinition[], toolChoice: "auto" | "required", maxOutputTokens = this.maxOutputTokens, capOutput = !this.conn.providerId) {
     return buildChatRequest({
       model: this.model,
       messages,
       tools,
       temperature: this.temperature,
-      maxOutputTokens: this.maxOutputTokens,
+      maxOutputTokens,
       stream,
       owner: `${this.conn.providerId}:${this.model}`,
-      chat: { toolChoice, capOutput: !this.conn.providerId, usage: this.conn.usage },
+      chat: { toolChoice, capOutput, usage: this.conn.usage },
     });
   }
 
@@ -1960,7 +2001,7 @@ export class LocalLlmClient {
    * (max_tokens on local endpoints) and streaming options. Inference and request counting both send this body, so a
    * count is of the request that is actually sent. Throws when the information-flow boundary denies the egress.
    */
-  private outboundChatBody(currentEp: string, requestId: string, messages: ChatMessage[], tools: ToolDefinition[]): any {
+  private outboundChatBody(currentEp: string, requestId: string, messages: ChatMessage[], tools: ToolDefinition[], outputLimit?: { required: boolean; maxOutputTokens: number }): any {
     // 1. Egress Interception & Quarantine (DISC-001..003, CTX-006, FAIL-003)
     const egressEvaluation = this.boundary.evaluateEgress(
       messages,
@@ -2000,8 +2041,16 @@ export class LocalLlmClient {
     }
     outboundTools = adaptToolDefinitionsForServer(LocalLlmClient.serverKindCache.get(this.kindKey(currentEp)) ?? "unknown", outboundTools);
 
-    const payload: any = this.chatBody(true, outboundMessages, outboundTools, "auto").body;
+    const payload: any = this.chatBody(
+      true,
+      outboundMessages,
+      outboundTools,
+      "auto",
+      outputLimit?.maxOutputTokens ?? this.maxOutputTokens,
+      outputLimit?.required || !this.conn.providerId,
+    ).body;
     this.omitUnsupported(payload);
+    if (outputLimit) this.requireSerializedOutputTokenLimit(payload, requestId, outputLimit.required, outputLimit.maxOutputTokens);
     this.applyToolGrammar(currentEp, requestId, payload, outboundTools);
     return payload;
   }
@@ -2016,12 +2065,12 @@ export class LocalLlmClient {
     if (wireProtocol(this.conn.protocol).native) return this.nativeCompletion(messages, tools, onToken, requestId, signal, true);
     return this.executeWithFailover("chatCompletionStream", async (currentEp) => {
       if (signal?.aborted) throw abortedError(requestId);
-      admitCurrentInferenceSubmission(this.estimatedInferenceTokenReservation(JSON.stringify(messages).length + JSON.stringify(tools).length));
+      const outputLimit = this.admitInferenceOutputTokens(JSON.stringify(messages).length + JSON.stringify(tools).length);
       const url = this.endpointUrl(currentEp, "/chat/completions");
       await this.prepareCredential(currentEp, requestId);
       this.preflight(currentEp, requestId, JSON.stringify(messages).length + JSON.stringify(tools).length);
 
-      const payload = this.outboundChatBody(currentEp, requestId, messages, tools);
+      const payload = this.outboundChatBody(currentEp, requestId, messages, tools, outputLimit);
 
       const watchdog = this.createWatchdog(signal, currentEp, true);
       let res: Response;
@@ -2174,7 +2223,7 @@ export class LocalLlmClient {
   ): Promise<ChatMessage> {
     return this.executeWithFailover(stream ? "chatCompletionStream" : "chatCompletion", async (currentEp) => {
       if (signal?.aborted) throw abortedError(requestId);
-      admitCurrentInferenceSubmission(this.estimatedInferenceTokenReservation(JSON.stringify(messages).length + JSON.stringify(tools).length));
+      const outputLimit = this.admitInferenceOutputTokens(JSON.stringify(messages).length + JSON.stringify(tools).length);
       await this.prepareCredential(currentEp, requestId);
       this.preflight(currentEp, requestId, JSON.stringify(messages).length + JSON.stringify(tools).length);
       const outbound = this.egress(messages, tools, currentEp);
@@ -2185,7 +2234,7 @@ export class LocalLlmClient {
         messages: outbound.messages,
         tools: outbound.tools,
         temperature: this.temperature,
-        maxOutputTokens: this.maxOutputTokens,
+        maxOutputTokens: outputLimit.maxOutputTokens,
         stream,
         owner,
         reasoningEffort: this.reasoningEffort,
@@ -2194,6 +2243,7 @@ export class LocalLlmClient {
       };
       const req = wire.build(input);
       this.omitUnsupported(req.body);
+      this.requireSerializedOutputTokenLimit(req.body, requestId, outputLimit.required, outputLimit.maxOutputTokens);
       if (req.droppedState) {
         this.emitDiagnostic("error", pc.dim(`[nexus] ${req.droppedState} earlier assistant turn(s) carry reasoning state owned by another provider/model or altered since capture; it is not replayed to ${owner} (visible text and tool calls are kept).`));
       }

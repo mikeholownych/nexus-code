@@ -22,6 +22,27 @@ export interface ProtocolAdapter {
   readStream?: typeof readEventStream;
 }
 
+/** The positive output-token limit serialized by a wire protocol, when the protocol request contains one. */
+export function serializedOutputTokenLimit(protocol: WireProtocol, body: Record<string, unknown>): number | undefined {
+  let value: unknown;
+  switch (protocol) {
+    case "openai-chat":
+    case "anthropic-messages":
+      value = body.max_tokens;
+      break;
+    case "openai-responses":
+      value = body.max_output_tokens;
+      break;
+    case "gemini-generate-content":
+      value = (body.generationConfig as Record<string, unknown> | undefined)?.maxOutputTokens;
+      break;
+    case "bedrock-converse":
+      value = (body.inferenceConfig as Record<string, unknown> | undefined)?.maxTokens;
+      break;
+  }
+  return Number.isSafeInteger(value) && (value as number) > 0 ? value as number : undefined;
+}
+
 export const WIRE_PROTOCOLS: Record<WireProtocol, ProtocolAdapter> = {
   "openai-chat": {
     native: false,
