@@ -349,6 +349,21 @@ export function validateOperationState(state: DurableOperationState): void {
       if (damaged) {
         throw new InvalidOperationStateError(`operation ${state.id}: the integration receipt of '${receipt.unitId}' has invalid files, tests or mergedChecks`);
       }
+      const binding = receipt.verificationBinding;
+      if (binding !== undefined && (
+        !binding || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(binding.commit)
+        || binding.commit !== receipt.integratedCommit || binding.worktree !== state.git?.integrationWorktree
+        || !Array.isArray(binding.runs) || !checks?.length || binding.runs.length !== checks.length
+        || binding.runs.some((run, index) =>
+          !run || run.command !== checks[index].command || checks[index].status !== "PASSED"
+          || typeof run.startedAt !== "string" || !Number.isFinite(Date.parse(run.startedAt))
+          || typeof run.completedAt !== "string" || !Number.isFinite(Date.parse(run.completedAt))
+          || !Number.isSafeInteger(run.timeoutMs) || run.timeoutMs < 1
+          || run.exitCode !== 0 || typeof run.outputSha256 !== "string" || !/^[a-f0-9]{64}$/.test(run.outputSha256)
+          || run.outputTruncated !== false)
+      )) {
+        throw new InvalidOperationStateError(`operation ${state.id}: the integration receipt of '${receipt.unitId}' has an invalid verification binding`);
+      }
     }
   }
   if (state.git?.units) {

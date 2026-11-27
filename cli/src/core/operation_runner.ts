@@ -477,12 +477,19 @@ export class OperationRunner {
         await this.revalidator.revalidate(signal);
         continue;
       }
+      if (d.kind === "complete") {
+        const verificationProblem = this.git?.completionVerificationProblem(this.state.integrations ?? []);
+        if (verificationProblem) {
+          this.blockOnGit(verificationProblem);
+          return this.state;
+        }
+      }
       this.scheduler.finish(d);
       // A blocked operation keeps its unit worktrees: the retry/restart remedies run the unit again in them.
       if (d.kind === "complete") {
-      this.reportPreservedWorktrees();
-      this.git?.disposeAllUnits();
-    }
+        this.reportPreservedWorktrees();
+        this.git?.disposeAllUnits();
+      }
       this.save();
       return this.state;
     }

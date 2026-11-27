@@ -393,6 +393,23 @@ export interface MergedCheck {
   sandbox?: "bwrap" | "docker";
 }
 
+/** Bounded verifier capture bound to an integration worktree and its exact committed candidate. */
+export interface MergedCheckRun {
+  command: string;
+  startedAt: string;
+  completedAt: string;
+  timeoutMs: number;
+  exitCode: number | null;
+  outputSha256: string;
+  outputTruncated: boolean;
+}
+
+export interface IntegrationVerificationBinding {
+  commit: string;
+  worktree: string;
+  runs: MergedCheckRun[];
+}
+
 /** What was integrated, and the evidence the merge was accepted with. */
 export interface IntegrationReceipt {
   unitId: string;
@@ -414,6 +431,8 @@ export interface IntegrationReceipt {
   ownerId?: string;
   /** Every verifier run on the merged tree before this receipt was written, in the order run (PA-2). */
   mergedChecks?: MergedCheck[];
+  /** Present for captured runs. Older receipts are readable without this binding. */
+  verificationBinding?: IntegrationVerificationBinding;
 }
 
 export interface DurableOperationState {
