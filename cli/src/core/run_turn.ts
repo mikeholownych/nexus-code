@@ -322,15 +322,9 @@ async function runTurnBody(this: any, taskPrompt: string | any[], onConfirm: Con
       }
       return { admitted, exhausted: admitted < requested };
     };
-    let currentInferenceSubmission: number | undefined;
     const reserveInferenceSubmission = () => {
-      if (tracker.reconcileInterruptedInferenceSubmission() && !this.persistProgress({ messages: true })) {
-        persistenceFailure = "Interrupted provider request outcome could not be recorded durably; no new provider request was sent.";
-        throw new InferenceSubmissionPersistenceFailed(persistenceFailure);
-      }
       const admitted = tracker.admitInferenceSubmissions(1, maxInferenceSubmissions);
       if (admitted !== 1) throw new InferenceSubmissionBudgetExhausted("Objective inference submission budget exhausted before request dispatch.");
-      currentInferenceSubmission = tracker.data.inferenceSubmissions;
       if (!this.persistProgress({ messages: true })) {
         persistenceFailure = "Inference submission budget could not be saved before dispatch; no request was sent.";
         throw new InferenceSubmissionPersistenceFailed(persistenceFailure);
@@ -343,16 +337,18 @@ async function runTurnBody(this: any, taskPrompt: string | any[], onConfirm: Con
         throw new SubmissionAdmissionDenied(err);
       }
     }, {
-      markDispatched: () => {
-        if (currentInferenceSubmission === undefined) throw new Error("Provider request was dispatched without a durable submission reservation.");
-        tracker.markInferenceSubmissionDispatched();
+      reserve: () => tracker.data.inferenceSubmissions,
+      markDispatched: (submission) => {
+        if (typeof submission !== "number") throw new Error("Provider request was dispatched without a durable submission reservation.");
+        tracker.markInferenceSubmissionDispatched(submission);
         if (!this.persistProgress({ messages: true })) {
           persistenceFailure = "Provider request dispatch state could not be saved; no request was sent.";
           throw new InferenceSubmissionPersistenceFailed(persistenceFailure);
         }
       },
-      settle: (outcome) => {
-        tracker.settleInferenceSubmission(outcome);
+      settle: (submission, outcome) => {
+        if (typeof submission !== "number") throw new Error("Provider request outcome has no durable submission reservation.");
+        tracker.settleInferenceSubmission(submission, outcome);
         if (!this.persistProgress({ messages: true })) {
           persistenceFailure = "Provider request outcome could not be saved durably.";
           throw new InferenceSubmissionPersistenceFailed(persistenceFailure);
@@ -1309,7 +1305,7 @@ async function runTurnBody(this: any, taskPrompt: string | any[], onConfirm: Con
               toolInvocationHistoryComplete: tracker.data.toolInvocationHistoryComplete,
               inferenceSubmissions: tracker.data.inferenceSubmissions,
               inferenceOutcomeUnknowns: tracker.data.inferenceOutcomeUnknowns,
-              ...(tracker.data.pendingInferenceSubmission !== undefined ? { pendingInferenceSubmission: tracker.data.pendingInferenceSubmission } : {}),
+              ...(tracker.data.pendingInferenceSubmissions.length > 0 ? { pendingInferenceSubmissions: [...tracker.data.pendingInferenceSubmissions] } : {}),
               maxInferenceSubmissions,
               inferenceSubmissionHistoryComplete: tracker.data.inferenceSubmissionHistoryComplete,
               taskElapsedMs: tracker.data.taskElapsedMs,

@@ -373,8 +373,8 @@ export interface TurnResult {
     inferenceSubmissions?: number;
     /** Requests that crossed the provider boundary but whose outcome could not be observed. */
     inferenceOutcomeUnknowns?: number;
-    /** Latest submission still in flight at the time of this result, if any. */
-    pendingInferenceSubmission?: number;
+    /** Submissions still in flight at the time of this result, if any. */
+    pendingInferenceSubmissions?: number[];
     maxInferenceSubmissions?: number;
     /** False means earlier requests predate this counter or the persisted counter was malformed. */
     inferenceSubmissionHistoryComplete?: boolean;

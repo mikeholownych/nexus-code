@@ -2502,9 +2502,12 @@
             "maxToolInvocations": {
               "type": "number"
             },
-            "pendingInferenceSubmission": {
-              "description": "Latest submission still in flight at the time of this result, if any.",
-              "type": "number"
+            "pendingInferenceSubmissions": {
+              "description": "Submissions still in flight at the time of this result, if any.",
+              "type": "array",
+              "items": {
+                "type": "number"
+              }
             },
             "repeated": {
               "description": "Demonstrated loops: the same action and result on an unchanged workspace, at least REPEAT_THRESHOLD times.",

@@ -722,25 +722,23 @@ export class OperationRunner {
         };
       }
       const result: UnitRunResult = await withInferenceSubmissionAdmissionScope(async (scope) => {
-        let activeInferenceCall: number | undefined;
         activateInferenceSubmissionAdmissionScope(
           scope,
           (estimatedInputTokens, requestedOutputTokens) => {
-            const admitted = this.reserveInferenceSubmission(estimatedInputTokens, requestedOutputTokens);
-            activeInferenceCall = this.state.inferenceCalls;
-            return admitted;
+            return this.reserveInferenceSubmission(estimatedInputTokens, requestedOutputTokens);
           },
           {
             requireOutputTokenLimit: this.state.policy.maxTotalTokens !== undefined,
-            markDispatched: () => {
-              if (activeInferenceCall === undefined) throw new Error("Provider request was dispatched without a durable operation reservation.");
+            reserve: () => this.state.inferenceCalls,
+            markDispatched: (reservation) => {
+              if (typeof reservation !== "number") throw new Error("Provider request was dispatched without a durable operation reservation.");
               this.state.pendingInferenceCalls ??= [];
-              if (!this.state.pendingInferenceCalls.includes(activeInferenceCall)) this.state.pendingInferenceCalls.push(activeInferenceCall);
+              if (!this.state.pendingInferenceCalls.includes(reservation)) this.state.pendingInferenceCalls.push(reservation);
               this.save();
             },
-            settle: (outcome) => {
-              if (activeInferenceCall === undefined) return;
-              this.state.pendingInferenceCalls = (this.state.pendingInferenceCalls ?? []).filter((call) => call !== activeInferenceCall);
+            settle: (reservation, outcome) => {
+              if (typeof reservation !== "number") throw new Error("Provider request outcome has no durable operation reservation.");
+              this.state.pendingInferenceCalls = (this.state.pendingInferenceCalls ?? []).filter((call) => call !== reservation);
               if (outcome === "unknown") this.state.inferenceOutcomeUnknowns += 1;
               this.save();
             },
