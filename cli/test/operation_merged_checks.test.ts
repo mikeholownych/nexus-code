@@ -334,8 +334,34 @@ test("integration distinguishes elapsed deadlines from a verifier's exit 124", a
     const result = await f.integrate("u1");
     assert.ok(result.kind === "failed");
     assert.equal(result.verificationBinding?.typedChecks?.[0]?.status, status);
+    assert.equal(Boolean(f.state.retainedVerificationCandidates?.length), status === "FAILED");
     assertUntouched(f, tip);
   }
+});
+
+test("a waiver cannot follow a changed unit commit", async () => {
+  const f = fixture();
+  const tree = f.prepare("u1");
+  write(tree, "edit.txt", "original candidate\n");
+  f.state.verificationChecks = [{
+    id: "smoke", purpose: "record failed expected result", command: "false", requirement: "required", cwd: ".", timeoutMs: 1000,
+  }];
+  const originalTip = f.ops.currentTip();
+  const first = await f.integrate("u1");
+  assert.equal(first.kind, "failed");
+  const candidate = f.state.retainedVerificationCandidates?.[0];
+  assert.ok(candidate);
+  f.state.verificationWaivers = [{
+    ...candidate, id: "e2408467-07de-4962-9fed-597778f16627", actor: "test operator",
+    reason: "Scoped approval to the original candidate", approvedAt: new Date().toISOString(),
+  }];
+
+  write(tree, "edit.txt", "changed candidate\n");
+  const result = await f.integrate("u1");
+  assert.ok(result.kind === "failed");
+  assert.equal(result.verificationBinding?.typedChecks?.[0]?.status, "FAILED");
+  assert.notEqual(result.verificationBinding?.commit, candidate.commit);
+  assertUntouched(f, originalTip);
 });
 
 test("integration requires complete verifier output even when the command exits successfully", async () => {

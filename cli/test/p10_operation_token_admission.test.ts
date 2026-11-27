@@ -219,7 +219,7 @@ test("operation schema migration never invents token history and rejects invalid
   const legacy = { ...current, schemaVersion: 9 };
   delete (legacy as Partial<typeof current>).tokenReservations;
   const migrated = migrateOperationState(legacy);
-  assert.equal(migrated.schemaVersion, 11);
+  assert.equal(migrated.schemaVersion, 12);
   assert.equal(migrated.tokenReservations, undefined, "pre-v10 history is seeded from measured usage before dispatch");
 
   assert.throws(

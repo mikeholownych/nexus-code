@@ -1,4 +1,4 @@
-import type { OperationVerificationCheck } from "./operation_verification.js";
+import type { OperationVerificationCheck, RetainedVerificationCandidate, VerificationWaiver } from "./operation_verification.js";
 /**
  * Convergence scheduling: an operation is a set of work units with dependencies, driven toward its objective.
  *
@@ -237,6 +237,7 @@ export type OperationEventType =
   | "CONCURRENCY_LIMIT"
   | "INTEGRATION_QUEUED"
   | "VERIFICATION_STARTED"
+  | "VERIFICATION_WAIVED"
   | "INTEGRATION_SKIPPED"
   | "OPERATION_MESSAGE"
   | "OPERATION_MESSAGE_DROPPED"
@@ -336,6 +337,10 @@ export interface OperationGitState {
   /** Operator-accepted definitions for the isolated candidate. */
   verificationChecks?: OperationVerificationCheck[];
   acceptedPlanDigest?: string;
+  /** The most recent declared-check failure retained per integrating unit. */
+  retainedVerificationCandidates?: RetainedVerificationCandidate[];
+  /** Deliberate operator exceptions tied to exact failed candidates. */
+  verificationWaivers?: VerificationWaiver[];
 }
 
 /** A durable snapshot of a unit's conversation, restorable by the operator. */
@@ -417,7 +422,8 @@ export interface MergedCheckRun {
 export interface TypedCheckOutcome {
   id: string;
   definitionSha256: string;
-  status: MergedCheck["status"] | "SKIPPED";
+  status: MergedCheck["status"] | "SKIPPED" | "WAIVED";
+  waiverId?: string;
   run?: MergedCheckRun;
   detail?: string;
 }
@@ -447,7 +453,7 @@ export interface IntegrationReceipt {
   files: string[];
   outcome: string;
   summary: string;
-  verification: "PASSED" | "PASSED_POSTHOC" | "PASSED_UNBOUND" | "PASSED_POSTHOC_UNBOUND" | "NOT_RUN" | "ALREADY_INTEGRATED" | "ALREADY_MERGED" | "NO_CHANGES";
+  verification: "PASSED" | "PASSED_POSTHOC" | "PASSED_UNBOUND" | "PASSED_POSTHOC_UNBOUND" | "NOT_RUN" | "ALREADY_INTEGRATED" | "ALREADY_MERGED" | "NO_CHANGES" | "WAIVED";
   /** Content-addressed view of the merged unit's tree; absent when the worktree was already gone. */
   candidate?: { digest: string; scope: "tree" | "commit" };
   /** The unit's executed verifier, copied verbatim from its result; absent when the unit produced none. */

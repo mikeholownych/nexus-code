@@ -21,7 +21,8 @@
  *      The optional `activeStartTicks` (driver start time) was added to v7 additively: no version bump, because a build
  *      that ignores it only loses the recycled-pid check. A record without it loads and reads as unknown driver identity (paused).
  *      v11 adds operator-accepted typed verification checks and their exact-candidate receipts. Older builds must
- *      refuse these records rather than run a graph without its declared checks.
+ *      refuse these records rather than run a graph without its declared checks. v12 adds candidate-scoped deliberate
+ *      verification waivers. Older builds must refuse records carrying that acceptance decision.
  *   3. A record from a newer build is refused. It is not corrupt: a build that wrote it can still read it, and
  *      quarantining it would destroy evidence. It is also never interpreted as if it were current.
  *
@@ -32,7 +33,7 @@ import { MAX_VERIFICATION_OUTPUT_PREVIEW, unresolvedAssumptionsProblem, type Dur
 import { specialistInputsProblem } from "./specialist_profiles.js";
 import { parseBoundaryRules } from "./boundary_rules.js";
 import {
-  MAX_INTEGRATION_CHECKS, operationVerificationDefinitionDigest, parseOperationVerificationChecks,
+  MAX_INTEGRATION_CHECKS, matchingVerificationWaiver, operationVerificationDefinitionDigest, parseOperationVerificationChecks, verificationApprovalStateProblem,
 } from "./operation_verification.js";
 import {
   DEFAULT_OPERATION_INFERENCE_SUBMISSIONS,
@@ -42,7 +43,7 @@ import {
 export { DEFAULT_OPERATION_INFERENCE_SUBMISSIONS, MAX_OPERATION_ACTIVE_MS, MAX_OPERATION_INFERENCE_SUBMISSIONS } from "./operation_budget_constants.js";
 
 /** The operation document version this build writes. Independent of the task-store envelope version. */
-export const CURRENT_OPERATION_SCHEMA_VERSION = 11;
+export const CURRENT_OPERATION_SCHEMA_VERSION = 12;
 
 /** The operation document version every released 1.0.0 build wrote. */
 export const LEGACY_OPERATION_SCHEMA_VERSION = 1;
@@ -385,14 +386,20 @@ export function validateOperationState(state: DurableOperationState): void {
           || binding.typedChecks.some((check) =>
             !check || typeof check.id !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(check.id)
             || typeof check.definitionSha256 !== "string" || !/^[a-f0-9]{64}$/.test(check.definitionSha256)
-            || (!MERGED_CHECK_STATUSES.has(check.status) && check.status !== "SKIPPED")
+            || (!MERGED_CHECK_STATUSES.has(check.status) && check.status !== "SKIPPED" && check.status !== "WAIVED")
             || (check.status === "PASSED" && !check.run)
-            || (check.run !== undefined && (check.status === "SKIPPED" || !validMergedCheckRun(check.run, check.status === "PASSED")))
+            || (check.run !== undefined && (check.status === "SKIPPED" || check.status === "WAIVED" || !validMergedCheckRun(check.run, check.status === "PASSED")))
+            || (check.status === "WAIVED" ? typeof check.waiverId !== "string"
+              || check.waiverId !== matchingVerificationWaiver(state.git?.verificationWaivers, check, binding)?.id
+              : check.waiverId !== undefined)
             || (check.detail !== undefined && (typeof check.detail !== "string" || check.detail.length > 512)))
           || new Set(binding.typedChecks.map((check) => check.id)).size !== binding.typedChecks.length
         ))
       )) {
         throw new InvalidOperationStateError(`operation ${state.id}: the integration receipt of '${receipt.unitId}' has an invalid verification binding`);
+      }
+      if ((receipt.verification === "WAIVED") !== Boolean(binding?.typedChecks?.some((check) => check.status === "WAIVED"))) {
+        throw new InvalidOperationStateError(`operation ${state.id}: the integration receipt of '${receipt.unitId}' has inconsistent waiver evidence`);
       }
     }
   }
@@ -420,6 +427,8 @@ export function validateOperationState(state: DurableOperationState): void {
       throw new InvalidOperationStateError(`operation ${state.id}: invalid git.verificationChecks: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+  const approvalProblem = verificationApprovalStateProblem(state);
+  if (approvalProblem) throw new InvalidOperationStateError(`operation ${state.id}: ${approvalProblem}`);
   // A pinned verifier that cannot be read must not read as "none pinned": the merged-tree check would be dropped.
   const pinned = state.git?.integrationVerifiers;
   if (pinned !== undefined && (!Array.isArray(pinned) || pinned.some((command) => typeof command !== "string" || !command.trim()))) {

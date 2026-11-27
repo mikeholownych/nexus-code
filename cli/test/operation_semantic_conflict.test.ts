@@ -489,6 +489,54 @@ test("aborting a running integration verifier cancels its process and leaves no 
   assert.equal(git(state.git!.integrationWorktree, ["rev-parse", "HEAD"]), tip);
 });
 
+test("an operator waiver accepts only the retained exact failed candidate and is not a passing check", async (t) => {
+  const root = repo();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-check-waiver-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new OperationStore(root, path.join(home, "tasks"), home);
+  const state = operation(root, ["u1"], "op-check-waiver");
+  state.git!.verificationChecks = [{
+    id: "smoke", unitId: "u1", purpose: "check tracked input",
+    command: "false", requirement: "required", cwd: ".", timeoutMs: 1000,
+  }];
+  const executor: WorkUnitExecutor = {
+    integrationPolicy: () => ({ verifier: "false" }),
+    async run(_unit, _resource, ctx) {
+      write(ctx.workspace!, "u1.txt", "one\n");
+      return { kind: "completed", summary: "done", outcome: "NOT_REQUIRED" };
+    },
+  };
+  const options = { executor, clock: clock(), persist: (s: DurableOperationState) => store.save(s) };
+  await new OperationRunner(state, options).run();
+  assert.equal(state.status, "BLOCKED");
+  let loaded = store.load(state.id);
+  const candidate = loaded.git?.retainedVerificationCandidates?.[0];
+  assert.ok(candidate);
+  const { recordOperationVerificationWaiver } = await import("../src/core/operation_verification.js");
+  const request = { attemptId: candidate.attemptId, checkId: "smoke", actor: "test-operator", reason: "Known environment failure" };
+  assert.throws(() => recordOperationVerificationWaiver(loaded, { ...request, commit: "0".repeat(40) }), /no matching/);
+  assert.throws(() => recordOperationVerificationWaiver(loaded, { ...request, commit: candidate.commit, reason: " " }), /reason/);
+  const waiver = recordOperationVerificationWaiver(loaded, { ...request, commit: candidate.commit });
+  assert.throws(() => recordOperationVerificationWaiver(loaded, { ...request, commit: candidate.commit }), /already waived/);
+  store.save(loaded);
+  loaded = store.load(state.id);
+  const retry = new OperationRunner(loaded, options);
+  retry.scheduler.resolve(loaded.blocked!.decisions[0].id, "1");
+  assert.equal((await retry.run()).status, "COMPLETE");
+
+  const stored = store.load(state.id);
+  const receipt = stored.integrations![0];
+  assert.equal(receipt.verification, "WAIVED");
+  assert.equal(receipt.integratedCommit, candidate.commit);
+  assert.equal(receipt.verificationBinding?.typedChecks?.[0].status, "WAIVED");
+  assert.equal(receipt.verificationBinding?.typedChecks?.[0].waiverId, waiver.id);
+  assert.equal(receipt.verificationBinding?.typedChecks?.[0].run, undefined);
+  assert.equal(stored.git?.verificationWaivers?.[0]?.actor, "test-operator");
+  assert.equal(stored.git?.verificationWaivers?.[0]?.reason, "Known environment failure");
+  assert.ok(stored.events.some((event) => event.type === "VERIFICATION_WAIVED" && event.detail?.id === waiver.id));
+});
+
 test("operation status --json shows the verified receipt and the rejection", async (t) => {
   const root = repo();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-pa2-home-"));
@@ -534,8 +582,8 @@ function v4Record(): Record<string, any> {
   return { ...JSON.parse(JSON.stringify(state)), schemaVersion: 4 };
 }
 
-test("schema: this build writes operation document version 11 and adds bounded request accounting to older records", () => {
-  assert.equal(CURRENT_OPERATION_SCHEMA_VERSION, 11);
+test("schema: this build writes operation document version 12 and adds bounded request accounting to older records", () => {
+  assert.equal(CURRENT_OPERATION_SCHEMA_VERSION, 12);
   const v4 = v4Record();
   v4.schemaVersion = 6;
   v4.origin = { kind: "job", jobId: "job-pa2", unattended: true };
@@ -545,7 +593,7 @@ test("schema: this build writes operation document version 11 and adds bounded r
   delete v4.policy.maxInferenceCalls;
   const before = JSON.parse(JSON.stringify(v4));
   const migrated = migrateOperationState(v4);
-  assert.equal(migrated.schemaVersion, 11);
+  assert.equal(migrated.schemaVersion, 12);
   assert.equal(migrated.inferenceCalls, 0);
   assert.equal(migrated.historyKnown, false, "pre-v9 inference usage is unknown");
   assert.equal(migrated.policy.maxInferenceCalls, 1_000);

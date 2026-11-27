@@ -1,4 +1,5 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import type { DurableOperationState, IntegrationVerificationBinding, TypedCheckOutcome } from "./operation.js";
 
 export const MAX_INTEGRATION_CHECKS = 16;
 const DEFAULT_TIMEOUT_MS = 300_000;
@@ -74,4 +75,127 @@ export function operationVerificationApplies(check: OperationVerificationCheck, 
   return check.requirement !== "conditional" || Boolean(check.when?.changedPaths.some(
     (scope) => changed.some((file) => scope === "." || file === scope || file.startsWith(scope + "/")),
   ));
+}
+
+
+export interface RetainedVerificationCandidate {
+  attemptId: string;
+  commit: string;
+  baseTip: string;
+  unitCommit: string;
+  worktree: string;
+  unitId: string;
+  checkId: string;
+  definitionSha256: string;
+}
+
+export interface VerificationWaiver extends RetainedVerificationCandidate {
+  id: string;
+  actor: string;
+  reason: string;
+  approvedAt: string;
+}
+
+const MAX_WAIVERS = 256;
+const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
+const SHA256 = /^[a-f0-9]{64}$/;
+const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
+
+function boundedLine(text: unknown, maxLength: number): text is string {
+  return typeof text === "string" && text.trim().length > 0 && text.length <= maxLength && !/[\u0000-\u001f\u007f]/.test(text);
+}
+
+/** Only a completed failed execution is eligible. Unknown, cancelled, excessive or timed-out output cannot be waived. */
+export function isWaivableCheckFailure(check: TypedCheckOutcome | undefined): check is TypedCheckOutcome & { run: NonNullable<TypedCheckOutcome["run"]> } {
+  const exit = check?.run?.exitCode;
+  return check?.status === "FAILED" && typeof exit === "number" && Number.isInteger(exit)
+    && exit > 0 && check.run?.outputTruncated === false;
+}
+
+function matchingDefinition(state: DurableOperationState, candidate: RetainedVerificationCandidate): boolean {
+  const definition = state.git?.verificationChecks?.find((check) => check.id === candidate.checkId);
+  return Boolean(definition && definition.requirement !== "advisory"
+    && operationVerificationDefinitionDigest(definition) === candidate.definitionSha256);
+}
+
+function validRetainedCandidate(state: DurableOperationState, row: RetainedVerificationCandidate): boolean {
+  return Boolean(row && typeof row.attemptId === "string" && UUID.test(row.attemptId)
+    && typeof row.commit === "string" && SHA.test(row.commit)
+    && typeof row.baseTip === "string" && SHA.test(row.baseTip)
+    && typeof row.unitCommit === "string" && SHA.test(row.unitCommit)
+    && typeof row.worktree === "string" && row.worktree === state.git?.integrationWorktree
+    && typeof row.unitId === "string" && state.units.some((unit) => unit.id === row.unitId)
+    && typeof row.checkId === "string" && ACCESSIBLE_ID.test(row.checkId)
+    && typeof row.definitionSha256 === "string" && SHA256.test(row.definitionSha256)
+    && matchingDefinition(state, row));
+}
+
+export function verificationApprovalStateProblem(state: DurableOperationState): string | undefined {
+  const retained = state.git?.retainedVerificationCandidates;
+  if (retained !== undefined && (!Array.isArray(retained) || retained.length > state.units.length
+    || retained.some((row) => !validRetainedCandidate(state, row))
+    || new Set(retained.map((row) => row.unitId)).size !== retained.length)) {
+    return "invalid retained verification candidates";
+  }
+  const approvals = state.git?.verificationWaivers;
+  if (approvals !== undefined && (!Array.isArray(approvals) || approvals.length > MAX_WAIVERS
+    || approvals.some((row) => !validRetainedCandidate(state, row) || typeof row.id !== "string" || !UUID.test(row.id)
+      || !boundedLine(row.actor, 160) || !boundedLine(row.reason, 500)
+      || typeof row.approvedAt !== "string" || !Number.isFinite(Date.parse(row.approvedAt)))
+    || new Set(approvals.map((row) => row.id)).size !== approvals.length)) {
+    return "invalid verification waiver records";
+  }
+  return undefined;
+}
+
+/** Call from an explicit operator decision while holding the operation driver lock, then save state. */
+export function recordOperationVerificationWaiver(
+  state: DurableOperationState,
+  input: { attemptId: string; checkId: string; commit: string; actor: string; reason: string },
+  now = Date.now,
+): VerificationWaiver {
+  if (!boundedLine(input.actor, 160)) throw new Error("a waiver needs a non-empty operator actor");
+  if (!boundedLine(input.reason, 500)) throw new Error("a waiver needs a reason of 1-500 single-line characters");
+  const git = state.git;
+  const candidate = git?.retainedVerificationCandidates?.find((row) =>
+    row.attemptId === input.attemptId && row.checkId === input.checkId && row.commit === input.commit);
+  if (git?.isolate !== true || state.status !== "BLOCKED" || !candidate || !validRetainedCandidate(state, candidate)
+    || !state.units.some((unit) => unit.id === candidate.unitId && unit.status === "BLOCKED" && !unit.dropped)) {
+    throw new Error("no matching eligible failed verification on the exact blocked candidate");
+  }
+  const hasEvidence = state.events.some((event) => {
+    if (event.type !== "INTEGRATION_REJECTED" || event.unitId !== candidate.unitId) return false;
+    const proof = event.detail?.verificationBinding as IntegrationVerificationBinding | undefined;
+    return proof?.attemptId === candidate.attemptId && proof.commit === candidate.commit && proof.worktree === candidate.worktree
+      && proof.typedChecks?.some((check) => check.id === candidate.checkId && check.definitionSha256 === candidate.definitionSha256
+        && isWaivableCheckFailure(check));
+  });
+  if (!hasEvidence) throw new Error("the retained failure has no complete waivable execution evidence");
+  const existing = git.verificationWaivers ?? [];
+  if (existing.some((entry) => entry.checkId === candidate.checkId && entry.commit === candidate.commit
+    && entry.definitionSha256 === candidate.definitionSha256 && entry.worktree === candidate.worktree)) {
+    throw new Error("this check is already waived for the candidate");
+  }
+  if (existing.length >= MAX_WAIVERS) throw new Error("the operation verification waiver limit was reached");
+  const waiver: VerificationWaiver = {
+    ...candidate, id: randomUUID(), actor: input.actor.trim(), reason: input.reason.trim(), approvedAt: new Date(now()).toISOString(),
+  };
+  git.verificationWaivers = [...existing, waiver];
+  state.updatedAt = waiver.approvedAt;
+  state.events.push({
+    type: "VERIFICATION_WAIVED", at: waiver.approvedAt, unitId: waiver.unitId,
+    message: `Operator waived check '${waiver.checkId}' on candidate ${waiver.commit.slice(0, 12)}.`,
+    detail: { ...waiver },
+  });
+  return waiver;
+}
+
+export function matchingVerificationWaiver(
+  waivers: readonly VerificationWaiver[] | undefined,
+  outcome: Pick<TypedCheckOutcome, "id" | "definitionSha256">,
+  binding: Pick<IntegrationVerificationBinding, "commit" | "worktree">,
+): VerificationWaiver | undefined {
+  if (!Array.isArray(waivers)) return undefined;
+  return waivers.find((waiver) => waiver?.checkId === outcome.id && waiver.definitionSha256 === outcome.definitionSha256
+    && waiver.commit === binding.commit && waiver.worktree === binding.worktree);
 }
