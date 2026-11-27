@@ -20,15 +20,20 @@
  *      estimates; older operations establish their initial amount from complete persisted token usage.
  *      The optional `activeStartTicks` (driver start time) was added to v7 additively: no version bump, because a build
  *      that ignores it only loses the recycled-pid check. A record without it loads and reads as unknown driver identity (paused).
+ *      v11 adds operator-accepted typed verification checks and their exact-candidate receipts. Older builds must
+ *      refuse these records rather than run a graph without its declared checks.
  *   3. A record from a newer build is refused. It is not corrupt: a build that wrote it can still read it, and
  *      quarantining it would destroy evidence. It is also never interpreted as if it were current.
  *
  * Migration is deliberately additive and lossless: the store writes a byte-identical `.pre-migration-vN` copy of the
  * whole record before the first write at a newer schema version (see `OperationStore.save`).
  */
-import { unresolvedAssumptionsProblem, type DurableOperationState, type OperationPolicy, type WorkUnit } from "./operation.js";
+import { unresolvedAssumptionsProblem, type DurableOperationState, type MergedCheckRun, type OperationPolicy, type WorkUnit } from "./operation.js";
 import { specialistInputsProblem } from "./specialist_profiles.js";
 import { parseBoundaryRules } from "./boundary_rules.js";
+import {
+  MAX_INTEGRATION_CHECKS, operationVerificationDefinitionDigest, parseOperationVerificationChecks,
+} from "./operation_verification.js";
 import {
   DEFAULT_OPERATION_INFERENCE_SUBMISSIONS,
   MAX_OPERATION_ACTIVE_MS,
@@ -37,7 +42,7 @@ import {
 export { DEFAULT_OPERATION_INFERENCE_SUBMISSIONS, MAX_OPERATION_ACTIVE_MS, MAX_OPERATION_INFERENCE_SUBMISSIONS } from "./operation_budget_constants.js";
 
 /** The operation document version this build writes. Independent of the task-store envelope version. */
-export const CURRENT_OPERATION_SCHEMA_VERSION = 10;
+export const CURRENT_OPERATION_SCHEMA_VERSION = 11;
 
 /** The operation document version every released 1.0.0 build wrote. */
 export const LEGACY_OPERATION_SCHEMA_VERSION = 1;
@@ -45,6 +50,15 @@ export const LEGACY_OPERATION_SCHEMA_VERSION = 1;
 const OPERATION_STATUSES = new Set(["RUNNING", "WAITING", "BLOCKED", "PAUSED", "COMPLETE", "CANCELLED"]);
 const WORK_UNIT_STATUSES = new Set(["RUNNABLE", "RUNNING", "PARKED", "WAITING_ON_DEPENDENCY", "COMPLETE", "BLOCKED"]);
 const MERGED_CHECK_STATUSES = new Set(["PASSED", "FAILED", "ENVIRONMENT", "TIMED_OUT"]);
+function validMergedCheckRun(run: MergedCheckRun, passed: boolean): boolean {
+  return Boolean(run && typeof run.command === "string" && run.command.trim()
+    && typeof run.startedAt === "string" && Number.isFinite(Date.parse(run.startedAt))
+    && typeof run.completedAt === "string" && Number.isFinite(Date.parse(run.completedAt))
+    && Number.isSafeInteger(run.timeoutMs) && run.timeoutMs > 0
+    && (run.exitCode === null || Number.isSafeInteger(run.exitCode))
+    && typeof run.outputSha256 === "string" && /^[a-f0-9]{64}$/.test(run.outputSha256)
+    && typeof run.outputTruncated === "boolean" && (!passed || (run.exitCode === 0 && !run.outputTruncated)));
+}
 const DECISION_ACTION_KINDS = new Set([
   "retry",
   "keep_waiting",
@@ -359,14 +373,21 @@ export function validateOperationState(state: DurableOperationState): void {
         !binding || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(binding.commit)
         || binding.commit !== receipt.integratedCommit
         || typeof binding.worktree !== "string" || !binding.worktree || binding.worktree !== state.git?.integrationWorktree
-        || !Array.isArray(binding.runs) || !checks?.length || binding.runs.length !== checks.length
+        || !Array.isArray(binding.runs) || binding.runs.length !== (checks?.length ?? 0)
+        || (!binding.runs.length && !binding.typedChecks?.length)
         || binding.runs.some((run, index) =>
-          !run || run.command !== checks[index].command || checks[index].status !== "PASSED"
-          || typeof run.startedAt !== "string" || !Number.isFinite(Date.parse(run.startedAt))
-          || typeof run.completedAt !== "string" || !Number.isFinite(Date.parse(run.completedAt))
-          || !Number.isSafeInteger(run.timeoutMs) || run.timeoutMs < 1
-          || run.exitCode !== 0 || typeof run.outputSha256 !== "string" || !/^[a-f0-9]{64}$/.test(run.outputSha256)
-          || run.outputTruncated !== false)
+          !validMergedCheckRun(run, true) || run.command !== checks?.[index]?.command || checks?.[index]?.status !== "PASSED")
+        || (binding.typedChecks !== undefined && (
+          !Array.isArray(binding.typedChecks) || binding.typedChecks.length > MAX_INTEGRATION_CHECKS
+          || binding.typedChecks.some((check) =>
+            !check || typeof check.id !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(check.id)
+            || typeof check.definitionSha256 !== "string" || !/^[a-f0-9]{64}$/.test(check.definitionSha256)
+            || (!MERGED_CHECK_STATUSES.has(check.status) && check.status !== "SKIPPED")
+            || (check.status === "PASSED" && !check.run)
+            || (check.run !== undefined && (check.status === "SKIPPED" || !validMergedCheckRun(check.run, check.status === "PASSED")))
+            || (check.detail !== undefined && (typeof check.detail !== "string" || check.detail.length > 512)))
+          || new Set(binding.typedChecks.map((check) => check.id)).size !== binding.typedChecks.length
+        ))
       )) {
         throw new InvalidOperationStateError(`operation ${state.id}: the integration receipt of '${receipt.unitId}' has an invalid verification binding`);
       }
@@ -377,6 +398,23 @@ export function validateOperationState(state: DurableOperationState): void {
       if ((entry as any).ownerId !== undefined && (typeof (entry as any).ownerId !== "string" || !(entry as any).ownerId)) {
         throw new InvalidOperationStateError(`operation ${state.id}: git unit '${unitId}' ownerId must be a non-empty string`);
       }
+    }
+  }
+  const acceptedPlan = state.git?.acceptedPlanDigest;
+  if (acceptedPlan !== undefined && (typeof acceptedPlan !== "string" || !/^[a-f0-9]{64}$/.test(acceptedPlan) || state.git?.isolate !== true)) {
+    throw new InvalidOperationStateError(`operation ${state.id}: invalid git.acceptedPlanDigest`);
+  }
+  const definitions = state.git?.verificationChecks;
+  if (definitions !== undefined) {
+    try {
+      const normalized = parseOperationVerificationChecks(definitions);
+      if (state.git?.isolate !== true || normalized.some((check, index) =>
+        (check.unitId && !state.units.some((unit) => unit.id === check.unitId))
+        || operationVerificationDefinitionDigest(check) !== operationVerificationDefinitionDigest(definitions[index]))) {
+        throw new Error("expected normalized definitions and existing unit ids in an isolated operation");
+      }
+    } catch (error) {
+      throw new InvalidOperationStateError(`operation ${state.id}: invalid git.verificationChecks: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   // A pinned verifier that cannot be read must not read as "none pinned": the merged-tree check would be dropped.

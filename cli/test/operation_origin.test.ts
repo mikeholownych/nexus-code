@@ -15,10 +15,10 @@ import { CURRENT_OPERATION_SCHEMA_VERSION, InvalidOperationStateError, migrateOp
 
 const state = (): DurableOperationState => newOperation("op-origin", "objective", [{ id: "u", title: "u", prompt: "p" }], [], Date.parse("2026-11-24T10:00:00.000Z"));
 
-test("the operation document is version 10 and an attended operation has no origin", () => {
-  assert.equal(CURRENT_OPERATION_SCHEMA_VERSION, 10);
+test("the operation document is version 11 and an attended operation has no origin", () => {
+  assert.equal(CURRENT_OPERATION_SCHEMA_VERSION, 11);
   const attended = state();
-  assert.equal(attended.schemaVersion, 10);
+  assert.equal(attended.schemaVersion, 11);
   assert.equal("origin" in attended, false);
   assert.doesNotThrow(() => validateOperationState(attended));
 });

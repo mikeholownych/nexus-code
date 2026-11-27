@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { HarnessConfig } from "../types.js";
 import { realRecoveryClock, type RecoveryClock } from "./provider_recovery.js";
-import { ConvergenceScheduler, type Assignment, type Decision, type DurableOperationState, type MergedCheck, type OperationEvent, type OperationMessage, type UnitRunResult, type WorkUnit } from "./operation.js";
+import { ConvergenceScheduler, type Assignment, type Decision, type DurableOperationState, type IntegrationVerificationBinding, type MergedCheck, type OperationEvent, type OperationMessage, type UnitRunResult, type WorkUnit } from "./operation.js";
 import { markDelivered, publishMessage, undeliveredFor } from "./operation_messages.js";
 import { OperationGit, ensureIntegrationWorktree, type OperationGitPlan } from "./operation_git.js";
 import { REQUIREMENTS_CAPABILITY, READ_OBJECTIVE_CAPABILITY } from "./objective.js";
@@ -329,6 +329,11 @@ export class OperationRunner {
       this.git?.disposeAllUnits();
       return this.state;
     }
+    const definitions = this.state.git?.verificationChecks;
+    if (definitions?.some((check) => check.command !== this.opts.executor.integrationPolicy?.().verifier?.trim())) {
+      this.blockOnGit("A typed check does not match the current operator-authorized verifier command.");
+      return this.state;
+    }
     this.pinIntegrationVerifier();
     if (this.git) {
       try {
@@ -521,7 +526,12 @@ export class OperationRunner {
         continue;
       }
       if (d.kind === "complete") {
-        const verificationProblem = this.git?.completionVerificationProblem(this.state.integrations ?? []);
+        if (this.state.git?.acceptedPlanDigest && this.state.units.some((unit) => unit.required !== false && (unit.dropped || unit.status !== "COMPLETE"))) {
+          this.blockOnGit("A required unit in the accepted plan is missing or incomplete.");
+          return this.state;
+        }
+        const requiredUnits = new Set(this.state.units.filter((unit) => !unit.dropped && unit.required !== false).map((unit) => unit.id));
+        const verificationProblem = this.git?.completionVerificationProblem(this.state.integrations ?? [], requiredUnits);
         if (verificationProblem) {
           this.blockOnGit(verificationProblem);
           return this.state;
@@ -1025,7 +1035,7 @@ export class OperationRunner {
   private pinIntegrationVerifier(): void {
     const verifier = this.opts.executor.integrationPolicy?.().verifier?.trim();
     const git = this.state.git;
-    if (!git?.isolate || !verifier || git.integrationVerifiers?.includes(verifier)) return;
+    if (!git?.isolate || !verifier || git.verificationChecks?.length || git.integrationVerifiers?.includes(verifier)) return;
     git.integrationVerifiers = [...(git.integrationVerifiers ?? []), verifier];
   }
 
@@ -1033,11 +1043,17 @@ export class OperationRunner {
    * PA-2: a refused merge is recorded as its own event, naming the integrated units it collides with and the checks
    * the runner ran. Returns the clause that names those units in the operator's decision.
    */
-  private recordRejection(unit: WorkUnit, reason: string, detail: { conflictWith?: string[]; checks?: MergedCheck[]; files?: string[] }): string {
+  private recordRejection(unit: WorkUnit, reason: string, detail: { conflictWith?: string[]; checks?: MergedCheck[]; verificationBinding?: IntegrationVerificationBinding; files?: string[] }): string {
     const others = detail.conflictWith ?? [];
     this.scheduler.emit("INTEGRATION_REJECTED", `${unit.id} was not integrated: ${reason.split("\n")[0]}`, {
       unitId: unit.id,
-      detail: { unitId: unit.id, conflictWith: others, ...(detail.checks ? { checks: detail.checks } : {}), ...(detail.files ? { files: detail.files } : {}) },
+      detail: {
+        unitId: unit.id,
+        conflictWith: others,
+        ...(detail.checks ? { checks: detail.checks } : {}),
+        ...(detail.verificationBinding ? { verificationBinding: detail.verificationBinding } : {}),
+        ...(detail.files ? { files: detail.files } : {}),
+      },
     });
     return others.length ? ` (${unit.id} against integrated ${others.join(", ")})` : "";
   }

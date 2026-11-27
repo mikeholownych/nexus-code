@@ -1,3 +1,4 @@
+import type { OperationVerificationCheck } from "./operation_verification.js";
 /**
  * Convergence scheduling: an operation is a set of work units with dependencies, driven toward its objective.
  *
@@ -331,6 +332,9 @@ export interface OperationGitState {
   units: Record<string, OperationGitUnit>;
   /** Operator verifiers pinned for the operation: each runs on every merged tree. Only ever added to (PA-2). */
   integrationVerifiers?: string[];
+  /** Operator-accepted definitions for the isolated candidate. */
+  verificationChecks?: OperationVerificationCheck[];
+  acceptedPlanDigest?: string;
 }
 
 /** A durable snapshot of a unit's conversation, restorable by the operator. */
@@ -404,10 +408,19 @@ export interface MergedCheckRun {
   outputTruncated: boolean;
 }
 
+export interface TypedCheckOutcome {
+  id: string;
+  definitionSha256: string;
+  status: MergedCheck["status"] | "SKIPPED";
+  run?: MergedCheckRun;
+  detail?: string;
+}
+
 export interface IntegrationVerificationBinding {
   commit: string;
   worktree: string;
   runs: MergedCheckRun[];
+  typedChecks?: TypedCheckOutcome[];
 }
 
 /** What was integrated, and the evidence the merge was accepted with. */

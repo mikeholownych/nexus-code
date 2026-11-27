@@ -26,6 +26,7 @@ import { parseActiveMinutesCap, parseInferenceSubmissionCap, parseTokenCap, setO
 import { withDerivedPause } from "./core/driver_identity.js";
 import { buildOperationView, renderOperationView, renderReplay, watchOperation } from "./operation_view.js";
 import { ensureIntegrationWorktree, newOperationGitState, planOperationGit } from "./core/operation_git.js";
+import { parseOperationVerificationChecks, type OperationVerificationCheck } from "./core/operation_verification.js";
 import { ContextCheckpointError, createContextCheckpoint, listContextCheckpoints, restoreContextCheckpoint } from "./core/operation_checkpoints.js";
 import { safeTerminal } from "./ui.js";
 import { credentialFingerprint, ResourceRegistry, type ResourceDescriptor } from "./core/resources.js";
@@ -64,6 +65,7 @@ export interface OperationSpec {
   git?: { isolate?: boolean; baseRef?: string };
   /** SI-5: boundary rules the review gate enforces on each candidate diff (core/boundary_rules.ts). */
   boundaries?: BoundaryRules;
+  verificationChecks?: OperationVerificationCheck[];
 }
 
 /**
@@ -80,7 +82,7 @@ export class OperationSpecError extends Error {
 // The spec is untrusted operator input. Unknown keys are rejected rather than ignored: a silently ignored
 // `git.publish` would leave the operator believing a PR will be opened, and a typo such as `depends` would drop a
 // dependency and run work out of order.
-const SPEC_KEYS = ["id", "objective", "units", "resources", "discoverCatalog", "policy", "git", "boundaries"] as const;
+const SPEC_KEYS = ["id", "objective", "units", "resources", "discoverCatalog", "policy", "git", "boundaries", "verificationChecks"] as const;
 const UNIT_KEYS = ["id", "title", "role", "prompt", "dependsOn", "requires", "required", "taskClass", "executionResources", "contextBudget", "inputs", "authorizedScope", "unresolvedAssumptions"] as const;
 const POLICY_KEYS = ["maxWaitMs", "unknownResumeBudget", "maxRunsPerUnit", "minWaitMs", "maxConcurrentUnits", "executionBudget"] as const;
 const EXECUTION_RESOURCE_KEYS = ["cpuMilli", "memoryBytes"] as const;
@@ -124,6 +126,18 @@ export function validateOperationSpec(spec: unknown): asserts spec is OperationS
     rejectUnknown("git", s.git, GIT_KEYS);
     if (s.git.isolate !== undefined && typeof s.git.isolate !== "boolean") throw new OperationSpecError("operation spec 'git.isolate' must be true or false");
     if (s.git.baseRef !== undefined && typeof s.git.baseRef !== "string") throw new OperationSpecError("operation spec 'git.baseRef' must be a string");
+  }
+  if (s.verificationChecks !== undefined) {
+    if (s.git?.isolate !== true) throw new OperationSpecError("typed verification checks require Git isolation");
+    try {
+      for (const check of parseOperationVerificationChecks(s.verificationChecks)) {
+        if (check.unitId && !s.units.some((unit: WorkUnitSpec | null) => unit?.id === check.unitId)) {
+          throw new Error("verificationChecks refers to an unknown work-unit id");
+        }
+      }
+    } catch (error) {
+      throw new OperationSpecError(error instanceof Error ? error.message : String(error));
+    }
   }
   if (s.boundaries !== undefined) {
     try {
@@ -345,6 +359,9 @@ export function registerOperationCommands(program: Command): void {
         throw new OperationSpecError(`cannot read operation spec ${specPath}: ${String(error?.message ?? error)}`);
       }
       validateOperationSpec(spec);
+      if (spec.verificationChecks) {
+        throw new OperationSpecError("typed verification checks require the accepted batch plan entry point");
+      }
       const config = buildConfig(options);
       const store = new OperationStore(config.workspace);
       const id = spec.id ?? `op-${randomUUID().slice(0, 8)}`;

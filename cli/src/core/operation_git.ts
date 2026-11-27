@@ -27,10 +27,16 @@ import { sandboxNetworkEnabled } from "../sandbox.js";
 import { SecurityManager } from "../security.js";
 import { printable } from "../worktrunk/git.js";
 import { sandboxedVerifierCommand, usableSandboxEngine } from "./verify.js";
+import { formatDiagnosticForOutput } from "../ui.js";
+import {
+  MAX_INTEGRATION_CHECKS, operationVerificationApplies, operationVerificationDefinitionDigest, type OperationVerificationCheck,
+} from "./operation_verification.js";
 import type {
   IntegrationReceipt,
+  IntegrationVerificationBinding,
   MergedCheck,
   MergedCheckRun,
+  TypedCheckOutcome,
   OperationGitState,
   OperationGitUnit,
   UnitRunResult,
@@ -110,13 +116,13 @@ export function newOperationGitState(plan: OperationGitPlan): OperationGitState 
 }
 
 /** Distinct verifier commands one merge may run (D-PA2-3). A larger set is refused whole, never cut short. */
-export const MAX_INTEGRATION_CHECKS = 16;
+export { MAX_INTEGRATION_CHECKS } from "./operation_verification.js";
 
 /** `conflictWith`: the integrated units whose work the refused unit collides with, when that is known. */
 export type IntegrateResult =
   | { kind: "integrated" | "nothing"; receipt: IntegrationReceipt }
   | { kind: "conflict"; files: string[]; tip: string; conflictWith?: string[] }
-  | { kind: "failed"; reason: string; checks?: MergedCheck[]; conflictWith?: string[] };
+  | { kind: "failed"; reason: string; checks?: MergedCheck[]; verificationBinding?: IntegrationVerificationBinding; conflictWith?: string[] };
 
 /** What the runner observed about the unit it is integrating; omitted fields are omitted from the receipt. */
 export interface IntegrationEvidence {
@@ -224,23 +230,52 @@ export class OperationGit {
     return problems;
   }
 
-  completionVerificationProblem(receipts: readonly IntegrationReceipt[]): string | undefined {
-    const required = this.state.integrationVerifiers;
-    if (!required?.length) return undefined;
+  completionVerificationProblem(receipts: readonly IntegrationReceipt[], requiredUnitIds?: ReadonlySet<string>): string | undefined {
+    const required = this.state.integrationVerifiers ?? [];
+    const definitions = this.state.verificationChecks ?? [];
+    if (!required.length && !definitions.length) return undefined;
     try {
       this.pin = trustedGitArgs(this.plan.integrationWorktree);
       const tip = this.currentTip();
-      const hasProof = receipts.some((receipt) =>
-        receipt.integratedCommit === tip && receipt.verificationBinding?.commit === tip
-        && receipt.verificationBinding.worktree === this.plan.integrationWorktree
-        && required.every((command) =>
-          receipt.mergedChecks?.some((check) => check.command === command && check.status === "PASSED" && check.owners.includes("operator"))
-          && receipt.verificationBinding?.runs.some((run) => run.command === command && run.exitCode === 0 && !run.outputTruncated)));
+      const completed = new Set(receipts.map((receipt) => receipt.unitId));
+      if (definitions.some((check) => check.requirement !== "advisory" && check.unitId && !completed.has(check.unitId)
+        && (!requiredUnitIds || requiredUnitIds.has(check.unitId)))) {
+        return "There is no passing verifier evidence for a required unit on the current integration candidate.";
+      }
+      const checks = this.activeVerificationChecks(receipts);
+      if (!required.length && !checks.length) return undefined;
+      const changed = this.verificationChangedPaths(checks, tip);
+      if (!changed) return "The changed paths for the required checks could not be established.";
+      const hasProof = receipts.some((receipt) => {
+        const proof = receipt.verificationBinding;
+        return receipt.integratedCommit === tip && proof?.commit === tip && proof.worktree === this.plan.integrationWorktree
+          && required.every((command) =>
+            receipt.mergedChecks?.some((check) => check.command === command && check.status === "PASSED" && check.owners.includes("operator"))
+            && proof.runs.some((run) => run.command === command && run.exitCode === 0 && !run.outputTruncated))
+          && checks.every((check) => proof.typedChecks?.some((result) =>
+            result.id === check.id && result.definitionSha256 === operationVerificationDefinitionDigest(check)
+            && (!operationVerificationApplies(check, changed) ? result.status === "SKIPPED"
+              : check.requirement === "advisory" ? result.status !== "SKIPPED"
+                : result.status === "PASSED" && result.run?.command === check.command
+                && result.run.exitCode === 0 && !result.run.outputTruncated && result.run.timeoutMs <= check.timeoutMs)));
+      });
       if (!hasProof) return "There is no passing verifier evidence for the current integration candidate and required checks.";
       return this.integrationIntegrity(tip, tip).reason;
     } catch {
       return "The integration worktree could not be read to confirm its verification evidence.";
     }
+  }
+
+  private activeVerificationChecks(receipts: readonly IntegrationReceipt[], integrating?: string): OperationVerificationCheck[] {
+    const units = new Set(receipts.map((receipt) => receipt.unitId));
+    if (integrating !== undefined) units.add(integrating);
+    return (this.state.verificationChecks ?? []).filter((check) => !check.unitId || units.has(check.unitId));
+  }
+
+  private verificationChangedPaths(checks: readonly OperationVerificationCheck[], tip: string): string[] | undefined {
+    if (!checks.some((check) => check.requirement === "conditional")) return [];
+    const diff = this.inIntegration(["diff", "--no-ext-diff", "--no-renames", "--name-only", "-z", this.plan.baseCommit, tip, "--"]);
+    return diff.ok ? diff.stdout.split("\0").filter(Boolean) : undefined;
   }
 
   /**
@@ -391,8 +426,10 @@ export class OperationGit {
     const tip = this.currentTip();
     const earlier = (evidence.integrated ?? this.options.integrations?.() ?? []).filter((receipt) => receipt.unitId !== unit.id);
     const checks = this.integrationChecks(unit, result, earlier);
-    const tooMany = checks.length > MAX_INTEGRATION_CHECKS
-      ? `the merged tree would need ${checks.length} distinct verifier commands (the limit is ${MAX_INTEGRATION_CHECKS}) and none may be skipped; ` +
+    const typedChecks = this.activeVerificationChecks(earlier, unit.id);
+    const hasChecks = checks.length > 0 || typedChecks.length > 0;
+    const tooMany = checks.length + typedChecks.length > MAX_INTEGRATION_CHECKS
+      ? `the merged tree would need ${checks.length + typedChecks.length} distinct verifier commands (the limit is ${MAX_INTEGRATION_CHECKS}) and none may be skipped; ` +
         "give the operation one --authoritative-verifier that covers its units"
       : undefined;
     // A branch already contained in the integration tip (crash after the merge) is recorded, not merged twice.
@@ -407,11 +444,11 @@ export class OperationGit {
         : undefined;
       const takeover = before ? this.verificationTakeover(unit, before, tip, earlier) : undefined;
       if (takeover) return { kind: "failed", ...takeover, reason: `${takeover.reason}${inPlace}` };
-      if (checks.length) {
+      if (hasChecks) {
         const clean = this.integrationIntegrity(commit, tip);
         if (!clean.ok) return { kind: "failed", reason: `${clean.reason}${inPlace}` };
       }
-      const posthoc = checks.length ? this.runChecks(checks, commit, tip) : undefined;
+      const posthoc = hasChecks ? this.runChecks(checks, typedChecks, commit, tip) : undefined;
       const integrity = posthoc ? this.integrationIntegrity(commit, tip) : undefined;
       if (posthoc && (posthoc.integrityFailure || (integrity && !integrity.ok))) {
         const reason = posthoc.integrityFailure ?? integrity?.reason ?? "integration verification changed the integration history";
@@ -419,9 +456,12 @@ export class OperationGit {
         return { kind: "failed", reason: restoration ? `${reason}; ${restoration}` : reason, checks: posthoc.ran };
       }
       if (posthoc) this.cleanIntegrationWorktree();
-      if (posthoc?.failed) {
+      if (posthoc?.failed || posthoc?.typedFailure) {
         // Do not record this as integrated: a retry must re-check the merged tree (and may add the missing work).
-        return { kind: "failed", reason: `${posthoc.failed.detail}${inPlace}`, checks: posthoc.ran };
+        return {
+          kind: "failed", reason: `${posthoc.typedFailure ?? posthoc.failed?.detail}${inPlace}`, checks: posthoc.ran,
+          ...(posthoc.binding.typedChecks ? { verificationBinding: posthoc.binding } : {}),
+        };
       }
       this.state.units[unit.id] = { ...entry, integratedCommit: tip };
       return {
@@ -442,7 +482,7 @@ export class OperationGit {
           ...evidenceFields(evidence),
           ...(posthoc ? {
             mergedChecks: posthoc.ran,
-            verificationBinding: { commit: tip, worktree: this.plan.integrationWorktree, runs: posthoc.runs },
+            verificationBinding: posthoc.binding,
           } : {}),
         },
       };
@@ -475,17 +515,18 @@ export class OperationGit {
       const restoration = this.restoreIntegration(tip);
       return { kind: "failed", ...takeover, reason: restoration ? `${takeover.reason}; ${restoration}` : takeover.reason };
     }
-    const verification = checks.length ? this.runChecks(checks, commit, mergedTip) : undefined;
+    const verification = hasChecks ? this.runChecks(checks, typedChecks, commit, mergedTip) : undefined;
     const integrity = verification ? this.integrationIntegrity(commit, mergedTip) : undefined;
-    if (verification && (verification.failed || verification.integrityFailure || (integrity && !integrity.ok))) {
+    if (verification && (verification.failed || verification.typedFailure || verification.integrityFailure || (integrity && !integrity.ok))) {
       // The merge is mechanically clean but the merged tree does not pass a verifier: undo it.
       const restoration = this.restoreIntegration(tip);
       const undone = !restoration && integrity?.ok && verification.failed ? this.attribute(unit, verification.failed, tip, commit, earlier) : undefined;
-      const reason = undone?.reason ?? verification.integrityFailure ?? integrity?.reason ?? verification.failed?.detail ?? "integration verification failed";
+      const reason = undone?.reason ?? verification.integrityFailure ?? integrity?.reason ?? verification.typedFailure ?? verification.failed?.detail ?? "integration verification failed";
       return {
         kind: "failed",
         reason: restoration ? `${reason}; ${restoration}` : reason,
         checks: verification.ran,
+        ...(verification.binding.typedChecks ? { verificationBinding: verification.binding } : {}),
         ...(undone?.conflictWith ? { conflictWith: undone.conflictWith } : {}),
       };
     }
@@ -508,7 +549,7 @@ export class OperationGit {
       ...evidenceFields(evidence),
       ...(verification ? {
         mergedChecks: verification.ran,
-        verificationBinding: { commit: mergedTip, worktree: this.plan.integrationWorktree, runs: verification.runs },
+        verificationBinding: verification.binding,
       } : {}),
     };
     this.state.units[unit.id] = { ...entry, integratedCommit };
@@ -747,11 +788,18 @@ export class OperationGit {
   /** Run the checks in order on the tree the integration worktree holds; stop at the first that does not pass. */
   private runChecks(
     checks: ReadonlyArray<{ command: string; owners: string[] }>,
+    definitions: readonly OperationVerificationCheck[],
     commit: string,
     expectedTip: string,
-  ): { ran: MergedCheck[]; runs: MergedCheckRun[]; failed?: { check: MergedCheck; detail: string }; integrityFailure?: string } {
+  ): {
+    ran: MergedCheck[];
+    binding: IntegrationVerificationBinding;
+    failed?: { check: MergedCheck; detail: string };
+    typedFailure?: string;
+    integrityFailure?: string;
+  } {
     const ran: MergedCheck[] = [];
-    const runs: MergedCheckRun[] = [];
+    const binding: IntegrationVerificationBinding = { commit: expectedTip, worktree: this.plan.integrationWorktree, runs: [] };
     for (const { command, owners } of checks) {
       const outcome = this.verifyMerged(command);
       const check: MergedCheck = {
@@ -760,12 +808,32 @@ export class OperationGit {
         ...(outcome.outputTruncated ? { outputTruncated: true } : {}),
       };
       ran.push(check);
-      if (outcome.run) runs.push(outcome.run);
-      if (!outcome.ok) return { ran, runs, failed: { check, detail: outcome.reason ?? "integration verification failed" } };
+      if (outcome.run) binding.runs.push(outcome.run);
+      if (!outcome.ok) return { ran, binding, failed: { check, detail: outcome.reason ?? "integration verification failed" } };
       const integrity = this.integrationIntegrity(commit, expectedTip);
-      if (!integrity.ok) return { ran, runs, integrityFailure: integrity.reason ?? "integration verification changed the integration history" };
+      if (!integrity.ok) return { ran, binding, integrityFailure: integrity.reason ?? "integration verification changed the integration history" };
     }
-    return { ran, runs };
+    if (!definitions.length) return { ran, binding };
+    const typedChecks: TypedCheckOutcome[] = [];
+    binding.typedChecks = typedChecks;
+    const changed = this.verificationChangedPaths(definitions, expectedTip);
+    if (!changed) return { ran, binding, typedFailure: "could not establish the changed paths for conditional verification" };
+    for (const definition of definitions) {
+      const identity = { id: definition.id, definitionSha256: operationVerificationDefinitionDigest(definition) };
+      if (!operationVerificationApplies(definition, changed)) {
+        typedChecks.push({ ...identity, status: "SKIPPED" });
+        continue;
+      }
+      const outcome = this.verifyMerged(definition.command, definition);
+      const detail = outcome.reason ? formatDiagnosticForOutput(outcome.reason).slice(0, 512) : undefined;
+      typedChecks.push({ ...identity, status: outcome.status, ...(outcome.run ? { run: outcome.run } : {}), ...(detail ? { detail } : {}) });
+      const integrity = this.integrationIntegrity(commit, expectedTip);
+      if (!integrity.ok) return { ran, binding, integrityFailure: integrity.reason ?? "integration verification changed the integration worktree" };
+      if (!outcome.ok && definition.requirement !== "advisory") {
+        return { ran, binding, typedFailure: `required check '${definition.id}' failed: ${detail ?? outcome.status}` };
+      }
+    }
+    return { ran, binding };
   }
 
   /**
@@ -773,9 +841,22 @@ export class OperationGit {
    * sandbox through the wrapper `nexus verify` uses (the operation's other worktrees hidden, the host read-only), or on
    * the host when the session has no sandbox. A sandbox that cannot be built is a result, never a reason to run outside it.
    */
-  private verifyMerged(command: string): { ok: boolean; reason?: string; status: MergedCheck["status"]; sandbox?: "bwrap" | "docker"; outputTruncated?: true; run?: MergedCheckRun } {
-    const deadlineMs = (this.options.verifyTimeoutSecs ?? verifierTimeoutSecs()) * 1000;
-    const directory = this.plan.integrationWorktree;
+  private verifyMerged(command: string, definition?: OperationVerificationCheck): { ok: boolean; reason?: string; status: MergedCheck["status"]; sandbox?: "bwrap" | "docker"; outputTruncated?: true; run?: MergedCheckRun } {
+    const deadlineMs = Math.min((this.options.verifyTimeoutSecs ?? verifierTimeoutSecs()) * 1000, definition?.timeoutMs ?? Infinity);
+    const root = this.plan.integrationWorktree;
+    let directory = root;
+    if (definition?.cwd && definition.cwd !== ".") {
+      // Resolve components before starting the verifier. Only physical directories within the worktree are eligible.
+      const intended = path.resolve(root, definition.cwd);
+      try {
+        const realRoot = fs.realpathSync(root);
+        const physical = path.resolve(realRoot, definition.cwd);
+        if (fs.realpathSync(intended) !== physical || !fs.statSync(intended).isDirectory()) throw new Error("not a physical candidate directory");
+        directory = intended;
+      } catch {
+        return { ok: false, status: "ENVIRONMENT", reason: "verification cwd is unavailable or resolves through a symlink" };
+      }
+    }
     const asked = this.options.sandbox === true ? "auto" : this.options.sandbox;
     let line = command;
     let engine: "bwrap" | "docker" | undefined;
@@ -789,8 +870,9 @@ export class OperationGit {
       });
       if (!engine) return unavailable(`the session's sandbox (${asked}) cannot confine a command on this host`);
       containerName = engine === "docker" ? `nexus-integration-${randomUUID()}` : undefined;
+      const sandboxCommand = directory === root ? command : "cd '" + directory.replaceAll("'", "'\\''") + "' && " + command;
       const confined = sandboxedVerifierCommand(
-        command, directory,
+        sandboxCommand, root,
         { engine, network: sandboxNetworkEnabled(), scratch: this.plan.baseDir, readOnlyDirs: [] },
         { containerName },
       );

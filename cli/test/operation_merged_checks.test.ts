@@ -246,6 +246,40 @@ test("a successful merged check records the exact candidate and bounded executio
   assert.ok(verificationBinding?.runs.every((run) => /^[a-f0-9]{64}$/.test(run.outputSha256)));
 });
 
+test("typed required checks gate no-change completion and advisory failures remain visible", async () => {
+  const f = fixture();
+  f.prepare("u1");
+  f.state.verificationChecks = [
+    { id: "advisory", purpose: "optional smoke", command: "false", requirement: "advisory", cwd: ".", timeoutMs: 1000 },
+    { id: "required", purpose: "expected input", command: "test -f expected.txt", requirement: "required", cwd: ".", timeoutMs: 1000 },
+  ];
+  const tip = f.ops.currentTip();
+  const result = await f.integrate("u1");
+  assert.ok(result.kind === "failed");
+  assert.match(result.reason, /required/);
+  assertUntouched(f, tip);
+});
+
+test("typed receipts bind alternate cwd, conditional applicability and unit ownership to the exact tree", async () => {
+  const f = fixture();
+  const tree = f.prepare("u1");
+  write(tree, "checks/marker.txt", "included\n");
+  f.state.verificationChecks = [
+    { id: "skip", purpose: "only edited docs", command: "false", requirement: "conditional", cwd: ".", timeoutMs: 1000, when: { changedPaths: ["docs"] } },
+    { id: "unit", unitId: "u1", purpose: "verify marker", command: "test -f marker.txt", requirement: "conditional", cwd: "checks", timeoutMs: 1000, when: { changedPaths: ["checks"] } },
+    { id: "note", purpose: "record advisory failure", command: "false", requirement: "advisory", cwd: ".", timeoutMs: 1000 },
+  ];
+  const result = await f.integrate("u1");
+  assert.ok(result.kind === "integrated");
+  const binding = result.receipt.verificationBinding;
+  assert.equal(binding?.commit, result.receipt.integratedCommit);
+  assert.deepEqual(binding?.typedChecks?.map((check) => [check.id, check.status]), [["skip", "SKIPPED"], ["unit", "PASSED"], ["note", "FAILED"]]);
+  assert.equal(f.ops.completionVerificationProblem(f.receipts), undefined);
+
+  f.state.verificationChecks[1] = { ...f.state.verificationChecks[1], timeoutMs: 2000 };
+  assert.match(f.ops.completionVerificationProblem(f.receipts) ?? "", /required checks/);
+});
+
 test("integration requires complete verifier output even when the command exits successfully", async () => {
   const f = fixture();
   f.state.integrationVerifiers = ["node -e 'process.stdout.write(Buffer.alloc(4 * 1024 * 1024 + 1, 10))'"];
