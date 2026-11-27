@@ -202,9 +202,14 @@ export class AgentWorkUnitExecutor implements WorkUnitExecutor {
   constructor(private readonly opts: AgentExecutorOptions) {}
 
   /** PA-2: the operator's verifier and the sandbox the units' own commands run in; merged-tree checks use both. */
-  integrationPolicy(): { verifier?: string; sandbox?: boolean | string } {
+  integrationPolicy(): { verifier?: string; sandbox?: boolean | string; verificationCommands?: readonly string[] } {
     const verifier = this.opts.baseConfig.authoritativeVerifierCommand?.trim();
-    return { ...(verifier ? { verifier } : {}), sandbox: this.opts.baseConfig.sandbox };
+    const verificationCommands = this.opts.baseConfig.batchVerifierCommands;
+    return {
+      ...(verifier ? { verifier } : {}),
+      ...(verificationCommands ? { verificationCommands } : {}),
+      sandbox: this.opts.baseConfig.sandbox,
+    };
   }
 
   configFor(resource: ResourceDescriptor, unit?: WorkUnit, workspace?: string): HarnessConfig {

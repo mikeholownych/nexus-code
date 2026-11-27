@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { buildConfig, autoDetectModel, configuredOperationPolicy, mergeOperationPolicy, readBoundedOperatorConfig } from "../src/config.js";
 import { startGateway } from "./helpers/fixtures.js";
 
-function runOperatorConfig(home: string, workspace: string, extraEnv: Record<string, string> = {}) {
+function runOperatorConfig(home: string, workspace: string, extraEnv: Record<string, string> = {}, field = "operationPolicy") {
   const cliDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const configModule = pathToFileURL(path.join(cliDir, "src/config.ts")).href;
   const script = `
@@ -16,7 +16,7 @@ function runOperatorConfig(home: string, workspace: string, extraEnv: Record<str
     process.chdir(${JSON.stringify(workspace)});
     loadEnvironment();
     const config = buildConfig({ endpoint: "http://127.0.0.1:1/v1", model: "fixture" });
-    process.stdout.write(JSON.stringify(config.operationPolicy ?? null));
+    process.stdout.write(JSON.stringify(config[${JSON.stringify(field)}] ?? null));
   `;
   return spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
     cwd: cliDir,
@@ -380,4 +380,24 @@ describe("config", () => {
       /Invalid operation policy unknownResumeBudget/,
     );
   });
+});
+
+test("reviewed check authority comes only from bounded operator configuration", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-batch-verify-policy-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, "home");
+  const workspace = path.join(root, "workspace");
+  fs.mkdirSync(home);
+  fs.mkdirSync(workspace);
+  fs.writeFileSync(path.join(workspace, ".env"), `NEXUS_BATCH_VERIFIER_COMMANDS='["echo project"]'\n`);
+  const read = (extraEnv: Record<string, string> = {}) => runOperatorConfig(home, workspace, extraEnv, "batchVerifierCommands");
+  const inherited = read();
+  assert.equal(inherited.status, 0, inherited.stderr);
+  assert.equal(inherited.stdout, "null");
+  const authorized = read({ NEXUS_BATCH_VERIFIER_COMMANDS: '["npm test","npm run lint"]' });
+  assert.equal(authorized.status, 0, authorized.stderr);
+  assert.deepEqual(JSON.parse(authorized.stdout), ["npm test", "npm run lint"]);
+  const malformed = read({ NEXUS_BATCH_VERIFIER_COMMANDS: '{"invalid":true}' });
+  assert.notEqual(malformed.status, 0);
+  assert.match(malformed.stderr, /NEXUS_BATCH_VERIFIER_COMMANDS/);
 });

@@ -414,6 +414,25 @@ export function normalizeTrustedDeliverableFiles(workspace: string, value: unkno
   return [...new Set(normalized)].sort();
 }
 
+function configuredBatchVerifierCommands(): string[] | undefined {
+  const setting = operatorSetting("NEXUS_BATCH_VERIFIER_COMMANDS");
+  if (setting === undefined) return undefined;
+  const invalid = () => new Error("NEXUS_BATCH_VERIFIER_COMMANDS must be a JSON array of at most 16 nonempty single-line commands.");
+  if (Buffer.byteLength(setting) > 32 * 1024) throw invalid();
+  let commands: unknown;
+  try {
+    commands = JSON.parse(setting);
+  } catch {
+    throw invalid();
+  }
+  if (!Array.isArray(commands) || commands.length > 16 ||
+      commands.some((command) => typeof command !== "string" || !command.trim() ||
+        command.length > 4096 || /[\u0000-\u001f\u007f]/.test(command))) {
+    throw invalid();
+  }
+  return [...new Set(commands.map((command: string) => command.trim()))];
+}
+
 /**
  * The configuration for these options, under the managed policy of this process (GV-1). A managed policy file that
  * exists and cannot be used throws `ManagedPolicyError`: nothing is configured without it.
@@ -550,6 +569,7 @@ export function buildConfigWithPolicy(options: any, policy: EffectivePolicy): Ha
   }
   const worktree = Boolean(options.worktree) || Boolean(worktreeBranch);
   const authoritativeVerifierCommand = options.authoritativeVerifier;
+  const batchVerifierCommands = configuredBatchVerifierCommands();
   const trustedDeliverableFiles = normalizeTrustedDeliverableFiles(workspace, options.deliverableFile);
   const recordFlight = Boolean(options.recordFlight || options.flight);
   const plannerProvider = selectProvider(options.plannerProvider, "PLANNER_LLM_PROVIDER");
@@ -612,6 +632,7 @@ export function buildConfigWithPolicy(options: any, policy: EffectivePolicy): Ha
     worktree,
     ...(worktreeBranch ? { worktreeBranch } : {}),
     authoritativeVerifierCommand,
+    ...(batchVerifierCommands ? { batchVerifierCommands } : {}),
     trustedDeliverableFiles,
     verifierTimeoutSecs,
     recordFlight,

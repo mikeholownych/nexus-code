@@ -56,13 +56,17 @@ test("operator-approved checks run through the durable batch runner only once", 
   const plans = new BatchPlanStore(workspace, join(root, "drafts"));
   const draft = plans.create({
     ...plan,
-    checks: [{ ...plan.checks[0], command: "git diff --quiet" }],
+    checks: [
+      { ...plan.checks[0], command: "git diff --quiet" },
+      { ...plan.checks[0], id: "worktree", command: "git rev-parse --is-inside-work-tree" },
+    ],
     units: [{ ...plan.units[0], scope: ["."] }],
   });
   const resources = [{ id: "fixture", endpoint: "http://127.0.0.1:1", model: "fixture", provider: "fixture", capabilities: [] }];
   const config = {
     workspace, endpoint: resources[0].endpoint, model: "fixture", maxSteps: 1,
     temperature: 0, shell: "bash", authoritativeVerifierCommand: "git diff --quiet",
+    batchVerifierCommands: ["git rev-parse --is-inside-work-tree"],
   };
   let attempts = 0;
   const options: BatchRunnerOptions = {
@@ -73,7 +77,10 @@ test("operator-approved checks run through the durable batch runner only once", 
         attempts++;
         return { kind: "completed", summary: "Inspected the workspace.", outcome: "NOT_REQUIRED" };
       },
-      integrationPolicy: () => ({ verifier: "git diff --quiet" }),
+      integrationPolicy: () => ({
+        verifier: "git diff --quiet",
+        verificationCommands: ["git rev-parse --is-inside-work-tree"],
+      }),
     },
   };
   const batch = new BatchOrchestrator(config, options);
@@ -84,6 +91,7 @@ test("operator-approved checks run through the durable batch runner only once", 
   assert.equal(attempts, 0);
   const first = await batch.runAcceptedPlan(plans, draft.id, draft.digest);
   assert.equal(first.status, "COMPLETE");
+  assert.deepEqual(first.operation.integrations?.[0].verificationBinding?.typedChecks?.map(({ status }) => status), ["PASSED", "PASSED"]);
   assert.equal(first.operation.git?.acceptedPlanDigest, plans.readAcceptance(draft.id)?.digest);
   const repeat = await batch.runAcceptedPlan(plans, draft.id, draft.digest);
   assert.equal(repeat.id, first.id);

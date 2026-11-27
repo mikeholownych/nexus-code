@@ -80,7 +80,7 @@ export interface WorkUnitExecutor {
    * Isolated operations (PA-2): the operator's verifier, pinned for the operation and run on every merged tree, and
    * the session's sandbox setting, which confines those runs as it confines the units' own commands.
    */
-  integrationPolicy?(): { verifier?: string; sandbox?: boolean | string };
+  integrationPolicy?(): { verifier?: string; sandbox?: boolean | string; verificationCommands?: readonly string[] };
   /** Side-effect-free reachability check used to revalidate endpoint-scope conditions on wake. */
   probe?(resource: ResourceDescriptor, signal?: AbortSignal): Promise<{ available: boolean; failure?: InferenceFailure }>;
   /** Re-reads provider catalogs, if enabled. */
@@ -331,7 +331,10 @@ export class OperationRunner {
       return this.state;
     }
     const definitions = this.state.git?.verificationChecks;
-    if (definitions?.some((check) => check.command !== this.opts.executor.integrationPolicy?.().verifier?.trim())) {
+    const verificationPolicy = this.opts.executor.integrationPolicy?.();
+    const allowedCommands = new Set(verificationPolicy?.verificationCommands);
+    if (verificationPolicy?.verifier) allowedCommands.add(verificationPolicy.verifier.trim());
+    if (definitions?.some((check) => !allowedCommands.has(check.command))) {
       this.blockOnGit("A typed check does not match the current operator-authorized verifier command.");
       return this.state;
     }

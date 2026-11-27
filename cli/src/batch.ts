@@ -246,9 +246,10 @@ export class BatchOrchestrator {
     if (draft.digest !== digest) throw new Error("Plan approval must name the exact displayed draft digest.");
     const mapped = batchPlanExecution(draft.plan);
     const checks = parseOperationVerificationChecks(mapped.verificationChecks);
-    const verifier = this.config.authoritativeVerifierCommand?.trim();
-    if (!verifier || checks.some((check) => check.command !== verifier)) {
-      throw new Error("Every plan check must use the operator-configured authoritative verifier command.");
+    const allowed = new Set(this.config.batchVerifierCommands);
+    if (this.config.authoritativeVerifierCommand) allowed.add(this.config.authoritativeVerifierCommand.trim());
+    if (checks.some((check) => !allowed.has(check.command))) {
+      throw new Error("Every plan check must use an operator-configured verifier command.");
     }
     const acceptance = plans.accept(draftId, digest);
     const existingResult = (): BatchResult => {
