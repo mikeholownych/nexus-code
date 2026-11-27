@@ -12,6 +12,37 @@ node eval/score.mjs eval/out/<label>/results.jsonl          # markdown table; --
 node eval/score.mjs --pairs "$NEXUS_RESULTS" "$GOOSE_RESULTS" "$OPENCODE_RESULTS"
 ```
 
+## Reviewed workflows deterministic regression assessment
+
+The v1.3.1 reviewed-workflow matrix in [claude_features_eval.test.ts](../cli/test/claude_features_eval.test.ts) runs in the
+ordinary CLI suite. For a focused report from the repository root, install CLI development dependencies and run:
+
+```bash
+assessment_home=$(mktemp -d)
+(cd cli && HOME="$assessment_home" XDG_CONFIG_HOME="$assessment_home/.config" \
+  NEXUS_STATE_DIR="$assessment_home/.nexus" \
+  node --import tsx --test test/claude_features_eval.test.ts)
+```
+
+Keep the complete test output and the checkout SHA together. The matrix emits one JSON diagnostic per group with
+raw counts and denominators. It uses recorded proposals, an injected deterministic unit executor, ordinary temporary
+Git worktrees and real local verifier processes. It sends zero model requests.
+
+| Group | Decision and denominator |
+|---|---|
+| Fixed plan replay | Admission disposition against eight hand-adjudicated graphs. The three valid graphs are scored for required acceptance coverage and missing or avoidable dependencies. The avoidable edge is intentionally present in one valid graph. |
+| Candidate acceptance | Correct COMPLETE or blocked disposition per attempted approval, verified completions per attempt, and false or unevidenced completions per reported COMPLETE. The positive oracle checks exact committed contents and the SHA-256 of actual verifier output. |
+| Fault reconciliation | Safe outcomes per injected stale-state, receipt-save, cancellation, or unknown provider fault. The test reopens durable state and submits the same approval again to check that work is not replayed. Cases without an expected captured result stay outside the retained-evidence denominator. |
+| Partial record recovery | Refusals per repeated approval after corrupting a durable operation record. Quarantine must not permit a later submission to recreate the same operation. |
+| Evidence completeness | Valid captured check metadata per row with expected durable evidence, including the reason for a timeout or truncated output. An ordinary exit 124 is also exercised. |
+| Knowledge controls | Correct disposition for each evidence-lifecycle case. This includes a false assertion, conflict, sensitive content, unresolved reference, linked-checkout isolation, staleness, rejection and expiry. |
+| Resource eligibility | Correct choice per fixed catalog and policy case, covering local preference, effective model identity, context fit, and cloud allowed or refused. |
+
+A failing case fails the regression gate and leaves its diagnostic in test output. This fixed assessment measures
+control correctness and replay on its declared inputs. Empirical model planning quality, process-crash recovery across
+every boundary, production routing, latency and token cost require additional measurements. Comparative results and the
+held-out corpus retain their existing procedures.
+
 ## Installed versioned datasets
 
 Installed releases expose the versioned runner through the Nexus CLI:
