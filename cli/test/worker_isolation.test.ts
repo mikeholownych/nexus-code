@@ -11,7 +11,7 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { RustCoreBridge, resolveCoreBinary } from "../src/tools.js";
+import { RustCoreBridge, coreBinaryCandidates, resolveCoreBinary } from "../src/tools.js";
 import { isBwrapAvailable, isDockerAvailable, setSandboxNetworkFlag, wrapSandboxedWorker, workerRuntimeFiles, DOCKER_WORKER_LABEL } from "../src/sandbox.js";
 import { getBuildIdentity } from "../src/build_identity.js";
 
@@ -514,5 +514,21 @@ describe("what happens when the box cannot be built", () => {
     assert.equal((bridge("bwrap") as any).workerSandboxMode(), "required");
     assert.equal((bridge(true) as any).workerSandboxMode(), "preferred");
     assert.equal((bridge("auto") as any).workerSandboxMode(), "preferred");
+  });
+
+  test("coreBinaryCandidates includes NEXUS_CORE_BIN and common install/home locations", () => {
+    const prev = process.env.NEXUS_CORE_BIN;
+    const prevHome = process.env.HOME;
+    try {
+      process.env.NEXUS_CORE_BIN = "/tmp/custom-harness-core";
+      process.env.HOME = "/tmp/fake-home";
+      const c = coreBinaryCandidates();
+      assert.ok(c.includes(path.resolve("/tmp/custom-harness-core")));
+      assert.ok(c.some((p) => p.endsWith("/tmp/fake-home/nexus-code/core/target/release/harness-core")));
+      assert.ok(c.some((p) => p.endsWith("/tmp/fake-home/.nexus/bin/harness-core")));
+    } finally {
+      if (prev === undefined) delete process.env.NEXUS_CORE_BIN; else process.env.NEXUS_CORE_BIN = prev;
+      if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
+    }
   });
 });
