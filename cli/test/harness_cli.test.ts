@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
+import { withJsonStdout } from "../src/harness_cli.js";
 
 function cliBin() { return path.resolve("dist/index.js"); }
 
@@ -18,6 +19,37 @@ function mk() {
 }
 
 describe("nexus harness CLI", () => {
+  it("keeps incidental run output on stderr and restores stdout for the JSON result", async () => {
+    const originalStdoutWrite = process.stdout.write;
+    const originalStderrWrite = process.stderr.write;
+    const stdoutChunks: string[] = [];
+    const stderrChunks: string[] = [];
+    const capture = (chunks: string[]) => (chunk: string | Uint8Array, encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void), callback?: (error?: Error | null) => void) => {
+      chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
+      const done = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
+      done?.();
+      return true;
+    };
+    const stdoutSpy = capture(stdoutChunks) as any;
+    process.stdout.write = stdoutSpy;
+    process.stderr.write = capture(stderrChunks) as any;
+
+    try {
+      const result = await withJsonStdout(true, async () => {
+        console.log("agent progress");
+        return { status: "COMPLETED" };
+      });
+      process.stdout.write(`${JSON.stringify(result)}\n`);
+
+      assert.equal(stderrChunks.join(""), "agent progress\n");
+      assert.deepEqual(JSON.parse(stdoutChunks.join("")), result);
+      assert.equal(process.stdout.write, stdoutSpy);
+    } finally {
+      process.stdout.write = originalStdoutWrite;
+      process.stderr.write = originalStderrWrite;
+    }
+  });
+
   it("init/status/show/report/cancel work with --json", () => {
     const { base, suite, state } = mk();
     const init = spawnSync(process.execPath, [cliBin(), "harness", "init", "--task-suite", suite, "--base", base, "--state-dir", state, "--json"], { encoding: "utf8" });
