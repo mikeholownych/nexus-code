@@ -75,7 +75,7 @@ export function validateHirRun(value: unknown): ValidationResult {
   if (!isObject(r.budgets)) errors.push("invalid budgets");
   else {
     const b = r.budgets as any;
-    for (const [k, min, max] of [["maxRounds",1,10],["maxCandidatesPerRound",1,8],["maxProbes",1,64],["maxWallClockMs",1000,86_400_000],["maxProbeWallClockMs",1000,3_600_000],["maxConcurrentProbes",1,1]] as const) {
+    for (const [k, min, max] of [["maxRounds",1,10],["maxCandidatesPerRound",1,8],["maxProbes",1,64],["maxWallClockMs",1000,86_400_000],["maxProbeWallClockMs",1000,3_600_000],["maxConcurrentProbes",1,4]] as const) {
       if (!Number.isSafeInteger(b[k]) || b[k] < min || b[k] > max) errors.push(`invalid budgets.${k}`);
     }
     if (b.maxTokens !== undefined && (!Number.isSafeInteger(b.maxTokens) || b.maxTokens < 1)) errors.push("invalid budgets.maxTokens");
