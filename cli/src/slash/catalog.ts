@@ -128,7 +128,7 @@ export const SLASH_COMMANDS: SlashSpec[] = [
   { name: "onboard", usage: "/onboard", summary: "Scan the workspace and write a tailored AGENTS.md" },
   { name: "plan", usage: "/plan [add <phase>|start <n>|done <n>|clear]", summary: "Show or edit the active plan" },
   { name: "requirements", usage: "/requirements [accept <id>...|clear|obligate <attempt> <test>|minimise|retire|reference]", summary: "The objective's acceptance requirements; accept a scope reduction, or clear the objective to start a new one" },
-  { name: "knowledge", usage: "/knowledge [set <key> <rule>|delete <key>]", summary: "Persistent project knowledge" },
+  { name: "knowledge", usage: "/knowledge [set <key> <rule>|delete <key>|suggest <session-id>|suggestions|show-suggestion <id>|review <id>|promote <id>|reject <id>|delete-suggestion <id>|reconcile-suggestions]", summary: "Persistent knowledge and evidence-linked suggestions", cancellable: true },
   { name: "skills", usage: "/skills", summary: "Discovered agent skills" },
   { name: "skill", usage: "/skill <name> | init <name>", summary: "Show a skill or scaffold a new one" },
   { name: "mcp", usage: "/mcp [add|resources|resource <uri>|prompts|prompt <name>]", summary: "MCP servers, tools, resources and prompts" },

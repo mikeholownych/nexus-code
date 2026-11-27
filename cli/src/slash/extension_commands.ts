@@ -7,6 +7,7 @@ import { SlashContext, SlashHandler, SlashOutcome, reply } from "./catalog.js";
 import { recall } from "./session_commands.js";
 import { executeBatchCommand } from "../batch_command.js";
 import { executeGoalCommand } from "../goal_command.js";
+import { executeKnowledgeSuggestionCommand } from "../knowledge_command.js";
 import { executeLoopCommand } from "../loop_command.js";
 
 const IMAGE_PROMPT = "Please analyze this image, describe its contents, and provide relevant technical solutions.";
@@ -49,7 +50,13 @@ function plan({ host, args }: SlashContext): SlashOutcome {
   }
 }
 
-function knowledge({ host, args }: SlashContext): SlashOutcome {
+async function knowledge({ host, args, signal }: SlashContext): Promise<SlashOutcome> {
+  const config = host.app.getConfig();
+  const suggested = await executeKnowledgeSuggestionCommand(args, {
+    ...config,
+    readOnly: config.readOnly || host.mode() === "read-only",
+  }, { signal });
+  if (suggested) return reply("knowledge", suggested.output, suggested.success);
   const graph = host.app.getAgent().getKnowledgeGraph();
   const [sub, key, ...value] = args.trim().split(/\s+/).filter(Boolean);
   const action = sub?.toLowerCase();

@@ -194,15 +194,26 @@ export class KnowledgeSuggestions {
     this.file = path.join(this.dir, `${sha256(this.workspace)}.json`);
   }
 
-  propose(input: unknown): KnowledgeSuggestion {
+  scopeFingerprint(): string {
+    return sha256(inspectScope(this.workspace));
+  }
+
+  propose(input: unknown, binding?: { scope: string; evidence: ReadonlyMap<string, KnowledgeEvidence> }): KnowledgeSuggestion {
     const proposal = normalizeProposal(input);
     checkProtectedContent(proposal);
     return this.update((records, now) => {
       checkPathScopes(this.workspace, proposal.paths ?? []);
       const scope = inspectScope(this.workspace);
+      if (binding && binding.scope !== sha256(scope)) throw new Error("Workspace changed while generating the knowledge suggestion");
       const evidence = proposal.sourceRefs.map((ref): EvidenceReference => {
         const resolved = this.resolveEvidence(ref);
         if (!validEvidence(resolved)) throw new Error("Knowledge suggestion provenance could not be resolved");
+        if (binding) {
+          const selected = binding.evidence.get(ref);
+          if (!selected || selected.revision !== resolved.revision || selected.source !== resolved.source) {
+            throw new Error("Knowledge suggestion selected source changed during extraction");
+          }
+        }
         return { ref, source: resolved.source, revision: resolved.revision };
       });
       const contentDigest = sha256(proposal);
