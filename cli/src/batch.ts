@@ -86,7 +86,7 @@ export function parseBatchWords(input: string): string[] {
 }
 
 /** Batch specification files are bounded, regular files inside the selected workspace, including through symlinks. */
-export function readBatchSpecFile(fileName: string, workspace: string): unknown {
+export function readBatchInputFile(fileName: string, workspace: string): string {
   const root = fs.realpathSync(workspace);
   const written = path.resolve(root, fileName);
   let real: string;
@@ -98,9 +98,14 @@ export function readBatchSpecFile(fileName: string, workspace: string): unknown 
   if (real !== root && !real.startsWith(root + path.sep)) throw new Error(`batch specification '${fileName}' is outside the workspace`);
   const stat = fs.statSync(real);
   if (!stat.isFile() || stat.size > MAX_BATCH_SPEC_BYTES) throw new Error(`batch specification must be a regular file no larger than ${MAX_BATCH_SPEC_BYTES} bytes`);
+  return fs.readFileSync(real, "utf8");
+}
+
+export function readBatchSpecFile(fileName: string, workspace: string): unknown {
+  const input = readBatchInputFile(fileName, workspace);
   let parsed: unknown;
   try {
-    parsed = JSON.parse(fs.readFileSync(real, "utf8"));
+    parsed = JSON.parse(input);
   } catch (error) {
     throw new Error(`cannot parse batch specification '${fileName}': ${error instanceof Error ? error.message : String(error)}`);
   }
