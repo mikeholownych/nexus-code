@@ -40,7 +40,7 @@ Both use the same format:
 | `hooks` | An object with `pre-tool` and/or `post-tool`, each a list of at most 16 hooks. Other events are refused ("not supported in this version"). |
 | `name` | 1 to 64 characters of `A-Z a-z 0-9 . _ -`, unique within its event. It is shown in denials, receipts and the flight log. |
 | `tools` | 1 to 64 exact Nexus tool names, or `["*"]` for every tool. There are no patterns. `nexus hooks list` warns about a name no built-in tool has. |
-| `command` | A string is run with `/bin/sh -c` (your own file only). An array is executed directly, without a shell; a leading `~/` in its first element is your home directory. A project file may only name a script of the workspace, alone or after a listed interpreter (see below). |
+| `command` | A string is run with `/bin/sh -c` (your own file only). An array is executed directly, without a shell; its first element must be an absolute path or a program name, since a leading `~` is refused (Nexus does not expand it). A project file may only name a script of the workspace, alone or after a listed interpreter (see below). |
 | `timeout_secs` | 1 to 60; 10 when omitted. All hooks of one call together get 120 seconds. |
 
 The file is at most 64 KiB. The reader is strict: an unknown key, a key written twice (at any depth), a pattern in

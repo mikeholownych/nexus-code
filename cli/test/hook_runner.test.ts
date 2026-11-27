@@ -10,7 +10,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { expandHookArgv, hookEnvironment, reduceHookOutput, runHookProcess, HOOK_STDERR_LIMIT, HOOK_STDOUT_LIMIT } from "../src/core/hook_runner.js";
+import { hookEnvironment, reduceHookOutput, runHookProcess, HOOK_STDERR_LIMIT, HOOK_STDOUT_LIMIT } from "../src/core/hook_runner.js";
 import { startedAt } from "../src/core/process_identity.js";
 
 function scratch(): string {
@@ -106,15 +106,20 @@ test("a string runs under the shell in the workspace; an array is executed witho
   }
 });
 
-test("a leading ~/ in an array command is the home directory", async () => {
-  const home = os.homedir();
-  assert.ok(home.startsWith(os.tmpdir()) || home.includes("tmp"), `this test writes under HOME, which must be a throwaway (${home})`);
-  fs.mkdirSync(path.join(home, "bin"), { recursive: true });
-  script(path.join(home, "bin"), "nexus-guard.sh", "echo from-home");
-  const argv = expandHookArgv(["~/bin/nexus-guard.sh"], home);
-  assert.ok(!("problem" in argv), JSON.stringify(argv));
-  const result = await runHookProcess({ command: argv, cwd: home, env: env(home), stdin: "", timeoutMs: 30_000 });
-  assert.equal(result.stdout, "from-home\n");
+test("an argv program that starts with ~ is refused and never spawned", async () => {
+  const dir = scratch();
+  try {
+    const bin = path.join(dir, "bin");
+    fs.mkdirSync(bin);
+    script(bin, "nexus-guard.sh", "echo must-not-run");
+    const result = await runHookProcess({ command: ["~/bin/nexus-guard.sh"], cwd: dir, env: { ...env(dir), HOME: dir }, stdin: "", timeoutMs: 30_000 });
+    assert.equal(result.failure, "spawn");
+    assert.match(result.detail ?? "", /starts with '~'/);
+    assert.equal(result.exit, null);
+    assert.equal(result.stdout, "");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("exit codes and signals come back as they happened", async () => {

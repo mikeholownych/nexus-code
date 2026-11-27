@@ -33,6 +33,11 @@ test("the documented example is accepted and comes back typed", () => {
   assert.deepEqual(hooksFor(file, "post-tool", "anything").map((h) => h.name), ["audit"], '"*" names every tool');
 });
 
+test("an argv program that starts with ~ is refused at load: Nexus does not expand it", () => {
+  assert.throws(() => parseHooksFile(doc([hook({ command: ["~/bin/nexus-guard.sh"] })])), /starts with '~'/);
+  assert.throws(() => parseHooksFile(doc([hook({ command: ["~"] })])), /starts with '~'/);
+});
+
 test("accepted documents", () => {
   for (const text of [
     '{"version":1,"hooks":{}}',

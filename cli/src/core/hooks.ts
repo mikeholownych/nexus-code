@@ -12,7 +12,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { extensionTrustEntry, extensionTrustStorePath, readExtensionTrust, revokeExtension, type ExtensionTrustEntry, type ExtensionTrustFile, type ExtensionTrustId, type ExtensionTrustStore } from "./content_trust.js";
-import { expandHookArgv, hookEnvironment, hookLine, hookOutputDigest, reduceHookOutput, runHookProcess } from "./hook_runner.js";
+import { hookEnvironment, hookLine, hookOutputDigest, isHomeRelativeArgv, reduceHookOutput, runHookProcess } from "./hook_runner.js";
 import type { ContextAdmissionHook, EvidenceEmissionHook, ExecutionReceipt } from "./spine.js";
 import type { EffectivePolicy } from "./managed_policy.js";
 import { managedPolicy } from "./policy_runtime.js";
@@ -203,6 +203,8 @@ export function validateHooksFile(raw: unknown, positions?: KeyPositions): Hooks
       const text = (value: unknown) => typeof value === "string" && value.length > 0 && value.length <= COMMAND_LIMIT && !value.includes("\0");
       if (Array.isArray(command)) {
         if (command.length === 0 || command.length > ARGV_LIMIT || !command.every(text)) fail(`${at}.command must be a non-empty string, or an array of 1 to ${ARGV_LIMIT} non-empty strings`);
+        // Nexus does not expand `~`: the home directory would come from the environment (CodeQL #86).
+        if (isHomeRelativeArgv(command[0] as string)) fail(`${at}.command[0] starts with '~'; give the program's absolute path (Nexus does not expand '~')`);
       } else if (!text(command) || !(command as string).trim()) {
         fail(`${at}.command must be a non-empty string, or an array of 1 to ${ARGV_LIMIT} non-empty strings`);
       }
@@ -974,12 +976,7 @@ export class HookRegistry {
       // Everything the workspace supplies (its own hooks file, its manifest plugins) runs from verified copies.
       const verified = source === "operator" ? undefined : this.verifiedCommand(hook, source);
       if (verified && "problem" in verified) return unstarted(verified.problem);
-      let command: string | string[] = verified ? verified.command : hook.command;
-      if (Array.isArray(command)) {
-        const expanded = expandHookArgv(command);
-        if ("problem" in expanded) return unstarted(expanded.problem);
-        command = expanded;
-      }
+      const command: string | string[] = verified ? verified.command : hook.command;
       return (this.options.run ?? runHookProcess)({
         command,
         cwd: input.cwd,
