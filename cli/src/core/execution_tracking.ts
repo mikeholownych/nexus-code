@@ -174,6 +174,10 @@ export interface ExecutionTracking {
   toolInvocationHistoryComplete: boolean;
   /** Inference submissions admitted since this field was introduced; lower bound for upgraded legacy tasks. */
   inferenceSubmissions: number;
+  /** Provider submissions whose outcome could not be observed after dispatch. */
+  inferenceOutcomeUnknowns: number;
+  /** Dispatched submissions without an observed outcome; reconciled as unknown after interruption. */
+  pendingInferenceSubmissions: number[];
   /** False when the record predates inference submission accounting or its counter was malformed. */
   inferenceSubmissionHistoryComplete: boolean;
   /** Fixed objective-wide ceiling; absent on legacy objectives until their first request is reserved. */
@@ -218,6 +222,8 @@ export function createTracking(): ExecutionTracking {
     toolInvocations: 0,
     toolInvocationHistoryComplete: true,
     inferenceSubmissions: 0,
+    inferenceOutcomeUnknowns: 0,
+    pendingInferenceSubmissions: [],
     inferenceSubmissionHistoryComplete: true,
     taskElapsedMs: 0,
     taskElapsedHistoryComplete: true,
@@ -258,6 +264,15 @@ export function normalizeTracking(raw: unknown): ExecutionTracking {
   const hasInferenceCountField = Object.hasOwn(t, "inferenceSubmissions");
   const hasValidInferenceCount = Number.isSafeInteger(t.inferenceSubmissions) && t.inferenceSubmissions >= 0;
   const hasInferenceHistoryFlag = typeof t.inferenceSubmissionHistoryComplete === "boolean";
+  const hasValidInferenceOutcomeUnknowns = Number.isSafeInteger(t.inferenceOutcomeUnknowns) && t.inferenceOutcomeUnknowns >= 0;
+  const rawPendingInferenceSubmissions = t.pendingInferenceSubmissions;
+  const hasPendingInferenceState = Object.hasOwn(t, "pendingInferenceSubmissions") || Object.hasOwn(t, "pendingInferenceSubmission");
+  const hasValidPendingInferenceSubmissions = Array.isArray(rawPendingInferenceSubmissions) &&
+    rawPendingInferenceSubmissions.every((submission: unknown) => Number.isSafeInteger(submission) && (submission as number) >= 1 &&
+      (!hasValidInferenceCount || (submission as number) <= t.inferenceSubmissions)) &&
+    new Set(rawPendingInferenceSubmissions).size === rawPendingInferenceSubmissions.length;
+  const hasValidLegacyPendingInferenceSubmission = Number.isSafeInteger(t.pendingInferenceSubmission) && t.pendingInferenceSubmission >= 1 &&
+    (!hasValidInferenceCount || t.pendingInferenceSubmission <= t.inferenceSubmissions);
   const hasValidInferenceLimit = t.maxInferenceSubmissions === undefined || (Number.isSafeInteger(t.maxInferenceSubmissions) && t.maxInferenceSubmissions >= 1);
   const hasTaskElapsedField = Object.hasOwn(t, "taskElapsedMs");
   const hasValidTaskElapsed = Number.isSafeInteger(t.taskElapsedMs) && t.taskElapsedMs >= 0;
@@ -293,6 +308,16 @@ export function normalizeTracking(raw: unknown): ExecutionTracking {
   t.toolInvocationHistoryComplete = hasValidToolCount && hasToolHistoryFlag ? t.toolInvocationHistoryComplete : false;
   t.inferenceSubmissions = hasValidInferenceCount ? t.inferenceSubmissions : (hasInferenceCountField ? -1 : 0);
   t.inferenceSubmissionHistoryComplete = hasValidInferenceCount && hasInferenceHistoryFlag ? t.inferenceSubmissionHistoryComplete : false;
+  t.inferenceOutcomeUnknowns = hasValidInferenceOutcomeUnknowns ? t.inferenceOutcomeUnknowns : 0;
+  if (hasValidPendingInferenceSubmissions) {
+    t.pendingInferenceSubmissions = rawPendingInferenceSubmissions;
+  } else if (hasValidLegacyPendingInferenceSubmission) {
+    t.pendingInferenceSubmissions = [t.pendingInferenceSubmission];
+  } else if (hasPendingInferenceState) {
+    t.pendingInferenceSubmissions = [hasValidInferenceCount ? Math.max(1, t.inferenceSubmissions) : 1];
+    t.inferenceSubmissionHistoryComplete = false;
+  }
+  delete t.pendingInferenceSubmission;
   t.maxInferenceSubmissions = hasValidInferenceLimit ? t.maxInferenceSubmissions : -1;
   t.taskElapsedMs = hasValidTaskElapsed ? t.taskElapsedMs : (hasTaskElapsedField ? -1 : 0);
   t.taskElapsedHistoryComplete = hasValidTaskElapsed && hasTaskElapsedField && hasTaskElapsedHistoryFlag ? t.taskElapsedHistoryComplete : false;
@@ -632,6 +657,29 @@ export class ExecutionTracker {
     const admitted = Math.min(requested, Math.max(0, maximum - this.data.inferenceSubmissions));
     this.data.inferenceSubmissions += admitted;
     return admitted;
+  }
+
+  /** Records that a reserved provider request crossed the network boundary. */
+  markInferenceSubmissionDispatched(submission: number): void {
+    if (!Number.isSafeInteger(submission) || submission < 1 || submission > this.data.inferenceSubmissions) {
+      throw new Error("Cannot mark an inference submission dispatched before it is reserved.");
+    }
+    if (!this.data.pendingInferenceSubmissions.includes(submission)) this.data.pendingInferenceSubmissions.push(submission);
+  }
+
+  /** Settle a dispatched request, retaining a count when its provider outcome could not be observed. */
+  settleInferenceSubmission(submission: number, outcome: "response_received" | "unknown" | "not_dispatched"): void {
+    if (!this.data.pendingInferenceSubmissions.includes(submission)) return;
+    this.data.pendingInferenceSubmissions = this.data.pendingInferenceSubmissions.filter((pending) => pending !== submission);
+    if (outcome === "unknown") this.data.inferenceOutcomeUnknowns += 1;
+  }
+
+  /** A persisted dispatched request left behind by a stopped process has an unknown provider outcome. */
+  reconcileInterruptedInferenceSubmission(): boolean {
+    if (this.data.pendingInferenceSubmissions.length === 0) return false;
+    this.data.inferenceOutcomeUnknowns += this.data.pendingInferenceSubmissions.length;
+    this.data.pendingInferenceSubmissions = [];
+    return true;
   }
 
   /** Records a single tool result; the verdict says whether it was new, a poll, or part of a demonstrated loop. */

@@ -53,5 +53,15 @@
     "protocol": 1,
     "schemaSha256": "af40b861ad86186d974ed1296a8c914567bde5c38c138b82c5e10d77a3a5d44b",
     "note": "Add OPERATION_TOKEN_BUDGET_EXHAUSTED to turn results for the durable operation-wide request-token estimate ceiling; additive protocol v1 change."
+  },
+  {
+    "protocol": 1,
+    "schemaSha256": "96dff548d2d9628f6186666d78ef181d966237a63be0590b6694c9224e86b278",
+    "note": "Add optional inferenceOutcomeUnknowns and pendingInferenceSubmission fields to TurnResult.execution for interrupted provider requests; additive protocol v1 change."
+  },
+  {
+    "protocol": 1,
+    "schemaSha256": "b2f0ba148ed8503a7042461397250837f932a07f023d023175d4b2a1a02b1725",
+    "note": "Replace the single pending provider request marker with a list so overlapping in-flight submissions remain explicitly represented; additive sidecar protocol v1 field."
   }
 ]

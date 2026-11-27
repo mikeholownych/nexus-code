@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { AutonomousAgent } from "../src/agent.js";
 import { continuationBudget, inferenceSubmissionLimit } from "../src/config.js";
-import { normalizeTracking } from "../src/core/execution_tracking.js";
-import { activateInferenceSubmissionAdmissionScope, admitCurrentInferenceSubmission, withInferenceSubmissionAdmissionScope } from "../src/core/inference_admission.js";
+import { ExecutionTracker, normalizeTracking } from "../src/core/execution_tracking.js";
+import { activateInferenceSubmissionAdmissionScope, admitCurrentInferenceSubmission, beginCurrentInferenceSubmission, markCurrentInferenceSubmissionDispatched, settleCurrentInferenceSubmission, withInferenceSubmissionAdmissionScope } from "../src/core/inference_admission.js";
 import { DEFAULT_CONTINUATION, DEFAULT_MAX_INFERENCE_SUBMISSIONS, type HarnessConfig } from "../src/types.js";
 import "./helpers/leak_guard.js";
 import { startGateway, makeRepo, type Reply } from "./helpers/fixtures.js";
@@ -45,6 +45,39 @@ test("inference submission ceilings have finite defaults, accept overrides, and 
   } finally {
     if (saved !== undefined) process.env.NEXUS_MAX_INFERENCE_SUBMISSIONS = saved;
   }
+});
+
+test("concurrent provider leases keep each durable in-flight reservation distinct", async () => {
+  const tracker = new ExecutionTracker(normalizeTracking({ inferenceSubmissions: 2, inferenceSubmissionHistoryComplete: true }));
+  let reservation = 0;
+
+  await withInferenceSubmissionAdmissionScope(async (scope) => {
+    activateInferenceSubmissionAdmissionScope(scope, () => undefined, {
+      reserve: () => ++reservation,
+      markDispatched: (submission) => tracker.markInferenceSubmissionDispatched(submission as number),
+      settle: (submission, outcome) => tracker.settleInferenceSubmission(submission as number, outcome),
+    });
+    const first = beginCurrentInferenceSubmission();
+    const second = beginCurrentInferenceSubmission();
+    markCurrentInferenceSubmissionDispatched(first.lease);
+    markCurrentInferenceSubmissionDispatched(second.lease);
+    settleCurrentInferenceSubmission(first.lease, "response_received");
+
+    assert.deepEqual(tracker.data.pendingInferenceSubmissions, [2], "settling one concurrent response must leave the other dispatch pending");
+    assert.equal(tracker.reconcileInterruptedInferenceSubmission(), true);
+    assert.equal(tracker.data.inferenceOutcomeUnknowns, 1);
+    assert.deepEqual(tracker.data.pendingInferenceSubmissions, []);
+  });
+});
+
+test("single pending markers from earlier records migrate to the pending submission list", () => {
+  const restored = normalizeTracking({
+    inferenceSubmissions: 3,
+    inferenceSubmissionHistoryComplete: true,
+    pendingInferenceSubmission: 2,
+  });
+  assert.deepEqual(restored.pendingInferenceSubmissions, [2]);
+  assert.equal("pendingInferenceSubmission" in restored, false);
 });
 
 test("provider retries consume the durable objective submission budget and resume cannot raise it", { timeout: 30_000 }, async () => {

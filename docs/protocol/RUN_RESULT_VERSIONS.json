@@ -28,5 +28,15 @@
     "schema_version": 1,
     "schemaSha256": "4fd360d78babaf5335dcf0d551933adc9ca0eb1d08117b7e8ba23e7d824c5078",
     "note": "Add OPERATION_TOKEN_BUDGET_EXHAUSTED for the durable operation-wide request-token estimate ceiling. The stop reason is additive and existing run-result meanings are unchanged, so schema_version stays 1."
+  },
+  {
+    "schema_version": 1,
+    "schemaSha256": "316eb2075d4e3e3f8fe4fac8191bfc4ba128c9a4947c832391aa4afe395f471b",
+    "note": "Add optional inferenceOutcomeUnknowns and pendingInferenceSubmission execution fields so interrupted provider requests are explicit in run results. Additive fields preserve existing meanings, so schema_version stays 1."
+  },
+  {
+    "schema_version": 1,
+    "schemaSha256": "d9a84eba97435a5426d733b17bde39247045cf44d75a9727bc19b43fe776e6d7",
+    "note": "Replace the single pending provider request marker with a list so overlapping in-flight submissions remain explicitly represented; additive run-result field, schema version stays 1."
   }
 ]

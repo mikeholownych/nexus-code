@@ -213,6 +213,9 @@ async function runTurnBody(this: any, taskPrompt: string | any[], onConfirm: Con
   const maxTotalSteps = budget ? budget.maxTotalSteps : segmentSteps;
   let segment = 1;
   const tracker = this.objective && this.durable ? trackingOf(this.objective) : ExecutionTracker.fresh();
+  if (tracker.reconcileInterruptedInferenceSubmission() && !this.persistProgress({ messages: true })) {
+    throw new Error("Interrupted provider request outcome could not be recorded durably; refusing to continue the task.");
+  }
   if (!Number.isSafeInteger(tracker.data.inferenceSubmissions) || tracker.data.inferenceSubmissions < 0) {
     throw new Error("Persisted objective inference submission count is invalid; refusing to send inference requests.");
   }
@@ -333,6 +336,24 @@ async function runTurnBody(this: any, taskPrompt: string | any[], onConfirm: Con
       } catch (err) {
         throw new SubmissionAdmissionDenied(err);
       }
+    }, {
+      reserve: () => tracker.data.inferenceSubmissions,
+      markDispatched: (submission) => {
+        if (typeof submission !== "number") throw new Error("Provider request was dispatched without a durable submission reservation.");
+        tracker.markInferenceSubmissionDispatched(submission);
+        if (!this.persistProgress({ messages: true })) {
+          persistenceFailure = "Provider request dispatch state could not be saved; no request was sent.";
+          throw new InferenceSubmissionPersistenceFailed(persistenceFailure);
+        }
+      },
+      settle: (submission, outcome) => {
+        if (typeof submission !== "number") throw new Error("Provider request outcome has no durable submission reservation.");
+        tracker.settleInferenceSubmission(submission, outcome);
+        if (!this.persistProgress({ messages: true })) {
+          persistenceFailure = "Provider request outcome could not be saved durably.";
+          throw new InferenceSubmissionPersistenceFailed(persistenceFailure);
+        }
+      },
     });
     const stopForToolBudget = () => {
       stopReason = "TOOL_INVOCATION_BUDGET_EXHAUSTED";
@@ -1283,6 +1304,8 @@ async function runTurnBody(this: any, taskPrompt: string | any[], onConfirm: Con
               maxToolInvocations,
               toolInvocationHistoryComplete: tracker.data.toolInvocationHistoryComplete,
               inferenceSubmissions: tracker.data.inferenceSubmissions,
+              inferenceOutcomeUnknowns: tracker.data.inferenceOutcomeUnknowns,
+              ...(tracker.data.pendingInferenceSubmissions.length > 0 ? { pendingInferenceSubmissions: [...tracker.data.pendingInferenceSubmissions] } : {}),
               maxInferenceSubmissions,
               inferenceSubmissionHistoryComplete: tracker.data.inferenceSubmissionHistoryComplete,
               taskElapsedMs: tracker.data.taskElapsedMs,

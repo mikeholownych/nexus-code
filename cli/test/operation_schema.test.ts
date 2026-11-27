@@ -91,6 +91,20 @@ test("a v6 operation migrates to v7 without inventing stall state", () => {
   assert.ok(migrated.units.every((unit) => unit.failureStalls === undefined), "migration must not invent prior failures");
 });
 
+test("a v10 operation gains empty provider-outcome accounting without inventing past outcomes", () => {
+  const v10 = JSON.parse(JSON.stringify(state())) as any;
+  v10.schemaVersion = 10;
+  delete v10.inferenceOutcomeUnknowns;
+  delete v10.pendingInferenceCalls;
+
+  const migrated = migrateOperationState(v10);
+
+  assert.equal(migrated.schemaVersion, CURRENT_OPERATION_SCHEMA_VERSION);
+  assert.equal(migrated.inferenceOutcomeUnknowns, 0);
+  assert.deepEqual(migrated.pendingInferenceCalls, []);
+  assert.equal(migrated.inferenceCalls, v10.inferenceCalls, "migration preserves request accounting without claiming earlier unknown outcomes");
+});
+
 test("the migrated state schedules exactly as the v1 state did", () => {
   const v1 = asV1Document(state());
   const migrated = migrateOperationState(v1);
