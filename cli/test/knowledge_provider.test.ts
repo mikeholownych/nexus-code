@@ -5,11 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import "./helpers/leak_guard.js";
+import { isolateGitConfig } from "./helpers/isolate_git_config.js";
 import { executeKnowledgeSuggestionCommand } from "../src/knowledge_command.js";
 import type { HarnessConfig } from "../src/types.js";
 import { startGateway } from "./helpers/fixtures.js";
 
 test("knowledge routes local first and records explicitly authorized cloud fallback", async (t) => {
+  isolateGitConfig(t);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-knowledge-provider-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const previous = process.env.NEXUS_STATE_DIR;
