@@ -591,8 +591,8 @@ function v4Record(): Record<string, any> {
   return { ...JSON.parse(JSON.stringify(state)), schemaVersion: 4 };
 }
 
-test("schema: this build writes operation document version 12 and adds bounded request accounting to older records", () => {
-  assert.equal(CURRENT_OPERATION_SCHEMA_VERSION, 12);
+test("schema: this build writes operation document version 13 and adds bounded request accounting to older records", () => {
+  assert.equal(CURRENT_OPERATION_SCHEMA_VERSION, 13);
   const v4 = v4Record();
   v4.schemaVersion = 6;
   v4.origin = { kind: "job", jobId: "job-pa2", unattended: true };
@@ -602,7 +602,7 @@ test("schema: this build writes operation document version 12 and adds bounded r
   delete v4.policy.maxInferenceCalls;
   const before = JSON.parse(JSON.stringify(v4));
   const migrated = migrateOperationState(v4);
-  assert.equal(migrated.schemaVersion, 12);
+  assert.equal(migrated.schemaVersion, 13);
   assert.equal(migrated.inferenceCalls, 0);
   assert.equal(migrated.historyKnown, false, "pre-v9 inference usage is unknown");
   assert.equal(migrated.policy.maxInferenceCalls, 1_000);

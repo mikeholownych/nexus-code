@@ -22,7 +22,8 @@
  *      that ignores it only loses the recycled-pid check. A record without it loads and reads as unknown driver identity (paused).
  *      v11 adds operator-accepted typed verification checks and their exact-candidate receipts. Older builds must
  *      refuse these records rather than run a graph without its declared checks. v12 adds candidate-scoped deliberate
- *      verification waivers. Older builds must refuse records carrying that acceptance decision.
+ *      verification waivers. Older builds must refuse records carrying that acceptance decision. v13 binds typed
+ *      verification to bounded material inputs. A legacy receipt can be read but cannot satisfy that gate.
  *   3. A record from a newer build is refused. It is not corrupt: a build that wrote it can still read it, and
  *      quarantining it would destroy evidence. It is also never interpreted as if it were current.
  *
@@ -43,7 +44,7 @@ import {
 export { DEFAULT_OPERATION_INFERENCE_SUBMISSIONS, MAX_OPERATION_ACTIVE_MS, MAX_OPERATION_INFERENCE_SUBMISSIONS } from "./operation_budget_constants.js";
 
 /** The operation document version this build writes. Independent of the task-store envelope version. */
-export const CURRENT_OPERATION_SCHEMA_VERSION = 12;
+export const CURRENT_OPERATION_SCHEMA_VERSION = 13;
 
 /** The operation document version every released 1.0.0 build wrote. */
 export const LEGACY_OPERATION_SCHEMA_VERSION = 1;
@@ -376,6 +377,8 @@ export function validateOperationState(state: DurableOperationState): void {
         !binding || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(binding.commit)
         || binding.commit !== receipt.integratedCommit
         || typeof binding.worktree !== "string" || !binding.worktree || binding.worktree !== state.git?.integrationWorktree
+        || (binding.materialInputsSha256 !== undefined
+          && (typeof binding.materialInputsSha256 !== "string" || !/^[a-f0-9]{64}$/.test(binding.materialInputsSha256)))
         || !Array.isArray(binding.runs) || binding.runs.length !== (checks?.length ?? 0)
         || (!binding.runs.length && !binding.typedChecks?.length)
         || binding.runs.some((run, index) =>

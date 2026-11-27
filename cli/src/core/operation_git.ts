@@ -29,6 +29,7 @@ import { printable } from "../worktrunk/git.js";
 import { sandboxedVerifierCommand, usableSandboxEngine } from "./verify.js";
 import { formatDiagnosticForOutput } from "../ui.js";
 import { runProbeProcess } from "./harness/probe_process.js";
+import { verificationMaterialDigest, verificationWorkingDirectory } from "./operation_verification_material.js";
 import {
   MAX_INTEGRATION_CHECKS, isWaivableCheckFailure, matchingVerificationWaiver, operationVerificationApplies, operationVerificationDefinitionDigest, type OperationVerificationCheck,
 } from "./operation_verification.js";
@@ -255,9 +256,12 @@ export class OperationGit {
       if (!required.length && !checks.length) return undefined;
       const changed = this.verificationChangedPaths(checks, tip);
       if (!changed) return "The changed paths for the required checks could not be established.";
+      const applicable = checks.filter((check) => operationVerificationApplies(check, changed));
+      const materialInputsSha256 = checks.length ? verificationMaterialDigest(this.plan.integrationWorktree, applicable) : undefined;
       const hasProof = receipts.some((receipt) => {
         const proof = receipt.verificationBinding;
         return receipt.integratedCommit === tip && proof?.commit === tip && proof.worktree === this.plan.integrationWorktree
+          && (materialInputsSha256 === undefined || proof.materialInputsSha256 === materialInputsSha256)
           && required.every((command) =>
             receipt.mergedChecks?.some((check) => check.command === command && check.status === "PASSED" && check.owners.includes("operator"))
             && proof.runs.some((run) => run.command === command && run.exitCode === 0 && !run.outputTruncated))
@@ -269,7 +273,13 @@ export class OperationGit {
                 : result.status === "PASSED" && result.run?.command === check.command
                   && result.run.exitCode === 0 && !result.run.outputTruncated && result.run.timeoutMs <= check.timeoutMs)));
       });
-      if (!hasProof) return "There is no passing verifier evidence for the current integration candidate and required checks.";
+      if (!hasProof) {
+        if (materialInputsSha256 && receipts.some((receipt) =>
+          receipt.integratedCommit === tip && receipt.verificationBinding?.materialInputsSha256 !== materialInputsSha256)) {
+          return "Verification material inputs changed or the previous evidence did not bind them.";
+        }
+        return "There is no passing verifier evidence for the current integration candidate and required checks.";
+      }
       return this.integrationIntegrity(tip, tip).reason;
     } catch {
       return "The integration worktree could not be read to confirm its verification evidence.";
@@ -296,6 +306,7 @@ export class OperationGit {
       ...(this.state.retainedVerificationCandidates ?? []).filter((candidate) => candidate.unitId !== unitId),
       {
         attemptId: binding.attemptId, commit: binding.commit, worktree: binding.worktree, baseTip, unitCommit, unitId,
+        ...(binding.materialInputsSha256 ? { materialInputsSha256: binding.materialInputsSha256 } : {}),
         checkId: failed.id, definitionSha256: failed.definitionSha256,
       },
     ];
@@ -502,7 +513,10 @@ export class OperationGit {
       if (posthoc && (posthoc.integrityFailure || (integrity && !integrity.ok))) {
         const reason = posthoc.integrityFailure ?? integrity?.reason ?? "integration verification changed the integration history";
         const restoration = this.restoreIntegration(tip);
-        return { kind: "failed", reason: restoration ? `${reason}; ${restoration}` : reason, checks: posthoc.ran };
+        return {
+          kind: "failed", reason: restoration ? `${reason}; ${restoration}` : reason, checks: posthoc.ran,
+          ...(posthoc.binding.typedChecks ? { verificationBinding: posthoc.binding } : {}),
+        };
       }
       if (posthoc) this.cleanIntegrationWorktree();
       if (posthoc?.failed || posthoc?.typedFailure) {
@@ -860,6 +874,25 @@ export class OperationGit {
   }> {
     const ran: MergedCheck[] = [];
     const binding: IntegrationVerificationBinding = { commit: expectedTip, worktree: this.plan.integrationWorktree, runs: [] };
+    const changed = this.verificationChangedPaths(definitions, expectedTip);
+    if (!changed) return { ran, binding, typedFailure: "could not establish the changed paths for conditional verification" };
+    const applicable = definitions.filter((check) => operationVerificationApplies(check, changed));
+    const currentMaterial = () => verificationMaterialDigest(binding.worktree, applicable);
+    if (definitions.length) {
+      try {
+        binding.materialInputsSha256 = currentMaterial();
+      } catch (error) {
+        return { ran, binding, typedFailure: `could not bind verification material inputs: ${formatDiagnosticForOutput(error)}` };
+      }
+    }
+    const materialProblem = (): string | undefined => {
+      if (!binding.materialInputsSha256) return undefined;
+      try {
+        return currentMaterial() === binding.materialInputsSha256 ? undefined : "verification changed a bound material input";
+      } catch (error) {
+        return `could not recheck verification material inputs: ${formatDiagnosticForOutput(error)}`;
+      }
+    };
     for (const { command, owners } of checks) {
       const outcome = await this.verifyMerged(command, undefined, signal);
       const check: MergedCheck = {
@@ -869,15 +902,15 @@ export class OperationGit {
       };
       ran.push(check);
       if (outcome.run) binding.runs.push(outcome.run);
+      const changedMaterial = materialProblem();
+      if (changedMaterial) return { ran, binding, integrityFailure: changedMaterial };
       if (!outcome.ok) return { ran, binding, failed: { check, detail: outcome.reason ?? "integration verification failed" } };
       const integrity = this.integrationIntegrity(commit, expectedTip);
       if (!integrity.ok) return { ran, binding, integrityFailure: integrity.reason ?? "integration verification changed the integration history" };
     }
-    if (!definitions.length) return { ran, binding };
+    if (!binding.materialInputsSha256) return { ran, binding };
     const typedChecks: TypedCheckOutcome[] = [];
     binding.typedChecks = typedChecks;
-    const changed = this.verificationChangedPaths(definitions, expectedTip);
-    if (!changed) return { ran, binding, typedFailure: "could not establish the changed paths for conditional verification" };
     const attemptId = randomUUID();
     const planned = definitions.map((definition) => ({
       id: definition.id,
@@ -885,7 +918,9 @@ export class OperationGit {
       applicable: operationVerificationApplies(definition, changed),
     }));
     try {
-      this.options.onVerificationStart?.(unitId, { attemptId, commit: expectedTip, worktree: binding.worktree, checks: planned });
+      this.options.onVerificationStart?.(unitId, {
+        attemptId, commit: expectedTip, worktree: binding.worktree, checks: planned, materialInputsSha256: binding.materialInputsSha256,
+      });
     } catch {
       return { ran, binding, typedFailure: "could not persist verification intent; no typed check was started" };
     }
@@ -909,7 +944,13 @@ export class OperationGit {
         outcome = { ok: false, status: "ENVIRONMENT", reason: "the verifier process or its output capture could not be completed" };
       }
       const detail = outcome.reason ? formatDiagnosticForOutput(outcome.reason).slice(0, 512) : undefined;
-      typedChecks.push({ ...identity, status: outcome.status, ...(outcome.run ? { run: outcome.run } : {}), ...(detail ? { detail } : {}) });
+      const changedMaterial = materialProblem();
+      const diagnostic = (changedMaterial ?? detail)?.slice(0, 512);
+      typedChecks.push({
+        ...identity, status: changedMaterial ? "ENVIRONMENT" : outcome.status,
+        ...(outcome.run ? { run: outcome.run } : {}), ...(diagnostic ? { detail: diagnostic } : {}),
+      });
+      if (changedMaterial) return { ran, binding, integrityFailure: changedMaterial };
       const integrity = this.integrationIntegrity(commit, expectedTip);
       if (!integrity.ok) return { ran, binding, integrityFailure: integrity.reason ?? "integration verification changed the integration worktree" };
       if (!outcome.ok && (definition.requirement !== "advisory" || outcome.status === "CANCELLED")) {
@@ -917,7 +958,8 @@ export class OperationGit {
       }
     }
     if (signal?.aborted) return { ran, binding, typedFailure: "integration verification was cancelled" };
-    return { ran, binding };
+    const changedMaterial = materialProblem();
+    return changedMaterial ? { ran, binding, integrityFailure: changedMaterial } : { ran, binding };
   }
 
   /**
@@ -931,19 +973,8 @@ export class OperationGit {
     if (signal?.aborted) return { ok: false, status: "CANCELLED", reason: "integration verification was cancelled" };
     const deadlineMs = Math.min((this.options.verifyTimeoutSecs ?? verifierTimeoutSecs()) * 1000, definition?.timeoutMs ?? Infinity);
     const root = this.plan.integrationWorktree;
-    let directory = root;
-    if (definition?.cwd && definition.cwd !== ".") {
-      // Resolve components before starting the verifier. Only physical directories within the worktree are eligible.
-      const intended = path.resolve(root, definition.cwd);
-      try {
-        const realRoot = fs.realpathSync(root);
-        const physical = path.resolve(realRoot, definition.cwd);
-        if (fs.realpathSync(intended) !== physical || !fs.statSync(intended).isDirectory()) throw new Error("not a physical candidate directory");
-        directory = intended;
-      } catch {
-        return { ok: false, status: "ENVIRONMENT", reason: "verification cwd is unavailable or resolves through a symlink" };
-      }
-    }
+    const directory = verificationWorkingDirectory(root, definition?.cwd ?? ".");
+    if (!directory) return { ok: false, status: "ENVIRONMENT", reason: "verification cwd is unavailable or resolves through a symlink" };
     // A named commit must refer to its physical object during both integration and the check.
     const verifierEnvironment = { ...buildVerifierEnvironment(), GIT_NO_REPLACE_OBJECTS: "1" };
     const asked = this.options.sandbox === true ? "auto" : this.options.sandbox;

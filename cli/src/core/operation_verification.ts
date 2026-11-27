@@ -5,7 +5,7 @@ export const MAX_INTEGRATION_CHECKS = 16;
 const DEFAULT_TIMEOUT_MS = 300_000;
 const MAX_TIMEOUT_MS = 300_000;
 const MAX_PATHS = 32;
-const CHECK_KEYS = new Set(["id", "unitId", "purpose", "command", "requirement", "cwd", "timeoutMs", "when"]);
+const CHECK_KEYS = new Set(["id", "unitId", "purpose", "command", "requirement", "cwd", "timeoutMs", "when", "materialInputs"]);
 const ACCESSIBLE_ID = /^[A-Za-z0-9_.-]{1,128}$/;
 
 export interface OperationVerificationCheck {
@@ -17,6 +17,7 @@ export interface OperationVerificationCheck {
   cwd: string;
   timeoutMs: number;
   when?: { changedPaths: string[] };
+  materialInputs?: string[];
 }
 
 function relativePath(value: unknown): value is string {
@@ -38,7 +39,7 @@ export function parseOperationVerificationChecks(raw: unknown): OperationVerific
     const fail = (reason: string): never => { throw new Error(`verificationChecks[${index}]: ${reason}`); };
     if (!record(row)) return fail("expected a check object");
     if (Object.keys(row).some((key) => !CHECK_KEYS.has(key))) return fail("unknown check field");
-    const { id, unitId, purpose, command, requirement, cwd = ".", timeoutMs = DEFAULT_TIMEOUT_MS, when } = row;
+    const { id, unitId, purpose, command, requirement, cwd = ".", timeoutMs = DEFAULT_TIMEOUT_MS, when, materialInputs } = row;
     if (typeof id !== "string" || !ACCESSIBLE_ID.test(id) || ids.has(id)) return fail("id must be a unique, non-empty check identifier");
     if (unitId !== undefined && (typeof unitId !== "string" || !ACCESSIBLE_ID.test(unitId))) return fail("unitId must be a work-unit identifier");
     if (typeof purpose !== "string" || !purpose.trim() || purpose.length > 500 || /[\u0000-\u001f\u007f]/.test(purpose)) return fail("purpose must be a bounded single line");
@@ -57,10 +58,20 @@ export function parseOperationVerificationChecks(raw: unknown): OperationVerific
       }
       changedPaths = [...when.changedPaths].sort();
     } else if (when !== undefined) return fail("when is supported only for conditional checks");
+    let inputs: string[] | undefined;
+    if (materialInputs !== undefined) {
+      if (!Array.isArray(materialInputs) || !materialInputs.length || materialInputs.length > MAX_PATHS
+        || !materialInputs.every((input): input is string => input !== "." && relativePath(input) && !input.split("/").includes(".nexus"))
+        || new Set(materialInputs).size !== materialInputs.length) {
+        return fail("materialInputs needs unique workspace-relative file or directory paths");
+      }
+      inputs = [...materialInputs].sort();
+    }
     ids.add(id);
     return {
       id, ...(unitId === undefined ? {} : { unitId }), purpose: purpose.trim(), command: command.trim(), requirement, cwd, timeoutMs,
       ...(changedPaths ? { when: { changedPaths } } : {}),
+      ...(inputs ? { materialInputs: inputs } : {}),
     };
   });
 }
@@ -68,6 +79,7 @@ export function parseOperationVerificationChecks(raw: unknown): OperationVerific
 export function operationVerificationDefinitionDigest(check: OperationVerificationCheck): string {
   return createHash("sha256").update(JSON.stringify([
     1, check.id, check.unitId ?? null, check.purpose, check.command, check.requirement, check.cwd, check.timeoutMs, check.when?.changedPaths ?? null,
+    ...(check.materialInputs ? [check.materialInputs] : []),
   ])).digest("hex");
 }
 
@@ -80,6 +92,7 @@ export function operationVerificationApplies(check: OperationVerificationCheck, 
 
 export interface RetainedVerificationCandidate {
   attemptId: string;
+  materialInputsSha256?: string;
   commit: string;
   baseTip: string;
   unitCommit: string;
@@ -127,6 +140,7 @@ function validRetainedCandidate(state: DurableOperationState, row: RetainedVerif
     && typeof row.unitId === "string" && state.units.some((unit) => unit.id === row.unitId)
     && typeof row.checkId === "string" && ACCESSIBLE_ID.test(row.checkId)
     && typeof row.definitionSha256 === "string" && SHA256.test(row.definitionSha256)
+    && (row.materialInputsSha256 === undefined || (typeof row.materialInputsSha256 === "string" && SHA256.test(row.materialInputsSha256)))
     && matchingDefinition(state, row));
 }
 
@@ -159,7 +173,7 @@ export function recordOperationVerificationWaiver(
   const git = state.git;
   const candidate = git?.retainedVerificationCandidates?.find((row) =>
     row.attemptId === input.attemptId && row.checkId === input.checkId && row.commit === input.commit);
-  if (git?.isolate !== true || state.status !== "BLOCKED" || !candidate || !validRetainedCandidate(state, candidate)
+  if (git?.isolate !== true || state.status !== "BLOCKED" || !candidate?.materialInputsSha256 || !validRetainedCandidate(state, candidate)
     || !state.units.some((unit) => unit.id === candidate.unitId && unit.status === "BLOCKED" && !unit.dropped)) {
     throw new Error("no matching eligible failed verification on the exact blocked candidate");
   }
@@ -167,13 +181,15 @@ export function recordOperationVerificationWaiver(
     if (event.type !== "INTEGRATION_REJECTED" || event.unitId !== candidate.unitId) return false;
     const proof = event.detail?.verificationBinding as IntegrationVerificationBinding | undefined;
     return proof?.attemptId === candidate.attemptId && proof.commit === candidate.commit && proof.worktree === candidate.worktree
+      && proof.materialInputsSha256 === candidate.materialInputsSha256
       && proof.typedChecks?.some((check) => check.id === candidate.checkId && check.definitionSha256 === candidate.definitionSha256
         && isWaivableCheckFailure(check));
   });
   if (!hasEvidence) throw new Error("the retained failure has no complete waivable execution evidence");
   const existing = git.verificationWaivers ?? [];
   if (existing.some((entry) => entry.checkId === candidate.checkId && entry.commit === candidate.commit
-    && entry.definitionSha256 === candidate.definitionSha256 && entry.worktree === candidate.worktree)) {
+    && entry.definitionSha256 === candidate.definitionSha256 && entry.worktree === candidate.worktree
+    && entry.materialInputsSha256 === candidate.materialInputsSha256)) {
     throw new Error("this check is already waived for the candidate");
   }
   if (existing.length >= MAX_WAIVERS) throw new Error("the operation verification waiver limit was reached");
@@ -193,9 +209,10 @@ export function recordOperationVerificationWaiver(
 export function matchingVerificationWaiver(
   waivers: readonly VerificationWaiver[] | undefined,
   outcome: Pick<TypedCheckOutcome, "id" | "definitionSha256">,
-  binding: Pick<IntegrationVerificationBinding, "commit" | "worktree">,
+  binding: Pick<IntegrationVerificationBinding, "commit" | "worktree" | "materialInputsSha256">,
 ): VerificationWaiver | undefined {
   if (!Array.isArray(waivers)) return undefined;
   return waivers.find((waiver) => waiver?.checkId === outcome.id && waiver.definitionSha256 === outcome.definitionSha256
-    && waiver.commit === binding.commit && waiver.worktree === binding.worktree);
+    && waiver.commit === binding.commit && waiver.worktree === binding.worktree
+    && waiver.materialInputsSha256 === binding.materialInputsSha256);
 }

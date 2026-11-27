@@ -364,6 +364,85 @@ test("a waiver cannot follow a changed unit commit", async () => {
   assertUntouched(f, originalTip);
 });
 
+test("a typed receipt cannot certify changed ignored dependency bytes on the same Git commit", async () => {
+  const f = fixture();
+  fs.appendFileSync(path.join(f.root, ".git/info/exclude"), "\nnode_modules/\n");
+  const dependency = path.join(f.integrationWorktree, "node_modules", "dep.js");
+  write(f.integrationWorktree, "node_modules/dep.js", "old dependency\n");
+  f.state.verificationChecks = [{
+    id: "check", purpose: "verify candidate dependency", command: "test -s node_modules/dep.js",
+    requirement: "required", cwd: ".", timeoutMs: 1000,
+  }];
+  write(f.prepare("u1"), "code.js", "verified candidate\n");
+
+  const passed = await f.integrate("u1");
+  assert.ok(passed.kind === "integrated");
+  assert.match(passed.receipt.verificationBinding?.materialInputsSha256 ?? "", /^[a-f0-9]{64}$/);
+  assert.equal(f.ops.completionVerificationProblem(f.receipts), undefined);
+  fs.writeFileSync(dependency, "same filepath, different bytes\n");
+  assert.equal(git(f.integrationWorktree, ["status", "--porcelain"]), "");
+  assert.equal(f.ops.currentTip(), passed.receipt.integratedCommit);
+  assert.match(f.ops.completionVerificationProblem(f.receipts) ?? "", /material input/i);
+});
+
+test("a verifier changing a declared ignored input cannot publish a passing receipt", async () => {
+  const f = fixture();
+  fs.appendFileSync(path.join(f.root, ".git/info/exclude"), "\nfixtures-cache/\n");
+  write(f.integrationWorktree, "fixtures-cache/value", "original input");
+  f.state.verificationChecks = [{
+    id: "check", purpose: "verify a declared input", command: "printf changed > fixtures-cache/value",
+    requirement: "required", cwd: ".", timeoutMs: 1000, materialInputs: ["fixtures-cache"],
+  }];
+  write(f.prepare("u1"), "code.js", "candidate\n");
+  const tip = f.ops.currentTip();
+  const result = await f.integrate("u1");
+  assert.ok(result.kind === "failed");
+  assert.match(result.reason, /material input/i);
+  assert.equal(f.receipts.length, 0);
+  assertUntouched(f, tip);
+});
+
+test("a verification waiver is ineligible after its material inputs change", async () => {
+  const f = fixture();
+  fs.appendFileSync(path.join(f.root, ".git/info/exclude"), "\nnode_modules/\n");
+  write(f.integrationWorktree, "node_modules/dep.js", "first dependency\n");
+  write(f.prepare("u1"), "code.js", "unchanged candidate\n");
+  f.state.verificationChecks = [{
+    id: "check", purpose: "record actual failure", command: "false", requirement: "required", cwd: ".", timeoutMs: 1000,
+  }];
+  const rejected = await f.integrate("u1");
+  assert.equal(rejected.kind, "failed");
+  const failure = f.state.retainedVerificationCandidates?.[0];
+  assert.ok(failure?.materialInputsSha256);
+  f.state.verificationWaivers = [{
+    ...failure, id: "8ebffa4f-eb38-4f07-9cf2-91a6b5edabc9", actor: "test operator",
+    reason: "Waived with original dependency inputs", approvedAt: new Date().toISOString(),
+  }];
+  write(f.integrationWorktree, "node_modules/dep.js", "new dependency\n");
+  const retry = await f.integrate("u1");
+  assert.ok(retry.kind === "failed");
+  assert.equal(retry.verificationBinding?.commit, failure.commit);
+  assert.notEqual(retry.verificationBinding?.materialInputsSha256, failure.materialInputsSha256);
+  assert.equal(retry.verificationBinding?.typedChecks?.[0]?.status, "FAILED");
+});
+
+test("verification material links outside the bound inputs fail closed", async () => {
+  const f = fixture();
+  fs.appendFileSync(path.join(f.root, ".git/info/exclude"), "\nnode_modules/\n");
+  write(f.outside, "dep.js", "external input\n");
+  fs.mkdirSync(path.join(f.integrationWorktree, "node_modules"));
+  fs.symlinkSync(path.join(f.outside, "dep.js"), path.join(f.integrationWorktree, "node_modules", "link.js"));
+  f.state.verificationChecks = [{
+    id: "check", purpose: "refuse an unbound input link", command: "true", requirement: "required", cwd: ".", timeoutMs: 1000,
+  }];
+  write(f.prepare("u1"), "code.js", "candidate\n");
+  const tip = f.ops.currentTip();
+  const result = await f.integrate("u1");
+  assert.ok(result.kind === "failed");
+  assert.match(result.reason, /outside the bound input scope/);
+  assertUntouched(f, tip);
+});
+
 test("integration requires complete verifier output even when the command exits successfully", async () => {
   const f = fixture();
   f.state.integrationVerifiers = ["node -e 'process.stdout.write(Buffer.alloc(4 * 1024 * 1024 + 1, 10))'"];

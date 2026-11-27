@@ -12,7 +12,7 @@ import { buildLspEnvironment } from "./lsp.js";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
 import type { MaterialValidationDependency } from "./core/candidate.js";
 
-const CONFIG_FILES = [
+export const MATERIAL_DEPENDENCY_CONFIG_FILES = [
   "package.json",
   "package-lock.json",
   "npm-shrinkwrap.json",
@@ -90,7 +90,7 @@ export function collectMaterialDependencies(workspace: string, probe: VersionPro
     const version = probe(tool, workspace);
     if (version) deps.push({ name: `${TOOLCHAIN_PREFIX}${tool}`, versionOrHash: version });
   }
-  for (const name of CONFIG_FILES) {
+  for (const name of MATERIAL_DEPENDENCY_CONFIG_FILES) {
     try {
       deps.push({ name, path: name, versionOrHash: crypto.createHash("sha256").update(fs.readFileSync(path.join(workspace, name))).digest("hex") });
     } catch {

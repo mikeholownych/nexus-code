@@ -432,11 +432,14 @@ export interface IntegrationVerificationIntent {
   attemptId: string;
   commit: string;
   worktree: string;
+  materialInputsSha256: string;
   checks: Array<{ id: string; definitionSha256: string; applicable: boolean }>;
 }
 
 export interface IntegrationVerificationBinding {
   attemptId?: string;
+  /** Bounded physical inputs at verification time. Absent on legacy receipts. */
+  materialInputsSha256?: string;
   commit: string;
   worktree: string;
   runs: MergedCheckRun[];
