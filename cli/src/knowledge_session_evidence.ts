@@ -45,7 +45,7 @@ function readSession(workspace: string, sessionId: string): SourceSession | unde
 
 function excerptAt(session: SourceSession, index: number): KnowledgeSessionExcerpt | undefined {
   const message = session.messages[index];
-  if (!message || (message.role !== "user" && message.role !== "assistant" && message.role !== "tool") ||
+  if (!message || message.harness !== undefined || (message.role !== "user" && message.role !== "assistant" && message.role !== "tool") ||
     typeof message.content !== "string" || !message.content.trim() || Buffer.byteLength(message.content) > MAX_SOURCE_BYTES) return undefined;
   if (redactForPersistence(message.content) !== message.content) return undefined;
   const ref = `${session.sessionId}:${index}`;

@@ -30,7 +30,10 @@ test("operator suggestion command validates selected sources and preserves revie
   const sessionFile = path.join(dir, `${sessionId}.json`);
   const session = {
     sessionId, workspace, workspacePath: workspace, status: "completed",
-    messages: [{ role: "user", content: "Use make test." }],
+    messages: [
+      { role: "user", content: "Use make test." },
+      { role: "user", harness: "note", content: "Synthetic note is not an operator statement." },
+    ],
   };
   const saveSession = () => fs.writeFileSync(sessionFile, JSON.stringify(session), { mode: 0o600 });
   saveSession();
@@ -44,6 +47,7 @@ test("operator suggestion command validates selected sources and preserves revie
     generate: async (_contract, input) => {
       calls++;
       assert.match(input, /Use make test/);
+      assert.doesNotMatch(input, /Synthetic note/);
       return output;
     },
   });
