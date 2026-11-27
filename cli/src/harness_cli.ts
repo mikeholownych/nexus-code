@@ -67,7 +67,7 @@ export function registerHarnessCommands(program: Command): void {
     .description("Run a harness improvement run")
     .option("--mock", "Use deterministic mock probe adapter (no network, no live model)")
     .option("--real", "Use isolated real probe adapter (deterministic verifier/artifact cases only; no live harness mutation)")
-    .option("--nexus-agent", "Use Nexus agent probe adapter in isolated candidate workspace (deterministic oracle required; trajectory captured)")
+    .option("--nexus-agent", "Use Nexus agent probe adapter in isolated candidate workspace (deterministic oracle required; trajectory captured; requires harness-core binary or NEXUS_CORE_BIN)")
     .option("--nexus-model <id>", "Model for --nexus-agent (provider/model or model id)")
     .option("--nexus-endpoint <url>", "Endpoint for --nexus-agent")
     .option("--nexus-api-key <key>", "API key for --nexus-agent (prefer env/config; avoid in shell history)")
