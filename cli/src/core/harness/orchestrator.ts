@@ -358,21 +358,36 @@ export class HarnessOrchestrator {
       }
 
       const probeConcurrency = Math.max(1, Math.min(run.budgets.maxConcurrentProbes ?? 1, 4));
+      const reserveProbe = (caseId: string): boolean => {
+        if (run.status === "BLOCKED" || run.status === "CANCELLED" || opts.signal?.aborted || store.cancellationRequested(runId)) return false;
+        if (run.actualUsage.probes >= run.budgets.maxProbes) {
+          run.status = "BLOCKED";
+          run.reason = "HIR probe budget exhausted";
+          run.nextAction = "Increase maxProbes or reduce suite/candidates/rounds.";
+          run.updatedAt = nowIso();
+          store.saveRun(run);
+          recordEvent(store, run.id, "hir.blocked", run.reason, { caseId, maxProbes: run.budgets.maxProbes });
+          return false;
+        }
+        // Reserve and persist synchronously before dispatch. Concurrent callbacks
+        // share this run object, so each observes the previous reservation.
+        run.actualUsage.probes += 1;
+        run.updatedAt = nowIso();
+        store.saveRun(run);
+        return !opts.signal?.aborted && !store.cancellationRequested(runId);
+      };
       const ensureBaseline = async (c: import("./types.js").HirTaskCase): Promise<ProbeResult | "BLOCKED" | "BUDGET"> => {
         const existing = baseProbeByCase.get(c.id);
         if (existing) return existing;
         if (Date.now() - started > run.budgets.maxWallClockMs) {
           run.status = "BLOCKED"; run.reason = "HIR wall-clock budget exhausted"; run.nextAction = "Increase maxWallClockMs or reduce suite/candidates/rounds."; return "BLOCKED";
         }
-        if (run.actualUsage.probes + 1 > run.budgets.maxProbes) {
-          run.status = "BLOCKED"; run.reason = "HIR probe budget exhausted"; run.nextAction = "Increase maxProbes or reduce suite/candidates/rounds."; return "BUDGET";
-        }
+        if (!reserveProbe(c.id)) return run.status === "BLOCKED" ? "BUDGET" : "BLOCKED";
         const b = await adapter.run({ runId: run.id, candidateId: "base", candidatePath: baseTree, case: c, timeoutMs: run.budgets.maxProbeWallClockMs, store, signal: opts.signal });
         store.saveProbe(b);
         run.probeIds.push(b.id);
         roundRecord.probeIds.push(b.id);
         if (!roundRecord.baselineProbeIds.includes(b.id)) roundRecord.baselineProbeIds.push(b.id);
-        run.actualUsage.probes += 1;
         run.actualUsage.tokens += b.metrics.tokens ?? 0;
         recordEvidence(store, run.id, { kind: "probe", subjectId: b.id, summary: `base ${c.id} ${b.status}`, refs: [b.id], confidence: "high", deterministic: b.metrics.verifierPass !== null });
         if (opts.signal?.aborted || store.cancellationRequested(runId) || b.status === "CANCELLED") return "BLOCKED";
@@ -403,9 +418,7 @@ export class HarnessOrchestrator {
             }
             const b = await ensureBaseline(c);
             if (b === "BLOCKED" || b === "BUDGET" || (run.status as string) === "BLOCKED") return { c, b: undefined, p: undefined };
-            if (run.actualUsage.probes + 1 > run.budgets.maxProbes) {
-              run.status = "BLOCKED"; run.reason = "HIR probe budget exhausted"; run.nextAction = "Increase maxProbes or reduce suite/candidates/rounds."; return { c, b, p: undefined };
-            }
+            if (!reserveProbe(c.id)) return { c, b, p: undefined };
             const p = await adapter.run({ runId: run.id, candidateId: candidate.id, candidatePath: candidateTree, case: c, timeoutMs: run.budgets.maxProbeWallClockMs, store, signal: opts.signal });
             return { c, b, p };
           }));
@@ -416,7 +429,6 @@ export class HarnessOrchestrator {
             store.saveProbe(r.p);
             run.probeIds.push(r.p.id);
             roundRecord.probeIds.push(r.p.id);
-            run.actualUsage.probes += 1;
             run.actualUsage.tokens += r.p.metrics.tokens ?? 0;
             recordEvidence(store, run.id, { kind: "probe", subjectId: r.p.id, summary: `candidate ${candidate.id} ${r.c.id} ${r.p.status}`, refs: [r.p.id], confidence: "high", deterministic: r.p.metrics.verifierPass !== null });
             if (opts.signal?.aborted || store.cancellationRequested(runId) || r.p.status === "CANCELLED") return this.cancelInStore(runId, store);
