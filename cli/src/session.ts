@@ -18,9 +18,12 @@ import { WorkspacePath } from "./core/workspace_path.js";
 import { isManagedWorktreePath, isNamedWorktreePath, protectArchivedMessages } from "./core/persistence_protection.js";
 import { insertedBlockPresent, isCompactionRecord } from "./core/compaction_record.js";
 import { appendLinesDurably, readArchiveLines, type ArchiveRead, ensurePrivateDir, writePrivateFile } from "./core/durable_file.js";
+import { DEFAULT_RETENTION_MAX_SIZE_BYTES } from "./core/retention.js";
 import { persistableEndpoint } from "./core/endpoint_identity.js";
 import { WorktreeManager } from "./worktree.js";
 import { buildSessionContextInventory, isContextInventorySnapshot, isInferenceContextManifest, markInterruptedInferenceManifestsUnknown, markPersistedContextFreshnessUnknown } from "./core/context_inventory.js";
+
+const MAX_SESSION_ARCHIVE_SCAN_ENTRIES = 100_000;
 
 // Re-export core state primitives
 export * from "./core/state.js";
@@ -104,10 +107,15 @@ export class SessionManager {
   private sessionsDir: string;
   private stateManager: DurableStateManager;
   private readonly selectedWorkspace: (() => WorkspacePath) | undefined;
+  private readonly maxArchivedHistoryBytes: number;
 
-  constructor(customDir?: string, selectedWorkspace?: () => WorkspacePath) {
+  constructor(customDir?: string, selectedWorkspace?: () => WorkspacePath, options: { maxArchivedHistoryBytes?: number } = {}) {
     this.sessionsDir = customDir || defaultSessionsDir();
     this.selectedWorkspace = selectedWorkspace;
+    this.maxArchivedHistoryBytes = options.maxArchivedHistoryBytes ?? DEFAULT_RETENTION_MAX_SIZE_BYTES;
+    if (!Number.isSafeInteger(this.maxArchivedHistoryBytes) || this.maxArchivedHistoryBytes < 0 || this.maxArchivedHistoryBytes > DEFAULT_RETENTION_MAX_SIZE_BYTES) {
+      throw new Error(`Session archive byte limit must be an integer from 0 to ${DEFAULT_RETENTION_MAX_SIZE_BYTES}.`);
+    }
     ensurePrivateDir(this.sessionsDir);
     this.stateManager = new DurableStateManager({ baseDir: this.sessionsDir });
     this.sessionsDir = this.stateManager.getBaseDir();
@@ -401,6 +409,7 @@ export class SessionManager {
       }
       const at = new Date().toISOString();
       const archivePath = this.archivedHistoryPath(id);
+      if (lines.length) this.assertSessionArchiveCapacity(lines);
       try {
         if (source.worktreeBinding) {
           const manager = new WorktreeManager(source.worktreeBinding.worktreePath);
@@ -471,8 +480,53 @@ export class SessionManager {
     withStateStoreGuard(this.sessionsDir, () => {
       const at = new Date().toISOString();
       const lines = protectArchivedMessages(messages).map((message, index) => JSON.stringify({ archivedAt: at, ...(compactionId ? { compactionId } : {}), ...(index === 0 && record !== undefined ? { record } : {}), message }));
-      appendLinesDurably(this.archivedHistoryPath(sessionId), lines);
+      const archivePath = this.archivedHistoryPath(sessionId);
+      this.assertSessionArchiveCapacity(lines);
+      appendLinesDurably(archivePath, lines);
     });
+  }
+
+  /** Enforces the existing 2 GiB retained-state target over session history archives, without pruning recovery data. */
+  private assertSessionArchiveCapacity(lines: string[]): void {
+    if (lines.length === 0) return;
+
+    let directory: fs.Dir;
+    try {
+      directory = fs.opendirSync(this.sessionsDir);
+    } catch (error) {
+      throw new Error(`Session history archive capacity could not be checked; no archive data was written. ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    let entries = 0;
+    let currentBytes = 0;
+    try {
+      for (let entry = directory.readSync(); entry; entry = directory.readSync()) {
+        entries++;
+        if (entries > MAX_SESSION_ARCHIVE_SCAN_ENTRIES) {
+          throw new Error(`Session history archive directory exceeds the ${MAX_SESSION_ARCHIVE_SCAN_ENTRIES}-entry safety bound; no archive data was written.`);
+        }
+        if (!entry.name.endsWith(".history.jsonl")) continue;
+        const file = path.join(this.sessionsDir, entry.name);
+        const stat = fs.lstatSync(file);
+        if (!stat.isFile() || stat.isSymbolicLink()) {
+          throw new Error(`Session history archive '${entry.name}' is not a regular file; no archive data was written.`);
+        }
+        currentBytes += stat.size;
+        if (!Number.isSafeInteger(currentBytes) || currentBytes > this.maxArchivedHistoryBytes) {
+          throw new Error(`Session history archives already exceed the ${this.maxArchivedHistoryBytes}-byte limit; no archive data was written.`);
+        }
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("Session history archive")) throw error;
+      throw new Error(`Session history archive capacity could not be checked; no archive data was written. ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      directory.closeSync();
+    }
+
+    const additionalBytes = Buffer.byteLength(`${lines.join("\n")}\n`);
+    if (additionalBytes > this.maxArchivedHistoryBytes - currentBytes) {
+      throw new Error(`Session history archive limit (${this.maxArchivedHistoryBytes} bytes) would be exceeded; no archive data was written, so compaction or fork was not committed.`);
+    }
   }
 
   /**
