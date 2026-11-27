@@ -205,6 +205,8 @@ export interface ScorecardEntry {
   verdict: "better" | "worse" | "same" | "unknown";
   /** 0-1 confidence in this scorecard judgment. */
   confidence?: number;
+  /** For advisory judgments, a short non-authoritative reason. */
+  advisoryReason?: string;
   evidenceIds: string[];
 }
 
