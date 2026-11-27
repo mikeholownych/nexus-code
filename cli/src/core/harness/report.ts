@@ -63,7 +63,9 @@ export function renderPromotionReportMd(report: PromotionReport): string {
   lines.push("");
   lines.push("## Scorecard");
   for (const s of report.scorecard) {
-    lines.push(`- [${s.label}] ${s.candidateId} ${s.caseId} ${s.dimension}: base=${JSON.stringify(s.baseValue)} candidate=${JSON.stringify(s.candidateValue)} verdict=${s.verdict}`);
+    const conf = s.confidence == null ? "" : ` conf=${s.confidence.toFixed(2)}`;
+    const delta = s.delta ? ` delta=${s.delta}` : "";
+    lines.push(`- [${s.label}] ${s.candidateId} ${s.caseId} ${s.dimension}: base=${JSON.stringify(s.baseValue)} candidate=${JSON.stringify(s.candidateValue)}${delta} verdict=${s.verdict}${conf}`);
   }
   if (report.scorecard.length === 0) lines.push("- (no scorecard entries)");
   lines.push("");

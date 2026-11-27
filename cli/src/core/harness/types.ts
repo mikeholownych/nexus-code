@@ -142,6 +142,12 @@ export interface ProbeResult {
     toolErrors: number;
     verifierPass: boolean | null;
     score: number | null;
+    /** 0-1 deterministic confidence from available evidence; null when no evidence. */
+    confidence?: number | null;
+    /** Optional cost estimate in USD or abstract units; null when unavailable. */
+    costUsd?: number | null;
+    /** Latency breakdown for analysis; all ms. */
+    latencyMs?: { total: number; setup?: number; probe?: number; verify?: number };
   };
   artifacts: {
     trajectoryRef?: string;
@@ -191,12 +197,14 @@ export interface PromotionReport {
 export interface ScorecardEntry {
   candidateId: string;
   caseId: string;
-  dimension: "correctness" | "safety" | "reliability" | "efficiency" | "behavioral_quality";
+  dimension: "correctness" | "safety" | "reliability" | "efficiency" | "behavioral_quality" | "cost" | "latency";
   label: "deterministic" | "advisory";
   baseValue: unknown;
   candidateValue: unknown;
   delta?: string;
   verdict: "better" | "worse" | "same" | "unknown";
+  /** 0-1 confidence in this scorecard judgment. */
+  confidence?: number;
   evidenceIds: string[];
 }
 

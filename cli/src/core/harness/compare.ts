@@ -8,10 +8,27 @@ function verdictFromBool(base: boolean | null | undefined, cand: boolean | null 
   return "unknown";
 }
 
+function verdictFromNumber(base: number | null | undefined, cand: number | null | undefined, lowerIsBetter: boolean): "better" | "worse" | "same" | "unknown" {
+  if (base == null || cand == null || !Number.isFinite(base) || !Number.isFinite(cand)) return "unknown";
+  if (cand === base) return "same";
+  if (lowerIsBetter) return cand < base ? "better" : "worse";
+  return cand > base ? "better" : "worse";
+}
+
+function probeConfidence(p: ProbeResult | undefined): number {
+  if (!p) return 0;
+  let c = 0;
+  if (p.status === "SUCCEEDED" || p.status === "FAILED") c += 0.5;
+  if (p.metrics.verifierPass !== null) c += 0.4;
+  if (p.metrics.wallClockMs > 0) c += 0.1;
+  return Math.min(1, c);
+}
+
 export function compareProbes(base: ProbeResult[], candidate: ProbeResult[], candidateId: string): ScorecardEntry[] {
   const entries: ScorecardEntry[] = [];
   for (const c of candidate) {
     const b = base.find((x) => x.caseId === c.caseId);
+    const conf = Math.min(probeConfidence(b), probeConfidence(c));
     const bPass = b?.metrics.verifierPass;
     const cPass = c.metrics.verifierPass;
     entries.push({
@@ -22,6 +39,7 @@ export function compareProbes(base: ProbeResult[], candidate: ProbeResult[], can
       baseValue: bPass,
       candidateValue: cPass,
       verdict: cPass === null ? "unknown" : verdictFromBool(bPass, cPass),
+      confidence: cPass === null ? 0.2 : conf,
       evidenceIds: [b?.id, c.id].filter(Boolean) as string[],
     });
 
@@ -34,7 +52,38 @@ export function compareProbes(base: ProbeResult[], candidate: ProbeResult[], can
       label: "deterministic",
       baseValue: bMs,
       candidateValue: cMs,
+      delta: bMs != null ? `${cMs - bMs}ms` : undefined,
       verdict: bMs == null ? "unknown" : cMs < bMs ? "better" : cMs > bMs ? "worse" : "same",
+      confidence: bMs == null ? 0.3 : 0.95,
+      evidenceIds: [b?.id, c.id].filter(Boolean) as string[],
+    });
+
+    const bLatency = b?.metrics.latencyMs?.total ?? bMs;
+    const cLatency = c.metrics.latencyMs?.total ?? cMs;
+    entries.push({
+      candidateId,
+      caseId: c.caseId,
+      dimension: "latency",
+      label: "deterministic",
+      baseValue: bLatency,
+      candidateValue: cLatency,
+      delta: bLatency != null ? `${cLatency - bLatency}ms` : undefined,
+      verdict: verdictFromNumber(bLatency, cLatency, true),
+      confidence: bLatency == null ? 0.3 : 0.95,
+      evidenceIds: [b?.id, c.id].filter(Boolean) as string[],
+    });
+
+    const bCost = b?.metrics.costUsd ?? null;
+    const cCost = c.metrics.costUsd ?? null;
+    entries.push({
+      candidateId,
+      caseId: c.caseId,
+      dimension: "cost",
+      label: bCost == null && cCost == null ? "advisory" : "deterministic",
+      baseValue: bCost,
+      candidateValue: cCost,
+      verdict: bCost == null && cCost == null ? "unknown" : verdictFromNumber(bCost, cCost, true),
+      confidence: bCost == null && cCost == null ? 0.1 : 0.8,
       evidenceIds: [b?.id, c.id].filter(Boolean) as string[],
     });
 
@@ -48,6 +97,7 @@ export function compareProbes(base: ProbeResult[], candidate: ProbeResult[], can
       baseValue: b?.status ?? null,
       candidateValue: c.status,
       verdict: verdictFromBool(bOk, cOk),
+      confidence: conf,
       evidenceIds: [b?.id, c.id].filter(Boolean) as string[],
     });
 
@@ -61,6 +111,7 @@ export function compareProbes(base: ProbeResult[], candidate: ProbeResult[], can
       baseValue: bBlocked,
       candidateValue: cBlocked,
       verdict: cBlocked === bBlocked ? "same" : cBlocked ? "worse" : bBlocked ? "better" : "unknown",
+      confidence: 0.5,
       evidenceIds: [b?.id, c.id].filter(Boolean) as string[],
     });
   }
