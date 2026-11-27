@@ -81,7 +81,7 @@ export class NexusModelProposalAdapter implements ProposalAdapter {
       process.env.NEXUS_STATE_DIR = stateDir;
       let turn: TurnResult | undefined;
       try {
-        const agent = this.opts.createAgent ? this.opts.createAgent(agentCfg, work) : (() => { const a = new AutonomousAgent(agentCfg); return { run: (p: string) => a.run(p), shutdown: () => a.shutdown() }; })();
+        const agent = this.opts.createAgent ? this.opts.createAgent(agentCfg, work) : (() => { const a = new AutonomousAgent(agentCfg, 1, { durable: false }); return { run: (p: string) => a.run(p), shutdown: () => a.shutdown() }; })();
         try {
           const prompt = [
             "You are proposing an improved harness candidate for a Harness Improvement Run.",

@@ -120,7 +120,7 @@ export class NexusAgentProbeAdapter implements ProbeAdapter {
         const agent = this.opts.createAgent
           ? this.opts.createAgent(agentCfg, candidateWork)
           : (() => {
-              const a = new AutonomousAgent(agentCfg);
+              const a = new AutonomousAgent(agentCfg, 1, { durable: false });
               return { run: (prompt: string) => a.run(prompt), shutdown: () => a.shutdown() };
             })();
         try {
