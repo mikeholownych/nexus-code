@@ -4,25 +4,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { isolateGitConfig } from "./helpers/isolate_git_config.js";
 import { executeKnowledgeSuggestionCommand } from "../src/knowledge_command.js";
 import { buildSessionExport } from "../src/session_export.js";
 import type { SessionData, SessionManager } from "../src/session.js";
 import type { HarnessConfig } from "../src/types.js";
 
 test("operator suggestion command validates selected sources and preserves review authority", async (t) => {
-  // The fixture exercises repository-local evidence. Runner-specific Git configuration
-  // can introduce executable hooks or include files outside the test's scope.
-  const gitConfigKeys = ["GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM"];
-  const priorGitConfig = gitConfigKeys.map((key) => [key, process.env[key]] as const);
-  for (const key of gitConfigKeys) delete process.env[key];
-  process.env.GIT_CONFIG_GLOBAL = "/dev/null";
-  process.env.GIT_CONFIG_NOSYSTEM = "1";
-  t.after(() => {
-    for (const [key, value] of priorGitConfig) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  });
+  isolateGitConfig(t);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-knowledge-command-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const prior = process.env.NEXUS_STATE_DIR;
