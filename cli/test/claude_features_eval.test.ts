@@ -1,4 +1,5 @@
 /** Deterministic release regression matrix; see eval/README.md for metric definitions. */
+import { isolateGitConfig } from "./helpers/isolate_git_config.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -126,6 +127,7 @@ class FaultingReceiptStore extends OperationStore {
 }
 
 function fixture(t: TestContext, command: string, fault: "receipt" | "stale" | "cancel" | "provider" | undefined, content?: string) {
+  isolateGitConfig(t);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "completion-eval-"));
   const workspace = path.join(root, "repo");
   const operationPath = path.join(root, "operations");
@@ -295,6 +297,7 @@ test("reviewed workflow evaluation scores real candidate acceptance and receipt 
 });
 
 test("reviewed workflow evaluation scores evidence lifecycle and workspace boundaries", async (t) => {
+  isolateGitConfig(t);
   const world = fixture(t, verifier, undefined);
   const stateDir = path.join(path.dirname(world.workspace), "knowledge");
   const provenance = new Map<string, KnowledgeEvidence>([

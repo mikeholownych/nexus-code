@@ -1,3 +1,4 @@
+import { isolateGitConfig } from "./helpers/isolate_git_config.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
@@ -44,6 +45,7 @@ test("accepted plans preserve checks, dependency scope and readable acceptance c
 });
 
 test("operator-approved checks run through the durable batch runner only once", async (t) => {
+  isolateGitConfig(t);
   const root = mkdtempSync(join(tmpdir(), "nexus-approved-plan-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const workspace = join(root, "repo");
@@ -125,6 +127,7 @@ test("parallel plans retain operator-reviewed execution reservations", () => {
 });
 
 test("approved parallel write units run in separate worktrees and integrate the verified result", async (t) => {
+  isolateGitConfig(t);
   const root = mkdtempSync(join(tmpdir(), "nexus-parallel-plan-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const workspace = join(root, "repo");

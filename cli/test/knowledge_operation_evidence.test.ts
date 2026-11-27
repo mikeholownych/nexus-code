@@ -1,3 +1,4 @@
+import { isolateGitConfig } from "./helpers/isolate_git_config.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -11,6 +12,7 @@ import { newOperation } from "../src/core/operation.js";
 import { knowledgeOperationExcerpts, resolveKnowledgeOperationEvidence } from "../src/knowledge_operation_evidence.js";
 
 test("completed operations provide scoped provenance and classify only captured checks as verified evidence", async (t) => {
+  isolateGitConfig(t);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-knowledge-operation-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const oldState = process.env.NEXUS_STATE_DIR;
@@ -108,6 +110,7 @@ test("completed operations provide scoped provenance and classify only captured 
 });
 
 test("saved turn evidence requires its exact live candidate and execution proof", async (t) => {
+  isolateGitConfig(t);
   const { computeCandidateIdentitySync } = await import("../src/core/candidate.js");
   const { knowledgeSessionExcerpts, resolveKnowledgeSessionEvidence } = await import("../src/knowledge_session_evidence.js");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-knowledge-verified-session-"));

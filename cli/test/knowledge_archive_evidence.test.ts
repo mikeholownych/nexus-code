@@ -1,3 +1,4 @@
+import { isolateGitConfig } from "./helpers/isolate_git_config.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -10,6 +11,7 @@ import { SessionManager } from "../src/session.js";
 import type { ChatMessage, HarnessConfig } from "../src/types.js";
 
 test("knowledge sources include only audited originals of committed session compactions", async (t) => {
+  isolateGitConfig(t);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-knowledge-archive-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const prior = process.env.NEXUS_STATE_DIR;

@@ -1,3 +1,4 @@
+import { isolateGitConfig } from "./helpers/isolate_git_config.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -33,6 +34,7 @@ const planner = { resourceId: "planner", model: "plan-model", disclosure: "local
 const reviewer = { resourceId: "reviewer", model: "review-model", disclosure: "local" } as const;
 
 function fixture(t: { after(callback: () => void): void }) {
+  isolateGitConfig(t);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "batch-acceptance-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const workspace = path.join(root, "workspace");
