@@ -61,6 +61,7 @@ test("rejection, expiry and deletion preserve deduplication for the same evidenc
   advance(31);
   assert.equal(open().list()[0].state, "expired");
   assert.equal(open().propose(proposal).state, "expired");
+  assert.equal(open().list()[0].proposal, undefined);
   assert.equal(open().delete(candidate.id, "operator").state, "deleted");
   assert.equal(open().propose(proposal).state, "deleted");
   assert.equal(open().list()[0].proposal, undefined);
@@ -133,4 +134,11 @@ test("terminal session source references resolve only in the saved workspace", a
   assert.throws(() => knowledgeSessionExcerpts(worktree, "../anything"), /terminal session/);
   fs.writeFileSync(file, JSON.stringify({ ...session, status: "in_progress" }));
   assert.equal(resolveKnowledgeSessionEvidence(worktree, excerpts[1].ref), undefined);
+});
+
+test("workspace safety preflight refuses knowledge admission with configured Git program hooks", (t) => {
+  const { git, open, proposal } = fixture(t);
+  git("config", "filter.fixture.clean", "cat");
+  assert.throws(() => open().propose(proposal), /safely establish workspace identity/);
+  assert.deepEqual(open().list(), []);
 });

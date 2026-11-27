@@ -10,6 +10,7 @@ import { safeOperatorText } from "./protocol.js";
 import type { ChatMessage } from "./types.js";
 import { gatingRequirements, requirementDone } from "./core/objective.js";
 import { describeChain, verifyChain } from "./core/hash_chain.js";
+import { knowledgeSuggestionAudit } from "./knowledge_suggestions.js";
 
 export const EXPORT_FORMAT = "nexus-session-export/2";
 const SUMMARY_PREFIX = "[Structured Context Memory";
@@ -83,6 +84,13 @@ export function buildSessionExport(manager: SessionManager, session: SessionData
     ? session.inferenceContextManifests
     : [];
   const exportSession = { ...session, inferenceContextManifests };
+  let knowledgeSuggestions: ReturnType<typeof knowledgeSuggestionAudit> | undefined;
+  let knowledgeSuggestionsUnavailable = false;
+  try {
+    if (session.workspace && session.id) knowledgeSuggestions = knowledgeSuggestionAudit(session.workspace, session.id);
+  } catch {
+    knowledgeSuggestionsUnavailable = true;
+  }
   const objective = session.objective ?? null;
   const lastTurn = session.lastTurn ?? null;
   const json: Record<string, unknown> = {
@@ -93,6 +101,8 @@ export function buildSessionExport(manager: SessionManager, session: SessionData
       format: EXPORT_FORMAT,
       exportedAt: capturedAt,
       history,
+      ...(knowledgeSuggestions?.length ? { knowledgeSuggestions } : {}),
+      ...(knowledgeSuggestionsUnavailable ? { knowledgeSuggestionsStatus: "unavailable" } : {}),
       taskState: {
         status: session.status,
         outcome: lastTurn ? { execution: lastTurn.execution, outcome: lastTurn.outcome, reason: lastTurn.reason ?? null, detail: lastTurn.detail ?? null } : null,
@@ -114,7 +124,7 @@ export function buildSessionExport(manager: SessionManager, session: SessionData
     },
     archivedHistory: archived.messages,
   };
-  return { json, markdown: markdownExport(exportSession, history, archived.messages, contextInventory) };
+  return { json, markdown: markdownExport(exportSession, history, archived.messages, contextInventory, knowledgeSuggestions, knowledgeSuggestionsUnavailable) };
 }
 
 /**
@@ -130,7 +140,14 @@ export function escapeTableCell(value: string): string {
     .replace(/\|/g, "\\|");
 }
 
-function markdownExport(session: SessionData, history: HistoryCompleteness, archived: ChatMessage[], contextInventory?: ContextInventorySnapshot): string {
+function markdownExport(
+  session: SessionData,
+  history: HistoryCompleteness,
+  archived: ChatMessage[],
+  contextInventory?: ContextInventorySnapshot,
+  knowledgeSuggestions?: ReturnType<typeof knowledgeSuggestionAudit>,
+  knowledgeSuggestionsUnavailable = false,
+): string {
   const out: string[] = [
     "# Nexus Code Session Export",
     "",
@@ -191,6 +208,15 @@ function markdownExport(session: SessionData, history: HistoryCompleteness, arch
   if (session.activePlan?.length) {
     out.push("**Plan (the agent's roadmap; requirement states above are authoritative):**", "");
     for (const p of session.activePlan) out.push(`- [${p.status}] ${p.name}${p.detail ? ` — ${p.detail}` : ""}`);
+    out.push("");
+  }
+  if (knowledgeSuggestionsUnavailable || knowledgeSuggestions?.length) {
+    out.push("## Knowledge suggestion provenance (content omitted)", "");
+    if (knowledgeSuggestionsUnavailable) out.push("Suggestion records were unavailable.");
+    for (const item of knowledgeSuggestions ?? []) {
+      const refs = item.evidence?.map(({ ref, source }) => `${escapeTableCell(ref)} (${source})`).join(", ");
+      out.push(`- \`${item.id}\` ${item.state}; freshness=${item.freshness}; trust=${item.validationStatus}; refs=${refs ?? "unavailable"}`);
+    }
     out.push("");
   }
   if (contextInventory) {

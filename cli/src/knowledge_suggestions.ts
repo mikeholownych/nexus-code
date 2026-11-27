@@ -6,6 +6,7 @@ import { computeCandidateIdentitySync } from "./core/candidate.js";
 import { ensurePrivateDir } from "./core/durable_file.js";
 import { acquireFileGuard, releaseFileGuard } from "./core/file_guard.js";
 import { assertNoSensitivePersistenceContent, redactForPersistence, writeProtectedTextFile } from "./core/persistence_protection.js";
+import { inspectWorkspaceGitSafety } from "./core/workspace_git_safety.js";
 import { assertPrivateDir, readPrivateJson } from "./core/runner_store.js";
 import type { KnowledgeCategory } from "./knowledge.js";
 import { resolveKnowledgeSessionEvidence } from "./knowledge_session_evidence.js";
@@ -55,6 +56,7 @@ interface StoredSuggestion {
   updatedAt: string;
   expiresAt: string;
   actor?: string;
+  decisions?: Array<{ state: SuggestionState; at: string; actor?: string }>;
 }
 
 export interface KnowledgeSuggestion extends StoredSuggestion {
@@ -81,7 +83,7 @@ function isDigest(value: unknown): value is string {
 }
 
 function isText(value: unknown, max: number): value is string {
-  return typeof value === "string" && value.length <= max && value.trim().length > 0 && !/[\x00-\x1f\x7f-\x9f]/u.test(value);
+  return typeof value === "string" && value.length <= max && value.trim().length > 0 && !/[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/u.test(value);
 }
 
 function isList(value: unknown, max: number, limit: number): value is string[] {
@@ -94,10 +96,13 @@ function directoryId(directory: string): string {
 }
 
 function inspectScope(workspace: string): SuggestionScope {
+  if (!inspectWorkspaceGitSafety(workspace).safe) throw new Error("Cannot safely establish workspace identity for knowledge suggestions");
   const repo = openRepo(workspace);
   const worktree = currentEntry(repo);
   if (!worktree?.head) throw new Error("Knowledge suggestions require a Git worktree with a committed base");
-  const candidate = computeCandidateIdentitySync(repo.cwd, { baseRef: worktree.head, includeUntracked: true });
+  const candidate = computeCandidateIdentitySync(repo.cwd, {
+    baseRef: worktree.head, includeUntracked: true, maxEntries: 4096, maxTotalBytes: 16 * 1024 * 1024,
+  });
   return {
     repository: directoryId(repo.commonDir),
     workspace: directoryId(repo.cwd),
@@ -163,11 +168,15 @@ function validateStored(value: unknown): StoredSuggestion {
   if (!item || typeof item !== "object" || !isDigest(item.id) || !isDigest(item.contentDigest) || !STATES.includes(item.state) ||
     !item.scope || ![item.scope.repository, item.scope.workspace, item.scope.worktree, item.scope.candidate].every(isDigest) ||
     ![item.createdAt, item.updatedAt, item.expiresAt].every((v) => typeof v === "string" && Number.isFinite(Date.parse(v))) ||
-    (item.actor !== undefined && !isText(item.actor, 120))) {
+    (item.actor !== undefined && !isText(item.actor, 120)) ||
+    (item.decisions !== undefined && (!Array.isArray(item.decisions) || item.decisions.length > 4 ||
+      item.decisions.some((decision) => !decision || !STATES.includes(decision.state) ||
+        typeof decision.at !== "string" || !Number.isFinite(Date.parse(decision.at)) ||
+        (decision.actor !== undefined && !isText(decision.actor, 120)))))) {
     throw new Error("Invalid stored knowledge suggestion");
   }
-  if (item.state === "deleted") {
-    if (item.proposal !== undefined || item.evidence !== undefined) throw new Error("Invalid deleted knowledge suggestion");
+  if (item.state === "deleted" || item.state === "expired" || (item.state === "rejected" && !item.proposal)) {
+    if (item.proposal !== undefined || item.evidence !== undefined) throw new Error("Invalid knowledge suggestion tombstone");
     checkProtectedContent(item);
     return item;
   }
@@ -282,6 +291,7 @@ export class KnowledgeSuggestions {
       item.state = state;
       item.actor = actor;
       item.updatedAt = new Date(now).toISOString();
+      (item.decisions ??= []).push({ state, at: item.updatedAt, actor });
       if (state === "deleted") {
         delete item.proposal;
         delete item.evidence;
@@ -316,10 +326,14 @@ export class KnowledgeSuggestions {
 
   private expire(records: StoredSuggestion[], now: number): void {
     for (const item of records) {
-      if ((item.state === "candidate" || item.state === "reviewed" || item.state === "promoted") && now >= Date.parse(item.expiresAt)) {
+      if (!item.proposal || now < Date.parse(item.expiresAt)) continue;
+      if (item.state !== "rejected") {
         item.state = "expired";
         item.updatedAt = new Date(now).toISOString();
+        (item.decisions ??= []).push({ state: "expired", at: item.updatedAt });
       }
+      delete item.proposal;
+      delete item.evidence;
     }
   }
 
@@ -357,4 +371,11 @@ export class KnowledgeSuggestions {
       releaseFileGuard(guard);
     }
   }
+}
+
+/** Content-free operator audit projection. The full proposal stays in private state. */
+export function knowledgeSuggestionAudit(workspace: string, sessionId?: string): Array<Omit<KnowledgeSuggestion, "proposal">> {
+  return new KnowledgeSuggestions(workspace, { readOnly: true }).list()
+    .filter((item) => !sessionId || item.evidence?.some(({ ref }) => ref.startsWith(`${sessionId}:`)))
+    .map(({ proposal: _proposal, ...audit }) => audit);
 }

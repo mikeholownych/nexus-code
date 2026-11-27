@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { executeKnowledgeSuggestionCommand } from "../src/knowledge_command.js";
+import { buildSessionExport } from "../src/session_export.js";
+import type { SessionData, SessionManager } from "../src/session.js";
 import type { HarnessConfig } from "../src/types.js";
 
 test("operator suggestion command validates selected sources and preserves review authority", async (t) => {
@@ -54,6 +56,15 @@ test("operator suggestion command validates selected sources and preserves revie
   const result = await call(`suggest ${sessionId}`);
   const id = result?.output.match(/^[a-f0-9]{64}/)?.[0];
   assert.ok(id);
+  const exported = buildSessionExport(
+    { readArchivedHistory: () => ({ messages: [], unreadableLines: 0 }) } as unknown as SessionManager,
+    { ...session, id: sessionId } as unknown as SessionData,
+  );
+  const audited = (exported.json.export as { knowledgeSuggestions?: unknown[] }).knowledgeSuggestions;
+  assert.equal(audited?.length, 1);
+  assert.match(JSON.stringify(audited), /model_suggestion_unverified/);
+  assert.equal(JSON.stringify(audited).includes(response.value), false);
+  assert.match(exported.markdown, /Knowledge suggestion provenance/);
   await assert.rejects(call(`promote ${id}`), /Cannot transition/);
   assert.match((await call(`review ${id}`))!.output, /reviewed/);
   assert.match((await call(`promote ${id}`))!.output, /promoted/);

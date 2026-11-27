@@ -1,3 +1,4 @@
+import { knowledgeSuggestionAudit } from "../knowledge_suggestions.js";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -517,14 +518,29 @@ async function context({ host, args, signal }: SlashContext): Promise<SlashOutco
       content: `${entry.category}\n${entry.key}\n${entry.value}`,
       trust: "persisted_unverified" as const,
       retention: entry.retention?.policy === "expires_at" ? `expires_at:${entry.retention.expiresAt}` : "until_deleted",
-      freshness: "unknown" as const,
-      freshnessRule: "record version and validation metadata are compared with the prior capture; underlying memory sources are not fingerprinted or revalidated, so claim freshness remains unknown",
-      inclusionReason: `persistent project memory is available to the prompt builder; validation=${validationStatus}; source freshness is unknown${recordChanged ? "; the prior captured record changed and is invalidated" : ""}`,
+      freshness: entry.suggestionId ? "current" as const : "unknown" as const,
+      freshnessRule: entry.suggestionId
+        ? "accepted worktree candidate identity and source revisions were revalidated"
+        : "record version and validation metadata are compared with the prior capture; underlying memory sources are not fingerprinted or revalidated, so claim freshness remains unknown",
+      inclusionReason: `persistent project memory is available to the prompt builder; validation=${validationStatus}; source freshness is ${entry.suggestionId ? "current" : "unknown"}${recordChanged ? "; the prior captured record changed and is invalidated" : ""}`,
       retrievalMethod: "knowledge_graph",
       sourceVersion,
       sourceRefs: [`knowledge:${entry.id}`, ...(entry.provenance?.sourceRefs ?? [])],
     };
   }));
+  await measure("knowledge_suggestions", () => knowledgeSuggestionAudit(config.workspace).map((item) => ({
+    sourceType: "knowledge_suggestion",
+    sourceLocation: `repository:knowledge-suggestion:${item.id}`,
+    scope: "repository" as const,
+    content: item.contentDigest,
+    trust: "model_generated_unverified" as const,
+    retention: `expires_at:${item.expiresAt}`,
+    freshness: item.freshness,
+    freshnessRule: "candidate identity and source record revisions are checked at inspection",
+    inclusionReason: `operator review history; lifecycle state=${item.state}`,
+    retrievalMethod: "knowledge_suggestion_store",
+    sourceRefs: item.evidence?.map(({ ref }) => ref),
+  })));
   if (changedKnowledgeCount) gaps.push(`${changedKnowledgeCount} project knowledge record changed since the previous capture; the prior memory context is invalidated and the current claim remains unverified`);
   await measure("skills", () => agent.getSkillManager().listSkills().map((skill) => ({
     sourceType: "skill_catalog_entry",
