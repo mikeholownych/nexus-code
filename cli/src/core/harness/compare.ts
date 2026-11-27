@@ -133,6 +133,23 @@ export function compareProbes(base: ProbeResult[], candidate: ProbeResult[], can
       advisoryReason: "advisory only: heuristic observation scan; not an authoritative judge",
       evidenceIds: [b?.id, c.id].filter(Boolean) as string[],
     });
+
+    // Rubric evidence is advisory only in v1.3.1: we record presence, never auto-promote.
+    const rubricRef = (c as any).rubricRef ?? (b as any)?.rubricRef;
+    if (rubricRef) {
+      entries.push({
+        candidateId,
+        caseId: c.caseId,
+        dimension: "behavioral_quality",
+        label: "advisory",
+        baseValue: b ? rubricRef : null,
+        candidateValue: rubricRef,
+        verdict: "unknown",
+        confidence: 0.2,
+        advisoryReason: `advisory only: rubric referenced (${String(rubricRef)}); no authoritative rubric judge executed`,
+        evidenceIds: [b?.id, c.id].filter(Boolean) as string[],
+      });
+    }
   }
   return entries;
 }
