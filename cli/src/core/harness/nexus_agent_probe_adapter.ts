@@ -125,7 +125,17 @@ export class NexusAgentProbeAdapter implements ProbeAdapter {
             })();
         try {
           turn = await agent.run(input.case.prompt);
-          trajectory += JSON.stringify({ type: "turn", execution: (turn as any).execution, outcome: (turn as any).outcome, reason: (turn as any).reason, detail: (turn as any).detail }) + "\n";
+          trajectory += JSON.stringify({
+            type: "turn",
+            execution: (turn as any).execution,
+            outcome: (turn as any).outcome,
+            reason: (turn as any).reason,
+            detail: (turn as any).detail,
+            steps: (turn as any).steps,
+            continuation: (turn as any).continuation,
+            capacity: (turn as any).capacity,
+            usage: (turn as any).usage,
+          }) + "\n";
         } finally {
           try { agent.shutdown?.(); } catch {}
         }
@@ -138,12 +148,23 @@ export class NexusAgentProbeAdapter implements ProbeAdapter {
 
       const observations: string[] = [];
       if (agentErr) observations.push(`agent_error:${agentErr instanceof Error ? agentErr.message : String(agentErr)}`);
-      if (turn) observations.push(`turn_execution=${(turn as any).execution ?? ""}`, `turn_outcome=${(turn as any).outcome ?? ""}`, `turn_reason=${(turn as any).reason ?? ""}`);
+      if (turn) {
+        observations.push(
+          `turn_execution=${(turn as any).execution ?? ""}`,
+          `turn_outcome=${(turn as any).outcome ?? ""}`,
+          `turn_reason=${(turn as any).reason ?? ""}`,
+          `turn_steps=${String((turn as any).steps?.used ?? "")}`,
+          `turn_tool_invocations=${String((turn as any).continuation?.toolInvocations ?? "")}`,
+        );
+      }
+      observations.push(`sandbox=${String((agentCfg as any).sandbox ?? "auto")}`, `network=${String((agentCfg as any).sandboxNetwork ?? false)}`);
 
+      const turnTokens = Number((turn as any)?.usage?.totalTokens ?? (turn as any)?.usage?.promptTokens ?? 0);
+      const turnToolErrors = Number((turn as any)?.continuation?.toolInvocations != null && (turn as any)?.execution !== "COMPLETED" ? 1 : 0);
       let verifierPass: boolean | null = null;
       const turnOk = !!turn && (turn as any).execution === "COMPLETED";
       let status: ProbeResult["status"] = turnOk ? "SUCCEEDED" : "FAILED";
-      let toolErrors = turnOk ? 0 : 1;
+      let toolErrors = turnOk ? 0 : Math.max(1, turnToolErrors);
       let score: number | null = null;
       let stdout = "";
       let stderr = "";
@@ -168,7 +189,7 @@ export class NexusAgentProbeAdapter implements ProbeAdapter {
       const result: ProbeResult = {
         schemaVersion: 1, id: `hprobe_${randomUUID()}`, runId: input.runId, candidateId: input.candidateId, caseId: input.case.id,
         status, startedAt, endedAt: new Date().toISOString(),
-        metrics: { wallClockMs: Date.now() - started, tokens: 0, toolErrors, verifierPass, score },
+        metrics: { wallClockMs: Date.now() - started, tokens: Number.isFinite(turnTokens) ? turnTokens : 0, toolErrors, verifierPass, score },
         artifacts: {}, observations,
       };
       return input.store ? writeProbeArtifacts(input.store, result, { stdout, stderr, trajectory }) : result;
