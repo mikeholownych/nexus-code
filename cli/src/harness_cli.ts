@@ -46,13 +46,14 @@ export function registerHarnessCommands(program: Command): void {
     .option("--real", "Use isolated real probe adapter (deterministic verifier/artifact cases only; no live harness mutation)")
     .option("--allow-unsandboxed-real-probe", "OWNER-APPROVED ONLY: allow real probes when OS sandbox is unavailable (unsafe)")
     .option("--dry-run", "Validate/plan only; no probes executed")
-    .option("--candidate <path>", "Candidate harness directory; defaults to base tree")
+    .option("--candidate <path>", "Candidate harness directory; can be repeated", (v: string, prev: string[] = []) => prev.concat([v]), [] as string[])
     .option("--state-dir <path>", "Harness state root")
     .option("--json", "Emit JSON")
     .action(async (id, opts) => {
       const store = storeFrom(opts);
       const orch = new HarnessOrchestrator(store);
-      const run = await orch.run(id, { store, mock: !!opts.mock, real: !!opts.real, dryRun: !!opts.dryRun, candidatePath: opts.candidate, allowUnsandboxedRealProbe: !!opts.allowUnsandboxedRealProbe });
+      const candidatePaths = Array.isArray(opts.candidate) ? opts.candidate.filter(Boolean) : (opts.candidate ? [opts.candidate] : []);
+      const run = await orch.run(id, { store, mock: !!opts.mock, real: !!opts.real, dryRun: !!opts.dryRun, candidatePath: candidatePaths[0], candidatePaths, allowUnsandboxedRealProbe: !!opts.allowUnsandboxedRealProbe });
       out(opts.json ? run : `Run ${statusLine(run)}${run.reason ? `\nreason: ${run.reason}` : ""}${run.nextAction ? `\nnext: ${run.nextAction}` : ""}`, opts.json);
     });
 

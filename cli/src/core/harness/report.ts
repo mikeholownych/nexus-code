@@ -9,8 +9,19 @@ export function buildPromotionReport(opts: {
   decision: ComposeDecision;
   scorecard: ScorecardEntry[];
   createdAt?: string;
+  candidates?: Array<{ id: string; diffRef: string; gateStatus: string }>;
 }): PromotionReport {
   const createdAt = opts.createdAt ?? new Date().toISOString();
+  const evidenceIds = Array.from(new Set(opts.scorecard.flatMap((s) => s.evidenceIds)));
+  const changes = (opts.candidates ?? (opts.candidateId ? [{ id: opts.candidateId, diffRef: "", gateStatus: "PASS" }] : [])).map((c) => ({
+    componentPath: c.diffRef || `(candidate ${c.id})`,
+    changeType: "modify" as const,
+    recommendation: c.id === opts.candidateId
+      ? (opts.decision.recommendation === "reject" ? "reject" as const : "review" as const)
+      : c.gateStatus === "FAIL" ? "reject" as const : "review" as const,
+    evidenceIds,
+    risks: c.id === opts.candidateId ? opts.decision.reasons : [`candidate ${c.id} not selected`],
+  }));
   return {
     schemaVersion: 1,
     id: opts.id,
@@ -19,20 +30,14 @@ export function buildPromotionReport(opts: {
     recommendedCandidateId: opts.candidateId,
     status: "READY_FOR_REVIEW",
     createdAt,
-    changes: opts.candidateId ? [{
-      componentPath: "(candidate tree)",
-      changeType: "modify",
-      recommendation: opts.decision.recommendation === "reject" ? "reject" : "review",
-      evidenceIds: Array.from(new Set(opts.scorecard.flatMap((s) => s.evidenceIds))),
-      risks: opts.decision.reasons,
-    }] : [],
+    changes,
     scorecard: opts.scorecard,
     applyInstructions: [
-      "Review report.json and candidate diff/artifacts.",
-      "If accepted, manually apply approved changes to the target harness in a separate reviewed change.",
+      "Review report.json, scorecards, and candidate diff artifacts under <state>/harness/candidates/<id>/diff.txt.",
+      "If accepted, manually apply approved changes to the target harness in a separate reviewed change and re-run verification.",
       "Do not auto-apply HIR output; Nexus HIR never mutates live harness state.",
     ],
-    nonPromotable: ["probe-only overlays", "temporary workspace paths", "redaction/policy pins"],
+    nonPromotable: ["probe-only overlays", "temporary workspace paths", "redaction/policy pins", "unsandboxed real-probe overrides"],
     noApplyWarning: "HIR does not apply changes. Operator review and manual apply required.",
   };
 }
@@ -48,6 +53,13 @@ export function renderPromotionReportMd(report: PromotionReport): string {
   lines.push(`- Created: ${report.createdAt}`);
   lines.push("");
   lines.push(`> ${report.noApplyWarning}`);
+  lines.push("");
+  lines.push("## Changes");
+  for (const c of report.changes) {
+    lines.push(`- ${c.recommendation.toUpperCase()} ${c.changeType} ${c.componentPath}`);
+    for (const r of c.risks) lines.push(`  - risk: ${r}`);
+  }
+  if (report.changes.length === 0) lines.push("- (no candidate changes)");
   lines.push("");
   lines.push("## Scorecard");
   for (const s of report.scorecard) {

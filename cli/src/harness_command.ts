@@ -53,8 +53,11 @@ export async function executeHarnessSlashCommand(args: string, _config: HarnessC
       const mock = rest.includes("--mock");
       const real = rest.includes("--real");
       const allowUnsandboxedRealProbe = rest.includes("--allow-unsandboxed-real-probe");
-      const candidatePath = getFlag(rest, "--candidate");
-      const run = await orch.run(id, { store, mock, real, candidatePath, allowUnsandboxedRealProbe });
+      const candidatePaths: string[] = [];
+      for (let i = 0; i < rest.length; i++) {
+        if (rest[i] === "--candidate" && rest[i + 1]) { candidatePaths.push(rest[i + 1]); i++; }
+      }
+      const run = await orch.run(id, { store, mock, real, candidatePath: candidatePaths[0], candidatePaths, allowUnsandboxedRealProbe });
       return { success: run.status !== "FAILED", output: JSON.stringify(run, null, 2) };
     }
     if (sub === "status") {
