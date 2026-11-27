@@ -9,6 +9,7 @@ import { loadTaskSuiteFile } from "./task_suite.js";
 import { gateCandidateTree } from "./gate.js";
 import { MockProbeAdapter, type ProbeAdapter } from "./probe_adapter.js";
 import { RealProbeAdapter } from "./real_probe_adapter.js";
+import { NexusAgentProbeAdapter } from "./nexus_agent_probe_adapter.js";
 import { compareProbes } from "./compare.js";
 import { composeDecision } from "./compose.js";
 import { buildPromotionReport, renderPromotionReportMd } from "./report.js";
@@ -35,11 +36,13 @@ export interface HirRunOptions {
   store?: HarnessStore;
   mock?: boolean;
   real?: boolean;
+  nexusAgent?: boolean;
   dryRun?: boolean;
   candidatePath?: string; // explicit candidate; may be passed repeatedly by CLI
   candidatePaths?: string[];
   adapter?: ProbeAdapter;
   allowUnsandboxedRealProbe?: boolean;
+  nexusAgentConfig?: { model: string; endpoint: string; apiKey?: string; maxSteps?: number; temperature?: number; sandbox?: "auto" | "bwrap" | "docker" | "none"; network?: boolean };
 }
 
 function nowIso() { return new Date().toISOString(); }
@@ -179,10 +182,10 @@ export class HarnessOrchestrator {
     const store = opts.store ?? this.store;
     const run = store.loadRun(runId);
     if (["COMPLETED", "CANCELLED", "FAILED"].includes(run.status)) return run;
-    if (!opts.mock && !opts.real && !opts.adapter) {
+    if (!opts.mock && !opts.real && !opts.nexusAgent && !opts.adapter) {
       run.status = "BLOCKED";
-      run.reason = "Select a probe adapter: use --mock for deterministic mock probes, or --real for isolated real probes (requires deterministic verifier/artifact expectations).";
-      run.nextAction = "Use `nexus harness run <id> --mock` or `--real`. HIR never mutates live harness state.";
+      run.reason = "Select a probe adapter: use --mock, --real, or --nexus-agent (deterministic oracle required).";
+      run.nextAction = "Use `nexus harness run <id> --mock`, `--real`, or `--nexus-agent`. HIR never mutates live harness state.";
       run.updatedAt = nowIso();
       store.saveRun(run);
       recordEvent(store, run.id, "hir.blocked", run.reason);
@@ -198,7 +201,8 @@ export class HarnessOrchestrator {
       recordEvent(store, run.id, "hir.blocked", run.reason);
       return run;
     }
-    const adapter = opts.adapter ?? (opts.real ? new RealProbeAdapter({ allowUnsandboxed }) : new MockProbeAdapter());
+    const adapter = opts.adapter
+      ?? (opts.nexusAgent ? new NexusAgentProbeAdapter({ resolveConfig: () => opts.nexusAgentConfig }) : opts.real ? new RealProbeAdapter({ allowUnsandboxed }) : new MockProbeAdapter());
     const baseManifest = store.loadBaseManifest(run.baseHarnessId);
     const suite = store.loadTaskSuite(run.taskSuiteRef);
     const started = Date.now();

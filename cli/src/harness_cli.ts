@@ -55,6 +55,10 @@ export function registerHarnessCommands(program: Command): void {
     .description("Run a harness improvement run")
     .option("--mock", "Use deterministic mock probe adapter (no network, no live model)")
     .option("--real", "Use isolated real probe adapter (deterministic verifier/artifact cases only; no live harness mutation)")
+    .option("--nexus-agent", "Use Nexus agent probe adapter in isolated candidate workspace (deterministic oracle required; trajectory captured)")
+    .option("--nexus-model <id>", "Model for --nexus-agent (provider/model or model id)")
+    .option("--nexus-endpoint <url>", "Endpoint for --nexus-agent")
+    .option("--nexus-api-key <key>", "API key for --nexus-agent (prefer env/config; avoid in shell history)")
     .option("--allow-unsandboxed-real-probe", "OWNER-APPROVED ONLY: allow real probes when OS sandbox is unavailable (unsafe)")
     .option("--dry-run", "Validate/plan only; no probes executed")
     .option("--candidate <path>", "Candidate harness directory; can be repeated", (v: string, prev: string[] = []) => prev.concat([v]), [] as string[])
@@ -64,7 +68,22 @@ export function registerHarnessCommands(program: Command): void {
       const store = storeFrom(opts);
       const orch = new HarnessOrchestrator(store);
       const candidatePaths = Array.isArray(opts.candidate) ? opts.candidate.filter(Boolean) : (opts.candidate ? [opts.candidate] : []);
-      const run = await orch.run(id, { store, mock: !!opts.mock, real: !!opts.real, dryRun: !!opts.dryRun, candidatePath: candidatePaths[0], candidatePaths, allowUnsandboxedRealProbe: !!opts.allowUnsandboxedRealProbe });
+      const nexusAgentConfig = opts.nexusAgent ? {
+        model: opts.nexusModel || process.env.NEXUS_MODEL || "gpt-4o-mini",
+        endpoint: opts.nexusEndpoint || process.env.NEXUS_ENDPOINT || process.env.OPENAI_BASE_URL || "http://127.0.0.1:11434/v1",
+        apiKey: opts.nexusApiKey || process.env.NEXUS_API_KEY || process.env.OPENAI_API_KEY,
+      } : undefined;
+      const run = await orch.run(id, {
+        store,
+        mock: !!opts.mock,
+        real: !!opts.real,
+        nexusAgent: !!opts.nexusAgent,
+        nexusAgentConfig,
+        dryRun: !!opts.dryRun,
+        candidatePath: candidatePaths[0],
+        candidatePaths,
+        allowUnsandboxedRealProbe: !!opts.allowUnsandboxedRealProbe,
+      });
       out(opts.json ? run : `Run ${statusLine(run)}${run.reason ? `\nreason: ${run.reason}` : ""}${run.nextAction ? `\nnext: ${run.nextAction}` : ""}`, opts.json);
     });
 
