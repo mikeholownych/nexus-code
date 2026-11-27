@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { redactForPersistence, writeProtectedTextFile } from "./core/persistence_protection.js";
 import { ensurePrivateDir } from "./core/durable_file.js";
+import { KnowledgeSuggestions } from "./knowledge_suggestions.js";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
 
 export type KnowledgeCategory = "idiom" | "architecture" | "dependency" | "troubleshooting" | "rule";
@@ -14,7 +15,7 @@ export interface KnowledgeRetention {
 }
 
 export interface KnowledgeProvenance {
-  source: "operator_entry" | "legacy_import";
+  source: "operator_entry" | "legacy_import" | "reviewed_suggestion";
   sourceRefs: string[];
 }
 
@@ -31,6 +32,7 @@ export interface KnowledgeEntry {
   provenance: KnowledgeProvenance;
   validationStatus: KnowledgeValidationStatus;
   retention: KnowledgeRetention;
+  suggestionId?: string;
 }
 
 export interface KnowledgeGraphData {
@@ -42,6 +44,7 @@ export interface KnowledgeGraphData {
 export interface KnowledgeOptions {
   readOnly?: boolean;
   trusted?: boolean;
+  suggestions?: KnowledgeSuggestions;
 }
 
 /**
@@ -53,12 +56,14 @@ export class KnowledgeGraph {
   private dbPath: string;
   private readOnly: boolean;
   private explicitTrusted?: boolean;
+  private suggestions?: KnowledgeSuggestions;
   private entries: Map<string, KnowledgeEntry> = new Map();
 
   constructor(workspace: string = process.cwd(), options: KnowledgeOptions = {}) {
     this.workspace = path.resolve(workspace);
     this.readOnly = Boolean(options.readOnly);
     this.explicitTrusted = options.trusted;
+    this.suggestions = options.suggestions;
     this.dbPath = path.join(this.workspace, ".nexus", "knowledge.json");
     // LAZY: no mkdir in constructor (REQ-SEC-114)
     this.load();
@@ -68,6 +73,7 @@ export class KnowledgeGraph {
     this.workspace = path.resolve(workspace);
     if (options.readOnly !== undefined) this.readOnly = options.readOnly;
     if (options.trusted !== undefined) this.explicitTrusted = options.trusted;
+    this.suggestions = options.suggestions;
     this.dbPath = path.join(this.workspace, ".nexus", "knowledge.json");
     this.load();
   }
@@ -213,7 +219,8 @@ export class KnowledgeGraph {
    */
   public get(key: string): KnowledgeEntry | undefined {
     const entry = this.entries.get(key);
-    return entry && !isExpired(entry) ? entry : undefined;
+    if (entry && !isExpired(entry)) return entry;
+    return this.promotedSuggestions().find((item) => item.key === key);
   }
 
   /**
@@ -244,7 +251,9 @@ export class KnowledgeGraph {
    * Returns all stored entries.
    */
   public list(): KnowledgeEntry[] {
-    return Array.from(this.entries.values()).filter((entry) => !isExpired(entry));
+    const manual = [...this.entries.values()].filter((entry) => !isExpired(entry));
+    const manualKeys = new Set(manual.map((entry) => entry.key));
+    return [...manual, ...this.promotedSuggestions().filter((entry) => !manualKeys.has(entry.key))];
   }
 
   /**
@@ -276,11 +285,7 @@ export class KnowledgeGraph {
    * Injected block is annotated with source path and trust state (partial CTX-001).
    */
   public exportPromptSection(): string {
-    const isTrusted =
-      this.explicitTrusted !== undefined
-        ? this.explicitTrusted
-        : isWorkspaceTrusted(this.workspace, this.readOnly);
-    if (!isTrusted) {
+    if (!this.isTrusted()) {
       return "";
     }
     const list = this.list();
@@ -290,7 +295,8 @@ export class KnowledgeGraph {
       `### Persistent Project Knowledge & Conventions [source: ${this.dbPath}] [trust: unverified memory; not evidence]:`,
     ];
     for (const entry of list) {
-      lines.push(`- [${entry.category.toUpperCase()}] [validation: ${entry.validationStatus}] [freshness: unknown; source references are not revalidated] **${entry.key}**: ${entry.value}`);
+      const freshness = entry.suggestionId ? "current" : "unknown; source references are not revalidated";
+      lines.push(`- [${entry.category.toUpperCase()}] [validation: ${entry.validationStatus}] [freshness: ${freshness}] **${entry.key}**: ${entry.value}`);
     }
 
     return lines.join("\n") + "\n";
@@ -302,6 +308,32 @@ export class KnowledgeGraph {
    */
   public autoExtract(_prompt: string, _outcome: string): KnowledgeEntry[] {
     return [];
+  }
+
+  private isTrusted(): boolean {
+    return this.explicitTrusted ?? isWorkspaceTrusted(this.workspace, this.readOnly);
+  }
+
+  private promotedSuggestions(): KnowledgeEntry[] {
+    if (!this.isTrusted()) return [];
+    try {
+      // The journal owns promotion and deletion atomically. Model-facing graph
+      // operations see a fresh projection and cannot change journal state.
+      const suggestions = this.suggestions ?? new KnowledgeSuggestions(this.workspace, { readOnly: true });
+      return suggestions.list({ state: "promoted" }).flatMap((item): KnowledgeEntry[] => {
+        if (item.state !== "promoted" || item.freshness !== "current" || !item.proposal) return [];
+        const { key, value, category, sourceRefs } = item.proposal;
+        return [{
+          id: item.id, suggestionId: item.id, key, value, category, confidence: 0,
+          createdAt: item.createdAt, updatedAt: item.updatedAt, scope: "repository",
+          provenance: { source: "reviewed_suggestion", sourceRefs },
+          validationStatus: "operator_reviewed_unverified",
+          retention: { policy: "expires_at", expiresAt: item.expiresAt },
+        }];
+      });
+    } catch {
+      return [];
+    }
   }
 
   private pruneExpired(): void {
