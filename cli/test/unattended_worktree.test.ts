@@ -14,7 +14,7 @@ import { chooseJobIds, loadJobOperation, readReceipt } from "../src/core/job_run
 import { newOperation } from "../src/core/operation.js";
 import { newOperationGitState, planOperationGit } from "../src/core/operation_git.js";
 import { OperationStore } from "../src/core/operation_runner_persistence.js";
-import { newJobIds } from "../src/core/runner_store.js";
+import { redactForPersistence } from "../src/core/persistence_protection.js";
 import { isSandboxAvailable } from "../src/sandbox.js";
 import { makeRepo, startGateway } from "./helpers/fixtures.js";
 import { runnerWorld, startedJobId } from "./helpers/runner_fixture.js";
@@ -95,7 +95,7 @@ test("a job runs in a fresh worktree from the submitted commit; the operator's c
   }
 });
 
-test("a job id is chosen so that the operation record keeps its own branch and worktree names through redaction", () => {
+test("unattended operation records preserve generated branch and worktree identities", () => {
   const repo = makeRepo();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-job-ids-"));
   try {
@@ -106,21 +106,19 @@ test("a job id is chosen so that the operation record keeps its own branch and w
       const state = newOperation(operationId, "objective", [{ id: "task", title: "task", prompt: "x" }], [], Date.now());
       state.git = { ...newOperationGitState(plan), units: { task: { branch: `${plan.integrationBranch.replace(/integration$/, "")}task`, worktree: path.join(plan.baseDir, "units", "task"), baseCommit: plan.baseCommit } } };
       store.save(state);
-      return { saved: store.load(operationId).git!.integrationBranch, planned: plan.integrationBranch };
+      const git = store.load(operationId).git!;
+      assert.equal(git.integrationWorktree, plan.integrationWorktree);
+      return { saved: git.integrationBranch, planned: plan.integrationBranch };
     };
     for (let i = 0; i < 40; i++) {
       const { operationId } = chooseJobIds(repo, ["task"]);
       const { saved, planned } = recorded(operationId);
       assert.equal(saved, planned, operationId);
     }
-    // The hazard is real: among plainly random ids some are taken for a secret, and their record loses the name.
-    let lost: string | undefined;
-    for (let i = 0; i < 600 && !lost; i++) {
-      const { operationId } = newJobIds();
-      const { saved, planned } = recorded(operationId);
-      if (saved !== planned) lost = saved;
-    }
-    assert.match(lost ?? "(none of 600 random ids was redacted)", /REDACTED/);
+    // Generic redaction still sees this fixed synthetic job ref as an entropy match.
+    const { saved, planned } = recorded("bg-3fdba35f04dc");
+    assert.match(redactForPersistence(planned), /REDACTED:HIGH_ENTROPY_STRING/);
+    assert.equal(saved, planned);
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
     fs.rmSync(root, { recursive: true, force: true });
