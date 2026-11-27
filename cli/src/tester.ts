@@ -7,6 +7,7 @@ import { operatorSetting } from "./client.js";
 import { buildMcpEnvironment } from "./mcp.js";
 import { extractCompilerDiagnostics, Diagnostic } from "./diagnostics.js";
 import { pathEscapesRoot } from "./path_within.js";
+import { runProbeProcess } from "./core/harness/probe_process.js";
 
 export interface TestRunResult {
   command: string;
@@ -680,6 +681,14 @@ export function environmentHint(): string {
   return "environment: command not found. The verifier runs with a scrubbed environment (inherited variables only); " +
     "add names to NEXUS_VERIFIER_ENV_PASSTHROUGH (comma-separated, trailing * for a prefix)." +
     (withheld.length ? ` Set here but not passed: ${withheld.join(", ")}.` : "");
+}
+
+/** Run an approved verifier line with operation cancellation and bounded evidence capture. */
+export function runCancellableVerifierShell(
+  command: string,
+  options: Parameters<typeof runProbeProcess>[2] & { env: NodeJS.ProcessEnv },
+) {
+  return runProbeProcess("bash", ["-c", command], options);
 }
 
 let timeoutBinary: boolean | undefined;

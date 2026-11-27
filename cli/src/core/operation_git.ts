@@ -22,13 +22,12 @@ import * as path from "node:path";
 import { trustedGitArgs } from "../git.js";
 import { ensureGitExclude } from "./git_exclude.js";
 import { GIT_SAFE, attributesTree, driverRefusal, safeGitEnv, snapshotSupport } from "./specialist_inputs.js";
-import { buildVerifierEnvironment, environmentHint, verifierTimeoutSecs } from "../tester.js";
+import { buildVerifierEnvironment, environmentHint, runCancellableVerifierShell, verifierTimeoutSecs } from "../tester.js";
 import { sandboxNetworkEnabled } from "../sandbox.js";
 import { SecurityManager } from "../security.js";
 import { printable } from "../worktrunk/git.js";
 import { sandboxedVerifierCommand, usableSandboxEngine } from "./verify.js";
 import { formatDiagnosticForOutput } from "../ui.js";
-import { runProbeProcess } from "./harness/probe_process.js";
 import { verificationMaterialDigest, verificationWorkingDirectory } from "./operation_verification_material.js";
 import {
   MAX_INTEGRATION_CHECKS, isWaivableCheckFailure, matchingVerificationWaiver, operationVerificationApplies, operationVerificationDefinitionDigest, type OperationVerificationCheck,
@@ -1000,7 +999,7 @@ export class OperationGit {
       line = confined.command;
     }
     const startedAt = new Date().toISOString();
-    const process = await runProbeProcess("bash", ["-c", line], {
+    const process = await runCancellableVerifierShell(line, {
       cwd: directory, timeoutMs: deadlineMs, env: verifierEnvironment, signal, dockerContainerName: containerName,
       maxCombinedOutputBytes: 4 * 1024 * 1024,
     });
