@@ -2,24 +2,38 @@ import { randomUUID } from "node:crypto";
 import { HarnessStore } from "./store.js";
 import type { HarnessLibraryEntry, PromotionReport } from "./types.js";
 
+function normalizeStatement(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
 export function draftLibraryEntriesFromReport(store: HarnessStore, report: PromotionReport): HarnessLibraryEntry[] {
   const now = new Date().toISOString();
-  const entries: HarnessLibraryEntry[] = report.changes.map((c) => ({
-    schemaVersion: 1,
-    id: `hlesson_${randomUUID()}`,
-    runId: report.runId,
-    createdAt: now,
-    updatedAt: now,
-    status: "draft",
-    scope: { baseHarnessId: report.baseHarnessId },
-    statement: `Candidate ${report.recommendedCandidateId ?? "unknown"} ${c.changeType} ${c.componentPath}: ${c.recommendation}. ${c.risks.join("; ")}`.slice(0, 500),
-    evidenceIds: c.evidenceIds,
-    confidence: c.recommendation === "reject" ? "medium" : "low",
-    recommendation: c.recommendation,
-    candidateId: report.recommendedCandidateId,
-    reportId: report.id,
-  }));
-  for (const e of entries) store.saveLibraryEntry(e);
+  const existing = store.listLibraryEntries();
+  const entries: HarnessLibraryEntry[] = [];
+  for (const c of report.changes) {
+    const statement = `Candidate ${report.recommendedCandidateId ?? "unknown"} ${c.changeType} ${c.componentPath}: ${c.recommendation}. ${c.risks.join("; ")}`.slice(0, 500);
+    const norm = normalizeStatement(statement);
+    const dup = existing.find((e) => e.runId === report.runId && normalizeStatement(e.statement) === norm);
+    if (dup) continue;
+    const entry: HarnessLibraryEntry = {
+      schemaVersion: 1,
+      id: `hlesson_${randomUUID()}`,
+      runId: report.runId,
+      createdAt: now,
+      updatedAt: now,
+      status: "draft",
+      scope: { baseHarnessId: report.baseHarnessId },
+      statement,
+      evidenceIds: c.evidenceIds,
+      confidence: c.recommendation === "reject" ? "medium" : "low",
+      recommendation: c.recommendation,
+      candidateId: report.recommendedCandidateId,
+      reportId: report.id,
+    };
+    store.saveLibraryEntry(entry);
+    entries.push(entry);
+    existing.push(entry);
+  }
   return entries;
 }
 
@@ -45,5 +59,14 @@ export function retrieveRelevantLibraryEntries(store: HarnessStore, opts: { base
     return { e, score };
   });
   scored.sort((a, b) => b.score - a.score || b.e.updatedAt.localeCompare(a.e.updatedAt));
-  return scored.slice(0, limit).map((s) => s.e);
+  const out: HarnessLibraryEntry[] = [];
+  const seen = new Set<string>();
+  for (const s of scored) {
+    const norm = normalizeStatement(s.e.statement);
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+    out.push(s.e);
+    if (out.length >= limit) break;
+  }
+  return out;
 }
