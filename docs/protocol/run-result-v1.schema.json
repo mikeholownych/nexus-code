@@ -1156,6 +1156,10 @@
               "description": "Steps run on this objective across all its turns (observability; never a limit).",
               "type": "number"
             },
+            "inferenceOutcomeUnknowns": {
+              "description": "Requests that crossed the provider boundary but whose outcome could not be observed.",
+              "type": "number"
+            },
             "inferenceSubmissionHistoryComplete": {
               "description": "False means earlier requests predate this counter or the persisted counter was malformed.",
               "type": "boolean"
@@ -1172,6 +1176,10 @@
               "type": "number"
             },
             "maxToolInvocations": {
+              "type": "number"
+            },
+            "pendingInferenceSubmission": {
+              "description": "Latest submission still in flight at the time of this result, if any.",
               "type": "number"
             },
             "repeated": {
