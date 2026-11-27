@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { LocalLlmClient } from "../src/client.js";
+import { LocalLlmClient, unsupportedParameter } from "../src/client.js";
 import { newOperation } from "../src/core/operation.js";
 import { InvalidOperationStateError, migrateOperationState, validateOperationState } from "../src/core/operation_schema.js";
 import { OperationRunner } from "../src/core/operation_runner.js";
+import { serializedOutputTokenLimit, wireProtocol } from "../src/protocols/index.js";
 import { startGateway } from "./helpers/fixtures.js";
 import "./helpers/leak_guard.js";
 
@@ -69,6 +70,110 @@ test("concurrent provider requests reserve operation token estimates durably bef
   assert.equal(persistedCalls, 1);
   assert.equal(persistedTokens, 20);
   assert.equal(result.status, "PAUSED");
+});
+
+test("durable operation token headroom becomes the serialized provider output-token cap", { timeout: 30_000 }, async (t) => {
+  let state = newOperation(
+    "op-token-output-ceiling",
+    "Keep the provider output allowance inside the remaining token estimate",
+    [{ id: "unit", prompt: "complete within the cap" }],
+    [resource],
+    Date.now(),
+    { maxInferenceCalls: 10, maxTotalTokens: 32 },
+  );
+  const gateway = await startGateway(() => ({ kind: "text", content: "ok" }));
+  t.after(() => gateway.close());
+  const client = new LocalLlmClient({ endpoint: gateway.url, model: "test-model", completionReserveTokens: 64, contextLimit: 128 } as any);
+  const runner = new OperationRunner(state, {
+    executor: {
+      run: async () => {
+        await client.chatCompletion([{ role: "user", content: "first request" }], []);
+        return { kind: "completed", summary: "response received", outcome: "NOT_REQUIRED" };
+      },
+    },
+    persist: (saved) => { state = saved; },
+  });
+
+  const result = await runner.run();
+
+  const inputEstimate = Math.ceil((JSON.stringify([{ role: "user", content: "first request" }]).length + JSON.stringify([]).length) / 4);
+  assert.equal(gateway.requests.length, 1);
+  assert.equal((gateway.requests[0] as any).max_tokens, 32 - inputEstimate);
+  assert.equal(result.tokenReservations, 32, "durable admission reserves the input estimate plus the narrowed output allowance");
+  assert.equal(state.tokenReservations, 32);
+  assert.equal(result.status, "PAUSED", "the fixture provides no post-call usage, so the final measured-usage gate stays fail-closed");
+});
+
+test("a provider rejection of the required output cap is not retried uncapped", { timeout: 30_000 }, async (t) => {
+  let state = newOperation(
+    "op-token-output-rejected",
+    "Do not remove a token limit after provider rejection",
+    [{ id: "unit", prompt: "keep the hard request cap" }],
+    [resource],
+    Date.now(),
+    { maxInferenceCalls: 10, maxTotalTokens: 32 },
+  );
+  const gateway = await startGateway(() => ({ kind: "http", status: 400, body: JSON.stringify({ detail: "Unsupported parameter: max_tokens" }) }));
+  t.after(() => gateway.close());
+  const client = new LocalLlmClient({ endpoint: gateway.url, model: "test-model", completionReserveTokens: 64, contextLimit: 128 } as any);
+  const runner = new OperationRunner(state, {
+    executor: { run: async () => { await client.chatCompletion([{ role: "user", content: "first request" }], []); return { kind: "completed", summary: "must not happen", outcome: "NOT_REQUIRED" }; } },
+    persist: (saved) => { state = saved; },
+  });
+
+  const result = await runner.run();
+
+  assert.equal(gateway.requests.length, 1, "the rejected request is not retried after removing max_tokens");
+  assert.equal(result.status, "PAUSED");
+  assert.match(result.pauseReason ?? "", /rejected its required output-token limit/);
+  assert.equal(result.inferenceCalls, 1, "the uncertain/rejected request allowance remains consumed");
+});
+
+test("a previously omitted output-limit parameter blocks dispatch when a durable token cap is active", { timeout: 30_000 }, async (t) => {
+  let state = newOperation(
+    "op-token-output-omitted",
+    "Do not send an uncapped request after learning the provider rejects the cap",
+    [{ id: "unit", prompt: "require a serialized limit" }],
+    [resource],
+    Date.now(),
+    { maxInferenceCalls: 10, maxTotalTokens: 32 },
+  );
+  const gateway = await startGateway(() => ({ kind: "text", content: "must not arrive" }));
+  t.after(() => gateway.close());
+  const client = new LocalLlmClient({ endpoint: gateway.url, model: "test-model", completionReserveTokens: 64, contextLimit: 128 } as any);
+  (client as any).unsupportedParams.add("max_tokens");
+  const runner = new OperationRunner(state, {
+    executor: { run: async () => { await client.chatCompletion([{ role: "user", content: "first request" }], []); return { kind: "completed", summary: "must not happen", outcome: "NOT_REQUIRED" }; } },
+    persist: (saved) => { state = saved; },
+  });
+
+  const result = await runner.run();
+
+  assert.equal(gateway.requests.length, 0, "a missing output cap is rejected before provider dispatch");
+  assert.equal(result.status, "PAUSED");
+  assert.match(result.pauseReason ?? "", /cannot serialize the admitted output-token limit/);
+  assert.equal(result.tokenReservations, 32, "the reserved allowance is conservatively retained after a known pre-dispatch refusal");
+});
+
+test("each supported native and chat wire protocol exposes its serialized output-token limit", () => {
+  const input = {
+    model: "test-model",
+    messages: [],
+    tools: [],
+    maxOutputTokens: 17,
+    stream: false,
+    owner: "test:test-model",
+    chat: { toolChoice: "auto" as const, capOutput: true, usage: "native" as const },
+  };
+  for (const protocol of ["openai-chat", "openai-responses", "anthropic-messages", "gemini-generate-content", "bedrock-converse"] as const) {
+    const request = wireProtocol(protocol).build(input);
+    assert.equal(serializedOutputTokenLimit(protocol, request.body), 17, protocol);
+  }
+});
+
+test("unsupported camel-case provider output-limit names normalize to the canonical parameter", () => {
+  assert.equal(unsupportedParameter("Unsupported parameter: maxOutputTokens"), "max_output_tokens");
+  assert.equal(unsupportedParameter('{"code":"unsupported_parameter","param":"maxOutputTokens"}'), "max_output_tokens");
 });
 
 test("token reservation persistence failure prevents the provider request", { timeout: 30_000 }, async (t) => {
