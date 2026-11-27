@@ -90,6 +90,8 @@ export async function executeSideQuestion(
   const deadline = signal ? AbortSignal.any([signal, timeout]) : timeout;
   deadline.throwIfAborted();
 
+  const workspace = WorkspacePath.fromSelectedWorkspace(path.resolve(config.workspace));
+  const security = new SecurityManager(workspace.value, { notify: () => {} });
   const completionReserveTokens = Math.min(config.completionReserveTokens ?? 1024, 1024);
   const contextLimit = config.contextLimit ?? 65_536;
   const client = new LocalLlmClient({ ...config, completionReserveTokens, readOnly: true, pinEndpoint: true }, {
@@ -97,8 +99,6 @@ export async function executeSideQuestion(
     diagnosticHandler: () => {},
   });
   const messages: ChatMessage[] = [{ role: "system", content: CONTRACT }, { role: "user", content: text }];
-  let workspace: WorkspacePath | undefined;
-  let security: SecurityManager | undefined;
   for (let reads = 0; reads <= MAX_READS; reads += 1) {
     const tools = reads === MAX_READS ? [] : [READ_FILE];
     const promptTokens = calculateContextBudget(messages, tools, contextLimit).totalActiveTokens;
@@ -120,12 +120,7 @@ export async function executeSideQuestion(
       throw new Error("Only a single read-only file tool is allowed within the side-question read budget.");
     }
     const relativePath = toolPath(call);
-    let contents: string | undefined;
-    if (relativePath) {
-      workspace ??= WorkspacePath.fromSelectedWorkspace(path.resolve(config.workspace));
-      security ??= new SecurityManager(workspace.value, { notify: () => {} });
-      contents = readWorkspaceText(workspace, security, relativePath);
-    }
+    const contents = relativePath ? readWorkspaceText(workspace, security, relativePath) : undefined;
     messages.push({ role: "assistant", tool_calls: [call] }, {
       role: "tool", tool_call_id: call.id,
       content: contents === undefined ? "The file is unavailable or outside the allowed read scope." : contents,

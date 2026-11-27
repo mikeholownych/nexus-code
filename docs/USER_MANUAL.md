@@ -620,6 +620,13 @@ In a trusted repository root at the draft's clean Git base, run `/batch plan acc
 
 Use `/batch status <operation-id>`, `/batch results <operation-id>`, or `/batch resume <operation-id>` to follow the approved operation. Use `nexus operation status <id> --json` to inspect verification attempts and any eligible retained failed candidate. To approve an eligible waiver, run `nexus operation waive-verification <id> <attempt> <check> <commit> --reason <text>`, confirm at the terminal, and use the existing retry decision. The receipt reports a waived check separately from a pass.
 
+### Second opinions, simplification, side questions, and polling
+
+- Use `/advisor task <text>`, `/advisor failure <text>`, `/advisor diff <relative-file>`, or `/advisor plan <draft-id>` to get structured findings, evidence references, uncertainty, and recommendations. Add `--independent` before the input kind to require a distinct qualified model. The diff input is a saved unified diff inside the trusted workspace. The advisor has read-only consultation authority.
+- Use `/simplify <completed-operation-id>` to review a functionally verified change for duplication, complexity, and avoidable abstractions. Each proposal identifies affected code and explains the behavior it preserves. If you apply a proposal in a separate change, rerun the applicable required verification against the new candidate.
+- Use `/btw <question>` to ask a separate question. It receives the text you send and can use bounded read-only workspace access. The question and answer stay outside task history, objective state, and durable memory. In the live TUI, you can ask it while the main task runs.
+- Use `/poll start operation:<id> --interval 5s --timeout 2m --max-calls 10` to monitor an operation from the same workspace. Use `/poll list`, `/poll status <poll-id>`, `/poll resume <poll-id>`, and `/poll cancel <poll-id>` to manage it. Intervals start at five seconds, deadlines are limited to 24 hours, and each monitor is limited to 100 calls. Press Ctrl-C to cancel the running monitor. It records missing or interrupted observations as unknown, and keeps its original deadline and call budget across restarts. Use `/loop` for objective iteration.
+
 ### Slash Commands Cheatsheet
 
 | Command | Description |

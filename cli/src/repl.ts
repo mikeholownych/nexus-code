@@ -46,7 +46,7 @@ import { executeGoalCommand } from "./goal_command.js";
 import { isKnowledgeSuggestionCommand } from "./knowledge_command.js";
 import { executeLoopCommand } from "./loop_command.js";
 import { routeSlash } from "./slash/router.js";
-import type { SlashHost } from "./slash/catalog.js";
+import { findSlash, secondaryWorkflowReadOnlyAllowed, type SlashHost } from "./slash/catalog.js";
 
 interface PatchHunk {
   header: string;
@@ -105,6 +105,7 @@ export function replReadOnlyAllowed(command: string, args: string): boolean {
        "exit", "quit", "q", "mode", "clear", "reset", "history", "skills", "copy", "paste", "image", "cd"].includes(name)) {
     return true;
   }
+  if (secondaryWorkflowReadOnlyAllowed(name, value)) return true;
   if (name === "checkpoint") return value === "diff" || value.startsWith("diff ");
   if (name === "worktree") return isReadOnlyWorktreeArgs(value);
   if (name === "knowledge" && (value === "suggestions" || /^show-source\s+\S+$/.test(value) || /^audit\s+operation:[a-z0-9_-][a-z0-9._-]{0,159}$/.test(value) || /^show-suggestion\s+[a-f0-9]{64}$/.test(value))) return true;
@@ -443,6 +444,10 @@ export class InteractiveRepl {
     console.log(`  ${pc.bold(pc.yellow("/batch <spec-file> | plan|run|validate|status|list|pause|resume|cancel|results"))} Bounded durable work batches`);
     console.log(`  ${pc.bold(pc.yellow("/goal <objective> | status|list|show|pause|resume|cancel|requirements|evidence"))} Durable objective with verification and independent review`);
     console.log(`  ${pc.bold(pc.yellow("/loop [--until <condition>] [--max-iterations <n>] [--max-duration <duration>] <objective> | status|list|pause|resume|stop|reconcile"))} Bounded durable iteration loop with deterministic verification`);
+    for (const name of ["advisor", "simplify", "btw", "poll"]) {
+      const spec = findSlash(name)!;
+      console.log(`  ${pc.bold(pc.yellow(spec.usage))} ${spec.summary}`);
+    }
     console.log(`  ${pc.bold(pc.yellow("/image <path> [prompt]"))} Ingest multi-modal image into vision model`);
     console.log(`  ${pc.bold(pc.yellow("/theme [name]"))}       View or switch terminal color theme`);
     console.log(`  ${pc.bold(pc.yellow("/tui"))}                Launch full-screen interactive TUI dashboard`);
@@ -714,7 +719,7 @@ export class InteractiveRepl {
           "/checkpoints", "/undo", "/audit", "/export", "/tokens", "/init",
           "/onboard", "/test",
           "/model", "/shell", "/cd", "/history", "/copy", "/paste",
-          "/image", "/theme", "/team", "/batch", "/goal", "/loop", "/upgrade",
+          "/image", "/theme", "/team", "/batch", "/goal", "/loop", "/advisor", "/simplify", "/btw", "/poll", "/upgrade",
           "/exit", "/quit"
         ];
         const trimmed = line.trim();
@@ -1832,6 +1837,19 @@ export class InteractiveRepl {
               console.log((result.success ? pc.green : pc.yellow)(`\n${formatDiagnosticForOutput(result.output)}\n`));
             } catch (error) {
               console.log(pc.red(`\n${formatDiagnosticForOutput(error)}\n`));
+            } finally {
+              this.operationAbort = undefined;
+            }
+            continue;
+          } else if (cmd === "advisor" || cmd === "simplify" || cmd === "btw" || cmd === "poll") {
+            const host = { app: this.app, mode: () => this.agent.getApprovalMode() } as SlashHost;
+            this.operationAbort = new AbortController();
+            try {
+              const args = fullInput.trimStart().slice(cmd.length + 1);
+              const outcome = await routeSlash(host, cmd, args, this.operationAbort.signal);
+              if (outcome.kind === "reply") {
+                console.log(`\n${outcome.success ? "" : pc.yellow("✖ ")}${formatDiagnosticForOutput(outcome.output)}\n`);
+              }
             } finally {
               this.operationAbort = undefined;
             }

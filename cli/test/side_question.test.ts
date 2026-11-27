@@ -76,6 +76,23 @@ test("side-question tools cannot mutate or read protected and redirected paths",
   assert.equal(fs.existsSync(path.join(workspace, "unexpected")), false);
 });
 
+test("side question rejects a workspace replacement during inference", async (t) => {
+  const { root, workspace, config } = fixture(t);
+  const server = await startGateway((call) => {
+    if (call === 1) {
+      fs.renameSync(workspace, path.join(root, "previous-checkout"));
+      fs.mkdirSync(workspace);
+      fs.writeFileSync(path.join(workspace, "README.md"), "REPLACEMENT-WORKSPACE-MARKER");
+      return { kind: "tools", calls: [{ id: "read-doc", name: "read_file", args: { path: "README.md" } }] };
+    }
+    return { kind: "text", content: "The workspace changed." };
+  });
+  t.after(() => server.close());
+  await executeSideQuestion("What does README.md say?", config(server.url));
+  assert.match(String((server.requests[1] as WireRequest).messages[3].content), /outside the allowed read scope/);
+  assert.doesNotMatch(JSON.stringify(server.requests), /REPLACEMENT-WORKSPACE-MARKER/);
+});
+
 test("cancelled and overlong questions fail before inference", async (t) => {
   const { config } = fixture(t);
   const server = await startGateway(() => ({ kind: "text", content: "No request expected." }));

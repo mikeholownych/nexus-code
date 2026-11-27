@@ -140,6 +140,10 @@ export const SLASH_COMMANDS: SlashSpec[] = [
   { name: "batch", usage: "/batch <spec-file> | run|validate <spec-file> | status|list|pause|resume|cancel|results [id] | plan <objective>", summary: "Propose plans and manage durable work batches", cancellable: true },
   { name: "goal", usage: "/goal <objective> | status|list|show|pause|resume|cancel|requirements|evidence", summary: "Run and track a durable objective through verified team work", cancellable: true },
   { name: "loop", usage: "/loop [--until <condition>] [--max-iterations <n>] [--max-duration <duration>] <objective> | status|list|pause|resume|stop [id] | reconcile <id> --confirm-no-effect", summary: "Run a bounded, durable iteration loop with deterministic verification", cancellable: true },
+  { name: "advisor", usage: "/advisor [--independent] task <text> | failure <text> | diff <file> | plan <draft-id>", summary: "Get a focused second opinion on selected evidence", cancellable: true },
+  { name: "simplify", usage: "/simplify <completed-operation-id>", summary: "Propose simplifications to a verified change", cancellable: true },
+  { name: "btw", usage: "/btw <question>", summary: "Ask a side question outside the task conversation", cancellable: true },
+  { name: "poll", usage: "/poll start operation:<id> --interval <duration> --timeout <duration> --max-calls <n> | status|resume|cancel <poll-id> | list", summary: "Monitor a local operation on a bounded schedule", cancellable: true },
   { name: "harness", usage: "/harness init|run|status|show|report|cancel|library ...", summary: "Evidence-gated harness improvement runs (no live mutation)", cancellable: true },
   { name: "theme", usage: "/theme [name]", summary: "Show or save the colour theme" },
   { name: "recover", usage: "/recover [task-id]", summary: "Recover durable task state" },
@@ -147,6 +151,11 @@ export const SLASH_COMMANDS: SlashSpec[] = [
   { name: "upgrade", usage: "/upgrade [--check] [--version <v>] [--yes] [--force]", summary: "Check for updates or safely upgrade Nexus to the latest stable or pinned release" },
   { name: "exit", usage: "/exit", summary: "Quit Nexus", aliases: ["quit", "q"] },
 ];
+
+export function secondaryWorkflowReadOnlyAllowed(name: string, args: string): boolean {
+  if (name === "advisor" || name === "simplify" || name === "btw") return true;
+  return name === "poll" && /^(?:list|status(?:\s+\S+)?)$/i.test(args.trim());
+}
 
 /** The catalogue as announced in `hello`. */
 export function slashCatalog(): Array<Pick<SlashSpec, "name" | "usage" | "summary">> {
