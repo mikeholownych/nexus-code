@@ -67,6 +67,17 @@ class CountingAdapter implements ProbeAdapter {
 }
 
 describe("HIR concurrent probe budget reservations", () => {
+  it("does not dispatch more probes than a nearly exhausted run budget", async () => {
+    const f = await fixture(2);
+    const adapter = new CountingAdapter();
+    const result = await new HarnessOrchestrator(f.store).run(f.run.id, { store: f.store, adapter, candidatePath: f.base });
+
+    assert.equal(adapter.calls.length, 2);
+    assert.equal(adapter.peak, 2);
+    assert.equal(result.actualUsage.probes, 2);
+    assert.equal(result.status, "BLOCKED");
+  });
+
   it("never dispatches more baseline and candidate probes than the run-wide budget", async () => {
     const f = await fixture(6);
     const adapter = new CountingAdapter();
