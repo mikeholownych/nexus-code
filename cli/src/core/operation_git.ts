@@ -291,7 +291,7 @@ export class OperationGit {
     const definition = this.state.verificationChecks?.find((check) => check.id === failed?.id);
     if (!binding.attemptId || !isWaivableCheckFailure(failed) || !definition || definition.requirement === "advisory") return "";
     const ref = this.verificationCandidateRef(unitId);
-    if (!this.inIntegration(["update-ref", ref, binding.commit]).ok) return "\nCould not retain the failed candidate for operator review.";
+    if (!this.inIntegration([...this.mechanicalGitConfig(), "update-ref", ref, binding.commit]).ok) return "\nCould not retain the failed candidate for operator review.";
     this.state.retainedVerificationCandidates = [
       ...(this.state.retainedVerificationCandidates ?? []).filter((candidate) => candidate.unitId !== unitId),
       {
