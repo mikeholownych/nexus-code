@@ -35,6 +35,7 @@ export interface PlanCheck {
   timeoutSeconds: number;
   required: boolean;
   when?: { changedPaths: string[] };
+  materialInputs?: string[];
 }
 
 export interface BatchPlanUnit {
@@ -158,12 +159,15 @@ function workspacePath(label: string, value: unknown, workspace: string | undefi
 
 function checks(label: string, value: unknown, workspace: string | undefined): PlanCheck[] {
   const parsed = items(label, value, MAX_CHECKS).map((item) => {
-    const check = strictObject(label, item, ["id", "command", "cwd", "expectation", "timeoutSeconds", "required"], ["when"]);
+    const check = strictObject(label, item, ["id", "command", "cwd", "expectation", "timeoutSeconds", "required"], ["when", "materialInputs"]);
     const required = boolean(`${label}.required`, check.required);
     const condition = check.when === undefined ? undefined : strictObject(`${label}.when`, check.when, ["changedPaths"]);
     if (condition && !required) throw new Error(`${label} conditional checks must be required when applicable`);
     const changedPaths = condition && distinct(`${label}.when.changedPaths`, items(`${label}.when.changedPaths`, condition.changedPaths, 32, 1)
       .map((value) => workspacePath(`${label}.when.changedPaths`, value, workspace, true))).sort();
+    const materialInputs = check.materialInputs === undefined ? undefined
+      : distinct(`${label}.materialInputs`, items(`${label}.materialInputs`, check.materialInputs, 32, 1)
+        .map((value) => workspacePath(`${label}.materialInputs`, value, workspace, false))).sort();
     return {
       id: text(`${label}.id`, check.id, 64, UNIT_ID),
       command: prose(`${label}.command`, check.command, 1000),
@@ -172,6 +176,7 @@ function checks(label: string, value: unknown, workspace: string | undefined): P
       timeoutSeconds: integer(`${label}.timeoutSeconds`, check.timeoutSeconds, 1, 300),
       required,
       ...(changedPaths ? { when: { changedPaths } } : {}),
+      ...(materialInputs ? { materialInputs } : {}),
     };
   });
   distinct(`${label} ids`, parsed.map((check) => check.id));

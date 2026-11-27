@@ -14,6 +14,7 @@ function integrationCheck(check: PlanCheck, unitId?: string) {
     timeoutMs: check.timeoutSeconds * 1000,
     unitId,
     ...(check.when ? { when: check.when } : {}),
+    ...(check.materialInputs ? { materialInputs: check.materialInputs } : {}),
   };
 }
 

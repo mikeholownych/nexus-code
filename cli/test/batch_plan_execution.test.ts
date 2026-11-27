@@ -192,3 +192,12 @@ test("approved parallel write units run in separate worktrees and integrate the 
   }
   assert.equal(result.operation.integrations?.at(-1)?.verificationBinding?.typedChecks?.length, 3);
 });
+
+test("approved checks preserve bounded material input declarations", () => {
+  const check = { ...plan.checks[0], materialInputs: ["tools/python", "fixtures/vendored"] };
+  const reviewed = validateBatchPlan({ ...plan, checks: [check] }, process.cwd());
+  assert.deepEqual(batchPlanExecution(reviewed).verificationChecks[0].materialInputs, ["fixtures/vendored", "tools/python"]);
+  for (const entry of [".", "../outside", ".nexus/state"]) {
+    assert.throws(() => validateBatchPlan({ ...plan, checks: [{ ...check, materialInputs: [entry] }] }, process.cwd()), /workspace-relative/);
+  }
+});
