@@ -8,7 +8,7 @@ import { activateInferenceSubmissionAdmissionScope, admitCurrentInferenceSubmiss
 import { MAX_OPERATION_INFERENCE_SUBMISSIONS, migrateOperationState } from "../src/core/operation_schema.js";
 import { newOperation } from "../src/core/operation.js";
 import { parseInferenceSubmissionCap, setOperationBudget } from "../src/core/operation_budget.js";
-import { OperationRunner } from "../src/core/operation_runner.js";
+import { driveOperation, OperationRunner } from "../src/core/operation_runner.js";
 import { OperationStore } from "../src/core/operation_runner_persistence.js";
 import "./helpers/leak_guard.js";
 import { startGateway } from "./helpers/fixtures.js";
@@ -37,6 +37,37 @@ test("operation inference cap is finite, bounded, and parsed without an unlimite
   for (const bad of ["0", "-1", "1.5", "none", "", String(MAX_OPERATION_INFERENCE_SUBMISSIONS + 1)]) {
     assert.throws(() => parseInferenceSubmissionCap(bad), /--max-total-inference-submissions/);
   }
+});
+
+test("stale operation recovery records outstanding provider requests as unknown", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-operation-unknown-provider-outcome-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const workspace = path.join(root, "workspace");
+  const stateDir = path.join(root, "state");
+  const home = path.join(root, "home");
+  fs.mkdirSync(workspace);
+  fs.mkdirSync(home);
+  const store = new OperationStore(workspace, stateDir, home);
+  const state = newOperation("op-unknown-provider-outcome", "Record interrupted provider outcomes", [{ id: "unit", prompt: "bounded work" }], [resource], Date.now());
+  state.inferenceCalls = 1;
+  state.pendingInferenceCalls = [1];
+  state.activeBootId = "previous-boot";
+  state.activeHost = os.hostname();
+  state.activePid = 2_147_483_647;
+  state.activeStartTicks = "1";
+  store.save(state);
+
+  const recovered = await driveOperation(state, {
+    store,
+    entry: "existing",
+    executor: { run: async () => ({ kind: "completed", summary: "unexpected execution", outcome: "NOT_REQUIRED" }) },
+  });
+
+  assert.equal(recovered.inferenceOutcomeUnknowns, 1);
+  assert.deepEqual(recovered.pendingInferenceCalls, []);
+  assert.match(recovered.pauseReason ?? "", /provider request outcome\(s\) are unknown/);
+  assert.ok(recovered.events.some((event) => event.detail?.unknownProviderOutcomes === 1));
+  assert.equal(recovered.units[0].runs, 0, "stale recovery does not start new work before the operator reviews the pause");
 });
 
 test("one durable inference counter spans separate units and denies the first request beyond the cap", async () => {
@@ -132,6 +163,8 @@ test("operation admission covers actual provider calls from nested side and chil
     ["side request", "child request", "primary request"],
   );
   assert.equal(result.inferenceCalls, 3);
+  assert.equal(result.inferenceOutcomeUnknowns, 0);
+  assert.deepEqual(result.pendingInferenceCalls, [], "observed provider responses settle their durable dispatch records");
   assert.equal(durableCount, 3, "each operation reservation is persisted before its provider call");
   assert.equal(turnReservations, 3, "nested requests also satisfy the enclosing turn admission");
   assert.equal(childReservations, 1, "the child request also satisfies its own turn admission");

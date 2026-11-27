@@ -43,7 +43,7 @@ import { refreshStoredSignIn } from "./oauth_shared_refresh.js";
 import { providerDefinition } from "./providers.js";
 import { ServerKindCache } from "./core/server_kind_cache.js";
 import { persistableEndpoint } from "./core/endpoint_identity.js";
-import { admitCurrentInferenceSubmission, currentInferenceOutputTokenLimitRequired, OperationInferenceAdmissionError } from "./core/inference_admission.js";
+import { admitCurrentInferenceSubmission, currentInferenceOutputTokenLimitRequired, markCurrentInferenceSubmissionDispatched, OperationInferenceAdmissionError, settleCurrentInferenceSubmission } from "./core/inference_admission.js";
 
 /** Longest a request waits for an expired server identity to be re-read before proceeding without it. */
 const REVERIFY_WAIT_MS = 1000;
@@ -1892,7 +1892,11 @@ export class LocalLlmClient {
       const watchdog = this.createWatchdog(signal, currentEp);
       let res: Response;
       let data: any;
+      let responseReceived = false;
+      let dispatchMarked = false;
       try {
+        markCurrentInferenceSubmissionDispatched();
+        dispatchMarked = true;
         res = await this.fetchResendingStale(url, {
           method: "POST",
           headers: {
@@ -1906,6 +1910,7 @@ export class LocalLlmClient {
           signal: watchdog.signal,
           ...this.fetchPolicy(),
         });
+        responseReceived = true;
 
         if (res.status === 401 && this.reloadAuthToken(url)) {
           watchdog.done();
@@ -1923,6 +1928,7 @@ export class LocalLlmClient {
         throw classifyTransportError(err, signal, requestId, "connect");
       } finally {
         watchdog.done();
+        settleCurrentInferenceSubmission(responseReceived ? "response_received" : dispatchMarked ? "unknown" : "not_dispatched");
       }
       const executions = this.pending?.executions;
       this.pending = {
@@ -2079,7 +2085,10 @@ export class LocalLlmClient {
 
       const watchdog = this.createWatchdog(signal, currentEp, true);
       let res: Response;
+      let dispatchMarked = false;
       try {
+        markCurrentInferenceSubmissionDispatched();
+        dispatchMarked = true;
         res = await this.fetchResendingStale(url, {
           method: "POST",
           headers: {
@@ -2095,18 +2104,21 @@ export class LocalLlmClient {
         });
       } catch (err: any) {
         watchdog.done();
+        settleCurrentInferenceSubmission(dispatchMarked ? "unknown" : "not_dispatched");
         // A resend happens only inside fetchResendingStale (stale keep-alive, before any response byte); any other
         // rejection goes to the agent loop.
         throw classifyTransportError(err, signal, requestId, "connect");
       }
 
       if (res.status === 401 && this.reloadAuthToken(url)) {
+        settleCurrentInferenceSubmission("response_received");
         watchdog.done();
         await this.reverifyExpiredKind(signal);
         return this.chatCompletionStreamOnce(messages, tools, onToken, requestId, signal);
       }
 
       if (!res.ok || !res.body) {
+        settleCurrentInferenceSubmission("response_received");
         try {
           const errText = await res.text();
           throw this.httpError(res.status, errText, requestId, res.headers);
@@ -2134,6 +2146,7 @@ export class LocalLlmClient {
         await readChatStream(res.body, parser, () => watchdog.onChunk());
       } catch (streamErr: any) {
         syncReported();
+        settleCurrentInferenceSubmission("unknown");
         if (streamErr instanceof ChatErrorFrame) throw this.fromChatErrorFrame(streamErr, requestId);
         if (streamErr instanceof ProviderStreamError) throw this.fromStreamError(streamErr, requestId);
         const classified = classifyTransportError(streamErr, signal, requestId, "stream", parser.text());
@@ -2143,6 +2156,7 @@ export class LocalLlmClient {
       } finally {
         watchdog.done();
       }
+      settleCurrentInferenceSubmission("response_received");
       syncReported();
 
       const result = parser.result();
@@ -2263,6 +2277,7 @@ export class LocalLlmClient {
       this.pending = { endpoint: currentEp };
       const watchdog = this.createWatchdog(signal, currentEp, stream);
       let res: Response;
+      let dispatchMarked = false;
       const payload = JSON.stringify(req.body);
       const headers: Record<string, string> = { "Content-Type": "application/json", ...this.authorization(url), ...this.providerHeaders(outbound.messages), "X-Request-ID": requestId };
       if (wire.sign) {
@@ -2274,6 +2289,8 @@ export class LocalLlmClient {
         }
       }
       try {
+        markCurrentInferenceSubmissionDispatched();
+        dispatchMarked = true;
         res = await this.fetchResendingStale(url, {
           method: "POST",
           headers,
@@ -2283,9 +2300,11 @@ export class LocalLlmClient {
         });
       } catch (err: any) {
         watchdog.done();
+        settleCurrentInferenceSubmission(dispatchMarked ? "unknown" : "not_dispatched");
         throw classifyTransportError(err, signal, requestId, "connect");
       }
       if (!res.ok || (stream && !res.body)) {
+        settleCurrentInferenceSubmission("response_received");
         try {
           const errText = await res.text();
           throw this.httpError(res.status, errText, requestId, res.headers);
@@ -2302,7 +2321,9 @@ export class LocalLlmClient {
         let data: any;
         try {
           data = await res.json();
+          settleCurrentInferenceSubmission("response_received");
         } catch (err: any) {
+          settleCurrentInferenceSubmission("unknown");
           if (err?.name === "SyntaxError") throw new InferenceError("malformed_event", "provider", "Provider returned a non-JSON response body.", { requestId, failoverEligible: false });
           throw classifyTransportError(err, signal, requestId, "stream");
         } finally {
@@ -2330,11 +2351,13 @@ export class LocalLlmClient {
             () => watchdog.onChunk(),
           );
         } catch (err: any) {
+          settleCurrentInferenceSubmission("unknown");
           if (err instanceof ProviderStreamError) throw this.fromStreamError(err, requestId);
           throw classifyTransportError(err, signal, requestId, "stream", parser.text());
         } finally {
           watchdog.done();
         }
+        settleCurrentInferenceSubmission("response_received");
         result = parser.result();
       }
       this.pending = { endpoint: currentEp, usage: result.usage, providerRequestId: result.providerRequestId, effectiveModel: result.effectiveModel, executions: this.pending?.executions };

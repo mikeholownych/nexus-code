@@ -44,7 +44,7 @@ import {
 export { DEFAULT_OPERATION_INFERENCE_SUBMISSIONS, MAX_OPERATION_ACTIVE_MS, MAX_OPERATION_INFERENCE_SUBMISSIONS } from "./operation_budget_constants.js";
 
 /** The operation document version this build writes. Independent of the task-store envelope version. */
-export const CURRENT_OPERATION_SCHEMA_VERSION = 13;
+export const CURRENT_OPERATION_SCHEMA_VERSION = 14;
 
 /** The operation document version every released 1.0.0 build wrote. */
 export const LEGACY_OPERATION_SCHEMA_VERSION = 1;
@@ -133,6 +133,8 @@ export function migrateOperationState(raw: unknown): DurableOperationState {
     // conservative lower bound at resume; it may include time parked while the owner was away.
     migrated.activeElapsedHistoryComplete ??= false;
     migrated.inferenceCalls ??= 0;
+    migrated.inferenceOutcomeUnknowns ??= 0;
+    migrated.pendingInferenceCalls ??= [];
     migrated.historyKnown ??= false;
   }
   validateOperationState(migrated);
@@ -343,6 +345,12 @@ export function validateOperationState(state: DurableOperationState): void {
   }
   if (!Number.isSafeInteger(state.inferenceCalls) || state.inferenceCalls < 0 || state.inferenceCalls > MAX_OPERATION_INFERENCE_SUBMISSIONS) {
     throw new InvalidOperationStateError(`operation ${state.id}: inferenceCalls must be a safe integer from 0 to ${MAX_OPERATION_INFERENCE_SUBMISSIONS} (got ${String(state.inferenceCalls)})`);
+  }
+  if (!Number.isSafeInteger(state.inferenceOutcomeUnknowns) || state.inferenceOutcomeUnknowns < 0 || state.inferenceOutcomeUnknowns > state.inferenceCalls) {
+    throw new InvalidOperationStateError(`operation ${state.id}: inferenceOutcomeUnknowns must be a safe integer from 0 to inferenceCalls (got ${String(state.inferenceOutcomeUnknowns)})`);
+  }
+  if (!Array.isArray(state.pendingInferenceCalls) || state.pendingInferenceCalls.some((call) => !Number.isSafeInteger(call) || call < 1 || call > state.inferenceCalls) || new Set(state.pendingInferenceCalls).size !== state.pendingInferenceCalls.length) {
+    throw new InvalidOperationStateError(`operation ${state.id}: pendingInferenceCalls must contain unique admitted request numbers`);
   }
   if (typeof state.historyKnown !== "boolean") {
     throw new InvalidOperationStateError(`operation ${state.id}: historyKnown must be a boolean`);

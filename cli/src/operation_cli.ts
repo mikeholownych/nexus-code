@@ -564,7 +564,7 @@ export function registerOperationCommands(program: Command): void {
       const usage = collectOperationUsage(state, (taskId) => store.manager.loadTaskState(taskId, workspace).tokenStats);
       const tokenUsage = `${usage.totalTokens} tokens used (${usage.reportedTokens} reported, ${usage.estimatedTokens} estimated; ${usage.inferenceRequests} requests; ${usage.tokenAccountingComplete ? "complete" : "incomplete subtotal"})`;
       console.log(
-        `Operation ${safeTerminal(id)}: ${tokenUsage}; token cap ${state.policy.maxTotalTokens ?? "none"}; active-time cap ${Math.floor(state.policy.maxTotalActiveMs / 60_000)} minutes; inference submissions ${state.inferenceCalls}/${state.policy.maxInferenceCalls} (recorded in its journal). ${state.status === "PAUSED" ? "It stays paused; run 'nexus operation resume' to continue." : ""}`.trim(),
+        `Operation ${safeTerminal(id)}: ${tokenUsage}; token cap ${state.policy.maxTotalTokens ?? "none"}; active-time cap ${Math.floor(state.policy.maxTotalActiveMs / 60_000)} minutes; inference submissions ${state.inferenceCalls}/${state.policy.maxInferenceCalls} (recorded in its journal); provider outcomes unknown ${state.inferenceOutcomeUnknowns}. ${state.status === "PAUSED" ? "It stays paused; run 'nexus operation resume' to continue." : ""}`.trim(),
       );
     }));
 

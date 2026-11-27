@@ -114,6 +114,7 @@ export function setOperationBudget(store: OperationStore, id: string, changes: O
         maxInferenceCalls: state.policy.maxInferenceCalls,
         priorCalls: previousInferenceCount,
         inferenceCalls: state.inferenceCalls,
+        inferenceOutcomeUnknowns: state.inferenceOutcomeUnknowns,
         historyWasKnown: previousInferenceHistoryComplete,
         historyKnown: state.historyKnown,
         inferenceReset: Boolean(changes.resetInferenceSubmissionHistory),

@@ -518,6 +518,10 @@ export interface DurableOperationState {
   activeElapsedHistoryComplete: boolean;
   /** Provider requests admitted across all durable units before dispatch. */
   inferenceCalls: number;
+  /** Provider requests dispatched without an observed response. */
+  inferenceOutcomeUnknowns: number;
+  /** Admitted request numbers currently crossing the provider boundary. */
+  pendingInferenceCalls: number[];
   /** False on migrated records whose pre-upgrade provider requests cannot be counted exactly. */
   historyKnown: boolean;
   /** Cumulative request-token estimate reserved before provider dispatch; not provider-reported usage. */
@@ -707,6 +711,8 @@ export function newOperation(
     activeElapsedMs: 0,
     activeElapsedHistoryComplete: true,
     inferenceCalls: 0,
+    inferenceOutcomeUnknowns: 0,
+    pendingInferenceCalls: [],
     historyKnown: true,
     tokenReservations: 0,
     units: units.map((u) => ({

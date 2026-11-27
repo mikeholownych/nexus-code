@@ -5,6 +5,8 @@ export interface InferenceSubmissionAdmissionScope {
   closed: boolean;
   requiresOutputTokenLimit: boolean;
   admit?: (estimatedInputTokens?: number, requestedOutputTokens?: number) => number | void;
+  markDispatched?: () => void;
+  settle?: (outcome: "response_received" | "unknown" | "not_dispatched") => void;
 }
 
 export type OperationInferenceAdmissionFailure = "budget_exhausted" | "token_budget_exhausted" | "output_limit_unsupported" | "history_unknown" | "persistence_failed";
@@ -35,6 +37,8 @@ export async function withInferenceSubmissionAdmissionScope<T>(
       scope.active = false;
       scope.closed = true;
       scope.admit = undefined;
+      scope.markDispatched = undefined;
+      scope.settle = undefined;
     }
   });
 }
@@ -42,12 +46,34 @@ export async function withInferenceSubmissionAdmissionScope<T>(
 export function activateInferenceSubmissionAdmissionScope(
   scope: InferenceSubmissionAdmissionScope,
   admit: (estimatedInputTokens?: number, requestedOutputTokens?: number) => number | void,
-  options: { requireOutputTokenLimit?: boolean } = {},
+  options: {
+    requireOutputTokenLimit?: boolean;
+    markDispatched?: () => void;
+    settle?: (outcome: "response_received" | "unknown" | "not_dispatched") => void;
+  } = {},
 ): void {
   if (scope.closed || scope.active) throw new Error("Inference admission scope cannot be activated in its current state.");
   scope.admit = admit;
+  scope.markDispatched = options.markDispatched;
+  scope.settle = options.settle;
   scope.requiresOutputTokenLimit = options.requireOutputTokenLimit === true;
   scope.active = true;
+}
+
+/** Durably mark the admitted request immediately before crossing the provider boundary. */
+export function markCurrentInferenceSubmissionDispatched(): void {
+  for (const scope of scopes.getStore() ?? []) {
+    if (scope.closed) throw new Error("Inference request outlived its active turn scope; refusing dispatch.");
+    if (scope.active) scope.markDispatched?.();
+  }
+}
+
+/** Resolve or record uncertainty for every enclosing durable admission scope. */
+export function settleCurrentInferenceSubmission(outcome: "response_received" | "unknown" | "not_dispatched"): void {
+  for (const scope of scopes.getStore() ?? []) {
+    if (scope.closed) throw new Error("Inference response outlived its active turn scope; refusing settlement.");
+    if (scope.active) scope.settle?.(outcome);
+  }
 }
 
 /** Whether any active durable scope requires the serialized request to carry its output-token limit. */

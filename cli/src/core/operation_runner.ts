@@ -722,10 +722,29 @@ export class OperationRunner {
         };
       }
       const result: UnitRunResult = await withInferenceSubmissionAdmissionScope(async (scope) => {
+        let activeInferenceCall: number | undefined;
         activateInferenceSubmissionAdmissionScope(
           scope,
-          (estimatedInputTokens, requestedOutputTokens) => this.reserveInferenceSubmission(estimatedInputTokens, requestedOutputTokens),
-          { requireOutputTokenLimit: this.state.policy.maxTotalTokens !== undefined },
+          (estimatedInputTokens, requestedOutputTokens) => {
+            const admitted = this.reserveInferenceSubmission(estimatedInputTokens, requestedOutputTokens);
+            activeInferenceCall = this.state.inferenceCalls;
+            return admitted;
+          },
+          {
+            requireOutputTokenLimit: this.state.policy.maxTotalTokens !== undefined,
+            markDispatched: () => {
+              if (activeInferenceCall === undefined) throw new Error("Provider request was dispatched without a durable operation reservation.");
+              this.state.pendingInferenceCalls ??= [];
+              if (!this.state.pendingInferenceCalls.includes(activeInferenceCall)) this.state.pendingInferenceCalls.push(activeInferenceCall);
+              this.save();
+            },
+            settle: (outcome) => {
+              if (activeInferenceCall === undefined) return;
+              this.state.pendingInferenceCalls = (this.state.pendingInferenceCalls ?? []).filter((call) => call !== activeInferenceCall);
+              if (outcome === "unknown") this.state.inferenceOutcomeUnknowns += 1;
+              this.save();
+            },
+          },
         );
         return this.opts.executor.run(unit, resource, ctx);
       });
@@ -1319,12 +1338,20 @@ export function currentBootId(): string | undefined {
 function pauseForStaleDriver(state: DurableOperationState): string | undefined {
   const verdict = staleDriver(state);
   if (!verdict) return undefined;
+  const pendingProviderRequests = state.pendingInferenceCalls?.length ?? 0;
+  if (pendingProviderRequests > 0) {
+    state.inferenceOutcomeUnknowns += pendingProviderRequests;
+    state.pendingInferenceCalls = [];
+  }
+  const outcomeNote = pendingProviderRequests > 0
+    ? ` ${pendingProviderRequests} provider request outcome(s) are unknown because no response was durably observed.`
+    : "";
   state.status = "PAUSED";
-  state.pauseReason = state.pauseReason && !state.pauseReason.startsWith(STALE_PAUSE_PREFIX) ? `${state.pauseReason} ${verdict.reason}` : verdict.reason;
+  state.pauseReason = state.pauseReason && !state.pauseReason.startsWith(STALE_PAUSE_PREFIX) ? `${state.pauseReason} ${verdict.reason}${outcomeNote}` : `${verdict.reason}${outcomeNote}`;
   delete state.wait;
   delete state.blocked;
   state.updatedAt = new Date().toISOString();
-  state.events.push({ type: "OPERATION_PAUSED", at: state.updatedAt, message: verdict.reason, detail: { reason: "stale_driver", cause: verdict.cause, previousBootId: state.activeBootId, previousPid: state.activePid, previousHost: state.activeHost, previousStartTicks: state.activeStartTicks } });
+  state.events.push({ type: "OPERATION_PAUSED", at: state.updatedAt, message: `${verdict.reason}${outcomeNote}`, detail: { reason: "stale_driver", cause: verdict.cause, previousBootId: state.activeBootId, previousPid: state.activePid, previousHost: state.activeHost, previousStartTicks: state.activeStartTicks, ...(pendingProviderRequests > 0 ? { unknownProviderOutcomes: pendingProviderRequests } : {}) } });
   if (state.events.length > 300) state.events.splice(0, state.events.length - 300);
   return verdict.reason;
 }

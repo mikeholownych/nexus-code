@@ -23,7 +23,7 @@ async function waitFor(description: string, check: () => boolean, timeoutMs = 10
   assert.fail(`timed out waiting for ${description}`);
 }
 
-test("a provider request whose response is lost to a process crash stays charged after resume", { timeout: 60_000 }, async (t) => {
+test("a provider request with a lost response is recorded as unknown after process-crash resume", { timeout: 60_000 }, async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-p10-provider-crash-"));
   const home = path.join(root, "home");
   const repo = makeRepo({ "README.md": "base\n" });
@@ -44,7 +44,11 @@ test("a provider request whose response is lost to a process crash stays charged
     req.on("end", () => {
       if (req.url?.endsWith("/chat/completions")) {
         try { requests.push(JSON.parse(raw)); } catch { requests.push(raw); }
-        // Deliberately leave the provider response unresolved. The test kills Nexus after the request arrives.
+        // The first response is lost when Nexus is killed; a later request gets a deterministic answer.
+        if (requests.length > 1) {
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({ id: "response-2", choices: [{ index: 0, message: { role: "assistant", content: "done" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
+        }
         return;
       }
       res.statusCode = 404;
@@ -87,7 +91,7 @@ test("a provider request whose response is lost to a process crash stays charged
       import fs from "node:fs";
       import { AutonomousAgent } from "./src/agent.ts";
       import { DEFAULT_CONTINUATION } from "./src/types.ts";
-      const agent = new AutonomousAgent({ endpoint: process.env.TEST_GATEWAY, model: "m", maxSteps: 2, maxInferenceSubmissions: 1, continuation: { ...DEFAULT_CONTINUATION, maxInferenceSubmissions: 1 }, temperature: 0, workspace: process.env.TEST_WORKSPACE, shell: "bash", approvalMode: "auto", fullAccess: true }, 1, undefined, { durable: true });
+      const agent = new AutonomousAgent({ endpoint: process.env.TEST_GATEWAY, model: "m", maxSteps: 2, maxInferenceSubmissions: 5, continuation: { ...DEFAULT_CONTINUATION, maxInferenceSubmissions: 5 }, temperature: 0, workspace: process.env.TEST_WORKSPACE, shell: "bash", approvalMode: "auto", fullAccess: true }, 1, undefined, { durable: true });
       agent.ui = new Proxy({}, { get: () => () => {} });
       fs.writeFileSync(process.env.TEST_TASK_ID_FILE, agent.getTaskId());
       await agent.runTurn("Continue the task.");
@@ -104,9 +108,14 @@ test("a provider request whose response is lost to a process crash stays charged
     first.stderr?.on("data", (chunk) => { firstOutput += String(chunk); });
     const firstExit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => first!.once("exit", (code, signal) => resolve({ code, signal })));
 
-    await waitFor("the durable task id", () => fs.existsSync(taskIdFile));
     try {
-      await waitFor("the pending provider request", () => requests.length === 1);
+      await waitFor("the durable task id", () => fs.existsSync(taskIdFile), 30_000);
+    } catch (error) {
+      assert.fail(`${error instanceof Error ? error.message : String(error)}\nfirst process output:\n${firstOutput}`);
+    }
+    try {
+      await waitFor("the pending provider request or first-process exit", () => requests.length === 1 || first!.exitCode !== null || first!.signalCode !== null, 30_000);
+      assert.equal(requests.length, 1, `first process ended before reaching the provider: exit=${first?.exitCode} signal=${first?.signalCode}\n${firstOutput}`);
     } catch (error) {
       assert.fail(`${error instanceof Error ? error.message : String(error)}\nfirst process output:\n${firstOutput}`);
     }
@@ -140,10 +149,10 @@ test("a provider request whose response is lost to a process crash stays charged
     assert.deepEqual(resumedExit, { code: 0, signal: null }, resumeOutput);
     assert.ok(fs.existsSync(resultFile), `resume result was not written: ${resumeOutput}`);
     const resumedState = JSON.parse(fs.readFileSync(resultFile, "utf8"));
-    assert.equal(resumedState.execution.inferenceSubmissions, 1, "the request reserved before dispatch remains charged after restart");
-    assert.equal(resumedState.execution.maxInferenceSubmissions, 1, "resume cannot raise the saved request ceiling");
-    assert.equal(resumedState.result.reason, "INFERENCE_SUBMISSION_BUDGET_EXHAUSTED");
-    assert.equal(requests.length, 1, "the resumed process does not duplicate the provider request whose response was lost");
+    assert.equal(resumedState.execution.inferenceSubmissions, requests.length, "every provider submission remains charged after restart");
+    assert.equal(resumedState.execution.maxInferenceSubmissions, 5, "resume preserves the saved request ceiling");
+    assert.equal(resumedState.execution.inferenceOutcomeUnknowns, 1, "the lost provider response is durably reported as unknown");
+    assert.ok(requests.length > 1, "resume can submit again when the persisted allowance still has capacity");
   } finally {
     await stop(first);
     await stop(resumed);
