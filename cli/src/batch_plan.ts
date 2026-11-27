@@ -536,7 +536,7 @@ export class BatchPlanStore {
   }
 
   /** Persist one immutable operator decision before admitting its deterministic operation id. */
-  accept(id: string, digest: string): BatchPlanAcceptance {
+  accept(id: string, digest: string, reviewDigest?: string): BatchPlanAcceptance {
     // Validate the id and locate the existing private directory before taking its guard.
     const file = this.file(id, "acceptance");
     if (!fs.existsSync(this.file(id))) throw new Error("batch plan draft was not found");
@@ -544,12 +544,16 @@ export class BatchPlanStore {
       const prior = this.readAcceptance(id);
       const draft = prior?.draft ?? this.read(id);
       if (digest !== draft.digest) throw new Error("plan acceptance digest does not match the displayed draft");
-      if (prior) return prior;
+      if (prior) {
+        if (reviewDigest !== prior.review?.digest) throw new Error("plan acceptance must name the exact displayed review digest");
+        return prior;
+      }
       if (draft.plan.blockers.length) throw new Error("plan has unresolved blockers; create and inspect a revised draft");
       const review = this.readReview(id);
       if (review?.findings.some((finding) => finding.blocking)) {
         throw new Error("plan has a blocking review finding; create and inspect a revised draft");
       }
+      if (reviewDigest !== review?.digest) throw new Error("plan acceptance must name the exact displayed review digest");
       if (!draft.base) throw new Error("plan acceptance needs a pinned Git base; create a draft in a repository with a commit");
       verifyCurrentBase(this.workspace, draft.base);
       const snapshot: Omit<BatchPlanAcceptance, "digest"> = {

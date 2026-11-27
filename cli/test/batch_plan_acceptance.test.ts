@@ -101,7 +101,13 @@ test("unresolved blockers and blocking reviews require a new draft", (t) => {
     findings: [{ category: "acceptance", summary: "Include the base path if known", blocking: false }],
     uncertainty: [],
   });
-  assert.equal(store.accept(revision.id, revision.digest).review?.digest, review.digest);
+  assert.throws(() => store.accept(revision.id, revision.digest), /review digest/);
+  const refreshed = store.recordReview(revision.id, revision.digest, reviewer, {
+    findings: [],
+    uncertainty: ["Confirm output format"],
+  });
+  assert.throws(() => store.accept(revision.id, revision.digest, review.digest), /review digest/);
+  assert.equal(store.accept(revision.id, revision.digest, refreshed.digest).review?.digest, refreshed.digest);
   assert.throws(() => store.recordReview(revision.id, revision.digest, reviewer, { findings: [], uncertainty: [] }), /already accepted/);
 });
 

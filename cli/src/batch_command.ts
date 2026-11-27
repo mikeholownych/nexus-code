@@ -11,7 +11,7 @@ export interface BatchCommandResult {
   output: string;
 }
 
-const PLAN_USAGE = "Usage: /batch plan <objective> | plan show|review <draft-id> | plan accept <draft-id> <digest> | plan import <file> [previous-draft-id]";
+const PLAN_USAGE = "Usage: /batch plan <objective> | plan show|review <draft-id> | plan accept <draft-id> <digest> [review-digest] | plan import <file> [previous-draft-id]";
 
 interface BatchPlanDependencies {
   propose?: typeof generateBatchPlanProposal;
@@ -42,7 +42,7 @@ async function executePlanCommand(
   dependencies: BatchPlanDependencies,
 ): Promise<BatchCommandResult> {
   const action = words[0];
-  if ((action === "accept" && words.length !== 3) ||
+  if ((action === "accept" && (words.length < 3 || words.length > 4)) ||
       (["show", "review"].includes(action) && words.length !== 2) ||
       (action === "import" && (words.length < 2 || words.length > 3))) {
     return { success: false, output: PLAN_USAGE };
@@ -54,7 +54,7 @@ async function executePlanCommand(
         throw new Error("This mode cannot execute an approved plan.");
       }
       const runner = new BatchOrchestrator(config, { signal, onEvent, maxInProcessWaitMs: 60_000 });
-      const result = await runner.runAcceptedPlan(store, words[1], words[2]);
+      const result = await runner.runAcceptedPlan(store, words[1], words[2], words[3]);
       return { success: result.status === "COMPLETE", output: renderBatchResult(result) };
     }
     let draft: BatchPlanDraft;

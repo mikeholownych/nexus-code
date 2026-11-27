@@ -234,7 +234,7 @@ export class BatchOrchestrator {
     return { id: result.id, status: batchStatus(result), operation: result };
   }
 
-  async runAcceptedPlan(plans: BatchPlanStore, draftId: string, digest: string): Promise<BatchResult> {
+  async runAcceptedPlan(plans: BatchPlanStore, draftId: string, digest: string, reviewDigest?: string): Promise<BatchResult> {
     if (this.config.readOnly || this.config.approvalMode === "read-only" || this.config.dryRun) {
       throw new Error("This mode cannot execute an approved plan.");
     }
@@ -258,7 +258,7 @@ export class BatchOrchestrator {
       }
       return existing;
     };
-    if (prior && this.store.has(prior.operationId)) return existingResult(prior);
+    if (prior && this.store.has(prior.operationId)) return existingResult(plans.accept(draftId, digest, reviewDigest));
     const resources = this.options.resources ?? normalizeResources(
       { objective: draft.plan.objective, units: mapped.units },
       this.config,
@@ -274,7 +274,7 @@ export class BatchOrchestrator {
           candidates.get(source)?.some((resource) => resource.model !== candidate.model)));
       if (!eligible) throw new Error(`For unit '${unit.id}', no configured resource meets the approved requirements.`);
     }
-    const acceptance = plans.accept(draftId, digest);
+    const acceptance = plans.accept(draftId, digest, reviewDigest);
     const operation = newOperation(
       acceptance.operationId, draft.plan.objective, mapped.units, resources,
       this.options.now?.() ?? Date.now(), { ...mergeOperationPolicy(this.config.operationPolicy, undefined), maxConcurrentUnits: 1, ...mapped.policy },
