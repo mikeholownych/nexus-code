@@ -49,8 +49,8 @@ test("stale operation recovery records outstanding provider requests as unknown"
   fs.mkdirSync(home);
   const store = new OperationStore(workspace, stateDir, home);
   const state = newOperation("op-unknown-provider-outcome", "Record interrupted provider outcomes", [{ id: "unit", prompt: "bounded work" }], [resource], Date.now());
-  state.inferenceCalls = 1;
-  state.pendingInferenceCalls = [1];
+  state.inferenceCalls = 2;
+  state.pendingInferenceCalls = [1, 2];
   state.activeBootId = "previous-boot";
   state.activeHost = os.hostname();
   state.activePid = 2_147_483_647;
@@ -63,10 +63,10 @@ test("stale operation recovery records outstanding provider requests as unknown"
     executor: { run: async () => ({ kind: "completed", summary: "unexpected execution", outcome: "NOT_REQUIRED" }) },
   });
 
-  assert.equal(recovered.inferenceOutcomeUnknowns, 1);
+  assert.equal(recovered.inferenceOutcomeUnknowns, 2);
   assert.deepEqual(recovered.pendingInferenceCalls, []);
   assert.match(recovered.pauseReason ?? "", /provider request outcome\(s\) are unknown/);
-  assert.ok(recovered.events.some((event) => event.detail?.unknownProviderOutcomes === 1));
+  assert.ok(recovered.events.some((event) => event.detail?.unknownProviderOutcomes === 2));
   assert.equal(recovered.units[0].runs, 0, "stale recovery does not start new work before the operator reviews the pause");
 });
 
