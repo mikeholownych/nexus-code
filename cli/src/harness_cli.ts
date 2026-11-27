@@ -97,6 +97,7 @@ export function registerHarnessCommands(program: Command): void {
         allowUnsandboxedRealProbe: !!opts.allowUnsandboxedRealProbe,
       });
       out(opts.json ? run : `Run ${statusLine(run)}${run.reason ? `\nreason: ${run.reason}` : ""}${run.nextAction ? `\nnext: ${run.nextAction}` : ""}`, opts.json);
+      if (run.status !== "COMPLETED") process.exitCode = 1;
     });
 
   harness.command("status [id]")

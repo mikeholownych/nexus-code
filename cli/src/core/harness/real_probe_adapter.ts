@@ -1,44 +1,13 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { ensurePrivateDir } from "../durable_file.js";
-import { isSandboxAvailable, wrapSandboxedCommand } from "../../sandbox.js";
+import { wrapSandboxedCommand } from "../../sandbox.js";
+import { runProbeProcess, scrubProbeEnv } from "./probe_process.js";
+import { copyProbeTree } from "./probe_tree.js";
 import { writeProbeArtifacts } from "./probe_artifacts.js";
 import type { ProbeResult } from "./types.js";
 import type { ProbeAdapter, ProbeInput } from "./probe_adapter.js";
-
-function copyDir(src: string, dst: string): void {
-  ensurePrivateDir(dst);
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    if (entry.name === ".git" || entry.name === "node_modules") continue;
-    const s = path.join(src, entry.name);
-    const d = path.join(dst, entry.name);
-    const lst = fs.lstatSync(s);
-    if (lst.isSymbolicLink()) {
-      const real = fs.realpathSync(s);
-      const rel = path.relative(path.resolve(src), real);
-      if (rel.startsWith("..") || path.isAbsolute(rel)) throw new Error(`symlink escapes probe source: ${s}`);
-      if (fs.statSync(real).isDirectory()) copyDir(real, d);
-      else { ensurePrivateDir(path.dirname(d)); fs.copyFileSync(real, d); }
-      continue;
-    }
-    if (entry.isDirectory()) copyDir(s, d);
-    else if (entry.isFile()) { ensurePrivateDir(path.dirname(d)); fs.copyFileSync(s, d); }
-  }
-}
-
-function scrubEnv(): NodeJS.ProcessEnv {
-  const allow = new Set(["PATH","HOME","USER","SHELL","LANG","LC_ALL","TERM","TMPDIR","TMP","TEMP","NODE_ENV"]);
-  const env: NodeJS.ProcessEnv = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (allow.has(k)) env[k] = v;
-  }
-  env.NEXUS_HIR_PROBE = "1";
-  env.NEXUS_HIR_LIVE_MUTATION = "0";
-  return env;
-}
 
 export interface RealProbeAdapterOptions {
   allowUnsandboxed?: boolean;
@@ -53,12 +22,14 @@ export class RealProbeAdapter implements ProbeAdapter {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "hir-probe-"));
     const candidateWork = path.join(workspace, "candidate");
     try {
-      copyDir(input.candidatePath, candidateWork);
+      copyProbeTree(input.candidatePath, candidateWork);
       let verifierPass: boolean | null = null;
       let status: ProbeResult["status"] = "SUCCEEDED";
       let observations: string[] = [`isolated_workspace=${workspace}`];
       let score: number | null = null;
       let toolErrors = 0;
+      let stdout = "";
+      let stderr = "";
 
       const cmd = input.case.expected?.verifierCommand;
       if (cmd) {
@@ -84,31 +55,26 @@ export class RealProbeAdapter implements ProbeAdapter {
           return input.store ? writeProbeArtifacts(input.store, blocked, { stderr: blocked.observations.join("\n") + "\n" }) : blocked;
         }
         observations.push(useSandbox ? `os_sandbox=${sandboxed.engine}` : "os_sandbox=UNSANDBOXED_EXPLICIT_OVERRIDE");
-        const r = useSandbox
-          ? spawnSync(sandboxed.argv![0], sandboxed.argv!.slice(1), {
-              cwd: candidateWork,
-              encoding: "utf8",
-              timeout: input.timeoutMs,
-              env: scrubEnv(),
-              maxBuffer: 1024 * 1024,
-            })
-          : spawnSync("bash", ["-lc", cmd], {
-              cwd: candidateWork,
-              encoding: "utf8",
-              timeout: input.timeoutMs,
-              env: scrubEnv(),
-              maxBuffer: 1024 * 1024,
-            });
-        verifierPass = r.status === 0;
-        status = r.signal === "SIGTERM" ? "TIMED_OUT" : r.status === 0 ? "SUCCEEDED" : "FAILED";
-        toolErrors = r.status === 0 ? 0 : 1;
+        const probeId = `hprobe_${randomUUID()}`;
+        const containerName = useSandbox && sandboxed.engine === "docker" ? `nexus-hir-${probeId.slice(-24)}` : undefined;
+        const file = useSandbox ? sandboxed.argv![0] : (process.platform === "win32" ? "bash" : "/bin/bash");
+        const args = useSandbox ? sandboxed.argv!.slice(1) : ["-lc", cmd];
+        if (containerName && file === "docker" && args[0] === "run") args.splice(1, 0, "--name", containerName);
+        const r = await runProbeProcess(file, args, {
+          cwd: candidateWork,
+          timeoutMs: input.timeoutMs,
+          signal: input.signal,
+          env: scrubProbeEnv(),
+          ...(containerName ? { dockerContainerName: containerName } : {}),
+        });
+        stdout = r.stdout;
+        stderr = r.stderr;
+        verifierPass = r.cancelled || r.timedOut || r.error ? null : r.status === 0;
+        status = r.cancelled ? "CANCELLED" : r.timedOut ? "TIMED_OUT" : r.status === 0 ? "SUCCEEDED" : "FAILED";
+        toolErrors = status === "FAILED" || status === "TIMED_OUT" ? 1 : 0;
         observations.push(`verifier_exit=${String(r.status)}`);
-        if (r.error) observations.push(`error:${r.error.message}`);
-        score = r.status === 0 ? 1 : 0;
-        const out = (r.stdout ?? "") + ((r.stderr ?? "") ? `\n[stderr]\n${r.stderr}` : "");
-        (observations as any)._stdout = r.stdout ?? "";
-        (observations as any)._stderr = r.stderr ?? "";
-        (observations as any)._cmdOut = out;
+        if (r.error) observations.push(`error:${r.error}`);
+        score = verifierPass === null ? null : verifierPass ? 1 : 0;
       } else if (input.case.expected?.artifactPath) {
         const p = path.resolve(candidateWork, input.case.expected.artifactPath);
         const rel = path.relative(candidateWork, p);
@@ -126,8 +92,6 @@ export class RealProbeAdapter implements ProbeAdapter {
       }
 
       const endedAt = new Date().toISOString();
-      const stdout = String((observations as any)._stdout ?? "");
-      const stderr = String((observations as any)._stderr ?? (observations as any)._cmdOut ?? "");
       const cleanObs = observations.filter((o) => typeof o === "string");
       const result: ProbeResult = {
         schemaVersion: 1,

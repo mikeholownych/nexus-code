@@ -30,6 +30,12 @@ describe("/harness slash command", () => {
       const report = await executeHarnessSlashCommand(`report ${run.id}`, {} as any, new AbortController().signal);
       assert.equal(report.success, true, report.output);
       assert.match(report.output, /does not apply/i);
+
+      const blockedInit = await executeHarnessSlashCommand(`init --task-suite ${suite} --base ${base}`, {} as any, new AbortController().signal);
+      const blockedRun = JSON.parse(blockedInit.output);
+      const blocked = await executeHarnessSlashCommand(`run ${blockedRun.id}`, {} as any, new AbortController().signal);
+      assert.equal(blocked.success, false);
+      assert.equal(JSON.parse(blocked.output).status, "BLOCKED");
     } finally {
       if (old === undefined) delete process.env.NEXUS_STATE_DIR;
       else process.env.NEXUS_STATE_DIR = old;

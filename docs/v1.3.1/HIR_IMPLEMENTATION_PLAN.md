@@ -28,13 +28,12 @@ Unverified/excluded: "10x better" marketing claim.
 - CLI: `nexus harness init/run/status/show/report/cancel --json`.
 - Base harness snapshot from fixture/explicit path.
 - Candidate tree/manifest, diffing, structural gate.
-- Deterministic mock probe adapter (no network, no live model).
+- Deterministic mock probe adapter and isolated real probe adapter (no live model; verifier commands use a no-network OS sandbox by default; real probing has a separately gated unsandboxed override).
 - Scorecard/comparison, evidence-cited composition, promotion report JSON+MD.
 - Redaction, path containment, no-live-mutation invariant.
 - Deterministic tests (Node 22/24 compatible).
 
 ### Deferred (v1.3.2+ unless pulled forward)
-- Real isolated Nexus probe adapter.
 - Parallel/sequential recursion k>1.
 - Reflection drafts + active library accept/reject.
 - `/harness` REPL/TUI slash command.
@@ -50,6 +49,8 @@ Unverified/excluded: "10x better" marketing claim.
 6. **Unknown effect blocks**: ambiguous external effects require explicit operator action.
 7. **Advisory != authority**: model/rubric judgments cannot produce `apply` recommendation in v1; deterministic evidence only.
 8. **Budget caps enforced**: probe/round/time/token/concurrency caps hard-fail or block.
+9. **Verifier boundary**: task-suite verifier commands are untrusted shell input. Mock and real probes require an OS sandbox with networking disabled; only the separately gated real-probe override may run unsandboxed.
+10. **Cancellation and incomplete evidence**: operator cancellation reaches active verifier processes and is durable across CLI processes. A cancelled, blocked, or timed-out required probe cannot produce a completed run or promotion report.
 
 ## 5. Architecture
 
@@ -97,12 +98,14 @@ Proposed layout under Nexus state root:
 - [ ] `nexus harness init/status/show/report/cancel --json` work on fixture inputs.
 - [ ] Base snapshot immutable and content-hashed; candidate trees immutable.
 - [ ] Structural gate blocks path escape, policy weakening, secret persistence, oversize components.
-- [ ] Mock probe run deterministic, no network, no live model.
+- [x] Mock and real verifier commands use a no-network OS sandbox by default; missing sandbox blocks execution unless the separately gated real-probe override is explicitly enabled.
+- [x] Cancellation stops active probe process trees, persists across processes, and cannot be overwritten by a stale run snapshot.
+- [x] Blocked, cancelled, or timed-out required probes prevent a completed run and promotion report; CLI exit/result status reflects non-completion.
 - [ ] Promotion report generated with evidence refs and explicit no-apply warning.
 - [ ] No live profile/config/skill files mutated.
 - [ ] HIR artifacts redacted/safe to persist; sensitive persistence errors fail closed.
 - [ ] Existing goal/loop/operation tests pass unchanged.
-- [ ] `npm --prefix cli run build` passes; targeted tests pass.
+- [x] `npm --prefix cli run build` passes; HIR assurance, adapter, CLI, command, and sandbox-policy tests pass.
 
 ## 8. Owner Decisions (2026-11-26)
 

@@ -25,7 +25,7 @@ function getFlag(parts: string[], name: string): string | undefined {
   return i >= 0 ? parts[i + 1] : undefined;
 }
 
-export async function executeHarnessSlashCommand(args: string, _config: HarnessConfig, _signal: AbortSignal): Promise<HarnessCommandResult> {
+export async function executeHarnessSlashCommand(args: string, _config: HarnessConfig, signal: AbortSignal): Promise<HarnessCommandResult> {
   const parts = parseArgs(args.trim());
   if (parts.length === 0) return { success: false, output: USAGE };
   const stateDir = getFlag(parts, "--state-dir") ?? (process.env.NEXUS_STATE_DIR ? `${process.env.NEXUS_STATE_DIR}/harness` : undefined);
@@ -57,8 +57,8 @@ export async function executeHarnessSlashCommand(args: string, _config: HarnessC
       for (let i = 0; i < rest.length; i++) {
         if (rest[i] === "--candidate" && rest[i + 1]) { candidatePaths.push(rest[i + 1]); i++; }
       }
-      const run = await orch.run(id, { store, mock, real, candidatePath: candidatePaths[0], candidatePaths, allowUnsandboxedRealProbe });
-      return { success: run.status !== "FAILED", output: JSON.stringify(run, null, 2) };
+      const run = await orch.run(id, { store, mock, real, candidatePath: candidatePaths[0], candidatePaths, allowUnsandboxedRealProbe, signal });
+      return { success: run.status === "COMPLETED", output: JSON.stringify(run, null, 2) };
     }
     if (sub === "status") {
       const id = rest.find((t) => !t.startsWith("--"));

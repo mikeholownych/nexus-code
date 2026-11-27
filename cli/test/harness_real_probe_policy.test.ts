@@ -26,10 +26,9 @@ describe("harness real probe sandbox policy", () => {
     process.env.PATH = "/nonexistent";
     try {
       const done = await orch.run(run.id, { store, real: true });
-      assert.equal(done.status, "COMPLETED");
-      const report = store.loadReport(done.id);
-      assert.ok(report);
-      // probes should be recorded as BLOCKED/FAILED depending on policy; check probe result
+      assert.equal(done.status, "BLOCKED");
+      assert.equal(store.loadReport(done.id), undefined, "a blocked probe cannot produce a promotion report");
+      // The failed sandbox prerequisite remains visible as a probe result.
       const probeDir = path.join(store.rootDir, "probes");
       const probeFiles = fs.readdirSync(probeDir).filter(f => f.endsWith(".json") || fs.statSync(path.join(probeDir,f)).isDirectory());
       assert.ok(probeFiles.length >= 1);

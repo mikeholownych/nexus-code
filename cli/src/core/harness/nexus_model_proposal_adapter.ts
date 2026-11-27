@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { ensurePrivateDir } from "../durable_file.js";
+import { copyProbeTree } from "./probe_tree.js";
 import { AutonomousAgent } from "../../agent.js";
 import type { HarnessConfig } from "../../types.js";
 import type { TurnResult } from "../turn.js";
@@ -19,28 +20,8 @@ export interface NexusModelProposalOptions {
 }
 
 export interface NexusModelProposalAdapterOptions {
-  createAgent?: (config: HarnessConfig, workspace: string) => { run: (prompt: string) => Promise<TurnResult>; shutdown?: () => void };
+  createAgent?: (config: HarnessConfig, workspace: string) => { run: (prompt: string, signal?: AbortSignal) => Promise<TurnResult>; shutdown?: () => void };
   resolveConfig?: (ctx: ProposalContext) => NexusModelProposalOptions | undefined;
-}
-
-function copyDir(src: string, dst: string): void {
-  ensurePrivateDir(dst);
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    if (entry.name === ".git" || entry.name === "node_modules") continue;
-    const s = path.join(src, entry.name);
-    const d = path.join(dst, entry.name);
-    const lst = fs.lstatSync(s);
-    if (lst.isSymbolicLink()) {
-      const real = fs.realpathSync(s);
-      const rel = path.relative(path.resolve(src), real);
-      if (rel.startsWith("..") || path.isAbsolute(rel)) throw new Error(`symlink escapes source: ${s}`);
-      if (fs.statSync(real).isDirectory()) copyDir(real, d);
-      else { ensurePrivateDir(path.dirname(d)); fs.copyFileSync(real, d); }
-      continue;
-    }
-    if (entry.isDirectory()) copyDir(s, d);
-    else if (entry.isFile()) { ensurePrivateDir(path.dirname(d)); fs.copyFileSync(s, d); }
-  }
 }
 
 function extractJson(text: string): any | undefined {
@@ -59,7 +40,7 @@ export class NexusModelProposalAdapter implements ProposalAdapter {
     const work = path.join(tempRoot, "work");
     const home = path.join(tempRoot, "home");
     try {
-      copyDir(ctx.baseTree, work);
+      copyProbeTree(ctx.baseTree, work);
       ensurePrivateDir(home);
       const stateDir = path.join(home, ".nexus", "state");
       const agentCfg: HarnessConfig = {
@@ -81,7 +62,7 @@ export class NexusModelProposalAdapter implements ProposalAdapter {
       process.env.NEXUS_STATE_DIR = stateDir;
       let turn: TurnResult | undefined;
       try {
-        const agent = this.opts.createAgent ? this.opts.createAgent(agentCfg, work) : (() => { const a = new AutonomousAgent(agentCfg, 1, { durable: false }); return { run: (p: string) => a.run(p), shutdown: () => a.shutdown() }; })();
+        const agent = this.opts.createAgent ? this.opts.createAgent(agentCfg, work) : (() => { const a = new AutonomousAgent(agentCfg, 1, { durable: false }); return { run: (p: string, signal?: AbortSignal) => a.run(p, undefined, { signal }), shutdown: () => a.shutdown() }; })();
         try {
           const prompt = [
             "You are proposing an improved harness candidate for a Harness Improvement Run.",
@@ -96,7 +77,7 @@ export class NexusModelProposalAdapter implements ProposalAdapter {
             `Prior probe observations: ${JSON.stringify(ctx.priorProbes.slice(-10).map((p) => ({ caseId: p.caseId, status: p.status, verifierPass: p.metrics.verifierPass, observations: p.observations.slice(-3) })))}`,
             `Relevant library lessons (advisory, do not auto-apply): ${JSON.stringify((ctx.libraryEntries ?? []).slice(-5).map((e) => ({ id: e.id, status: e.status, confidence: e.confidence, statement: e.statement })))}`,
           ].join("\n");
-          turn = await agent.run(prompt);
+          turn = await agent.run(prompt, ctx.signal);
         } finally {
           try { agent.shutdown?.(); } catch {}
         }
@@ -120,7 +101,7 @@ export class NexusModelProposalAdapter implements ProposalAdapter {
         }
       }
       const outDir = path.join(tempRoot, "candidate");
-      copyDir(work, outDir);
+      copyProbeTree(work, outDir);
       return [{
         candidatePath: outDir,
         rationale: typeof parsed?.rationale === "string" ? parsed.rationale : "model proposal",

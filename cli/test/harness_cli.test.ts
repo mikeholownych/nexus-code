@@ -51,5 +51,12 @@ describe("nexus harness CLI", () => {
     const cancel = spawnSync(process.execPath, [cliBin(), "harness", "cancel", run2.id, "--state-dir", state, "--json"], { encoding: "utf8" });
     assert.equal(cancel.status, 0, cancel.stderr + cancel.stdout);
     assert.equal(JSON.parse(cancel.stdout).status, "CANCELLED");
+
+    const blockedInit = spawnSync(process.execPath, [cliBin(), "harness", "init", "--task-suite", suite, "--base", base, "--state-dir", state, "--json"], { encoding: "utf8" });
+    assert.equal(blockedInit.status, 0, blockedInit.stderr + blockedInit.stdout);
+    const blockedId = JSON.parse(blockedInit.stdout).id;
+    const blockedRun = spawnSync(process.execPath, [cliBin(), "harness", "run", blockedId, "--state-dir", state, "--json"], { encoding: "utf8" });
+    assert.equal(blockedRun.status, 1, blockedRun.stderr + blockedRun.stdout);
+    assert.equal(JSON.parse(blockedRun.stdout).status, "BLOCKED");
   });
 });

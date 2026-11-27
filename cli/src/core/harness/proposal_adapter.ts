@@ -2,6 +2,7 @@ import type { HarnessImprovementRun, HarnessLibraryEntry, HirTaskSuite, ProbeRes
 import type { ReflectionSummary } from "./reflection.js";
 
 export interface ProposalContext {
+  signal?: AbortSignal;
   run: HarnessImprovementRun;
   suite: HirTaskSuite;
   baseTree: string;

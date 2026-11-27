@@ -28,6 +28,7 @@ export class HarnessStore {
 
   runDir(runId: string): string { return path.join(this.rootDir, "runs", safeId(runId)); }
   runPath(runId: string): string { return path.join(this.runDir(runId), "run.json"); }
+  cancellationPath(runId: string): string { return path.join(this.runDir(runId), "cancel.json"); }
   eventsPath(runId: string): string { return path.join(this.runDir(runId), "events.jsonl"); }
   evidencePath(runId: string): string { return path.join(this.runDir(runId), "evidence.jsonl"); }
   reportJsonPath(runId: string): string { return path.join(this.runDir(runId), "report.json"); }
@@ -37,6 +38,12 @@ export class HarnessStore {
   probeDir(id: string): string { return path.join(this.rootDir, "probes", safeId(id)); }
 
   saveRun(run: HarnessImprovementRun): void {
+    if (run.status !== "CANCELLED" && this.cancellationRequested(run.id)) {
+      run.status = "CANCELLED";
+      run.reason = "Cancellation requested by operator; any in-flight probe outcome is retained as incomplete.";
+      run.nextAction = "Start a new HIR run if more evaluation is needed.";
+      run.updatedAt = nowIso();
+    }
     assertValid("run", run, validateHirRun);
     const dir = this.runDir(run.id);
     ensurePrivateDir(dir);
@@ -47,6 +54,16 @@ export class HarnessStore {
   loadRun(runId: string): HarnessImprovementRun {
     const raw = JSON.parse(fs.readFileSync(this.runPath(runId), "utf8"));
     return assertValid("run", raw, validateHirRun);
+  }
+
+  requestCancellation(runId: string): void {
+    const dir = this.runDir(runId);
+    ensurePrivateDir(dir);
+    writeFileDurably(this.cancellationPath(runId), JSON.stringify({ requestedAt: nowIso() }) + "\n", 0o600);
+  }
+
+  cancellationRequested(runId: string): boolean {
+    return fs.existsSync(this.cancellationPath(runId));
   }
 
   listRuns(): HarnessImprovementRun[] {

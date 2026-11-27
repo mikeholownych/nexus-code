@@ -18,6 +18,7 @@ import { recordEvidence, recordEvent } from "./events.js";
 import { reflectCandidate, type ReflectionSummary } from "./reflection.js";
 import { NoopProposalAdapter, type ProposalAdapter } from "./proposal_adapter.js";
 import { NexusModelProposalAdapter } from "./nexus_model_proposal_adapter.js";
+import { copyProbeTree } from "./probe_tree.js";
 import { assertValid, validateHirRun } from "./schema.js";
 import type { HarnessCandidate, HarnessImprovementRun, ProbeResult, ScorecardEntry } from "./types.js";
 
@@ -47,6 +48,7 @@ export interface HirRunOptions {
   adapter?: ProbeAdapter;
   proposalAdapter?: ProposalAdapter;
   allowUnsandboxedRealProbe?: boolean;
+  signal?: AbortSignal;
   nexusAgentConfig?: { model: string; endpoint: string; apiKey?: string; maxSteps?: number; temperature?: number; sandbox?: "auto" | "bwrap" | "docker" | "none"; network?: boolean };
   nexusProposalConfig?: { model: string; endpoint: string; apiKey?: string; maxSteps?: number; temperature?: number; sandbox?: "auto" | "bwrap" | "docker" | "none"; network?: boolean };
 }
@@ -69,33 +71,13 @@ function isWithin(root: string, target: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
-function copyDirSync(src: string, dst: string): void {
-  ensurePrivateDir(dst);
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    if (entry.name === ".git" || entry.name === "node_modules") continue;
-    const s = path.join(src, entry.name);
-    const d = path.join(dst, entry.name);
-    const lst = fs.lstatSync(s);
-    if (lst.isSymbolicLink()) {
-      const real = fs.realpathSync(s);
-      const rel = path.relative(path.resolve(src), real);
-      if (rel.startsWith("..") || path.isAbsolute(rel)) throw new Error(`symlink escapes source: ${s}`);
-      if (fs.statSync(real).isDirectory()) copyDirSync(real, d);
-      else { ensurePrivateDir(path.dirname(d)); fs.copyFileSync(real, d); }
-      continue;
-    }
-    if (entry.isDirectory()) copyDirSync(s, d);
-    else if (entry.isFile()) { ensurePrivateDir(path.dirname(d)); fs.copyFileSync(s, d); }
-  }
-}
-
 function ensureCandidateTree(store: HarnessStore, candidateId: string, sourcePath: string): string {
   const abs = path.resolve(sourcePath);
   if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) throw new Error(`candidate path missing or not directory: ${abs}`);
   const dir = store.candidateDir(candidateId);
   const treeDir = path.join(dir, "tree");
   fs.rmSync(treeDir, { recursive: true, force: true });
-  copyDirSync(abs, treeDir);
+  copyProbeTree(abs, treeDir);
   return treeDir;
 }
 
@@ -186,8 +168,24 @@ export class HarnessOrchestrator {
 
   async run(runId: string, opts: HirRunOptions = {}): Promise<HarnessImprovementRun> {
     const store = opts.store ?? this.store;
+    const cancellation = new AbortController();
+    const poll = setInterval(() => {
+      if (store.cancellationRequested(runId)) cancellation.abort(new Error("HIR cancellation requested"));
+    }, 50);
+    poll.unref?.();
+    const signal = opts.signal ? AbortSignal.any([opts.signal, cancellation.signal]) : cancellation.signal;
+    try {
+      return await this.runInternal(runId, { ...opts, store, signal });
+    } finally {
+      clearInterval(poll);
+    }
+  }
+
+  private async runInternal(runId: string, opts: HirRunOptions): Promise<HarnessImprovementRun> {
+    const store = opts.store ?? this.store;
     const run = store.loadRun(runId);
     if (["COMPLETED", "CANCELLED", "FAILED"].includes(run.status)) return run;
+    if (opts.signal?.aborted || store.cancellationRequested(runId)) return this.cancelInStore(runId, store);
     if (!opts.mock && !opts.real && !opts.nexusAgent && !opts.adapter) {
       run.status = "BLOCKED";
       run.reason = "Select a probe adapter: use --mock, --real, or --nexus-agent (deterministic oracle required).";
@@ -222,6 +220,7 @@ export class HarnessOrchestrator {
       const uniqueCandidates = Array.from(new Set(candidateInputs)).slice(0, run.budgets.maxCandidatesPerRound);
       const gates = [];
       for (const candidatePath of uniqueCandidates) {
+        if (opts.signal?.aborted || store.cancellationRequested(runId)) return this.cancelInStore(runId, store);
         const gate = await gateCandidateTree({ baseManifest, candidatePath, policy: run.policy });
         gates.push({ candidatePath, status: gate.status, findings: gate.findings.length });
       }
@@ -253,6 +252,7 @@ export class HarnessOrchestrator {
     let usedCandidates = 0;
 
     for (let round = 1; round <= run.budgets.maxRounds; round++) {
+      if (opts.signal?.aborted || store.cancellationRequested(runId)) return this.cancelInStore(runId, store);
       const remaining = totalCandidateBudget - usedCandidates;
       if (remaining <= 0) {
         recordEvent(store, run.id, "hir.warning", "Candidate budget exhausted before round", { round, totalCandidateBudget });
@@ -262,6 +262,7 @@ export class HarnessOrchestrator {
       if (round > 1) {
         const libraryEntries = retrieveRelevantLibraryEntries(store, { baseHarnessId: baseManifest.id, limit: 5, statuses: ["accepted", "draft"] });
         const proposals = await proposalAdapter.propose({
+          signal: opts.signal,
           run,
           suite,
           baseTree,
@@ -272,6 +273,7 @@ export class HarnessOrchestrator {
           priorReflections: allReflections,
           libraryEntries,
         });
+        if (opts.signal?.aborted || store.cancellationRequested(runId)) return this.cancelInStore(runId, store);
         if (proposals.length > 0) {
           roundInputs = proposals.map((p) => path.resolve(p.candidatePath));
           recordEvent(store, run.id, "hir.proposals", `Round ${round} received ${proposals.length} proposal(s)`, { round, proposals: proposals.map((p) => ({ candidatePath: p.candidatePath, source: p.source, rationale: p.rationale, targetWeaknesses: p.targetWeaknesses })) });
@@ -300,6 +302,7 @@ export class HarnessOrchestrator {
 
       const roundCandidates: HarnessCandidate[] = [];
       for (const candidatePath of capped) {
+        if (opts.signal?.aborted || store.cancellationRequested(runId)) return this.cancelInStore(runId, store);
         const candidateId = `hcand_${randomUUID()}`;
         const gate = await gateCandidateTree({ baseManifest, candidatePath, policy: run.policy });
         recordEvidence(store, run.id, { kind: "gate", subjectId: candidateId, summary: `Gate ${gate.status}`, refs: [], confidence: "high", deterministic: true });
@@ -370,19 +373,30 @@ export class HarnessOrchestrator {
             if (run.actualUsage.probes + 1 > run.budgets.maxProbes) {
               run.status = "BLOCKED"; run.reason = "HIR probe budget exhausted"; run.nextAction = "Increase maxProbes or reduce suite/candidates/rounds."; break;
             }
-            b = await adapter.run({ runId: run.id, candidateId: "base", candidatePath: baseTree, case: c, timeoutMs: run.budgets.maxProbeWallClockMs, store });
-            baseProbeByCase.set(c.id, b);
+            b = await adapter.run({ runId: run.id, candidateId: "base", candidatePath: baseTree, case: c, timeoutMs: run.budgets.maxProbeWallClockMs, store, signal: opts.signal });
             store.saveProbe(b);
             run.probeIds.push(b.id);
             roundRecord.probeIds.push(b.id);
             if (!roundRecord.baselineProbeIds.includes(b.id)) roundRecord.baselineProbeIds.push(b.id);
             run.actualUsage.probes += 1;
             recordEvidence(store, run.id, { kind: "probe", subjectId: b.id, summary: `base ${c.id} ${b.status}`, refs: [b.id], confidence: "high", deterministic: b.metrics.verifierPass !== null });
+            if (opts.signal?.aborted || store.cancellationRequested(runId) || b.status === "CANCELLED") return this.cancelInStore(runId, store);
+            if (b.status === "BLOCKED" || b.status === "TIMED_OUT" || (b.status === "FAILED" && b.metrics.verifierPass === null)) {
+              run.status = "BLOCKED";
+              run.reason = `Required baseline probe ${b.id} did not complete with usable evidence (${b.status}).`;
+              run.nextAction = "Resolve the probe failure or sandbox requirement, then start a new HIR run.";
+              run.actualUsage.wallClockMs += Date.now() - started;
+              run.updatedAt = nowIso();
+              store.saveRun(run);
+              recordEvent(store, run.id, "hir.blocked", run.reason, { probeId: b.id, probeStatus: b.status });
+              return run;
+            }
+            baseProbeByCase.set(c.id, b);
           }
           if (run.actualUsage.probes + 1 > run.budgets.maxProbes) {
             run.status = "BLOCKED"; run.reason = "HIR probe budget exhausted"; run.nextAction = "Increase maxProbes or reduce suite/candidates/rounds."; break;
           }
-          const p = await adapter.run({ runId: run.id, candidateId: candidate.id, candidatePath: candidateTree, case: c, timeoutMs: run.budgets.maxProbeWallClockMs, store });
+          const p = await adapter.run({ runId: run.id, candidateId: candidate.id, candidatePath: candidateTree, case: c, timeoutMs: run.budgets.maxProbeWallClockMs, store, signal: opts.signal });
           candProbes.push(p);
           baseProbes.push(b);
           store.saveProbe(p);
@@ -390,6 +404,17 @@ export class HarnessOrchestrator {
           roundRecord.probeIds.push(p.id);
           run.actualUsage.probes += 1;
           recordEvidence(store, run.id, { kind: "probe", subjectId: p.id, summary: `candidate ${candidate.id} ${c.id} ${p.status}`, refs: [p.id], confidence: "high", deterministic: p.metrics.verifierPass !== null });
+          if (opts.signal?.aborted || store.cancellationRequested(runId) || p.status === "CANCELLED") return this.cancelInStore(runId, store);
+          if (p.status === "BLOCKED" || p.status === "TIMED_OUT" || (p.status === "FAILED" && p.metrics.verifierPass === null)) {
+            run.status = "BLOCKED";
+            run.reason = `Required candidate probe ${p.id} did not complete with usable evidence (${p.status}).`;
+            run.nextAction = "Resolve the probe failure or sandbox requirement, then start a new HIR run.";
+            run.actualUsage.wallClockMs += Date.now() - started;
+            run.updatedAt = nowIso();
+            store.saveRun(run);
+            recordEvent(store, run.id, "hir.blocked", run.reason, { probeId: p.id, probeStatus: p.status });
+            return run;
+          }
         }
         const scorecard = compareProbes(baseProbes, candProbes, candidate.id);
         roundRecord.scorecard.push(...scorecard);
@@ -415,6 +440,7 @@ export class HarnessOrchestrator {
       }
     }
 
+    if (opts.signal?.aborted || store.cancellationRequested(runId)) return this.cancelInStore(runId, store);
     const rank = (r: "apply" | "review" | "reject" | "defer") => ({ apply: 4, review: 3, defer: 2, reject: 1 }[r]);
     const betterCount = (sc: ScorecardEntry[]) => sc.filter((s) => s.dimension === "correctness" && s.verdict === "better").length;
     const worseCount = (sc: ScorecardEntry[]) => sc.filter((s) => s.dimension === "correctness" && s.verdict === "worse").length;
@@ -435,6 +461,7 @@ export class HarnessOrchestrator {
       candidates: candidates.map((c) => ({ id: c.id, diffRef: c.diffRef, gateStatus: c.gate.status })),
     });
     const md = renderPromotionReportMd(report);
+    if (opts.signal?.aborted || store.cancellationRequested(runId)) return this.cancelInStore(runId, store);
     store.saveReport(run.id, report, md);
     run.promotionReportId = report.id;
     draftLibraryEntriesFromReport(store, report);
@@ -451,13 +478,18 @@ export class HarnessOrchestrator {
   }
 
   cancel(runId: string, reason = "Cancelled by operator"): HarnessImprovementRun {
-    const run = this.store.loadRun(runId);
+    return this.cancelInStore(runId, this.store, reason);
+  }
+
+  private cancelInStore(runId: string, store: HarnessStore, reason = "Cancelled by operator"): HarnessImprovementRun {
+    const run = store.loadRun(runId);
     if (["COMPLETED", "FAILED", "CANCELLED"].includes(run.status)) return run;
+    store.requestCancellation(runId);
     run.status = "CANCELLED";
     run.reason = reason;
     run.updatedAt = nowIso();
-    this.store.saveRun(run);
-    recordEvent(this.store, run.id, "hir.cancelled", reason);
+    store.saveRun(run);
+    recordEvent(store, run.id, "hir.cancelled", reason);
     return run;
   }
 }
