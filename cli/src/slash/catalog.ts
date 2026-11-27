@@ -137,7 +137,7 @@ export const SLASH_COMMANDS: SlashSpec[] = [
   { name: "image", usage: "/image <path> [prompt]", summary: "Send an image to the vision model", cancellable: true },
   { name: "tdd", usage: "/tdd <issue>", summary: "[experimental] Run a RED → GREEN → REFACTOR cycle", cancellable: true },
   { name: "team", usage: "/team <role|full> [--independent-review] <objective>", summary: "Run a role or the full team as a durable operation (researcher, architect, implementer, tester, reviewer)" },
-  { name: "batch", usage: "/batch <spec-file> | run|validate <spec-file> | status|list|pause|resume|cancel|results [id]", summary: "Validate and run bounded durable work batches through the operation scheduler", cancellable: true },
+  { name: "batch", usage: "/batch <spec-file> | run|validate <spec-file> | status|list|pause|resume|cancel|results [id] | plan <objective>", summary: "Propose plans and manage durable work batches", cancellable: true },
   { name: "goal", usage: "/goal <objective> | status|list|show|pause|resume|cancel|requirements|evidence", summary: "Run and track a durable objective through verified team work", cancellable: true },
   { name: "loop", usage: "/loop [--until <condition>] [--max-iterations <n>] [--max-duration <duration>] <objective> | status|list|pause|resume|stop [id] | reconcile <id> --confirm-no-effect", summary: "Run a bounded, durable iteration loop with deterministic verification", cancellable: true },
   { name: "theme", usage: "/theme [name]", summary: "Show or save the colour theme" },

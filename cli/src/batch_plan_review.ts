@@ -41,9 +41,12 @@ function modelIdentity(model: string): string {
 
 export function isDistinctPlanReviewer(
   planner: BatchPlanProvenance,
-  reviewer: { id: string; model: string },
+  reviewer: { id: string; model: string; effectiveModel?: string },
 ): boolean {
-  return planner.resourceId !== reviewer.id && modelIdentity(planner.model) !== modelIdentity(reviewer.model);
+  const plannerModels = [planner.model, planner.effectiveModel].map((model) => model && modelIdentity(model));
+  const reviewerModels = [reviewer.model, reviewer.effectiveModel];
+  return planner.resourceId !== reviewer.id &&
+    reviewerModels.every((model) => !model || !plannerModels.includes(modelIdentity(model)));
 }
 
 export function selectBatchPlanReviewer(
@@ -66,7 +69,7 @@ function reviewList<T>(label: string, value: unknown, parse: (item: unknown) => 
 
 function reviewText(label: string, value: unknown): string {
   const result = text(label, value, 1200).trim();
-  if (!result || /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(result)) {
+  if (!result || /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(result)) {
     throw new Error(`${label} contains empty text or unsupported control characters`);
   }
   return result;

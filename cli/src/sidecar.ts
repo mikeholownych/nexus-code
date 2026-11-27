@@ -42,7 +42,9 @@ export function readOnlySlashAllowed(command: string, args: string): boolean {
   if (["help", "status", "tokens", "diff", "git", "checkpoints", "audit", "receipt", "details", "sessions", "exit", "mode", "clear", "history", "skills"].includes(name)) return true;
   if (name === "checkpoint") return value === "diff" || value.startsWith("diff ");
   if (name === "worktree") return isReadOnlyWorktreeArgs(value);
-  if (name === "plan" || name === "requirements" || name === "knowledge") return !value;
+  if (name === "batch") return /^(?:plan\s+show)(?:\s|$)/.test(value);
+  if (name === "knowledge") return !value || /^(?:suggestions|show-suggestion)(?:\s|$)/.test(value);
+  if (name === "plan" || name === "requirements") return !value;
   if (name === "skill") return !value || !/^(init)(?:\s|$)/.test(value);
   if (name === "theme") return !value;
   if (name === "context") return /^(?:inspect(?:\s+--json)?|maturity(?:\s+--json)?)$/.test(value);

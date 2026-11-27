@@ -1,5 +1,5 @@
 /** Review-only graph records. These records are deliberately incompatible with runnable batch specifications. */
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isDistinctPlanReviewer, type BatchPlanReview, validatePlanReview } from "./batch_plan_review.js";
@@ -17,7 +17,7 @@ export const MAX_BATCH_PLAN_BYTES = 256 * 1024;
 const MAX_UNITS = 32;
 const MAX_CHECKS = 8;
 const UNIT_ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
-const DRAFT_ID = /^plan-[a-f0-9]{24}$/;
+const DRAFT_ID = /^plan-(?:[a-f0-9]{24}|[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12})$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 
 export interface PlanCheck {
@@ -61,6 +61,7 @@ export interface BatchPlanProvenance {
   resourceId: string;
   model: string;
   disclosure: "local" | "cloud";
+  effectiveModel?: string;
   fallbackFrom?: string;
 }
 
@@ -83,7 +84,7 @@ function items(label: string, value: unknown, max: number, min = 0): unknown[] {
 
 function prose(label: string, value: unknown, max = 1000): string {
   const result = text(label, value, max).trim();
-  if (!result || /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(result)) {
+  if (!result || /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(result)) {
     throw new Error(`${label} contains empty text or unsupported control characters`);
   }
   return result;
@@ -271,11 +272,12 @@ function sha256(value: string): string {
 
 function parseProvenance(value: unknown): BatchPlanProvenance | undefined {
   if (value === undefined) return undefined;
-  const record = strictObject("plan provenance", value, ["resourceId", "model", "disclosure"], ["fallbackFrom"]);
+  const record = strictObject("plan provenance", value, ["resourceId", "model", "disclosure"], ["effectiveModel", "fallbackFrom"]);
   const provenance = {
     resourceId: prose("plan resource id", record.resourceId, 512),
     model: prose("plan model", record.model, 512),
     disclosure: oneOf("plan disclosure", record.disclosure, ["local", "cloud"] as const),
+    ...(record.effectiveModel === undefined ? {} : { effectiveModel: prose("provider-reported model", record.effectiveModel, 512) }),
     ...(record.fallbackFrom === undefined ? {} : { fallbackFrom: prose("previous plan resource id", record.fallbackFrom, 512) }),
   };
   if (JSON.stringify(redactForPersistence(provenance)) !== JSON.stringify(provenance)) {
@@ -298,7 +300,7 @@ export class BatchPlanStore {
   }
 
   private file(id: string, kind: "draft" | "review" = "draft"): string {
-    text("draft id", id, 29, DRAFT_ID);
+    text("draft id", id, 41, DRAFT_ID);
     const resolved = realpathAllowingMissing(this.directory);
     if (isPathWithin(resolved, this.workspace)) throw new Error("batch plan state must be outside the workspace");
     return path.join(resolved, kind === "review" ? `${id}.review.json` : `${id}.json`);
@@ -307,7 +309,7 @@ export class BatchPlanStore {
   create(value: unknown, provenance?: BatchPlanProvenance): BatchPlanDraft {
     const parsedProvenance = parseProvenance(provenance);
     const plan = validateBatchPlan(value, this.workspace);
-    const id = `plan-${randomBytes(12).toString("hex")}`;
+    const id = `plan-${randomUUID()}`;
     const snapshot: Omit<BatchPlanDraft, "digest"> = {
       version: 1,
       id,
@@ -347,7 +349,7 @@ export class BatchPlanStore {
     const draft = this.read(id);
     if (draft.digest !== planDigest) throw new Error("batch plan review digest does not match the draft");
     const reviewer = parseProvenance(provenance);
-    if (!reviewer || !draft.provenance || !isDistinctPlanReviewer(draft.provenance, { id: reviewer.resourceId, model: reviewer.model })) {
+    if (!reviewer || !draft.provenance || !isDistinctPlanReviewer(draft.provenance, { ...reviewer, id: reviewer.resourceId })) {
       throw new Error("batch plan review requires a known planner and a distinct reviewer resource and model");
     }
     const snapshot: Omit<BatchPlanReview, "digest"> = {
@@ -371,7 +373,7 @@ export class BatchPlanStore {
     ]);
     if (record.version !== 1 || record.planDigest !== draft.digest) throw new Error("batch plan review digest does not match the draft");
     const provenance = parseProvenance(record.provenance);
-    if (!provenance || !draft.provenance || !isDistinctPlanReviewer(draft.provenance, { id: provenance.resourceId, model: provenance.model })) {
+    if (!provenance || !draft.provenance || !isDistinctPlanReviewer(draft.provenance, { ...provenance, id: provenance.resourceId })) {
       throw new Error("batch plan review requires a known planner and a distinct reviewer resource and model");
     }
     const snapshot: Omit<BatchPlanReview, "digest"> = {

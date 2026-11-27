@@ -767,6 +767,11 @@ export class LocalLlmClient {
     return this.lastUsageReport;
   }
 
+  /** Model identifier reported by the provider for the most recent request, when supplied. */
+  public getLastEffectiveModel(): string | undefined {
+    return this.pending?.effectiveModel;
+  }
+
   /** Whether the connection supports native tool calling (Responses, Anthropic, or OpenAI-compatible accepting tools). */
   public supportsNativeTools(): boolean {
     if (wireProtocol(this.conn.protocol).nativeTools) return true;

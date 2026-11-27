@@ -19,7 +19,7 @@ test("batch planning saves an inspectable proposal without creating a batch", as
     version: 1,
     objective: "Inspect project conventions",
     acceptanceCriteria: ["Record the package manager"],
-    checks: [{ id: "final", command: "git status --short", cwd: ".", expectation: "exit 0", timeoutSeconds: 10, required: true }], risks: [], assumptions: [], blockers: [],
+    checks: [{ id: "final", command: "printf \\raw", cwd: ".", expectation: "exit 0", timeoutSeconds: 10, required: true }], risks: [], assumptions: [], blockers: [],
     units: [{
       id: "inspect", title: "Inspect conventions", objective: "Find package manager",
       role: "researcher", mode: "read", required: true, dependsOn: [], scope: ["."],
@@ -36,6 +36,7 @@ test("batch planning saves an inspectable proposal without creating a batch", as
   assert.match(outcome.output, /Proposal saved/);
   const envelope = JSON.parse(outcome.output.slice(outcome.output.indexOf("\n") + 1));
   assert.equal(envelope.plan.units[0].id, "inspect");
+  assert.equal(envelope.plan.checks[0].command, plan.checks[0].command);
   assert.equal(envelope.provenance.model, "test-planner");
   assert.deepEqual(await executeBatchCommand(`plan show ${envelope.id}`, config), outcome);
   assert.match((await executeBatchCommand("list", config)).output, /No batches/);

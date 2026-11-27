@@ -27,3 +27,9 @@ test("review selection requires distinct qualified context-fitting resources and
   assert.equal(selectBatchPlanReviewer(alternatives, planner, disclosure, { allowCloud: false, minContext: 1024 }), undefined);
   assert.equal(selectBatchPlanReviewer(alternatives, planner, disclosure, { allowCloud: true, minContext: 1024 }), cloud);
 });
+
+test("review selection rejects the effective planner model even when it was requested under an alias", () => {
+  const planner = { resourceId: "primary", model: "writing-alias", effectiveModel: "base-model", disclosure: "local" } as const;
+  const same = descriptor("reviewer", "BASE-MODEL");
+  assert.equal(selectBatchPlanReviewer([same], planner, () => "local", { allowCloud: false }), undefined);
+});

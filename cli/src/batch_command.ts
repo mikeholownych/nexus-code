@@ -83,6 +83,9 @@ async function executePlanCommand(
       workspace: safeTerminal(draft.workspace),
       ...(review ? { review } : {}),
     }, null, 2)
+      // The generic terminal formatter recognizes literal \r and \u escape spellings.
+      // Use JSON's equivalent code point form for a literal backslash.
+      .replace(/\\\\/g, "\\u005c")
       .split("\n").map(visibleControls).join("\n");
     const status = review ? "Advisory review recorded." : "Proposal saved for review.";
     return { success: true, output: `${status}\n${normalized}` };

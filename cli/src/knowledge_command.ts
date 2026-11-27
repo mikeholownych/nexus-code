@@ -4,6 +4,7 @@ import { classifyLocality } from "./core/egress.js";
 import { requestJsonProposal } from "./core/proposal_inference.js";
 import { knowledgeSessionExcerpts } from "./knowledge_session_evidence.js";
 import { KnowledgeSuggestions, type KnowledgeSuggestion } from "./knowledge_suggestions.js";
+import { disclosureClass } from "./providers.js";
 import type { HarnessConfig } from "./types.js";
 import { isWorkspaceTrusted } from "./workspace_trust.js";
 
@@ -39,7 +40,8 @@ export async function executeKnowledgeSuggestionCommand(args: string, config: Ha
   if (!isKnowledgeSuggestionCommand(args)) return undefined;
   const [word, value, ...extra] = args.trim().split(/\s+/);
   const action = word.toLowerCase();
-  const store = new KnowledgeSuggestions(config.workspace, { readOnly: config.readOnly });
+  const readOnly = config.readOnly || config.approvalMode === "read-only" || config.dryRun;
+  const store = new KnowledgeSuggestions(config.workspace, { readOnly });
   if (extra.length) throw new Error("Expected one argument at most for this knowledge suggestion command.");
   if (action === "suggestions" || action === "reconcile-suggestions") {
     if (value) throw new Error("This knowledge suggestion command takes no arguments.");
@@ -49,9 +51,10 @@ export async function executeKnowledgeSuggestionCommand(args: string, config: Ha
     return { output: rows.join("\n") || "No knowledge suggestions in this workspace.", success: true };
   }
   if (action === "suggest") {
-    if (config.readOnly) throw new Error("Read-only mode blocks generating knowledge suggestions.");
+    if (readOnly) throw new Error("Read-only mode blocks generating knowledge suggestions.");
     if (!(options.workspaceTrusted ?? isWorkspaceTrusted(config.workspace))) throw new Error("Knowledge suggestions require a trusted workspace.");
-    if (config.provider || !["HOST_LOCAL", "LOCAL_APPLIANCE"].includes(classifyLocality(config.endpoint).boundary)) {
+    if (config.provider || disclosureClass(config.endpoint, config.provider, config.cloudRoutedOrigins) !== "local" ||
+        !["HOST_LOCAL", "LOCAL_APPLIANCE"].includes(classifyLocality(config.endpoint).boundary)) {
       throw new Error("Knowledge suggestions require a configured local inference endpoint.");
     }
     if (!value) throw new Error("Usage: /knowledge suggest <saved-session-id>");
@@ -61,7 +64,7 @@ export async function executeKnowledgeSuggestionCommand(args: string, config: Ha
     const evidence = new Map(excerpts.map((excerpt) => [excerpt.ref, excerpt.evidence]));
     const input = JSON.stringify(excerpts.map(({ ref, content, evidence: source }) => ({ ref, content, source: source.source })));
     const generate = options.generate ?? ((contract: string, text: string, signal?: AbortSignal) =>
-      requestJsonProposal(new LocalLlmClient({ ...config, pinEndpoint: true }), contract, text, signal));
+      requestJsonProposal(new LocalLlmClient({ ...config, pinEndpoint: true, readOnly: true }), contract, text, signal));
     const candidate = await generate(CONTRACT, input, options.signal);
     options.signal?.throwIfAborted();
     if (candidate === null) return { output: "No reusable knowledge suggested for this session.", success: true };

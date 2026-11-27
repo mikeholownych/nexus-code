@@ -1,4 +1,4 @@
-import type { BatchPlanDraft } from "./batch_plan.js";
+import type { BatchPlanDraft, BatchPlanProvenance } from "./batch_plan.js";
 import { BATCH_PLAN_REVIEW_CONTRACT, selectBatchPlanReviewer } from "./batch_plan_review.js";
 import { InferenceError, LocalLlmClient } from "./client.js";
 import { AgentWorkUnitExecutor, resourcesFromConfig } from "./core/operation_runner.js";
@@ -41,26 +41,41 @@ function proposalClients(contract: string, input: string, config: HarnessConfig,
   return { clients, resources: [...clients.values()].map((entry) => entry.resource) };
 }
 
+function inferenceProvenance(id: string, client: LocalLlmClient, fallbackFrom?: string): BatchPlanProvenance {
+  const effectiveModel = client.getLastEffectiveModel();
+  return {
+    resourceId: id, model: client.getModel(), disclosure: client.disclosureOf(),
+    ...(effectiveModel ? { effectiveModel } : {}),
+    ...(fallbackFrom ? { fallbackFrom } : {}),
+  };
+}
+
 export async function generateBatchPlanProposal(input: string, config: HarnessConfig, signal?: AbortSignal) {
   const timeout = AbortSignal.timeout(60_000);
   const deadline = signal ? AbortSignal.any([signal, timeout]) : timeout;
   deadline.throwIfAborted();
   const { clients, resources } = proposalClients(PROPOSAL_CONTRACT, input, config, "batch-planner");
-  let fallbackFrom: string | undefined;
+
+  let lastFailure: { resourceId: string; error: InferenceError } | undefined;
+  const attempted = new Set<string>();
   for (const disclosure of ["local", "cloud"] as const) {
-    const candidates = resources.filter((resource) => clients.get(resource.id)!.client.disclosureOf() === disclosure);
-    const resource = new ResourceRegistry(candidates).select({ qualification: "architecture" }).chosen;
-    if (!resource) continue;
-    const { client } = clients.get(resource.id)!;
-    try {
-      const plan = await requestJsonProposal(client, PROPOSAL_CONTRACT, input, deadline);
-      return { plan, provenance: { resourceId: resource.id, model: client.getModel(), disclosure, ...(fallbackFrom ? { fallbackFrom } : {}) } };
-    } catch (error) {
-      if (disclosure === "cloud" || !(error instanceof InferenceError) || !error.failoverEligible) throw error;
-      fallbackFrom = resource.id;
-      if (!resources.some((candidate) => clients.get(candidate.id)!.client.disclosureOf() === "cloud")) throw error;
+    const available = resources.filter((resource) => clients.get(resource.id)!.client.disclosureOf() === disclosure);
+    while (attempted.size < 3) {
+      const candidates = available.filter((resource) => !attempted.has(resource.id));
+      const resource = new ResourceRegistry(candidates).select({ qualification: "architecture" }).chosen;
+      if (!resource) break;
+      const { client } = clients.get(resource.id)!;
+      attempted.add(resource.id);
+      try {
+        const plan = await requestJsonProposal(client, PROPOSAL_CONTRACT, input, deadline);
+        return { plan, provenance: inferenceProvenance(resource.id, client, lastFailure?.resourceId) };
+      } catch (error) {
+        if (!(error instanceof InferenceError) || !error.failoverEligible) throw error;
+        lastFailure = { resourceId: resource.id, error };
+      }
     }
   }
+  if (lastFailure) throw lastFailure.error;
   throw new Error("No eligible resource is configured for batch planning.");
 }
 
@@ -75,5 +90,5 @@ export async function generateBatchPlanReview(draft: BatchPlanDraft, config: Har
   if (!resource) throw new Error("No distinct qualified resource is configured for plan review.");
   const { client } = clients.get(resource.id)!;
   const review = await requestJsonProposal(client, BATCH_PLAN_REVIEW_CONTRACT, input, signal);
-  return { review, provenance: { resourceId: resource.id, model: client.getModel(), disclosure: client.disclosureOf() } };
+  return { review, provenance: inferenceProvenance(resource.id, client) };
 }

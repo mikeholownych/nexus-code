@@ -51,6 +51,10 @@ test("operator suggestion command validates selected sources and preserves revie
   assert.equal(calls, 1);
   await assert.rejects(call(`suggest ${sessionId}`, { ...config, provider: "irrelevant-cloud" }), /local inference/);
   await assert.rejects(call(`suggest ${sessionId}`, { ...config, readOnly: true }), /Read-only/);
+  await assert.rejects(call(`suggest ${sessionId}`, {
+    ...config, cloudRoutedOrigins: [new URL(config.endpoint).origin],
+  }), /local inference/);
+  await assert.rejects(call(`suggest ${sessionId}`, { ...config, dryRun: true }), /Read-only/);
   assert.equal(calls, 1);
   output = response;
   const result = await call(`suggest ${sessionId}`);
