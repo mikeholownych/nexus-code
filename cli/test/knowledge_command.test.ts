@@ -10,6 +10,19 @@ import type { SessionData, SessionManager } from "../src/session.js";
 import type { HarnessConfig } from "../src/types.js";
 
 test("operator suggestion command validates selected sources and preserves review authority", async (t) => {
+  // The fixture exercises repository-local evidence. Runner-specific Git configuration
+  // can introduce executable hooks or include files outside the test's scope.
+  const gitConfigKeys = ["GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM"];
+  const priorGitConfig = gitConfigKeys.map((key) => [key, process.env[key]] as const);
+  for (const key of gitConfigKeys) delete process.env[key];
+  process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+  process.env.GIT_CONFIG_NOSYSTEM = "1";
+  t.after(() => {
+    for (const [key, value] of priorGitConfig) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-knowledge-command-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const prior = process.env.NEXUS_STATE_DIR;
@@ -21,7 +34,7 @@ test("operator suggestion command validates selected sources and preserves revie
   const workspace = path.join(root, "workspace");
   fs.mkdirSync(workspace);
   const git = (...args: string[]) => execFileSync("git", ["-C", workspace, ...args], { stdio: "ignore" });
-  git("init");
+  git("init", "--template=");
   git("-c", "user.name=Nexus Fixture", "-c", "user.email=nexus@example.invalid", "commit", "--allow-empty", "-m", "fixture");
   const sessionId = "session_20261127_080000_fixture";
   const sourceRef = `${sessionId}:0`;
