@@ -357,64 +357,81 @@ export class HarnessOrchestrator {
         continue;
       }
 
+      const probeConcurrency = Math.max(1, Math.min(run.budgets.maxConcurrentProbes ?? 1, 4));
+      const ensureBaseline = async (c: import("./types.js").HirTaskCase): Promise<ProbeResult | "BLOCKED" | "BUDGET"> => {
+        const existing = baseProbeByCase.get(c.id);
+        if (existing) return existing;
+        if (Date.now() - started > run.budgets.maxWallClockMs) {
+          run.status = "BLOCKED"; run.reason = "HIR wall-clock budget exhausted"; run.nextAction = "Increase maxWallClockMs or reduce suite/candidates/rounds."; return "BLOCKED";
+        }
+        if (run.actualUsage.probes + 1 > run.budgets.maxProbes) {
+          run.status = "BLOCKED"; run.reason = "HIR probe budget exhausted"; run.nextAction = "Increase maxProbes or reduce suite/candidates/rounds."; return "BUDGET";
+        }
+        const b = await adapter.run({ runId: run.id, candidateId: "base", candidatePath: baseTree, case: c, timeoutMs: run.budgets.maxProbeWallClockMs, store, signal: opts.signal });
+        store.saveProbe(b);
+        run.probeIds.push(b.id);
+        roundRecord.probeIds.push(b.id);
+        if (!roundRecord.baselineProbeIds.includes(b.id)) roundRecord.baselineProbeIds.push(b.id);
+        run.actualUsage.probes += 1;
+        run.actualUsage.tokens += b.metrics.tokens ?? 0;
+        recordEvidence(store, run.id, { kind: "probe", subjectId: b.id, summary: `base ${c.id} ${b.status}`, refs: [b.id], confidence: "high", deterministic: b.metrics.verifierPass !== null });
+        if (opts.signal?.aborted || store.cancellationRequested(runId) || b.status === "CANCELLED") return "BLOCKED";
+        if (b.status === "BLOCKED" || b.status === "TIMED_OUT" || (b.status === "FAILED" && b.metrics.verifierPass === null)) {
+          run.status = "BLOCKED";
+          run.reason = `Required baseline probe ${b.id} did not complete with usable evidence (${b.status}).`;
+          run.nextAction = "Resolve the probe failure or sandbox requirement, then start a new HIR run.";
+          run.updatedAt = nowIso();
+          store.saveRun(run);
+          recordEvent(store, run.id, "hir.blocked", run.reason, { probeId: b.id, probeStatus: b.status });
+          return "BLOCKED";
+        }
+        baseProbeByCase.set(c.id, b);
+        return b;
+      };
+
       for (const candidate of gated) {
         const candProbes: ProbeResult[] = [];
         const baseProbes: ProbeResult[] = [];
         const candidateTree = candidate.treeRef;
-        for (const c of suite.cases) {
-          if (Date.now() - started > run.budgets.maxWallClockMs) {
-            run.status = "BLOCKED";
-            run.reason = "HIR wall-clock budget exhausted";
-            run.nextAction = "Increase maxWallClockMs or reduce suite/candidates/rounds.";
-            break;
-          }
-          let b = baseProbeByCase.get(c.id);
-          if (!b) {
-            if (run.actualUsage.probes + 1 > run.budgets.maxProbes) {
-              run.status = "BLOCKED"; run.reason = "HIR probe budget exhausted"; run.nextAction = "Increase maxProbes or reduce suite/candidates/rounds."; break;
+        for (let i = 0; i < suite.cases.length; i += probeConcurrency) {
+          if ((run.status as string) === "BLOCKED") break;
+          const batch = suite.cases.slice(i, i + probeConcurrency);
+          const results = await Promise.all(batch.map(async (c) => {
+            if ((run.status as string) === "BLOCKED") return { c, b: undefined, p: undefined };
+            if (Date.now() - started > run.budgets.maxWallClockMs) {
+              run.status = "BLOCKED"; run.reason = "HIR wall-clock budget exhausted"; run.nextAction = "Increase maxWallClockMs or reduce suite/candidates/rounds."; return { c, b: undefined, p: undefined };
             }
-            b = await adapter.run({ runId: run.id, candidateId: "base", candidatePath: baseTree, case: c, timeoutMs: run.budgets.maxProbeWallClockMs, store, signal: opts.signal });
-            store.saveProbe(b);
-            run.probeIds.push(b.id);
-            roundRecord.probeIds.push(b.id);
-            if (!roundRecord.baselineProbeIds.includes(b.id)) roundRecord.baselineProbeIds.push(b.id);
+            const b = await ensureBaseline(c);
+            if (b === "BLOCKED" || b === "BUDGET" || (run.status as string) === "BLOCKED") return { c, b: undefined, p: undefined };
+            if (run.actualUsage.probes + 1 > run.budgets.maxProbes) {
+              run.status = "BLOCKED"; run.reason = "HIR probe budget exhausted"; run.nextAction = "Increase maxProbes or reduce suite/candidates/rounds."; return { c, b, p: undefined };
+            }
+            const p = await adapter.run({ runId: run.id, candidateId: candidate.id, candidatePath: candidateTree, case: c, timeoutMs: run.budgets.maxProbeWallClockMs, store, signal: opts.signal });
+            return { c, b, p };
+          }));
+          for (const r of results) {
+            if (!r.b || !r.p) continue;
+            candProbes.push(r.p);
+            baseProbes.push(r.b);
+            store.saveProbe(r.p);
+            run.probeIds.push(r.p.id);
+            roundRecord.probeIds.push(r.p.id);
             run.actualUsage.probes += 1;
-            recordEvidence(store, run.id, { kind: "probe", subjectId: b.id, summary: `base ${c.id} ${b.status}`, refs: [b.id], confidence: "high", deterministic: b.metrics.verifierPass !== null });
-            if (opts.signal?.aborted || store.cancellationRequested(runId) || b.status === "CANCELLED") return this.cancelInStore(runId, store);
-            if (b.status === "BLOCKED" || b.status === "TIMED_OUT" || (b.status === "FAILED" && b.metrics.verifierPass === null)) {
+            run.actualUsage.tokens += r.p.metrics.tokens ?? 0;
+            recordEvidence(store, run.id, { kind: "probe", subjectId: r.p.id, summary: `candidate ${candidate.id} ${r.c.id} ${r.p.status}`, refs: [r.p.id], confidence: "high", deterministic: r.p.metrics.verifierPass !== null });
+            if (opts.signal?.aborted || store.cancellationRequested(runId) || r.p.status === "CANCELLED") return this.cancelInStore(runId, store);
+            if (r.p.status === "BLOCKED" || r.p.status === "TIMED_OUT" || (r.p.status === "FAILED" && r.p.metrics.verifierPass === null)) {
               run.status = "BLOCKED";
-              run.reason = `Required baseline probe ${b.id} did not complete with usable evidence (${b.status}).`;
+              run.reason = `Required candidate probe ${r.p.id} did not complete with usable evidence (${r.p.status}).`;
               run.nextAction = "Resolve the probe failure or sandbox requirement, then start a new HIR run.";
               run.actualUsage.wallClockMs += Date.now() - started;
               run.updatedAt = nowIso();
               store.saveRun(run);
-              recordEvent(store, run.id, "hir.blocked", run.reason, { probeId: b.id, probeStatus: b.status });
+              recordEvent(store, run.id, "hir.blocked", run.reason, { probeId: r.p.id, probeStatus: r.p.status });
               return run;
             }
-            baseProbeByCase.set(c.id, b);
           }
-          if (run.actualUsage.probes + 1 > run.budgets.maxProbes) {
-            run.status = "BLOCKED"; run.reason = "HIR probe budget exhausted"; run.nextAction = "Increase maxProbes or reduce suite/candidates/rounds."; break;
-          }
-          const p = await adapter.run({ runId: run.id, candidateId: candidate.id, candidatePath: candidateTree, case: c, timeoutMs: run.budgets.maxProbeWallClockMs, store, signal: opts.signal });
-          candProbes.push(p);
-          baseProbes.push(b);
-          store.saveProbe(p);
-          run.probeIds.push(p.id);
-          roundRecord.probeIds.push(p.id);
-          run.actualUsage.probes += 1;
-          recordEvidence(store, run.id, { kind: "probe", subjectId: p.id, summary: `candidate ${candidate.id} ${c.id} ${p.status}`, refs: [p.id], confidence: "high", deterministic: p.metrics.verifierPass !== null });
-          if (opts.signal?.aborted || store.cancellationRequested(runId) || p.status === "CANCELLED") return this.cancelInStore(runId, store);
-          if (p.status === "BLOCKED" || p.status === "TIMED_OUT" || (p.status === "FAILED" && p.metrics.verifierPass === null)) {
-            run.status = "BLOCKED";
-            run.reason = `Required candidate probe ${p.id} did not complete with usable evidence (${p.status}).`;
-            run.nextAction = "Resolve the probe failure or sandbox requirement, then start a new HIR run.";
-            run.actualUsage.wallClockMs += Date.now() - started;
-            run.updatedAt = nowIso();
-            store.saveRun(run);
-            recordEvent(store, run.id, "hir.blocked", run.reason, { probeId: p.id, probeStatus: p.status });
-            return run;
-          }
+          if ((run.status as string) === "BLOCKED") break;
         }
         const scorecard = compareProbes(baseProbes, candProbes, candidate.id);
         roundRecord.scorecard.push(...scorecard);
@@ -426,13 +443,13 @@ export class HarnessOrchestrator {
         allReflections.push(reflection);
         recordEvidence(store, run.id, { kind: "reflection", subjectId: candidate.id, summary: `reflection ${decision.recommendation}; strengths=${reflection.strengths.length}; weaknesses=${reflection.weaknesses.length}`, refs: reflection.evidenceIds, confidence: "medium", deterministic: false });
         recordEvent(store, run.id, "hir.reflection", `Reflection for ${candidate.id}`, reflection as unknown as Record<string, unknown>);
-        if (run.status === "BLOCKED") break;
+        if ((run.status as string) === "BLOCKED") break;
       }
       roundRecord.completedAt = nowIso();
-      roundRecord.status = run.status === "BLOCKED" ? "BLOCKED" : "COMPLETED";
+      roundRecord.status = (run.status as string) === "BLOCKED" ? "BLOCKED" : "COMPLETED";
       store.saveRun(run);
-      recordEvent(store, run.id, "hir.round.completed", `Round ${round} completed`, { round, candidates: roundRecord.candidateIds.length, probes: roundRecord.probeIds.length, blocked: run.status === "BLOCKED" });
-      if (run.status === "BLOCKED") break;
+      recordEvent(store, run.id, "hir.round.completed", `Round ${round} completed`, { round, candidates: roundRecord.candidateIds.length, probes: roundRecord.probeIds.length, blocked: (run.status as string) === "BLOCKED" });
+      if ((run.status as string) === "BLOCKED") break;
       const roundHasBetter = decisions.some((d) => d.round === round && d.scorecard.some((s) => s.dimension === "correctness" && s.verdict === "better"));
       if (roundHasBetter) {
         recordEvent(store, run.id, "hir.early_stop", "Deterministic improvement found; stopping further rounds", { round });
@@ -441,6 +458,14 @@ export class HarnessOrchestrator {
     }
 
     if (opts.signal?.aborted || store.cancellationRequested(runId)) return this.cancelInStore(runId, store);
+    // A blocked baseline or exhausted run budget is not a promotion result. In
+    // particular, do not persist a READY_FOR_REVIEW report from partial probes.
+    if ((run.status as string) === "BLOCKED") {
+      run.actualUsage.wallClockMs += Date.now() - started;
+      run.updatedAt = nowIso();
+      store.saveRun(run);
+      return run;
+    }
     const rank = (r: "apply" | "review" | "reject" | "defer") => ({ apply: 4, review: 3, defer: 2, reject: 1 }[r]);
     const betterCount = (sc: ScorecardEntry[]) => sc.filter((s) => s.dimension === "correctness" && s.verdict === "better").length;
     const worseCount = (sc: ScorecardEntry[]) => sc.filter((s) => s.dimension === "correctness" && s.verdict === "worse").length;
@@ -465,7 +490,7 @@ export class HarnessOrchestrator {
     store.saveReport(run.id, report, md);
     run.promotionReportId = report.id;
     draftLibraryEntriesFromReport(store, report);
-    if (run.status !== "BLOCKED") {
+    if ((run.status as string) !== "BLOCKED") {
       run.status = "COMPLETED";
       run.nextAction = "Review promotion report; HIR does not apply changes.";
     }
