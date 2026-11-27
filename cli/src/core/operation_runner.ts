@@ -136,6 +136,18 @@ function sharedResourceMaximum(): number {
   return value;
 }
 
+/** Operator-owned host-wide ceiling across active durable-operation work units. */
+function sharedOperationMaximum(): number {
+  const raw = operatorSetting("NEXUS_MAX_SHARED_OPERATION_UNITS");
+  if (raw === undefined) return 4;
+  if (!/^\d+$/.test(raw)) throw new Error(`Invalid NEXUS_MAX_SHARED_OPERATION_UNITS='${raw}': expected an integer from 1 to ${MAX_CONCURRENT_UNITS}.`);
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_CONCURRENT_UNITS) {
+    throw new Error(`Invalid NEXUS_MAX_SHARED_OPERATION_UNITS='${raw}': expected an integer from 1 to ${MAX_CONCURRENT_UNITS}.`);
+  }
+  return value;
+}
+
 /** PA-2: how many verifiers held on the merged tree, for the operator's event line. */
 function mergedChecksNote(checks: readonly MergedCheck[] | undefined): string {
   return checks?.length ? ` (${checks.length} merged-tree ${checks.length === 1 ? "check" : "checks"} passed)` : "";
@@ -147,6 +159,7 @@ export class OperationRunner {
   private readonly clock: RecoveryClock;
   private readonly revalidator: OperationRevalidator;
   private readonly resourceAdmission: SharedResourceAdmission;
+  private readonly sharedOperationCapacity: number;
   private readonly git: OperationGit | undefined;
   /** One merge at a time: all units share the operation's integration worktree. */
   private integrationChain: Promise<void> = Promise.resolve();
@@ -160,6 +173,7 @@ export class OperationRunner {
     private readonly opts: OperationRunnerOptions,
   ) {
     this.clock = opts.clock ?? realRecoveryClock;
+    this.sharedOperationCapacity = sharedOperationMaximum();
     this.resourceAdmission = opts.resourceAdmission ?? new SharedResourceAdmission(
       path.join(credentialStorageHome(), ".local/state/nexus/resource-admission"),
       { operatorMaxUnits: sharedResourceMaximum() },
@@ -422,12 +436,32 @@ export class OperationRunner {
         }
         const admitted: Assignment[] = [];
         const leases: ResourceSlotLease[] = [];
+        let operationCapacityBusy = false;
         try {
           for (const assignment of ready) {
             if (signal?.aborted) break;
-            const lease = this.resourceAdmission.acquire(assignment.resource);
-            if (!lease) continue;
-            leases.push(lease);
+            const operationLease = this.resourceAdmission.acquireNamed(
+              "durable-operation-unit",
+              this.sharedOperationCapacity,
+              "operation work unit",
+            );
+            if (!operationLease) {
+              operationCapacityBusy = true;
+              continue;
+            }
+            let resourceLease: ResourceSlotLease | null;
+            try {
+              resourceLease = this.resourceAdmission.acquire(assignment.resource);
+            } catch (error) {
+              operationLease.release();
+              throw error;
+            }
+            if (!resourceLease) {
+              operationLease.release();
+              continue;
+            }
+            // Release the provider-specific lock first, the reverse of acquisition, then return the aggregate slot.
+            leases.push(resourceLease, operationLease);
             admitted.push(assignment);
           }
         } catch (error) {
@@ -443,7 +477,9 @@ export class OperationRunner {
           this.scheduler.wait({
             kind: "wait",
             wakeAt,
-            reason: "shared inference-resource capacity is reserved by another operation",
+            reason: operationCapacityBusy
+              ? "shared operation or inference-resource capacity is reserved by another operation"
+              : "shared inference-resource capacity is reserved by another operation",
             parked: ready.map((assignment) => assignment.unit.id),
           });
           this.save();
