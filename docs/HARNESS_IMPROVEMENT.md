@@ -80,4 +80,4 @@ HIR stores durable state under `<state>/harness/` (default `~/.nexus/harness` or
 - Orchestrator enforces probe/wall-clock/token budgets and uses bounded parallel case probing (`maxConcurrentProbes`, capped). Round completion events record probe concurrency.
 - Library retrieval ranks by base/profile/tag/status/confidence/evidence recency and dedupes normalized statements.
 - Promotion reports include confidence calibration summaries (deterministic vs advisory avg confidence) and explicit non-authoritative advisory labeling.
-- Apply preview remains review-only and includes rollback guidance; Nexus HIR never mutates live harness/profile state.
+- Apply preview remains review-only and includes rollback guidance (preview.json/md include `rollbackPlan` and explicit no-live-mutation warning); Nexus HIR never mutates live harness/profile state.

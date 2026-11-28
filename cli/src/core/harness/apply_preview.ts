@@ -13,6 +13,7 @@ export interface ApplyPreviewResult {
   previewDir: string;
   files: string[];
   noApplyWarning: string;
+  rollbackPlan: string[];
 }
 
 function safeDiff(base: string, cand: string): string {
@@ -32,6 +33,11 @@ export function buildApplyPreview(store: HarnessStore, runId: string): ApplyPrev
   ensurePrivateDir(previewDir);
   const files: string[] = [];
 
+  const rollbackPlan = [
+    "Do not apply directly to live harness/profile state.",
+    "If manually applied in a reviewed branch, rollback by reverting that reviewed commit/PR.",
+    "Keep HIR state and probe artifacts for audit; rerun deterministic verification after rollback.",
+  ];
   const summary = {
     schemaVersion: 1,
     runId,
@@ -41,6 +47,7 @@ export function buildApplyPreview(store: HarnessStore, runId: string): ApplyPrev
     liveMutation: false,
     noApplyWarning: "HIR apply preview is review-only. It does not mutate live harness/profile state. Manual reviewed apply required.",
     recommendedAction: report.changes.find((c) => c.recommendation === "review" || c.recommendation === "apply")?.recommendation ?? "review",
+    rollbackPlan,
     candidateDiffRefs: [] as Array<{ candidateId: string; diffRef: string; gateStatus: string }>,
   };
 
@@ -77,9 +84,7 @@ export function buildApplyPreview(store: HarnessStore, runId: string): ApplyPrev
     ...summary.candidateDiffRefs.map((c) => `- ${c.candidateId}: gate=${c.gateStatus} diff=${c.diffRef || "(generated)"}`),
     "",
     "## Rollback / safety",
-    "- Do not apply directly to live harness/profile state.",
-    "- If manually applied in a reviewed branch, rollback by reverting that reviewed commit/PR.",
-    "- Keep HIR state and probe artifacts for audit; rerun deterministic verification after rollback.",
+    ...rollbackPlan.map((r) => `- ${r}`),
     "",
     "## Manual apply (reviewed)",
     "- Inspect preview.json and candidate diff files.",
@@ -90,5 +95,5 @@ export function buildApplyPreview(store: HarnessStore, runId: string): ApplyPrev
   writeFileDurably(mdPath, md, 0o600);
   files.push(mdPath);
 
-  return { runId, reportId: report.id, candidateId, createdAt, previewDir, files, noApplyWarning: summary.noApplyWarning };
+  return { runId, reportId: report.id, candidateId, createdAt, previewDir, files, noApplyWarning: summary.noApplyWarning, rollbackPlan };
 }
