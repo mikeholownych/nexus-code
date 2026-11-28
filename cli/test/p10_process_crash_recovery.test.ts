@@ -2,9 +2,11 @@ import "./helpers/leak_guard.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { AutonomousAgent } from "../src/agent.js";
 import { makeRepo, startGateway } from "./helpers/fixtures.js";
@@ -134,6 +136,120 @@ test("a crash during a multi-tool response preserves a completed sibling and doe
   assert.equal(effects, "completed\npending\n", "the completed sibling remains once and the unknown sibling is not repeated");
   assert.ok(toolResults.some((content) => content.includes("completed")), JSON.stringify(toolResults));
   assert.ok(toolResults.some((content) => /effects, if any, are unknown/.test(content)), JSON.stringify(toolResults));
+});
+
+test("a real process crash after an MCP side effect resumes as unknown without replay", { timeout: 60_000 }, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-p10-mcp-crash-"));
+  const home = path.join(root, "home");
+  fs.mkdirSync(home, { recursive: true });
+  const previous = {
+    home: process.env.HOME,
+    xdg: process.env.XDG_CONFIG_HOME,
+    trust: process.env.NEXUS_TRUST_WORKSPACE,
+  };
+  process.env.HOME = home;
+  process.env.XDG_CONFIG_HOME = path.join(home, ".config");
+  process.env.NEXUS_TRUST_WORKSPACE = "1";
+  const repo = makeRepo({ "README.md": "base\n" });
+  const effects = path.join(root, "mcp-effects.txt");
+  const taskIdFile = path.join(root, "task-id.txt");
+  let mcpCallCount = 0;
+  const mcp = http.createServer((req, res) => {
+    let raw = "";
+    req.on("data", (chunk) => { raw += chunk; });
+    req.on("end", () => {
+      const body = JSON.parse(raw || "{}");
+      if (body.method === "tools/call") {
+        mcpCallCount++;
+        fs.appendFileSync(effects, "ran\n");
+        // Hold the response so the parent can kill Nexus after the remote effect but before it is journaled.
+        return;
+      }
+      const result = body.method === "tools/list"
+        ? { tools: [{ name: "write_marker", description: "write one marker", inputSchema: { type: "object", properties: {} } }] }
+        : {};
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ jsonrpc: "2.0", id: body.id, result }));
+    });
+  });
+  await new Promise<void>((resolve) => mcp.listen(0, "127.0.0.1", resolve));
+  fs.writeFileSync(path.join(repo, ".mcp.json"), JSON.stringify({
+    mcpServers: { demo: { url: `http://127.0.0.1:${(mcp.address() as AddressInfo).port}`, transport: "http" } },
+  }));
+  const gateway = await startGateway((n) => n === 1
+    ? { kind: "tools", calls: [{ name: "mcp__demo__write_marker", args: {} }] }
+    : { kind: "text", content: "The interrupted action is accounted for; stop." });
+  const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  let child: ReturnType<typeof spawn> | undefined;
+  let resumed: AutonomousAgent | undefined;
+  const previousCwd = process.cwd();
+
+  try {
+    const childScript = `
+      import fs from "node:fs";
+      import { AutonomousAgent } from "./src/agent.ts";
+      const agent = new AutonomousAgent({ endpoint: process.env.TEST_GATEWAY, model: "m", maxSteps: 6, temperature: 0, workspace: process.env.TEST_WORKSPACE, shell: "bash", approvalMode: "auto", fullAccess: true }, 1, undefined, { durable: true });
+      agent.ui = new Proxy({}, { get: () => () => {} });
+      fs.writeFileSync(process.env.TEST_TASK_ID_FILE, agent.getTaskId());
+      await agent.initExtensibility();
+      await agent.runTurn("Call the MCP tool and report its result.");
+      process.exit(0);
+    `;
+    child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", childScript], {
+      cwd: cliRoot,
+      env: {
+        PATH: process.env.PATH,
+        HOME: home,
+        XDG_CONFIG_HOME: path.join(home, ".config"),
+        NEXUS_TRUST_WORKSPACE: "1",
+        TEST_GATEWAY: gateway.url,
+        TEST_WORKSPACE: repo,
+        TEST_TASK_ID_FILE: taskIdFile,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    trackResource("child process", `MCP crash fixture agent pid ${child.pid}`, () => child?.exitCode === null && child?.signalCode === null, () => child?.kill("SIGKILL"));
+    let childOutput = "";
+    child.stdout?.on("data", (chunk) => { childOutput += String(chunk); });
+    child.stderr?.on("data", (chunk) => { childOutput += String(chunk); });
+    const childExit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      child!.once("exit", (code, signal) => resolve({ code, signal }));
+    });
+
+    await waitFor("the child task id", () => fs.existsSync(taskIdFile));
+    await waitFor("the first provider request", () => gateway.requests.length >= 1);
+    await waitFor("the MCP side effect", () => mcpCallCount === 1);
+    assert.equal(fs.readFileSync(effects, "utf8"), "ran\n");
+    child.kill("SIGKILL");
+    const killed = await childExit;
+    assert.equal(killed.signal, "SIGKILL", `child ended unexpectedly: ${JSON.stringify(killed)} ${childOutput}`);
+
+    const taskId = fs.readFileSync(taskIdFile, "utf8").trim();
+    resumed = new AutonomousAgent({ endpoint: gateway.url, model: "m", maxSteps: 6, temperature: 0, workspace: repo, shell: "bash", approvalMode: "auto", fullAccess: true } as any, 1, undefined, { durable: true });
+    resumed.ui = new Proxy({}, { get: () => () => {} });
+    const recovery = await resumed.recoverFromTaskState(taskId);
+    assert.equal(recovery.interrupted, true, "restart identifies the durable MCP operation left in flight");
+    await resumed.runTurn("Continue.", undefined, { resume: true });
+
+    assert.equal(mcpCallCount, 1, "recovery must not replay the MCP side effect");
+    assert.equal(fs.readFileSync(effects, "utf8"), "ran\n");
+    const toolResults = gateway.requests.flatMap((request: any) => request.messages ?? [])
+      .filter((message: any) => message.role === "tool")
+      .map((message: any) => String(message.content));
+    assert.ok(toolResults.some((content) => /effects, if any, are unknown/.test(content)), JSON.stringify(toolResults));
+  } finally {
+    if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    resumed?.shutdown();
+    await gateway.close();
+    mcp.closeAllConnections?.();
+    await new Promise<void>((resolve) => mcp.close(() => resolve()));
+    process.chdir(previousCwd);
+    fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+    if (previous.home === undefined) delete process.env.HOME; else process.env.HOME = previous.home;
+    if (previous.xdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = previous.xdg;
+    if (previous.trust === undefined) delete process.env.NEXUS_TRUST_WORKSPACE; else process.env.NEXUS_TRUST_WORKSPACE = previous.trust;
+  }
 });
 
 type FileMutationCrashInput = {
