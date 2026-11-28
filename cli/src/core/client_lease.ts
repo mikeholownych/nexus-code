@@ -8,7 +8,7 @@ import { MAX_SHARED_RESOURCE_CAPACITY, SharedResourceAdmission, type ResourceSlo
 const heartbeatTimers = new WeakMap<FileGuard, ReturnType<typeof setInterval>>();
 const activeClientSlots = new WeakMap<FileGuard, ResourceSlotLease>();
 const activeClientHeartbeatTimers = new WeakMap<FileGuard, ReturnType<typeof setInterval>>();
-export const DEFAULT_MAX_ACTIVE_CLIENTS = MAX_SHARED_RESOURCE_CAPACITY;
+export const DEFAULT_MAX_ACTIVE_CLIENTS = 16;
 
 export class ClientActiveLimitError extends Error {
   constructor(readonly limit: number) {
@@ -105,7 +105,8 @@ export function acquireClientLease(
   if (!lease) throw new ClientLeaseBusyError(exclusive);
   if (activeLimit !== undefined) {
     try {
-      const admission = new SharedResourceAdmission(path.join(path.dirname(leasePath), "resource-admission"), { guardWaitMs: 0 });
+      const homeAdmissionDir = path.join(path.dirname(leasePath), path.basename(leasePath, ".guard"), "resource-admission");
+      const admission = new SharedResourceAdmission(homeAdmissionDir, { guardWaitMs: 0 });
       const slot = admission.acquireNamed("active-client-processes", activeLimit, "client process");
       if (!slot) {
         releaseFileGuard(lease);

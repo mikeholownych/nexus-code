@@ -64,17 +64,16 @@ describe("cross-process client admission", { skip: process.platform !== "linux" 
     assert.equal(afterExit.stdout.trim(), "admitted");
   });
 
-  it("counts active client processes across separate homes for the same OS user", () => {
+  it("admits separate homes independently for the same OS user", () => {
     const firstHome = home("home-one");
     const secondHome = home("home-two");
     const first = acquireClientLease(firstHome, { maxActiveClients: 1 });
+    let second: ReturnType<typeof acquireClientLease> | undefined;
     try {
-      assert.throws(
-        () => acquireClientLease(secondHome, { maxActiveClients: 1 }),
-        /active client limit \(1\) reached/,
-      );
+      second = acquireClientLease(secondHome, { maxActiveClients: 1 });
     } finally {
       releaseClientLease(first);
+      releaseClientLease(second ?? null);
     }
   });
 
