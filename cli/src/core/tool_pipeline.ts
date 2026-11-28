@@ -916,7 +916,7 @@ export async function executeToolCall(agent: any, input: ToolExecutionInput): Pr
     metadata: { actor, stepIndex: currentStep, verificationAuthority, sandbox: agent.config.sandbox, sandboxProfile: agent.config.sandboxProfile },
     defaultHandler: async (tName, tArgs) => {
       if (agent.mcpManager.isMcpTool(tName)) {
-        return await agent.mcpManager.executeMcpTool(tName, tArgs);
+        return await agent.mcpManager.executeMcpTool(tName, tArgs, pluginSignal);
       }
       if (agent.pluginManager.isCustomTool(tName)) {
         return await agent.pluginManager.executeCustomTool(tName, tArgs, pluginSignal);
