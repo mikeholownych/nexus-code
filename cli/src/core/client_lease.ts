@@ -8,7 +8,7 @@ import { MAX_SHARED_RESOURCE_CAPACITY, SharedResourceAdmission, type ResourceSlo
 const heartbeatTimers = new WeakMap<FileGuard, ReturnType<typeof setInterval>>();
 const activeClientSlots = new WeakMap<FileGuard, ResourceSlotLease>();
 const activeClientHeartbeatTimers = new WeakMap<FileGuard, ReturnType<typeof setInterval>>();
-export const DEFAULT_MAX_ACTIVE_CLIENTS = 16;
+export const DEFAULT_MAX_ACTIVE_CLIENTS = MAX_SHARED_RESOURCE_CAPACITY;
 
 export class ClientActiveLimitError extends Error {
   constructor(readonly limit: number) {

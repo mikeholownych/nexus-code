@@ -31,7 +31,7 @@ Provider disclosure is explicit for cloud destinations. Local inference keeps ta
 
 Saved sessions and task state live under `~/.nexus/`. Use `/sessions`, `/resume [id]`, and `/export [md|json]` to inspect, resume, or export a session. Exports are written into the current workspace; inspect and protect them as source data. `/compact` summarizes older context to make room, while durable findings and the active plan are retained where supported. `/doctor` checks the current runtime; `nexus doctor --deep` performs a minimal inference probe and can incur model cost.
 
-On Linux, Nexus admits up to 16 concurrent CLI client processes for the same OS user, across its home directories. To set a different limit, export `NEXUS_MAX_ACTIVE_CLIENTS` in the launching shell or service environment before starting Nexus; accepted values are 1 through 64. For example:
+On Linux, Nexus admits up to 64 concurrent CLI client processes for the same OS user, across its home directories. To set a different limit, export `NEXUS_MAX_ACTIVE_CLIENTS` in the launching shell or service environment before starting Nexus; accepted values are 1 through 64. For example:
 
 ```sh
 export NEXUS_MAX_ACTIVE_CLIENTS=8
