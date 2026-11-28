@@ -771,6 +771,11 @@ function persistOperationStart(
   reissuesInterrupted: boolean,
 ): OperationStartPersistence {
   if (!agent.durable || !durableTaskId) return { persisted: false };
+  // The durable task record has one current-operation slot. Turn orchestration
+  // intentionally dispatches READ_ONLY_TOOLS in parallel, so journaling those
+  // calls would let a later read replace an in-flight side-effect record. Reads
+  // are safe to repeat after recovery and do not need the side-effect journal.
+  if (READ_ONLY_TOOLS.has(toolName)) return { persisted: false };
   try {
     if (!agent.stateManager) throw new Error("durable state manager is unavailable");
     if (!agent.stateManager.hasTaskState(durableTaskId)) {
