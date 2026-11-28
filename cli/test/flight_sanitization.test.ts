@@ -86,7 +86,7 @@ test("rehydrated local tool arguments execute under fullAccess while flight and 
     shell: "bash",
     fullAccess: true,
     recordFlight: true,
-  });
+  }, 0, { durable: false });
   let executedArgs: Record<string, unknown> | undefined;
   try {
     assert.equal(agent.authorityEngine.isFullAccess(), true);
@@ -118,7 +118,7 @@ test("rehydrated local tool arguments execute under fullAccess while flight and 
   }
 });
 
-test("classifier failure skips flight and audit persistence without blocking authorized execution", async () => {
+test("classifier failure skips flight and audit persistence and blocks durable tool execution", async () => {
   const boundary = new InformationFlowBoundary();
   const secret = `ghp_${"f".repeat(36)}`;
   boundary.classifyText = () => { throw new Error(`synthetic classifier failure: ${secret}`); };
@@ -151,8 +151,9 @@ test("classifier failure skips flight and audit persistence without blocking aut
       id: "synthetic-failure-call",
       function: { name: "update_plan", arguments: JSON.stringify({ token: secret, phases: [] }) },
     }, 1);
-    assert.equal(result.receipt.success, true);
-    assert.deepEqual(executedArgs, { token: secret, phases: [] });
+    assert.equal(result.receipt.success, false);
+    assert.match(result.receipt.error, /Not executed: the durable operation start could not be recorded/);
+    assert.equal(executedArgs, undefined, "the handler must not run when durable state classification fails");
     const flight = agent.getFlightRecorder() as FlightRecorder;
     assert.equal(fs.existsSync(flight.getLogPath()), true, "the durable gap marker should survive classifier failure");
     const flightRows = fs.readFileSync(flight.getLogPath(), "utf8").trim().split("\n").map((line) => JSON.parse(line));
