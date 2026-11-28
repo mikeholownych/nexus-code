@@ -91,9 +91,9 @@ test("a mutating tool result is not accepted when its durable end journal cannot
   const taskId = (agent as any).currentTaskId as string;
   const savedState = stateManager.loadTaskState(taskId);
   assert.equal(savedState.currentOperation?.toolName, "write_file");
-  assert.equal(savedState.currentOperation?.status, "in_flight", "recovery retains the unresolved operation instead of overwriting it with completion");
+  assert.equal(savedState.currentOperation?.status, "outcome_unknown", "the failed end write is preserved as an unknown outcome instead of being overwritten with completion");
   const recovered = stateManager.recoverTaskState(taskId, { revalidateCandidate: false });
   assert.equal(recovered.interrupted, true);
   assert.equal(recovered.interruptedOperation?.toolName, "write_file");
-  assert.match(recovered.interruptedOperation?.error ?? "", /outcome is unknown/i);
+  assert.match(recovered.interruptedOperation?.error ?? "", /outcome (?:is|was) unknown/i);
 });

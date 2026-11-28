@@ -783,7 +783,7 @@ function persistOperationStart(
     if (!agent.stateManager.hasTaskState(durableTaskId)) {
       throw new Error("durable task state is still unavailable after checkpoint");
     }
-    agent.stateManager.recordOperationStart(durableTaskId, {
+    const saved = agent.stateManager.recordOperationStart(durableTaskId, {
       invocationId: call.id,
       seq: operationSeq,
       toolName,
@@ -791,6 +791,7 @@ function persistOperationStart(
       argsSummary: JSON.stringify(args).slice(0, 200),
       argsHash: argsFingerprint(toolName, args),
     });
+    agent.unresolvedOperation = saved.currentOperation ?? null;
     if (reissuesInterrupted) agent.interruptedCall = undefined;
     return { persisted: true };
   } catch (err: any) {
@@ -867,17 +868,31 @@ function recordOperationEndIfStarted(
 ): string | undefined {
   if (!operationStartPersisted) return undefined;
   try {
-    agent.stateManager.recordOperationEnd(durableTaskId, invocationId, {
+    const saved = agent.stateManager.recordOperationEnd(durableTaskId, invocationId, {
       success: receipt.success,
       error: receipt.error,
       outcomeUnknown: receipt.outcomeUnknown,
     }, operationSeq);
+    if (saved.currentOperation?.seq !== operationSeq || saved.currentOperation.status === "in_flight") {
+      throw new Error("durable operation-end write did not settle the matching operation");
+    }
+    agent.unresolvedOperation = null;
     return undefined;
   } catch (err: any) {
     agent.reportPersistenceFailure("operation_end", err);
     agent.acceptancePersistenceFailure =
       "A tool outcome could not be durably recorded; verified task completion is blocked.";
-    return redactSecrets(err instanceof Error ? err.message : String(err)).slice(0, 200) || "unknown persistence error";
+    const failure = redactSecrets(err instanceof Error ? err.message : String(err)).slice(0, 200) || "unknown persistence error";
+    const unresolved = agent.unresolvedOperation;
+    if (unresolved && unresolved.seq === operationSeq) {
+      agent.unresolvedOperation = {
+        ...unresolved,
+        status: "outcome_unknown",
+        outcomeUnknown: true,
+        error: `The tool may have completed, but its outcome could not be durably recorded (${failure}).`,
+      };
+    }
+    return failure;
   }
 }
 
