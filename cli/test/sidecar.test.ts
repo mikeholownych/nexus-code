@@ -1126,10 +1126,17 @@ describe("SidecarServer: evidence and receipts", () => {
 const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sidecarSrc = path.join(cliRoot, "src", "sidecar.ts");
 
-function spawnSidecar(gwUrl: string, repo: string, home: string, entry: string = sidecarSrc, args: string[] = ["-w", repo, "-e", gwUrl, "-m", "m"]) {
+function spawnSidecar(
+  gwUrl: string,
+  repo: string,
+  home: string,
+  entry: string = sidecarSrc,
+  args: string[] = ["-w", repo, "-e", gwUrl, "-m", "m"],
+  extraEnv: NodeJS.ProcessEnv = {},
+) {
   const child = spawn(process.execPath, ["--import", "tsx", entry, ...args], {
     cwd: cliRoot,
-    env: { ...process.env, HOME: home, NEXUS_DEBUG: "0" },
+    env: { ...process.env, HOME: home, NEXUS_DEBUG: "0", ...extraEnv },
   });
   let stdout = "";
   let stderr = "";
@@ -1157,6 +1164,28 @@ describe("sidecar process", () => {
       assert.equal(await proc.exited, 0, proc.stderr());
     } finally {
       proc.child.kill("SIGKILL");
+      await gw.close();
+      fs.rmSync(repo, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects an extra same-home sidecar before it starts when the active client cap is reached", { skip: process.platform !== "linux" }, async () => {
+    const gw = await startGateway(readOnlyTurn);
+    const repo = makeRepo();
+    const home = makeHome();
+    const env = { NEXUS_MAX_ACTIVE_CLIENTS: "1" };
+    const first = spawnSidecar(gw.url, repo, home, sidecarSrc, ["-w", repo, "-e", gw.url, "-m", "m"], env);
+    try {
+      await waitUntil(() => first.lines().some((line) => line.includes('"type":"hello"')), 20000);
+      const second = spawnSidecar(gw.url, repo, home, sidecarSrc, ["-w", repo, "-e", gw.url, "-m", "m"], env);
+      assert.equal(await second.exited, 1, second.stderr());
+      assert.match(second.stderr(), /active client limit \(1\) reached/i);
+      assert.equal(second.lines().some((line) => line.includes('"type":"hello"')), false);
+      first.child.stdin.write(JSON.stringify({ v: 1, type: "shutdown" }) + "\n");
+      assert.equal(await first.exited, 0, first.stderr());
+    } finally {
+      first.child.kill("SIGKILL");
       await gw.close();
       fs.rmSync(repo, { recursive: true, force: true });
       fs.rmSync(home, { recursive: true, force: true });

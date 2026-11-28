@@ -3,8 +3,29 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { acquireFileGuard, releaseFileGuard, type FileGuard } from "./file_guard.js";
+import { MAX_SHARED_RESOURCE_CAPACITY, SharedResourceAdmission, type ResourceSlotLease } from "./shared_resource_admission.js";
 
 const heartbeatTimers = new WeakMap<FileGuard, ReturnType<typeof setInterval>>();
+const activeClientSlots = new WeakMap<FileGuard, ResourceSlotLease>();
+const activeClientHeartbeatTimers = new WeakMap<FileGuard, ReturnType<typeof setInterval>>();
+export const DEFAULT_MAX_ACTIVE_CLIENTS = MAX_SHARED_RESOURCE_CAPACITY;
+
+export class ClientActiveLimitError extends Error {
+  constructor(readonly limit: number) {
+    super(`Nexus active client limit (${limit}) reached; close another client or set NEXUS_MAX_ACTIVE_CLIENTS to a value from 1 to ${MAX_SHARED_RESOURCE_CAPACITY}.`);
+    this.name = "ClientActiveLimitError";
+  }
+}
+
+function maxActiveClients(options: { maxActiveClients?: number }): number {
+  const raw = process.env.NEXUS_MAX_ACTIVE_CLIENTS;
+  const value = options.maxActiveClients ?? (raw === undefined ? DEFAULT_MAX_ACTIVE_CLIENTS : Number(raw));
+  if ((raw !== undefined && options.maxActiveClients === undefined && !/^\d+$/.test(raw)) ||
+      !Number.isSafeInteger(value) || value < 1 || value > MAX_SHARED_RESOURCE_CAPACITY) {
+    throw new Error(`Invalid NEXUS_MAX_ACTIVE_CLIENTS='${raw ?? value}': expected an integer from 1 to ${MAX_SHARED_RESOURCE_CAPACITY}.`);
+  }
+  return value;
+}
 
 /** Only unambiguous metadata/recovery invocations may avoid a normal client lifetime lease. */
 export function clientInvocationKind(args: readonly string[]): "metadata" | "restore" | "client" {
@@ -69,14 +90,46 @@ export function clientLeasePath(homeDir: string): string {
 }
 
 /** Retain the returned descriptor until the client has finished every use of loaded configuration/state. */
-export function acquireClientLease(homeDir: string, options: { exclusive?: boolean; waitMs?: number } = {}): FileGuard {
+export function acquireClientLease(
+  homeDir: string,
+  options: { exclusive?: boolean; waitMs?: number; maxActiveClients?: number } = {},
+): FileGuard {
   const exclusive = options.exclusive === true;
-  const lease = acquireFileGuard(clientLeasePath(homeDir), {
+  const activeLimit = exclusive ? undefined : maxActiveClients(options);
+  const leasePath = clientLeasePath(homeDir);
+  const lease = acquireFileGuard(leasePath, {
     mode: exclusive ? "exclusive" : "shared",
     waitMs: options.waitMs ?? 0,
     label: "Nexus client lease",
   });
   if (!lease) throw new ClientLeaseBusyError(exclusive);
+  if (activeLimit !== undefined) {
+    try {
+      const homeAdmissionDir = path.join(path.dirname(leasePath), path.basename(leasePath, ".guard"), "resource-admission");
+      // Concurrent clients serialize this shared admission check; bound the wait without mistaking lock contention for a full client cap.
+      const admission = new SharedResourceAdmission(homeAdmissionDir, { guardWaitMs: 10_000 });
+      const slot = admission.acquireNamed("active-client-processes", activeLimit, "client process");
+      if (!slot) {
+        releaseFileGuard(lease);
+        throw new ClientActiveLimitError(activeLimit);
+      }
+      if (slot.inheritedFd === undefined) {
+        slot.release();
+        throw new Error("Nexus active client slot does not expose its kernel lease descriptor");
+      }
+      const slotFd = slot.inheritedFd;
+      const slotHeartbeat = setInterval(() => {
+        try { const now = new Date(); fs.futimesSync(slotFd, now, now); }
+        catch { /* Kernel ownership remains until the descriptor is closed. */ }
+      }, 60_000);
+      slotHeartbeat.unref();
+      activeClientSlots.set(lease, slot);
+      activeClientHeartbeatTimers.set(lease, slotHeartbeat);
+    } catch (error) {
+      releaseFileGuard(lease);
+      throw error;
+    }
+  }
   // An active long-lived client must not age out of the operating system's
   // temporary-file policy. This timer never keeps a finished CLI process alive.
   const heartbeat = setInterval(() => {
@@ -93,5 +146,16 @@ export function releaseClientLease(lease: FileGuard | null): void {
   if (!lease) return;
   const heartbeat = heartbeatTimers.get(lease);
   if (heartbeat) { clearInterval(heartbeat); heartbeatTimers.delete(lease); }
+  const activeSlot = activeClientSlots.get(lease);
+  if (activeSlot) {
+    const slotHeartbeat = activeClientHeartbeatTimers.get(lease);
+    if (slotHeartbeat) { clearInterval(slotHeartbeat); activeClientHeartbeatTimers.delete(lease); }
+    // Close the lifetime guard first so an exclusive maintenance invocation
+    // cannot overlap a normal client while the capacity slot is being freed.
+    releaseFileGuard(lease);
+    activeSlot.release();
+    activeClientSlots.delete(lease);
+    return;
+  }
   releaseFileGuard(lease);
 }
