@@ -248,7 +248,9 @@ export async function acquirePtyLock(timeoutMs = 15 * 60_000): Promise<() => voi
       let pid = 0;
       try {
         pid = Number(fs.readFileSync(owner, "utf8"));
-      } catch {}
+      } catch (readErr: any) {
+        if (readErr?.code === "ENOENT") continue;
+      }
       let alive = false;
       try {
         if (pid > 0) {
@@ -257,8 +259,19 @@ export async function acquirePtyLock(timeoutMs = 15 * 60_000): Promise<() => voi
         }
       } catch {}
       // A lock without a live owner (crashed run, or an owner not yet written for a while) is taken over.
-      if (!alive && (pid > 0 || Date.now() - fs.statSync(dir).mtimeMs > 5_000)) {
-        fs.rmSync(dir, { recursive: true, force: true });
+      let ageMs = 0;
+      try {
+        ageMs = Date.now() - fs.statSync(dir).mtimeMs;
+      } catch (statErr: any) {
+        if (statErr?.code === "ENOENT") continue;
+        throw statErr;
+      }
+      if (!alive && (pid > 0 || ageMs > 5_000)) {
+        try {
+          fs.rmSync(dir, { recursive: true, force: true });
+        } catch (rmErr: any) {
+          if (rmErr?.code !== "ENOENT") throw rmErr;
+        }
         continue;
       }
       if (Date.now() > deadline) throw new Error(`timed out waiting for the PTY test lock held by pid ${pid}`);
