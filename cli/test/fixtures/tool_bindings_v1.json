@@ -416,7 +416,7 @@
       "executionDomain": "agent_orchestration",
       "simulated": false,
       "extraReceiptKeys": "",
-      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
     },
     {
       "tools": "write_file,edit_file,delete_file,patch_file,manage_knowledge",
@@ -497,7 +497,7 @@
       "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > flight.durableState > ui.printToolResult > observer.toolEnd:ok"
     },
     {
-      "tools": "activate_skill,hybrid_search,update_requirements,read_objective,read_findings,read_archive,read_tool_output,enable_tools",
+      "tools": "activate_skill,update_requirements,read_objective,read_findings,read_archive,read_tool_output,enable_tools",
       "asked": "",
       "status": "COMPLETED",
       "denialReason": null,
@@ -508,6 +508,19 @@
       "simulated": false,
       "extraReceiptKeys": "",
       "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+    },
+    {
+      "tools": "hybrid_search",
+      "asked": "",
+      "status": "COMPLETED",
+      "denialReason": null,
+      "error": null,
+      "output": "<stub>",
+      "shouldExit": false,
+      "executionDomain": "agent_orchestration",
+      "simulated": false,
+      "extraReceiptKeys": "",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
     }
   ],
   "sweep review/operator-approves": [
@@ -522,7 +535,7 @@
       "executionDomain": "agent_orchestration",
       "simulated": false,
       "extraReceiptKeys": "",
-      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
     },
     {
       "tools": "write_file,edit_file,patch_file",
@@ -551,7 +564,7 @@
       "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > confirm > plugin.notifyToolCall > journal.start > baseline.capture > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.candidateMutation > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
     },
     {
-      "tools": "fetch_web,run_tests,search_web,lsp_hover,lsp_definition,lsp_diagnostics",
+      "tools": "fetch_web,search_web,lsp_hover,lsp_definition,lsp_diagnostics",
       "asked": "asked",
       "status": "COMPLETED",
       "denialReason": null,
@@ -561,7 +574,7 @@
       "executionDomain": "agent_orchestration",
       "simulated": false,
       "extraReceiptKeys": "",
-      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > confirm > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > confirm > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
     },
     {
       "tools": "task_completed",
@@ -603,7 +616,7 @@
       "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > flight.durableState > ui.printToolResult > observer.toolEnd:ok"
     },
     {
-      "tools": "activate_skill,hybrid_search,update_requirements,read_objective,read_findings,read_archive,read_tool_output,enable_tools",
+      "tools": "activate_skill,update_requirements,read_objective,read_findings,read_archive,read_tool_output,enable_tools",
       "asked": "",
       "status": "COMPLETED",
       "denialReason": null,
@@ -616,7 +629,33 @@
       "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
     },
     {
-      "tools": "browser_navigate,browser_screenshot,browser_type,browser_console_logs",
+      "tools": "run_tests",
+      "asked": "asked",
+      "status": "COMPLETED",
+      "denialReason": null,
+      "error": null,
+      "output": "<stub>",
+      "shouldExit": false,
+      "executionDomain": "agent_orchestration",
+      "simulated": false,
+      "extraReceiptKeys": "",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > confirm > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+    },
+    {
+      "tools": "hybrid_search",
+      "asked": "",
+      "status": "COMPLETED",
+      "denialReason": null,
+      "error": null,
+      "output": "<stub>",
+      "shouldExit": false,
+      "executionDomain": "agent_orchestration",
+      "simulated": false,
+      "extraReceiptKeys": "",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+    },
+    {
+      "tools": "browser_navigate,browser_type",
       "asked": "asked",
       "status": "COMPLETED",
       "denialReason": null,
@@ -627,6 +666,19 @@
       "simulated": false,
       "extraReceiptKeys": "",
       "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > confirm > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+    },
+    {
+      "tools": "browser_screenshot,browser_console_logs",
+      "asked": "asked",
+      "status": "COMPLETED",
+      "denialReason": null,
+      "error": null,
+      "output": "<stub>",
+      "shouldExit": false,
+      "executionDomain": "agent_orchestration",
+      "simulated": false,
+      "extraReceiptKeys": "",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > confirm > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
     },
     {
       "tools": "browser_click,manage_knowledge",
@@ -680,7 +732,7 @@
       "executionDomain": "agent_orchestration",
       "simulated": false,
       "extraReceiptKeys": "",
-      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
     },
     {
       "tools": "write_file,edit_file,run_command,delete_file,fetch_web,patch_file,run_tests,search_web,lsp_hover,lsp_definition,lsp_diagnostics,browser_navigate,browser_screenshot,browser_click,browser_type,browser_console_logs,manage_knowledge,mcp__demo__echo,custom__stamp",
@@ -735,7 +787,7 @@
       "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > flight.durableState > ui.printToolResult > observer.toolEnd:ok"
     },
     {
-      "tools": "activate_skill,hybrid_search,update_requirements,read_objective,read_findings,read_archive,read_tool_output,enable_tools",
+      "tools": "activate_skill,update_requirements,read_objective,read_findings,read_archive,read_tool_output,enable_tools",
       "asked": "",
       "status": "COMPLETED",
       "denialReason": null,
@@ -746,6 +798,19 @@
       "simulated": false,
       "extraReceiptKeys": "",
       "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+    },
+    {
+      "tools": "hybrid_search",
+      "asked": "",
+      "status": "COMPLETED",
+      "denialReason": null,
+      "error": null,
+      "output": "<stub>",
+      "shouldExit": false,
+      "executionDomain": "agent_orchestration",
+      "simulated": false,
+      "extraReceiptKeys": "",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
     }
   ],
   "sweep review,full-access/no-operator": [
@@ -760,7 +825,7 @@
       "executionDomain": "agent_orchestration",
       "simulated": false,
       "extraReceiptKeys": "",
-      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
     },
     {
       "tools": "write_file,edit_file,delete_file,patch_file,manage_knowledge",
@@ -841,7 +906,7 @@
       "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > flight.durableState > ui.printToolResult > observer.toolEnd:ok"
     },
     {
-      "tools": "activate_skill,hybrid_search,update_requirements,read_objective,read_findings,read_archive,read_tool_output,enable_tools",
+      "tools": "activate_skill,update_requirements,read_objective,read_findings,read_archive,read_tool_output,enable_tools",
       "asked": "",
       "status": "COMPLETED",
       "denialReason": null,
@@ -852,11 +917,9 @@
       "simulated": false,
       "extraReceiptKeys": "",
       "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
-    }
-  ],
-  "sweep auto/no-operator": [
+    },
     {
-      "tools": "read_file,list_dir,search_code,find_files,search_symbols,file_info,batch_read,file_tree,run_tests,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search",
+      "tools": "hybrid_search",
       "asked": "",
       "status": "COMPLETED",
       "denialReason": null,
@@ -866,7 +929,22 @@
       "executionDomain": "agent_orchestration",
       "simulated": false,
       "extraReceiptKeys": "",
-      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+    }
+  ],
+  "sweep auto/no-operator": [
+    {
+      "tools": "read_file,list_dir,search_code,find_files,search_symbols,file_info,batch_read,file_tree,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search",
+      "asked": "",
+      "status": "COMPLETED",
+      "denialReason": null,
+      "error": null,
+      "output": "<stub>",
+      "shouldExit": false,
+      "executionDomain": "agent_orchestration",
+      "simulated": false,
+      "extraReceiptKeys": "",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
     },
     {
       "tools": "write_file,edit_file,patch_file",
@@ -947,7 +1025,7 @@
       "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > flight.durableState > ui.printToolResult > observer.toolEnd:ok"
     },
     {
-      "tools": "activate_skill,hybrid_search,update_requirements,read_objective,read_findings,read_archive,read_tool_output,enable_tools",
+      "tools": "activate_skill,update_requirements,read_objective,read_findings,read_archive,read_tool_output,enable_tools",
       "asked": "",
       "status": "COMPLETED",
       "denialReason": null,
@@ -958,6 +1036,32 @@
       "simulated": false,
       "extraReceiptKeys": "",
       "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+    },
+    {
+      "tools": "run_tests",
+      "asked": "",
+      "status": "COMPLETED",
+      "denialReason": null,
+      "error": null,
+      "output": "<stub>",
+      "shouldExit": false,
+      "executionDomain": "agent_orchestration",
+      "simulated": false,
+      "extraReceiptKeys": "",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+    },
+    {
+      "tools": "hybrid_search",
+      "asked": "",
+      "status": "COMPLETED",
+      "denialReason": null,
+      "error": null,
+      "output": "<stub>",
+      "shouldExit": false,
+      "executionDomain": "agent_orchestration",
+      "simulated": false,
+      "extraReceiptKeys": "",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
     },
     {
       "tools": "manage_knowledge",
@@ -988,7 +1092,7 @@
   ],
   "sweep auto/operator-approves": [
     {
-      "tools": "read_file,list_dir,search_code,find_files,search_symbols,file_info,batch_read,file_tree,run_tests,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search",
+      "tools": "read_file,list_dir,search_code,find_files,search_symbols,file_info,batch_read,file_tree,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search",
       "asked": "",
       "status": "COMPLETED",
       "denialReason": null,
@@ -998,7 +1102,7 @@
       "executionDomain": "agent_orchestration",
       "simulated": false,
       "extraReceiptKeys": "",
-      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
     },
     {
       "tools": "write_file,edit_file,patch_file",
@@ -1037,7 +1141,7 @@
       "executionDomain": "agent_orchestration",
       "simulated": false,
       "extraReceiptKeys": "",
-      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > confirm > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > confirm > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
     },
     {
       "tools": "task_completed",
@@ -1079,7 +1183,7 @@
       "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > flight.durableState > ui.printToolResult > observer.toolEnd:ok"
     },
     {
-      "tools": "activate_skill,hybrid_search,update_requirements,read_objective,read_findings,read_archive,read_tool_output,enable_tools",
+      "tools": "activate_skill,update_requirements,read_objective,read_findings,read_archive,read_tool_output,enable_tools",
       "asked": "",
       "status": "COMPLETED",
       "denialReason": null,
@@ -1092,7 +1196,33 @@
       "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
     },
     {
-      "tools": "browser_navigate,browser_screenshot,browser_type,browser_console_logs",
+      "tools": "run_tests",
+      "asked": "",
+      "status": "COMPLETED",
+      "denialReason": null,
+      "error": null,
+      "output": "<stub>",
+      "shouldExit": false,
+      "executionDomain": "agent_orchestration",
+      "simulated": false,
+      "extraReceiptKeys": "",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+    },
+    {
+      "tools": "hybrid_search",
+      "asked": "",
+      "status": "COMPLETED",
+      "denialReason": null,
+      "error": null,
+      "output": "<stub>",
+      "shouldExit": false,
+      "executionDomain": "agent_orchestration",
+      "simulated": false,
+      "extraReceiptKeys": "",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+    },
+    {
+      "tools": "browser_navigate,browser_type",
       "asked": "asked",
       "status": "COMPLETED",
       "denialReason": null,
@@ -1103,6 +1233,19 @@
       "simulated": false,
       "extraReceiptKeys": "",
       "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > confirm > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+    },
+    {
+      "tools": "browser_screenshot,browser_console_logs",
+      "asked": "asked",
+      "status": "COMPLETED",
+      "denialReason": null,
+      "error": null,
+      "output": "<stub>",
+      "shouldExit": false,
+      "executionDomain": "agent_orchestration",
+      "simulated": false,
+      "extraReceiptKeys": "",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > confirm > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
     },
     {
       "tools": "browser_click",
@@ -1159,7 +1302,7 @@
   ],
   "sweep auto,full-access/no-operator": [
     {
-      "tools": "read_file,list_dir,search_code,find_files,search_symbols,fetch_web,file_info,batch_read,file_tree,run_tests,search_web,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search",
+      "tools": "read_file,list_dir,search_code,find_files,search_symbols,fetch_web,file_info,batch_read,file_tree,search_web,lsp_hover,lsp_definition,lsp_diagnostics,git_status,git_diff,git_log,cst_symbols,outline_file,trigram_search",
       "asked": "",
       "status": "COMPLETED",
       "denialReason": null,
@@ -1169,7 +1312,7 @@
       "executionDomain": "agent_orchestration",
       "simulated": false,
       "extraReceiptKeys": "",
-      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
     },
     {
       "tools": "write_file,edit_file,patch_file",
@@ -1237,7 +1380,7 @@
       "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > flight.durableState > ui.printToolResult > observer.toolEnd:ok"
     },
     {
-      "tools": "activate_skill,hybrid_search,browser_navigate,browser_screenshot,browser_type,browser_console_logs,update_requirements,read_objective,read_findings,read_archive,read_tool_output,enable_tools",
+      "tools": "activate_skill,browser_navigate,browser_type,update_requirements,read_objective,read_findings,read_archive,read_tool_output,enable_tools",
       "asked": "",
       "status": "COMPLETED",
       "denialReason": null,
@@ -1248,6 +1391,32 @@
       "simulated": false,
       "extraReceiptKeys": "",
       "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+    },
+    {
+      "tools": "run_tests",
+      "asked": "",
+      "status": "COMPLETED",
+      "denialReason": null,
+      "error": null,
+      "output": "<stub>",
+      "shouldExit": false,
+      "executionDomain": "agent_orchestration",
+      "simulated": false,
+      "extraReceiptKeys": "",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+    },
+    {
+      "tools": "hybrid_search,browser_screenshot,browser_console_logs",
+      "asked": "",
+      "status": "COMPLETED",
+      "denialReason": null,
+      "error": null,
+      "output": "<stub>",
+      "shouldExit": false,
+      "executionDomain": "agent_orchestration",
+      "simulated": false,
+      "extraReceiptKeys": "",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
     },
     {
       "tools": "browser_click,manage_knowledge",
@@ -1301,7 +1470,7 @@
       "executionDomain": "agent_orchestration",
       "simulated": false,
       "extraReceiptKeys": "",
-      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
     },
     {
       "tools": "write_file,edit_file,delete_file,patch_file,browser_click,manage_knowledge,custom__stamp",
@@ -1369,7 +1538,7 @@
       "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission(refused) > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:failed > ui.printToolResult > observer.toolEnd:failed"
     },
     {
-      "tools": "activate_skill,hybrid_search,browser_navigate,browser_screenshot,browser_console_logs,update_requirements,read_objective,read_findings,read_archive,read_tool_output,enable_tools",
+      "tools": "activate_skill,browser_navigate,update_requirements,read_objective,read_findings,read_archive,read_tool_output,enable_tools",
       "asked": "",
       "status": "COMPLETED",
       "denialReason": null,
@@ -1380,6 +1549,19 @@
       "simulated": false,
       "extraReceiptKeys": "",
       "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+    },
+    {
+      "tools": "hybrid_search,browser_screenshot,browser_console_logs",
+      "asked": "",
+      "status": "COMPLETED",
+      "denialReason": null,
+      "error": null,
+      "output": "<stub>",
+      "shouldExit": false,
+      "executionDomain": "agent_orchestration",
+      "simulated": false,
+      "extraReceiptKeys": "",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
     }
   ],
   "sweep read-only/operator-approves": [
@@ -1394,7 +1576,7 @@
       "executionDomain": "agent_orchestration",
       "simulated": false,
       "extraReceiptKeys": "",
-      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
     },
     {
       "tools": "write_file,edit_file,delete_file,patch_file,browser_click,manage_knowledge,custom__stamp",
@@ -1462,7 +1644,7 @@
       "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission(refused) > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:failed > ui.printToolResult > observer.toolEnd:failed"
     },
     {
-      "tools": "activate_skill,hybrid_search,browser_navigate,browser_screenshot,browser_console_logs,update_requirements,read_objective,read_findings,read_archive,read_tool_output,enable_tools",
+      "tools": "activate_skill,browser_navigate,update_requirements,read_objective,read_findings,read_archive,read_tool_output,enable_tools",
       "asked": "",
       "status": "COMPLETED",
       "denialReason": null,
@@ -1473,6 +1655,19 @@
       "simulated": false,
       "extraReceiptKeys": "",
       "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+    },
+    {
+      "tools": "hybrid_search,browser_screenshot,browser_console_logs",
+      "asked": "",
+      "status": "COMPLETED",
+      "denialReason": null,
+      "error": null,
+      "output": "<stub>",
+      "shouldExit": false,
+      "executionDomain": "agent_orchestration",
+      "simulated": false,
+      "extraReceiptKeys": "",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
     }
   ],
   "sweep read-only,full-access/no-operator": [
@@ -1487,7 +1682,7 @@
       "executionDomain": "agent_orchestration",
       "simulated": false,
       "extraReceiptKeys": "",
-      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
     },
     {
       "tools": "write_file,edit_file,delete_file,patch_file,browser_click,manage_knowledge,custom__stamp",
@@ -1555,7 +1750,7 @@
       "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission(refused) > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:failed > ui.printToolResult > observer.toolEnd:failed"
     },
     {
-      "tools": "activate_skill,hybrid_search,browser_navigate,browser_screenshot,browser_console_logs,update_requirements,read_objective,read_findings,read_archive,read_tool_output,enable_tools",
+      "tools": "activate_skill,browser_navigate,update_requirements,read_objective,read_findings,read_archive,read_tool_output,enable_tools",
       "asked": "",
       "status": "COMPLETED",
       "denialReason": null,
@@ -1566,6 +1761,19 @@
       "simulated": false,
       "extraReceiptKeys": "",
       "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
+    },
+    {
+      "tools": "hybrid_search,browser_screenshot,browser_console_logs",
+      "asked": "",
+      "status": "COMPLETED",
+      "denialReason": null,
+      "error": null,
+      "output": "<stub>",
+      "shouldExit": false,
+      "executionDomain": "agent_orchestration",
+      "simulated": false,
+      "extraReceiptKeys": "",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:spine-handler > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok"
     }
   ],
   "cases": {
@@ -1656,7 +1864,7 @@
       "shouldExit": false,
       "executionDomain": "agent_orchestration",
       "simulated": false,
-      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:failed > ui.printToolResult > observer.toolEnd:failed",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:failed > ui.printToolResult > observer.toolEnd:failed",
       "extraReceiptKeys": "error"
     },
     "arguments are not JSON: task_completed": {
@@ -1701,7 +1909,7 @@
       "shouldExit": false,
       "executionDomain": "agent_orchestration",
       "simulated": false,
-      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok",
       "extraReceiptKeys": ""
     },
     "arguments are truncated JSON: MCP tool": {
@@ -1731,7 +1939,7 @@
       "shouldExit": false,
       "executionDomain": "agent_orchestration",
       "simulated": false,
-      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:failed > ui.printToolResult > observer.toolEnd:failed",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:failed > ui.printToolResult > observer.toolEnd:failed",
       "extraReceiptKeys": "error"
     },
     "arguments are a JSON string": {
@@ -1746,7 +1954,7 @@
       "shouldExit": false,
       "executionDomain": "agent_orchestration",
       "simulated": false,
-      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:failed > ui.printToolResult > observer.toolEnd:failed",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:failed > ui.printToolResult > observer.toolEnd:failed",
       "extraReceiptKeys": "error"
     },
     "arguments are JSON null": {
@@ -1776,7 +1984,7 @@
       "shouldExit": false,
       "executionDomain": "agent_orchestration",
       "simulated": false,
-      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:failed > ui.printToolResult > observer.toolEnd:failed",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:failed > ui.printToolResult > observer.toolEnd:failed",
       "extraReceiptKeys": "error"
     },
     "a required argument is missing: write tool, review, operator approves": {
@@ -1806,7 +2014,7 @@
       "shouldExit": false,
       "executionDomain": "agent_orchestration",
       "simulated": false,
-      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok",
       "extraReceiptKeys": ""
     },
     "an argument the schema does not name": {
@@ -1821,7 +2029,7 @@
       "shouldExit": false,
       "executionDomain": "agent_orchestration",
       "simulated": false,
-      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok",
       "extraReceiptKeys": ""
     },
     "delegated allow-list: a tool outside it": {
@@ -1986,7 +2194,7 @@
       "shouldExit": false,
       "executionDomain": "agent_orchestration",
       "simulated": false,
-      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok",
       "extraReceiptKeys": ""
     },
     "dry run: a write": {
@@ -2031,7 +2239,7 @@
       "shouldExit": false,
       "executionDomain": "agent_orchestration",
       "simulated": true,
-      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok",
       "extraReceiptKeys": ""
     },
     "command rule allow: review, no operator": {
@@ -2211,7 +2419,7 @@
       "shouldExit": false,
       "executionDomain": "agent_orchestration",
       "simulated": false,
-      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > journal.start > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > journal.end > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok",
+      "trace": "flight.toolCall > ui.printToolCall > observer.toolStart > plugin.notifyToolCall > spine.contextAdmission > spine.authorityAdmission > spine.resourceConfinement > spine.egressQuarantine > spine.processLifecycle:start > run:bridge > spine.processLifecycle:exit > spine.evidenceEmission > plugin.notifyToolResult > audit.log > flight.toolResult:ok > ui.printToolResult > observer.toolEnd:ok",
       "extraReceiptKeys": ""
     },
     "managed commands.forbid: auto, full access, operator approves": {

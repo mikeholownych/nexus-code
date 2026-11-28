@@ -189,7 +189,7 @@ describe("tool routing and dispatch decisions (MT-2 characterization)", () => {
     assert.equal(approved.get("write_file")!.trace, common("run:bridge", "flight.fileDiff"));
     assert.equal(approved.get("run_command")!.trace, common("run:bridge", ""));
     // A read asks nobody, captures no baseline and reports no mutation; the rest of the order is the same.
-    assert.equal(approved.get("read_file")!.trace, common("run:bridge", "").replace("confirm > ", "").replace("baseline.capture > ", "").replace("spine.candidateMutation > ", ""));
+    assert.equal(approved.get("read_file")!.trace, common("run:bridge", "").replace("confirm > ", "").replace("journal.start > ", "").replace("baseline.capture > ", "").replace("spine.candidateMutation > ", "").replace("journal.end > ", ""));
   });
 
   test("every offered tool has a route and every route belongs to an offered tool", async () => {

@@ -131,6 +131,8 @@ export class AutonomousAgent {
    */
   private recoveredUnboundVerifier?: { command: string; reason: string };
   private recoveredOperation?: DurableTaskState["operation"];
+  /** Last durable tool operation whose result has not been durably recorded yet. */
+  private unresolvedOperation: NonNullable<DurableTaskState["currentOperation"]> | null = null;
   /** A tool call interrupted before its result was durable; an identical replay needs an operator decision. */
   private interruptedCall?: { toolName: string; argsHash?: string };
   private extensionPosture?: { workspace: string; readOnly: boolean };
@@ -941,6 +943,7 @@ export class AutonomousAgent {
       candidateId: this.activeValidationReceipt?.candidateId || null,
       validationReceipts: this.activeValidationReceipt ? [this.activeValidationReceipt] : [],
       messages: this.messages,
+      currentOperation: this.unresolvedOperation,
       inferenceContextManifests: this.inferenceContextManifests,
       unverifiedChangesPending: this.hasPendingModifications,
       verificationConfigAttempts: this.bridge.getSecurityManager().getVerificationAttempts(),
@@ -1044,6 +1047,7 @@ export class AutonomousAgent {
     this.recoveredOperation = state.operation;
     const interruptedOp = recoveryResult.interruptedOperation
       ?? (state.currentOperation?.status === "interrupted" ? state.currentOperation : undefined);
+    this.unresolvedOperation = state.currentOperation ?? null;
     this.interruptedCall = interruptedOp
       ? {
           toolName: typeof interruptedOp.toolName === "string" && interruptedOp.toolName ? interruptedOp.toolName : "*",

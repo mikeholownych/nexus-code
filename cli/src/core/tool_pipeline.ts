@@ -771,6 +771,11 @@ function persistOperationStart(
   reissuesInterrupted: boolean,
 ): OperationStartPersistence {
   if (!agent.durable || !durableTaskId) return { persisted: false };
+  // The durable task record has one current-operation slot. Turn orchestration
+  // intentionally dispatches READ_ONLY_TOOLS in parallel, so journaling those
+  // calls would let a later read replace an in-flight side-effect record. Reads
+  // are safe to repeat after recovery and do not need the side-effect journal.
+  if (READ_ONLY_TOOLS.has(toolName)) return { persisted: false };
   try {
     if (!agent.stateManager) throw new Error("durable state manager is unavailable");
     if (!agent.stateManager.hasTaskState(durableTaskId)) {
@@ -783,7 +788,7 @@ function persistOperationStart(
     if (!agent.stateManager.hasTaskState(durableTaskId)) {
       throw new Error("durable task state is still unavailable after checkpoint");
     }
-    agent.stateManager.recordOperationStart(durableTaskId, {
+    const saved = agent.stateManager.recordOperationStart(durableTaskId, {
       invocationId: call.id,
       seq: operationSeq,
       toolName,
@@ -791,6 +796,7 @@ function persistOperationStart(
       argsSummary: JSON.stringify(args).slice(0, 200),
       argsHash: argsFingerprint(toolName, args),
     });
+    agent.unresolvedOperation = saved.currentOperation ?? null;
     if (reissuesInterrupted) agent.interruptedCall = undefined;
     return { persisted: true };
   } catch (err: any) {
@@ -864,16 +870,34 @@ function recordOperationEndIfStarted(
   receipt: ExecutionReceipt,
   operationSeq: number,
   operationStartPersisted: boolean,
-): void {
-  if (!operationStartPersisted) return;
+): string | undefined {
+  if (!operationStartPersisted) return undefined;
   try {
-    agent.stateManager.recordOperationEnd(durableTaskId, invocationId, {
+    const saved = agent.stateManager.recordOperationEnd(durableTaskId, invocationId, {
       success: receipt.success,
       error: receipt.error,
       outcomeUnknown: receipt.outcomeUnknown,
     }, operationSeq);
+    if (saved.currentOperation?.seq !== operationSeq || saved.currentOperation.status === "in_flight") {
+      throw new Error("durable operation-end write did not settle the matching operation");
+    }
+    agent.unresolvedOperation = null;
+    return undefined;
   } catch (err: any) {
     agent.reportPersistenceFailure("operation_end", err);
+    agent.acceptancePersistenceFailure =
+      "A tool outcome could not be durably recorded; verified task completion is blocked.";
+    const failure = redactSecrets(err instanceof Error ? err.message : String(err)).slice(0, 200) || "unknown persistence error";
+    const unresolved = agent.unresolvedOperation;
+    if (unresolved && unresolved.seq === operationSeq) {
+      agent.unresolvedOperation = {
+        ...unresolved,
+        status: "outcome_unknown",
+        outcomeUnknown: true,
+        error: `The tool may have completed, but its outcome could not be durably recorded (${failure}).`,
+      };
+    }
+    return failure;
   }
 }
 
@@ -947,7 +971,6 @@ export async function executeToolCall(agent: any, input: ToolExecutionInput): Pr
     receipt = await executeWithDurableStartGate(
       agent, call, effectiveTaskId, actor, toolName, args, currentStep, operationStart.failure, skillAttr, context,
     );
-    recordReceipt(receipt);
   } finally {
     agent.syncVerificationAttempts();
   }
@@ -973,9 +996,19 @@ export async function executeToolCall(agent: any, input: ToolExecutionInput): Pr
   }
 
   if (agent.durable && agent.stateManager && durableTaskId) {
-    recordOperationEndIfStarted(agent, durableTaskId, call.id, receipt, operationSeq, operationStart.persisted);
+    const endFailure = recordOperationEndIfStarted(agent, durableTaskId, call.id, receipt, operationSeq, operationStart.persisted);
+    if (endFailure) {
+      receipt = {
+        ...receipt,
+        success: false,
+        outcomeUnknown: true,
+        status: "UNKNOWN",
+        error: `The tool may have completed, but its outcome could not be durably recorded (${endFailure}). Check its effect before retrying.`,
+      };
+    }
   }
 
+  recordReceipt(receipt);
   return { call, currentStep, toolName, args, dispatch, receipt, diffTarget, before };
 }
 
