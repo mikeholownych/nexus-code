@@ -64,6 +64,7 @@ async function recoverAfterProcessCrash(includeCompletedSibling: boolean): Promi
         PATH: process.env.PATH,
         HOME: home,
         XDG_CONFIG_HOME: path.join(home, ".config"),
+        NEXUS_CORE_BIN: process.env.NEXUS_CORE_BIN ?? "",
         TEST_GATEWAY: gateway.url,
         TEST_WORKSPACE: repo,
         TEST_TASK_ID_FILE: taskIdFile,
@@ -133,4 +134,89 @@ test("a crash during a multi-tool response preserves a completed sibling and doe
   assert.equal(effects, "completed\npending\n", "the completed sibling remains once and the unknown sibling is not repeated");
   assert.ok(toolResults.some((content) => content.includes("completed")), JSON.stringify(toolResults));
   assert.ok(toolResults.some((content) => /effects, if any, are unknown/.test(content)), JSON.stringify(toolResults));
+});
+
+test("a file write completed before process death remains unknown and is not replayed", { timeout: 60_000 }, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-p10-file-crash-"));
+  const home = path.join(root, "home");
+  const repo = makeRepo({ "README.md": "base\n" });
+  const taskIdFile = path.join(root, "task-id.txt");
+  const endJournalReached = path.join(root, "end-journal-reached.txt");
+  const target = path.join(repo, "written.txt");
+  fs.mkdirSync(home, { recursive: true });
+
+  const gateway = await startGateway((n) => n === 1
+    ? { kind: "tools", calls: [{ name: "write_file", args: { path: "written.txt", content: "written once\n" } }] }
+    : { kind: "text", content: "done" });
+  const previousHome = process.env.HOME;
+  const previousXdg = process.env.XDG_CONFIG_HOME;
+  const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const childScript = `
+    import fs from "node:fs";
+    import { AutonomousAgent } from "./src/agent.ts";
+    const agent = new AutonomousAgent({ endpoint: process.env.TEST_GATEWAY, model: "m", maxSteps: 4, temperature: 0, workspace: process.env.TEST_WORKSPACE, shell: "bash", approvalMode: "auto", fullAccess: true }, 1, undefined, { durable: true });
+    agent.ui = new Proxy({}, { get: () => () => {} });
+    const state = agent.getStateManager();
+    state.recordOperationEnd = () => {
+      fs.writeFileSync(process.env.TEST_END_JOURNAL_REACHED, "write_file already returned");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+    };
+    fs.writeFileSync(process.env.TEST_TASK_ID_FILE, agent.getTaskId());
+    await agent.runTurn("Write written.txt.");
+    process.exit(0);
+  `;
+  const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", childScript], {
+    cwd: cliRoot,
+    env: {
+      PATH: process.env.PATH,
+      HOME: home,
+      XDG_CONFIG_HOME: path.join(home, ".config"),
+      NEXUS_CORE_BIN: process.env.NEXUS_CORE_BIN ?? "",
+      TEST_GATEWAY: gateway.url,
+      TEST_WORKSPACE: repo,
+      TEST_TASK_ID_FILE: taskIdFile,
+      TEST_END_JOURNAL_REACHED: endJournalReached,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  trackResource("child process", `file crash fixture agent pid ${child.pid}`, () => child.exitCode === null && child.signalCode === null, () => child.kill("SIGKILL"));
+  let childOutput = "";
+  child.stdout?.on("data", (chunk) => { childOutput += String(chunk); });
+  child.stderr?.on("data", (chunk) => { childOutput += String(chunk); });
+  const childExit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+  });
+  let resumed: AutonomousAgent | undefined;
+  try {
+    await waitFor("the durable task id", () => fs.existsSync(taskIdFile));
+    await waitFor("the file write and blocked operation-end journal", () => fs.existsSync(endJournalReached));
+    assert.equal(fs.readFileSync(target, "utf8"), "written once\n", "the mutating tool completed before the crash boundary");
+
+    child.kill("SIGKILL");
+    const killed = await childExit;
+    assert.equal(killed.signal, "SIGKILL", `child ended unexpectedly: ${JSON.stringify(killed)} ${childOutput}`);
+
+    process.env.HOME = home;
+    process.env.XDG_CONFIG_HOME = path.join(home, ".config");
+    resumed = new AutonomousAgent({ endpoint: gateway.url, model: "m", maxSteps: 4, temperature: 0, workspace: repo, shell: "bash", approvalMode: "auto", fullAccess: true }, 1, undefined, { durable: true });
+    resumed.ui = new Proxy({}, { get: () => () => {} });
+    const taskId = fs.readFileSync(taskIdFile, "utf8").trim();
+    const recovery = await resumed.recoverFromTaskState(taskId);
+    assert.equal(recovery.interrupted, true, "restart identifies the operation whose end record was never persisted");
+    await resumed.runTurn("Continue.", undefined, { resume: true });
+
+    assert.equal(fs.readFileSync(target, "utf8"), "written once\n", "resume does not replay the completed filesystem effect");
+    const toolResults = gateway.requests.flatMap((request: any) => request.messages ?? [])
+      .filter((message: any) => message.role === "tool")
+      .map((message: any) => String(message.content));
+    assert.ok(toolResults.some((content) => /effects, if any, are unknown/.test(content)), JSON.stringify(toolResults));
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    resumed?.shutdown();
+    await gateway.close();
+    fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+    if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+    if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = previousXdg;
+  }
 });
