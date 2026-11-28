@@ -842,6 +842,7 @@ export class AutonomousAgent {
       this.mcpManager = new McpClientManager(workspace, { readOnly });
     }
     if (this.pluginManager) {
+      this.pluginManager.shutdown();
       this.pluginManager = new PluginManager(workspace, { readOnly });
       if (this.flightRecorder) this.pluginManager.setFlightRecorder(this.flightRecorder);
     }
@@ -1342,6 +1343,7 @@ export class AutonomousAgent {
   }
 
   public shutdown(): void {
+    this.pluginManager.shutdown();
     this.bridge.shutdown();
     this.skillManager.stopWatcher();
     this.mcpManager.shutdownAll();

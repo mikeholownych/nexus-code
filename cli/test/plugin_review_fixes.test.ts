@@ -18,6 +18,9 @@ import { hasUnprintable, printable } from "../src/core/printable.js";
 import { inspectWorkspaceManifestPlugins, workspacePluginReads } from "../src/core/workspace_plugins.js";
 import { diagnoseWorkspacePlugins } from "../src/doctor_plugins.js";
 import { PluginManager, operatorDirInWorkspace, pluginFileSha256, workspacePluginTrustId } from "../src/plugins.js";
+import { closeLoadedPluginManagersAfterTests } from "./helpers/plugin_manager_cleanup.js";
+
+closeLoadedPluginManagersAfterTests();
 import { trustWorkspacePlugin } from "../src/plugins_cli.js";
 import { setWorkspaceTrusted } from "../src/workspace_trust.js";
 import { dispatch, hookAgent } from "./helpers/hooks_fixture.js";

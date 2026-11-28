@@ -18,6 +18,9 @@ import { diagnoseWorkspacePlugins } from "../src/doctor_plugins.js";
 import { PluginManager, pluginFileSha256, workspacePluginTrustId } from "../src/plugins.js";
 import { setWorkspaceTrusted } from "../src/workspace_trust.js";
 import { FAKE_SYSTEM, policyWorld, toml } from "./helpers/policy_enforcement.js";
+import { closeLoadedPluginManagersAfterTests } from "./helpers/plugin_manager_cleanup.js";
+
+closeLoadedPluginManagersAfterTests();
 
 let base = "", home = "", ws = "", marker = "", previousHome: string | undefined, previousEnvTrust: string | undefined;
 let seq = 0;

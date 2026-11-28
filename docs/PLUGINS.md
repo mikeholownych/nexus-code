@@ -5,9 +5,10 @@ This page is about plugins that a repository carries: JavaScript modules in `<wo
 here changes them. Installed plugin packages (`nexus plugins install`) and the plugin API are described in
 [`SKILLS_AND_PLUGINS.md`](SKILLS_AND_PLUGINS.md).
 
-A workspace plugin runs inside the Nexus process with all of its authority. From v1.3.0 a workspace plugin file is
-loaded only when **that file's exact bytes** are approved by you. In-process workspace plugins are kept for now and are
-deprecated.
+JavaScript plugin files run in a separate worker process so a stuck callback can be stopped without freezing Nexus.
+This is execution containment, **not a security sandbox**: an approved plugin still has the operating-system access of
+your user account. From v1.3.0 a workspace plugin file is loaded only when **that file's exact bytes** are approved by
+you.
 
 ```bash
 nexus plugins list                          # what is loaded, and what is not and why
@@ -53,9 +54,9 @@ not trusted. An approvals file that a repository ships is never read: only the o
 
 ## How an approved plugin is run
 
-Nexus reads the file once, and imports those same bytes from a private copy in a temporary directory (mode 700, one
-file, removed after the import), not from the workspace. So what runs is what was hashed, even if the file is replaced
-at that moment. It also means the plugin is **one file**:
+Nexus reads the file once, then imports those same bytes in the plugin worker from a private temporary copy (directory
+mode 700, file mode 600). The copy stays available while that worker is active and is removed when it shuts down. So
+what runs is what was hashed, even if the workspace file is replaced. It also means the plugin is **one file**:
 
 - `import "./lib.js"`, `require("./lib")` and dynamic `import("./x.js")` of a sibling do not resolve;
 - a bare package import (`import x from "some-package"`, `require("some-package")`) does not resolve either: the
@@ -68,6 +69,13 @@ A plugin that fails for one of these reasons is reported, not dropped: one notic
 What an approved plugin does at run time is its own business, and yours for having approved it: an absolute
 `import("/path/to/other.mjs")`, a `child_process` call or a file read by absolute path are not checked. Review the file
 before you approve it.
+
+Each plugin callback has a parent-enforced deadline. The default is 15 seconds. `NEXUS_PLUGIN_TIMEOUT_MS` can lower
+or raise it up to 60 seconds; invalid values use the default. A callback timeout, cancellation, malformed worker
+message, or worker exit stops and unloads that plugin. If a custom tool or middleware continuation may already have
+started its work, Nexus reports the result as unknown so it is checked before retrying. Plugin stdout and stderr are
+limited to 64 KiB combined, and each worker message is limited to 1 MiB. These limits bound callback and message
+handling; they are not CPU or memory quotas.
 
 ## Workspace manifest plugins (command hooks, no in-process code)
 

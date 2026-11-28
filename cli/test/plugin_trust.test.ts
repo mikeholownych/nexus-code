@@ -8,6 +8,9 @@ import test from "node:test";
 import { PluginManager, workspacePluginTrustId, pluginFileSha256, pluginBytesSha256, importPluginBytes } from "../src/plugins.js";
 import { approveExtension, revokeExtension, readExtensionTrust } from "../src/core/content_trust.js";
 import { setWorkspaceTrusted } from "../src/workspace_trust.js";
+import { closeLoadedPluginManagersAfterTests } from "./helpers/plugin_manager_cleanup.js";
+
+closeLoadedPluginManagersAfterTests();
 
 const CLI_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TSX = path.join(CLI_DIR, "node_modules", ".bin", "tsx");

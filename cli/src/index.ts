@@ -1104,44 +1104,48 @@ program
     .action(async (options: any) => {
       const ws = options.workspace ? path.resolve(options.workspace) : process.cwd();
       const pm = new PluginManager(ws);
-      const { untrustedWorkspaceExtensions } = await import("./workspace_trust.js");
-      for (const file of untrustedWorkspaceExtensions(ws).filter((f) => !/(^|[\\/])\.?mcp\.json$/.test(f))) {
-        console.log(pc.yellow(`Not loaded (workspace not trusted; run \`nexus trust\`): ${printable(file)}`));
-      }
-      await pm.loadPlugins();
-      const plugins = pm.listPlugins();
-      const records = pm.getPluginTrustRecords();
-      const { workspaceManifestPlugins } = await import("./plugins_cli.js");
-      const manifestPlugins = workspaceManifestPlugins(ws).map((p) => ({ name: p.name, dir: p.dir, status: p.status, ...(p.problem ? { problem: p.problem } : {}), ...(p.changed ? { changed: p.changed } : {}), ...(p.digest ? { treeSha256: p.digest } : {}), hooks: p.hooks.flatMap((file) => [...(file.hooks["pre-tool"] ?? []), ...(file.hooks["post-tool"] ?? [])].map((hook) => hook.name)), skills: p.skills, files: p.files.map((file) => file.path) }));
-      // The operator's own directories that are not used here, with why: otherwise their plugins are just absent.
-      const { skippedOperatorDirs } = await import("./plugins.js");
-      const skipped = skippedOperatorDirs(ws);
-      if (options.json) { console.log(JSON.stringify({ plugins, records, manifestPlugins, skippedOperatorDirs: skipped }, null, 2)); return; }
-      for (const dir of skipped) console.log(pc.yellow(`Not loaded: your plugins in ${printable(dir)}. The directory lies inside the workspace (${printable(ws)}), where the agent's tools can write it. Start Nexus in a project directory, not in your home directory.\n`));
-      if (plugins.length === 0) console.log(pc.yellow("\nNo active plugins loaded.\n"));
-      else {
-        console.log(pc.bold(pc.cyan("\n=== Loaded Custom Plugins ===\n")));
-        for (const p of plugins) console.log(`• ${pc.bold(pc.green(printable(p.name, 80)))}: ${printable(p.description)} (custom tools: ${p.customToolCount})\n`);
-      }
-      if (manifestPlugins.length) {
-        console.log(pc.bold(pc.cyan("=== Workspace manifest plugins (command hooks) ===\n")));
-        for (const p of manifestPlugins) {
-          console.log(`• ${p.status === "active" ? pc.green(p.status) : pc.yellow(p.status)} ${pc.bold(printable(p.name, 80))} ${pc.dim(printable(p.dir))}${p.treeSha256 ? pc.dim(` tree sha256 ${p.treeSha256}`) : ""}`);
-          if (p.problem) console.log(`  ${pc.dim(printable(p.problem))}`);
-          if (p.changed) console.log(`  ${pc.dim(`changed since approval: ${printable(p.changed.join(", "))}`)}`);
-          if (p.hooks.length) console.log(`  hooks: ${printable(p.hooks.join(", "))}`);
-          if (p.status === "not_approved" || p.status === "changed") console.log(`  ${pc.dim(`review it, then run \`nexus plugins trust ${printable(path.relative(ws, p.dir))}\` in a terminal`)}`);
+      try {
+        const { untrustedWorkspaceExtensions } = await import("./workspace_trust.js");
+        for (const file of untrustedWorkspaceExtensions(ws).filter((f) => !/(^|[\\/])\.?mcp\.json$/.test(f))) {
+          console.log(pc.yellow(`Not loaded (workspace not trusted; run \`nexus trust\`): ${printable(file)}`));
         }
-        console.log();
-      }
-      const blocked = records.filter((r) => r.status !== "global" && r.status !== "trusted");
-      if (blocked.length) {
-        console.log(pc.bold(pc.yellow("=== Plugins not active ===\n")));
-        for (const r of blocked) {
-          console.log(`• ${pc.yellow(r.status)} ${printable(r.path)}${r.sha256 ? pc.dim(` sha256 ${r.sha256}`) : ""}`);
-          if (r.reason) console.log(`  ${pc.dim(printable(r.reason, 600))}`);
+        await pm.loadPlugins();
+        const plugins = pm.listPlugins();
+        const records = pm.getPluginTrustRecords();
+        const { workspaceManifestPlugins } = await import("./plugins_cli.js");
+        const manifestPlugins = workspaceManifestPlugins(ws).map((p) => ({ name: p.name, dir: p.dir, status: p.status, ...(p.problem ? { problem: p.problem } : {}), ...(p.changed ? { changed: p.changed } : {}), ...(p.digest ? { treeSha256: p.digest } : {}), hooks: p.hooks.flatMap((file) => [...(file.hooks["pre-tool"] ?? []), ...(file.hooks["post-tool"] ?? [])].map((hook) => hook.name)), skills: p.skills, files: p.files.map((file) => file.path) }));
+        // The operator's own directories that are not used here, with why: otherwise their plugins are just absent.
+        const { skippedOperatorDirs } = await import("./plugins.js");
+        const skipped = skippedOperatorDirs(ws);
+        if (options.json) { console.log(JSON.stringify({ plugins, records, manifestPlugins, skippedOperatorDirs: skipped }, null, 2)); return; }
+        for (const dir of skipped) console.log(pc.yellow(`Not loaded: your plugins in ${printable(dir)}. The directory lies inside the workspace (${printable(ws)}), where the agent's tools can write it. Start Nexus in a project directory, not in your home directory.\n`));
+        if (plugins.length === 0) console.log(pc.yellow("\nNo active plugins loaded.\n"));
+        else {
+          console.log(pc.bold(pc.cyan("\n=== Loaded Custom Plugins ===\n")));
+          for (const p of plugins) console.log(`• ${pc.bold(pc.green(printable(p.name, 80)))}: ${printable(p.description)} (custom tools: ${p.customToolCount})\n`);
         }
-        console.log();
+        if (manifestPlugins.length) {
+          console.log(pc.bold(pc.cyan("=== Workspace manifest plugins (command hooks) ===\n")));
+          for (const p of manifestPlugins) {
+            console.log(`• ${p.status === "active" ? pc.green(p.status) : pc.yellow(p.status)} ${pc.bold(printable(p.name, 80))} ${pc.dim(printable(p.dir))}${p.treeSha256 ? pc.dim(` tree sha256 ${p.treeSha256}`) : ""}`);
+            if (p.problem) console.log(`  ${pc.dim(printable(p.problem))}`);
+            if (p.changed) console.log(`  ${pc.dim(`changed since approval: ${printable(p.changed.join(", "))}`)}`);
+            if (p.hooks.length) console.log(`  hooks: ${printable(p.hooks.join(", "))}`);
+            if (p.status === "not_approved" || p.status === "changed") console.log(`  ${pc.dim(`review it, then run \`nexus plugins trust ${printable(path.relative(ws, p.dir))}\` in a terminal`)}`);
+          }
+          console.log();
+        }
+        const blocked = records.filter((r) => r.status !== "global" && r.status !== "trusted");
+        if (blocked.length) {
+          console.log(pc.bold(pc.yellow("=== Plugins not active ===\n")));
+          for (const r of blocked) {
+            console.log(`• ${pc.yellow(r.status)} ${printable(r.path)}${r.sha256 ? pc.dim(` sha256 ${r.sha256}`) : ""}`);
+            if (r.reason) console.log(`  ${pc.dim(printable(r.reason, 600))}`);
+          }
+          console.log();
+        }
+      } finally {
+        pm.shutdown();
       }
     });
   pluginsCmd

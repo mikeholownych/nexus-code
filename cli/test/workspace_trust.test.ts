@@ -10,6 +10,9 @@ import os from "node:os";
 import path from "node:path";
 import { isWorkspaceTrusted, listTrustedWorkspaces, setWorkspaceTrusted, untrustedWorkspaceExtensions } from "../src/workspace_trust.js";
 import { PluginManager } from "../src/plugins.js";
+import { closeLoadedPluginManagersAfterTests } from "./helpers/plugin_manager_cleanup.js";
+
+closeLoadedPluginManagersAfterTests();
 import { mcpConfigFiles } from "../src/mcp.js";
 import { SecurityManager } from "../src/security.js";
 import { AutonomousAgent } from "../src/agent.js";
