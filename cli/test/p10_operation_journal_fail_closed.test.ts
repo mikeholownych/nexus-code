@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
+import "./helpers/leak_guard.js";
 import { makeAgent, makeWorld } from "./helpers/tool_characterization.js";
 import { startGateway } from "./helpers/fixtures.js";
 
