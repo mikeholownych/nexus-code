@@ -864,16 +864,20 @@ function recordOperationEndIfStarted(
   receipt: ExecutionReceipt,
   operationSeq: number,
   operationStartPersisted: boolean,
-): void {
-  if (!operationStartPersisted) return;
+): string | undefined {
+  if (!operationStartPersisted) return undefined;
   try {
     agent.stateManager.recordOperationEnd(durableTaskId, invocationId, {
       success: receipt.success,
       error: receipt.error,
       outcomeUnknown: receipt.outcomeUnknown,
     }, operationSeq);
+    return undefined;
   } catch (err: any) {
     agent.reportPersistenceFailure("operation_end", err);
+    agent.acceptancePersistenceFailure =
+      "A tool outcome could not be durably recorded; verified task completion is blocked.";
+    return redactSecrets(err instanceof Error ? err.message : String(err)).slice(0, 200) || "unknown persistence error";
   }
 }
 
@@ -947,7 +951,6 @@ export async function executeToolCall(agent: any, input: ToolExecutionInput): Pr
     receipt = await executeWithDurableStartGate(
       agent, call, effectiveTaskId, actor, toolName, args, currentStep, operationStart.failure, skillAttr, context,
     );
-    recordReceipt(receipt);
   } finally {
     agent.syncVerificationAttempts();
   }
@@ -973,9 +976,19 @@ export async function executeToolCall(agent: any, input: ToolExecutionInput): Pr
   }
 
   if (agent.durable && agent.stateManager && durableTaskId) {
-    recordOperationEndIfStarted(agent, durableTaskId, call.id, receipt, operationSeq, operationStart.persisted);
+    const endFailure = recordOperationEndIfStarted(agent, durableTaskId, call.id, receipt, operationSeq, operationStart.persisted);
+    if (endFailure) {
+      receipt = {
+        ...receipt,
+        success: false,
+        outcomeUnknown: true,
+        status: "UNKNOWN",
+        error: `The tool may have completed, but its outcome could not be durably recorded (${endFailure}). Check its effect before retrying.`,
+      };
+    }
   }
 
+  recordReceipt(receipt);
   return { call, currentStep, toolName, args, dispatch, receipt, diffTarget, before };
 }
 

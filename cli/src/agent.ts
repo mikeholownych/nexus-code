@@ -909,6 +909,13 @@ export class AutonomousAgent {
   }
 
   public checkpointDurableState(notes?: string, turn?: TurnResult): DurableTaskState {
+    const storedOperation = this.stateManager?.hasTaskState(this.currentTaskId)
+      ? this.stateManager.loadTaskState(this.currentTaskId).currentOperation
+      : undefined;
+    const unresolvedOperation = storedOperation &&
+      ["in_flight", "outcome_unknown", "interrupted"].includes(storedOperation.status)
+      ? storedOperation
+      : null;
     const state: DurableTaskState = {
       schemaVersion: 1,
       taskId: this.currentTaskId,
@@ -941,6 +948,7 @@ export class AutonomousAgent {
       candidateId: this.activeValidationReceipt?.candidateId || null,
       validationReceipts: this.activeValidationReceipt ? [this.activeValidationReceipt] : [],
       messages: this.messages,
+      currentOperation: unresolvedOperation,
       inferenceContextManifests: this.inferenceContextManifests,
       unverifiedChangesPending: this.hasPendingModifications,
       verificationConfigAttempts: this.bridge.getSecurityManager().getVerificationAttempts(),
