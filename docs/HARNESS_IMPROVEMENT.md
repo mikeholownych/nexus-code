@@ -73,10 +73,11 @@ HIR stores durable state under `<state>/harness/` (default `~/.nexus/harness` or
 
 `--real` runs verifier commands in isolated temp workspaces and attempts OS sandboxing via Nexus sandbox backends (bwrap/docker, network off). If no OS sandbox is available, HIR blocks real probes unless `--allow-unsandboxed-real-probe` is explicitly set (unsafe, owner-approved only).
 
-## v1.3.1 hardening notes (in progress)
+## v1.3.1 hardening notes
 
-- Scorecards now include confidence and cost/latency dimensions where evidence exists.
-- Advisory scorecard entries are explicitly labeled `advisory` and include `advisoryReason`; they are non-authoritative and must not be auto-promoted.
-- Orchestrator enforces probe/wall-clock budgets and uses bounded parallel case probing (`maxConcurrentProbes`, capped).
+- Scorecards include confidence and cost/latency dimensions where evidence exists.
+- Advisory scorecard entries are explicitly labeled `advisory` and include `advisoryReason`; they are non-authoritative and must not be auto-promoted. Rubric references are recorded as advisory evidence only.
+- Orchestrator enforces probe/wall-clock/token budgets and uses bounded parallel case probing (`maxConcurrentProbes`, capped). Round completion events record probe concurrency.
 - Library retrieval ranks by base/profile/tag/status/confidence/evidence recency and dedupes normalized statements.
+- Promotion reports include confidence calibration summaries (deterministic vs advisory avg confidence) and explicit non-authoritative advisory labeling.
 - Apply preview remains review-only and includes rollback guidance; Nexus HIR never mutates live harness/profile state.
