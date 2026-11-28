@@ -4,6 +4,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PluginManager, pluginDirs } from "../src/plugins.js";
+import { closeLoadedPluginManagersAfterTests } from "./helpers/plugin_manager_cleanup.js";
+
+closeLoadedPluginManagersAfterTests();
 
 async function withHome(run: (home: string, ws: string) => Promise<void>): Promise<void> {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-plugin-dirs-home-"));

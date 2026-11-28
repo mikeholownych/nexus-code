@@ -22,6 +22,9 @@ import { runDoctor } from "../src/doctor.js";
 import { diagnoseHooks } from "../src/doctor_hooks.js";
 import { registerHookCommands } from "../src/hooks_cli.js";
 import { PluginManager, pluginFileSha256, workspacePluginTrustId } from "../src/plugins.js";
+import { closeLoadedPluginManagersAfterTests } from "./helpers/plugin_manager_cleanup.js";
+
+closeLoadedPluginManagersAfterTests();
 import { registerPluginPackageCommands } from "../src/plugins_cli.js";
 import { SecurityManager } from "../src/security.js";
 import { setWorkspaceTrusted } from "../src/workspace_trust.js";

@@ -15,6 +15,9 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { approveExtension, readExtensionTrust } from "../src/core/content_trust.js";
 import { PLUGIN_FILE_LIMIT, PluginManager, inspectWorkspacePlugins, pluginDirSources, pluginFileSha256, readPluginFile, skippedOperatorDirs, workspacePluginTrustId } from "../src/plugins.js";
+import { closeLoadedPluginManagersAfterTests } from "./helpers/plugin_manager_cleanup.js";
+
+closeLoadedPluginManagersAfterTests();
 import { trustWorkspacePlugin } from "../src/plugins_cli.js";
 
 const CLI_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -130,7 +133,9 @@ test("no import before approval; an approved plugin runs from a private copy of 
   const [ranFrom] = marks(marker);
   assert.match(ranFrom, /^file:\/\/.*\/nexus-plugin-[^/]+\/p\.mjs$/, "it ran from a copy in a private directory");
   assert.ok(!fileURLToPath(ranFrom).startsWith(`${ws}${path.sep}`), `not from the workspace path: ${ranFrom}`);
-  assert.equal(fs.existsSync(path.dirname(fileURLToPath(ranFrom))), false, "the copy is removed after the import");
+  assert.equal(fs.existsSync(fileURLToPath(ranFrom)), true, "the worker keeps the approved copy while the plugin is active");
+  after.manager.shutdown();
+  assert.equal(fs.existsSync(path.dirname(fileURLToPath(ranFrom))), false, "the copy is removed after worker shutdown");
 
   // One byte changed: not imported again.
   fs.appendFileSync(file, "\n");

@@ -880,8 +880,9 @@ function recordOperationEndIfStarted(
 /** Plugin notice, journal start, baseline capture, and the spine call, in their original order. */
 export async function executeToolCall(agent: any, input: ToolExecutionInput): Promise<ExecutedToolCall> {
   const { call, currentStep, actor, onConfirm, toolName, args, dispatch, verificationAuthority, reissuesInterrupted, skillAttr, recordReceipt } = input;
+  const pluginSignal = agent.getActiveTurnSignal?.() as AbortSignal | undefined;
   agent.ui.startSpinner(`Executing ${toolName}...`);
-  await agent.pluginManager.notifyToolCall(toolName, args);
+  await agent.pluginManager.notifyToolCall(toolName, args, pluginSignal);
 
   const context: InvocationContext = {
     workspaceRoot: agent.config.workspace,
@@ -894,12 +895,13 @@ export async function executeToolCall(agent: any, input: ToolExecutionInput): Pr
         return await agent.mcpManager.executeMcpTool(tName, tArgs);
       }
       if (agent.pluginManager.isCustomTool(tName)) {
-        return await agent.pluginManager.executeCustomTool(tName, tArgs);
+        return await agent.pluginManager.executeCustomTool(tName, tArgs, pluginSignal);
       }
       return await agent.pluginManager.executeToolPipeline(
         tName,
         tArgs,
-        async (pipeArgs: any) => agent.bridge.executeTool(tName, pipeArgs, verificationAuthority)
+        async (pipeArgs: any) => agent.bridge.executeTool(tName, pipeArgs, verificationAuthority),
+        pluginSignal,
       );
     },
   };
@@ -984,7 +986,7 @@ export async function afterToolCall(agent: any, state: ExecutedToolCall): Promis
     success: receipt.success,
     output: receipt.output,
     error: receipt.error,
-  });
+  }, agent.getActiveTurnSignal?.() as AbortSignal | undefined);
   // A run_tests result is a verifier attempt on the current workspace (what a requirement's `verified` rests on).
   if (toolName === "run_tests" && agent.objective && agent.durable) {
     try {

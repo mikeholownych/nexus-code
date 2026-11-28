@@ -13,6 +13,7 @@ import { permitsPlugin, type EffectivePolicy } from "./core/managed_policy.js";
 import { ManagedPolicyError } from "./core/managed_policy_load.js";
 import { emitPolicyNotice, managedPolicy, printableRefusal } from "./core/policy_runtime.js";
 import { recordMiddlewareAudit } from "./core/persistence_protection.js";
+import { PluginProcessClient, PluginProcessError, pluginTimeoutMs, type PluginProcessMetadata } from "./core/plugin_process.js";
 import type { FlightRecorder } from "./flight.js";
 import pc from "picocolors";
 
@@ -29,21 +30,23 @@ export interface ToolPostMiddlewareContext extends ToolMiddlewareContext {
 export interface PluginHooks {
   name: string;
   description?: string;
-  onTurnStart?: (context: { prompt: string; workspace: string }) => Promise<void> | void;
-  onToolCall?: (context: { toolName: string; args: Record<string, any> }) => Promise<void> | void;
-  onToolResult?: (context: { toolName: string; result: ExecutionResult }) => Promise<void> | void;
+  onTurnStart?: (context: { prompt: string; workspace: string }, signal?: AbortSignal) => Promise<void> | void;
+  onToolCall?: (context: { toolName: string; args: Record<string, any> }, signal?: AbortSignal) => Promise<void> | void;
+  onToolResult?: (context: { toolName: string; result: ExecutionResult }, signal?: AbortSignal) => Promise<void> | void;
   // Candidate #41: Chain-of-responsibility middleware pipeline
   preToolExecution?: (
     context: ToolMiddlewareContext,
-    next: (modifiedArgs?: Record<string, any>) => Promise<ExecutionResult>
+    next: (modifiedArgs?: Record<string, any>) => Promise<ExecutionResult>,
+    signal?: AbortSignal,
   ) => Promise<ExecutionResult>;
   postToolExecution?: (
-    context: ToolPostMiddlewareContext
+    context: ToolPostMiddlewareContext,
+    signal?: AbortSignal,
   ) => Promise<ExecutionResult> | ExecutionResult;
-  onTurnEnd?: (context: { summary: string; isFinished: boolean }) => Promise<void> | void;
+  onTurnEnd?: (context: { summary: string; isFinished: boolean }, signal?: AbortSignal) => Promise<void> | void;
   customTools?: Array<{
     definition: ToolDefinition;
-    handler: (args: Record<string, any>) => Promise<ExecutionResult>;
+    handler: (args: Record<string, any>, signal?: AbortSignal) => Promise<ExecutionResult>;
   }>;
 }
 
@@ -226,6 +229,19 @@ export async function importPluginBytes(filePath: string, bytes: Buffer): Promis
   }
 }
 
+function retainPluginBytes(filePath: string, bytes: Buffer): { modulePath: string; cleanup: () => void } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-plugin-worker-"));
+  fs.chmodSync(dir, 0o700);
+  const dest = path.join(dir, path.basename(filePath));
+  try {
+    fs.writeFileSync(dest, bytes, { mode: 0o600, flag: "wx" });
+  } catch (error) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
+  return { modulePath: dest, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
+}
+
 /** How many pending plugin files the first-session notice names before it says "and N more". */
 const PENDING_NOTICE_LIMIT = 10;
 
@@ -235,7 +251,8 @@ export class PluginManager {
   private trusted: boolean;
   private flightRecorder?: FlightRecorder;
   private plugins: Map<string, PluginHooks> = new Map();
-  private customToolsMap: Map<string, (args: Record<string, any>) => Promise<ExecutionResult>> = new Map();
+  private readonly pluginWorkers = new Map<string, PluginProcessClient>();
+  private customToolsMap: Map<string, (args: Record<string, any>, signal?: AbortSignal) => Promise<ExecutionResult>> = new Map();
   private customToolDefs: ToolDefinition[] = [];
   private readonly policy: () => EffectivePolicy;
   private readonly notify: (notice: string) => void;
@@ -243,14 +260,16 @@ export class PluginManager {
   private pluginTrustRecords: PluginTrustRecord[] = [];
   private announced: string | undefined;
   private readonly toldChanged = new Set<string>();
+  private readonly pluginTimeoutMs: number;
 
-  constructor(workspace: string, options?: { readOnly?: boolean; trusted?: boolean; flightRecorder?: FlightRecorder; policy?: () => EffectivePolicy; notify?: (notice: string) => void }) {
+  constructor(workspace: string, options?: { readOnly?: boolean; trusted?: boolean; flightRecorder?: FlightRecorder; policy?: () => EffectivePolicy; notify?: (notice: string) => void; pluginTimeoutMs?: number }) {
     this.workspace = path.resolve(workspace);
     this.readOnly = Boolean(options?.readOnly);
     this.trusted = options?.trusted !== undefined ? options.trusted : isWorkspaceTrusted(this.workspace, this.readOnly);
     this.flightRecorder = options?.flightRecorder;
     this.policy = options?.policy ?? managedPolicy;
     this.notify = options?.notify ?? emitPolicyNotice;
+    this.pluginTimeoutMs = pluginTimeoutMs(options?.pluginTimeoutMs);
   }
 
   public getPluginTrustRecords(): PluginTrustRecord[] {
@@ -300,6 +319,7 @@ export class PluginManager {
   }
 
   public async loadPlugins(): Promise<void> {
+    this.shutdown();
     this.plugins.clear();
     this.customToolsMap.clear();
     this.customToolDefs = [];
@@ -356,7 +376,9 @@ export class PluginManager {
     this.pluginTrustRecords.push(record);
     let approved: ExtensionTrustId | undefined;
     try {
-      let mod: any;
+      let modulePath = filePath;
+      let cleanup: (() => void) | undefined;
+      let registered = false;
       if (source === "workspace") {
         // Read once, safely: the policy decides on, the approval names, and the import runs these same bytes.
         const read = readPluginFile(filePath);
@@ -377,26 +399,37 @@ export class PluginManager {
         Object.assign(record, { status, reason: status === "trusted" ? undefined : trust.reason });
         if (status !== "trusted") return;
         approved = workspacePluginTrustId(this.workspace, filePath);
-        mod = await importPluginBytes(filePath, read.bytes);
+        const retained = retainPluginBytes(filePath, read.bytes);
+        modulePath = retained.modulePath;
+        cleanup = retained.cleanup;
       } else {
         const policyRefusal = this.refusedByPolicy(filePath, source);
         if (policyRefusal) {
           Object.assign(record, { status: "policy-refused", reason: policyRefusal });
           return;
         }
-        mod = await import(pathToFileURL(filePath).href);
       }
-      const plugin: PluginHooks = mod.default || mod;
-      if (!plugin || typeof plugin !== "object" || !plugin.name) throw new Error("the module does not export a plugin object with a name");
-      record.name = plugin.name;
-      const earlier = this.pluginTrustRecords.find((other) => other !== record && other.name === plugin.name && (other.status === "global" || other.status === "trusted"));
+      const { client, metadata } = await PluginProcessClient.start(modulePath, {
+        timeoutMs: this.pluginTimeoutMs,
+        cleanup,
+        onFailure: (error) => {
+          if (registered && record.name) {
+            this.unregisterPlugin(record.name);
+            this.notify(`nexus: plugin worker for ${printable(filePath)} stopped: ${loadFailureText(error)}`);
+          }
+        },
+      });
+      const earlier = this.pluginTrustRecords.find((other) => other !== record && other.name === metadata.name && (other.status === "global" || other.status === "trusted"));
+      record.name = metadata.name;
       if (earlier && source === "workspace") {
         // The operator's plugin of that name was loaded first and stays: a repository cannot replace it.
-        Object.assign(record, { status: "shadowed", reason: `${earlier.source === "global" ? "the operator's" : "another"} plugin ${printable(earlier.path)} has the same name '${printable(plugin.name, 80)}' and is the one used` });
+        Object.assign(record, { status: "shadowed", reason: `${earlier.source === "global" ? "the operator's" : "another"} plugin ${printable(earlier.path)} has the same name '${printable(metadata.name, 80)}' and is the one used` });
         this.notify(`nexus: workspace plugin ${printable(filePath)} is not used: ${record.reason}`);
+        client.shutdown();
         return;
       }
-      this.registerPlugin(plugin);
+      this.registerRemotePlugin(metadata, client);
+      registered = true;
       if (approved) this.noteLoad(approved, undefined);
     } catch (error) {
       // An approved plugin that cannot be imported must not vanish: the failure is recorded, shown and told once.
@@ -429,6 +462,63 @@ export class PluginManager {
     }
   }
 
+  private registerRemotePlugin(metadata: PluginProcessMetadata, client: PluginProcessClient): void {
+    const invoke = <T>(method: string, context: unknown, onNext?: (args?: Record<string, any>) => Promise<unknown>, signal?: AbortSignal) => client.invoke<T>(method, { context }, onNext, signal);
+    const plugin: PluginHooks = { name: metadata.name, description: metadata.description };
+    if (metadata.hooks.onTurnStart) plugin.onTurnStart = (context, signal) => invoke<void>("onTurnStart", context, undefined, signal);
+    if (metadata.hooks.onToolCall) plugin.onToolCall = (context, signal) => invoke<void>("onToolCall", context, undefined, signal);
+    if (metadata.hooks.onToolResult) plugin.onToolResult = (context, signal) => invoke<void>("onToolResult", context, undefined, signal);
+    if (metadata.hooks.preToolExecution) {
+      plugin.preToolExecution = (context, next, signal) => invoke<ExecutionResult>("preToolExecution", context, next, signal);
+    }
+    if (metadata.hooks.postToolExecution) plugin.postToolExecution = (context, signal) => invoke<ExecutionResult>("postToolExecution", context, undefined, signal);
+    if (metadata.hooks.onTurnEnd) plugin.onTurnEnd = (context, signal) => invoke<void>("onTurnEnd", context, undefined, signal);
+    if (metadata.customTools.length) {
+      plugin.customTools = metadata.customTools
+        .filter((tool) => typeof tool.definition?.function?.name === "string" && tool.definition.function.name.length > 0)
+        .map((tool) => ({
+          definition: tool.definition,
+          handler: async (args, signal) => {
+            try {
+              const result = await client.invoke<unknown>("customTool", { name: tool.definition.function.name, args }, undefined, signal);
+              if (!result || typeof result !== "object" || typeof (result as any).success !== "boolean" || typeof (result as any).output !== "string") {
+                client.failClosed("plugin custom tool returned an invalid result");
+                return { success: false, output: "", outcomeUnknown: true, error: "Plugin custom tool returned an invalid result; its effects may be unknown." };
+              }
+              return result as ExecutionResult;
+            } catch (error) {
+              const unknown = error instanceof PluginProcessError && error.outcomeUnknown;
+              const cancelled = error instanceof PluginProcessError && error.cancelled;
+              return { success: false, output: "", ...(cancelled ? { cancelled: true } : {}), ...(unknown ? { outcomeUnknown: true } : {}), error: unknown ? "Plugin custom tool timed out after execution may have started; outcome is unknown. Do not retry until its effects are checked." : cancelled ? "Plugin custom tool was cancelled before a result was received." : `Plugin custom tool failed: ${loadFailureText(error)}` };
+            }
+          },
+        }));
+    }
+    this.pluginWorkers.set(metadata.name, client);
+    this.plugins.set(metadata.name, plugin);
+    for (const tool of plugin.customTools ?? []) {
+      this.customToolDefs.push(tool.definition);
+      this.customToolsMap.set(tool.definition.function.name, tool.handler);
+    }
+  }
+
+  private unregisterPlugin(name: string): void {
+    const plugin = this.plugins.get(name);
+    for (const tool of plugin?.customTools ?? []) {
+      const toolName = tool.definition.function?.name;
+      if (toolName) this.customToolsMap.delete(toolName);
+    }
+    const names = new Set((plugin?.customTools ?? []).map((tool) => tool.definition.function?.name).filter(Boolean));
+    this.customToolDefs = this.customToolDefs.filter((definition) => !names.has(definition.function?.name));
+    this.plugins.delete(name);
+    this.pluginWorkers.delete(name);
+  }
+
+  public shutdown(): void {
+    for (const worker of this.pluginWorkers.values()) worker.shutdown();
+    this.pluginWorkers.clear();
+  }
+
   public getCustomToolDefinitions(): ToolDefinition[] {
     return this.customToolDefs;
   }
@@ -437,12 +527,12 @@ export class PluginManager {
     return this.customToolsMap.has(toolName);
   }
 
-  public async executeCustomTool(toolName: string, args: Record<string, any>): Promise<ExecutionResult> {
+  public async executeCustomTool(toolName: string, args: Record<string, any>, signal?: AbortSignal): Promise<ExecutionResult> {
     const handler = this.customToolsMap.get(toolName);
     if (!handler) {
       return { success: false, output: "", error: `Custom tool not found: ${toolName}` };
     }
-    return handler(args);
+    return handler(args, signal);
   }
 
   /**
@@ -452,7 +542,8 @@ export class PluginManager {
   public async executeToolPipeline(
     toolName: string,
     initialArgs: Record<string, any>,
-    coreExecutor: (args: Record<string, any>) => Promise<ExecutionResult>
+    coreExecutor: (args: Record<string, any>) => Promise<ExecutionResult>,
+    signal?: AbortSignal,
   ): Promise<ExecutionResult> {
     const preMiddlewares: Array<{ pluginName: string; hook: NonNullable<PluginHooks["preToolExecution"]> }> = [];
     const postMiddlewares: Array<{ pluginName: string; hook: NonNullable<PluginHooks["postToolExecution"]> }> = [];
@@ -473,24 +564,40 @@ export class PluginManager {
         const beforeArgs = currentArgs;
         const beforeDigest = sha256(JSON.stringify(beforeArgs ?? {}));
 
-        return hook(
-          { toolName, args: currentArgs, workspace: this.workspace },
-          async (nextArgs) => {
-            const effectiveNextArgs = nextArgs || currentArgs;
-            const afterDigest = sha256(JSON.stringify(effectiveNextArgs ?? {}));
-            if (beforeDigest !== afterDigest) {
-              this.recordMiddlewareRewrite({
-                kind: "middleware_rewrite",
-                plugin: pluginName,
-                tool: toolName,
-                phase: "pre",
-                before_digest: beforeDigest,
-                after_digest: afterDigest,
-              });
-            }
-            return dispatch(idx + 1, effectiveNextArgs);
+        try {
+          return await hook(
+            { toolName, args: currentArgs, workspace: this.workspace },
+            async (nextArgs) => {
+              const effectiveNextArgs = nextArgs || currentArgs;
+              const afterDigest = sha256(JSON.stringify(effectiveNextArgs ?? {}));
+              if (beforeDigest !== afterDigest) {
+                this.recordMiddlewareRewrite({
+                  kind: "middleware_rewrite",
+                  plugin: pluginName,
+                  tool: toolName,
+                  phase: "pre",
+                  before_digest: beforeDigest,
+                  after_digest: afterDigest,
+                });
+              }
+              return dispatch(idx + 1, effectiveNextArgs);
+            },
+            signal,
+          );
+        } catch (error) {
+          if (error instanceof PluginProcessError) {
+            return {
+              success: false,
+              output: "",
+              ...(error.cancelled ? { cancelled: true } : {}),
+              ...(error.outcomeUnknown ? { outcomeUnknown: true } : {}),
+              error: error.outcomeUnknown
+                ? `Plugin middleware timed out after tool execution may have started; outcome is unknown. Check the effect before retrying.`
+                : `Plugin middleware failed: ${loadFailureText(error)}`,
+            };
           }
-        );
+          throw error;
+        }
       }
       return coreExecutor(currentArgs);
     };
@@ -506,7 +613,7 @@ export class PluginManager {
           args: initialArgs,
           result,
           workspace: this.workspace,
-        });
+        }, signal);
         const afterDigest = sha256(JSON.stringify(newResult ?? {}));
         if (beforeDigest !== afterDigest) {
           this.recordMiddlewareRewrite({
@@ -554,33 +661,33 @@ export class PluginManager {
     }
   }
 
-  public async notifyToolCall(toolName: string, args: Record<string, any>): Promise<void> {
+  public async notifyToolCall(toolName: string, args: Record<string, any>, signal?: AbortSignal): Promise<void> {
     for (const p of this.plugins.values()) {
       if (p.onToolCall) {
         try {
           // This hook observes an approved call; it must not be able to mutate the arguments
           // that the executor will use after notification completes.
-          await p.onToolCall({ toolName, args: structuredClone(args) });
+          await p.onToolCall({ toolName, args: structuredClone(args) }, signal);
         } catch {}
       }
     }
   }
 
-  public async notifyToolResult(toolName: string, result: ExecutionResult): Promise<void> {
+  public async notifyToolResult(toolName: string, result: ExecutionResult, signal?: AbortSignal): Promise<void> {
     for (const p of this.plugins.values()) {
       if (p.onToolResult) {
         try {
-          await p.onToolResult({ toolName, result });
+          await p.onToolResult({ toolName, result }, signal);
         } catch {}
       }
     }
   }
 
-  public async notifyTurnEnd(summary: string, isFinished: boolean): Promise<void> {
+  public async notifyTurnEnd(summary: string, isFinished: boolean, signal?: AbortSignal): Promise<void> {
     for (const p of this.plugins.values()) {
       if (p.onTurnEnd) {
         try {
-          await p.onTurnEnd({ summary, isFinished });
+          await p.onTurnEnd({ summary, isFinished }, signal);
         } catch {}
       }
     }

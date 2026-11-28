@@ -12,6 +12,9 @@ import os from "node:os";
 import path from "node:path";
 import { McpClientManager, McpConnection } from "../src/mcp.js";
 import { PluginManager } from "../src/plugins.js";
+import { closeLoadedPluginManagersAfterTests } from "./helpers/plugin_manager_cleanup.js";
+
+closeLoadedPluginManagersAfterTests();
 import { isWorkspaceFile } from "../src/workspace_trust.js";
 import type { EffectivePolicy } from "../src/core/managed_policy.js";
 import { FAKE_SYSTEM, FAKE_USER, policyWorld, sha256, toml } from "./helpers/policy_enforcement.js";
