@@ -136,17 +136,23 @@ test("a crash during a multi-tool response preserves a completed sibling and doe
   assert.ok(toolResults.some((content) => /effects, if any, are unknown/.test(content)), JSON.stringify(toolResults));
 });
 
-test("a file write completed before process death remains unknown and is not replayed", { timeout: 60_000 }, async () => {
+async function recoverAfterFileMutationCrash(input: {
+  toolName: "write_file" | "edit_file";
+  toolArgs: Record<string, string>;
+  initialFiles?: Record<string, string>;
+  expectedContent: string;
+  prompt: string;
+}): Promise<void> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-p10-file-crash-"));
   const home = path.join(root, "home");
-  const repo = makeRepo({ "README.md": "base\n" });
+  const repo = makeRepo({ "README.md": "base\n", ...input.initialFiles });
   const taskIdFile = path.join(root, "task-id.txt");
   const endJournalReached = path.join(root, "end-journal-reached.txt");
   const target = path.join(repo, "written.txt");
   fs.mkdirSync(home, { recursive: true });
 
   const gateway = await startGateway((n) => n === 1
-    ? { kind: "tools", calls: [{ name: "write_file", args: { path: "written.txt", content: "written once\n" } }] }
+    ? { kind: "tools", calls: [{ name: input.toolName, args: input.toolArgs }] }
     : { kind: "text", content: "done" });
   const previousHome = process.env.HOME;
   const previousXdg = process.env.XDG_CONFIG_HOME;
@@ -158,11 +164,11 @@ test("a file write completed before process death remains unknown and is not rep
     agent.ui = new Proxy({}, { get: () => () => {} });
     const state = agent.getStateManager();
     state.recordOperationEnd = () => {
-      fs.writeFileSync(process.env.TEST_END_JOURNAL_REACHED, "write_file already returned");
+      fs.writeFileSync(process.env.TEST_END_JOURNAL_REACHED, "${input.toolName} already returned");
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
     };
     fs.writeFileSync(process.env.TEST_TASK_ID_FILE, agent.getTaskId());
-    await agent.runTurn("Write written.txt.");
+    await agent.runTurn(process.env.TEST_PROMPT);
     process.exit(0);
   `;
   const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", childScript], {
@@ -172,6 +178,7 @@ test("a file write completed before process death remains unknown and is not rep
       HOME: home,
       XDG_CONFIG_HOME: path.join(home, ".config"),
       NEXUS_CORE_BIN: process.env.NEXUS_CORE_BIN ?? "",
+      TEST_PROMPT: input.prompt,
       TEST_GATEWAY: gateway.url,
       TEST_WORKSPACE: repo,
       TEST_TASK_ID_FILE: taskIdFile,
@@ -189,8 +196,8 @@ test("a file write completed before process death remains unknown and is not rep
   let resumed: AutonomousAgent | undefined;
   try {
     await waitFor("the durable task id", () => fs.existsSync(taskIdFile));
-    await waitFor("the file write and blocked operation-end journal", () => fs.existsSync(endJournalReached));
-    assert.equal(fs.readFileSync(target, "utf8"), "written once\n", "the mutating tool completed before the crash boundary");
+    await waitFor(`the ${input.toolName} effect and blocked operation-end journal`, () => fs.existsSync(endJournalReached));
+    assert.equal(fs.readFileSync(target, "utf8"), input.expectedContent, "the mutating tool completed before the crash boundary");
 
     child.kill("SIGKILL");
     const killed = await childExit;
@@ -205,7 +212,7 @@ test("a file write completed before process death remains unknown and is not rep
     assert.equal(recovery.interrupted, true, "restart identifies the operation whose end record was never persisted");
     await resumed.runTurn("Continue.", undefined, { resume: true });
 
-    assert.equal(fs.readFileSync(target, "utf8"), "written once\n", "resume does not replay the completed filesystem effect");
+    assert.equal(fs.readFileSync(target, "utf8"), input.expectedContent, "resume preserves the completed filesystem effect");
     const toolResults = gateway.requests.flatMap((request: any) => request.messages ?? [])
       .filter((message: any) => message.role === "tool")
       .map((message: any) => String(message.content));
@@ -219,4 +226,23 @@ test("a file write completed before process death remains unknown and is not rep
     if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
     if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = previousXdg;
   }
+}
+
+test("a write_file completed before process death remains unknown and is not automatically replayed", { timeout: 60_000 }, async () => {
+  await recoverAfterFileMutationCrash({
+    toolName: "write_file",
+    toolArgs: { path: "written.txt", content: "written once\n" },
+    expectedContent: "written once\n",
+    prompt: "Write written.txt.",
+  });
+});
+
+test("an edit_file completed before process death remains unknown and is not automatically replayed", { timeout: 60_000 }, async () => {
+  await recoverAfterFileMutationCrash({
+    toolName: "edit_file",
+    toolArgs: { path: "written.txt", old_content: "before\n", new_content: "after\n" },
+    initialFiles: { "written.txt": "before\n" },
+    expectedContent: "after\n",
+    prompt: "Replace before with after in written.txt.",
+  });
 });
