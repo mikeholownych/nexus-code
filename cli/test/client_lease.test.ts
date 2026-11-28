@@ -2,7 +2,7 @@ import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { acquireClientLease, releaseClientLease } from "../src/core/client_lease.js";
 
@@ -34,6 +34,40 @@ function probe(targetHome: string, maxActiveClients: number): ReturnType<typeof 
   });
 }
 
+function concurrentProbe(targetHome: string, maxActiveClients: number): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  const source = `
+    import { acquireClientLease } from "./src/core/client_lease.ts";
+    try {
+      acquireClientLease(process.env.HOME, { maxActiveClients: ${maxActiveClients} });
+      await new Promise(resolve => setTimeout(resolve, 100));
+      console.log("admitted");
+    } catch (error) {
+      console.log(error?.name ?? "unknown-error");
+      if (error?.name !== "ClientActiveLimitError" && error?.name !== "ResourceAdmissionConflictError") process.exitCode = 2;
+    }
+  `;
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", source], {
+      cwd: cliRoot,
+      env: { ...process.env, HOME: targetHome, XDG_CONFIG_HOME: path.join(targetHome, ".config") },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });
+    child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
+    const timeout = setTimeout(() => {
+      stderr += "\nprobe timed out";
+      child.kill("SIGKILL");
+    }, 15_000);
+    child.once("error", reject);
+    child.once("close", (status) => {
+      clearTimeout(timeout);
+      resolve({ status, stdout, stderr });
+    });
+  });
+}
+
 after(() => fs.rmSync(testRoot, { recursive: true, force: true }));
 
 describe("cross-process client admission", { skip: process.platform !== "linux" || typeof process.getuid !== "function" }, () => {
@@ -62,6 +96,12 @@ describe("cross-process client admission", { skip: process.platform !== "linux" 
     const afterExit = probe(targetHome, 1);
     assert.equal(afterExit.status, 0, afterExit.stderr);
     assert.equal(afterExit.stdout.trim(), "admitted");
+  });
+
+  it("does not report capacity exhaustion when same-home clients contend for the admission guard", async () => {
+    const targetHome = home("concurrent-same-home");
+    const results = await Promise.all(Array.from({ length: 16 }, () => concurrentProbe(targetHome, 16)));
+    assert.deepEqual(results.map((result) => [result.status, result.stdout.trim()]), Array.from({ length: 16 }, () => [0, "admitted"]));
   });
 
   it("admits separate homes independently for the same OS user", () => {

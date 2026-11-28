@@ -106,7 +106,8 @@ export function acquireClientLease(
   if (activeLimit !== undefined) {
     try {
       const homeAdmissionDir = path.join(path.dirname(leasePath), path.basename(leasePath, ".guard"), "resource-admission");
-      const admission = new SharedResourceAdmission(homeAdmissionDir, { guardWaitMs: 0 });
+      // Concurrent clients serialize this shared admission check; bound the wait without mistaking lock contention for a full client cap.
+      const admission = new SharedResourceAdmission(homeAdmissionDir, { guardWaitMs: 10_000 });
       const slot = admission.acquireNamed("active-client-processes", activeLimit, "client process");
       if (!slot) {
         releaseFileGuard(lease);
