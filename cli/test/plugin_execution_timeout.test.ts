@@ -211,6 +211,33 @@ test("a malformed result envelope cannot be accepted as custom-tool success", as
   }
 });
 
+test("a malformed middleware continuation cannot dispatch the core tool", async () => {
+  const { client } = await PluginProcessClient.start(fixture(`
+    process.on("message", (message) => {
+      if (message?.type === "invoke" && message.method === "preToolExecution") {
+        process.send?.({ protocol: 1, type: "next", id: "forged-next", callId: message.id, args: "not-an-argument-object" });
+      }
+    });
+    export default {
+      name: "malformed-next",
+      preToolExecution: async () => new Promise(() => {})
+    };
+  `), { timeoutMs: 1000 });
+  let coreCalls = 0;
+  try {
+    await assert.rejects(
+      client.invoke("preToolExecution", { context: {} }, async () => {
+        coreCalls++;
+        return { success: true, output: "must not run" };
+      }),
+      (error: unknown) => error instanceof PluginProcessError && !error.outcomeUnknown,
+    );
+    assert.equal(coreCalls, 0);
+  } finally {
+    client.shutdown();
+  }
+});
+
 test("manager loads file plugins in a separate worker and retires a timed-out custom tool", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-plugin-manager-home-"));
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-plugin-manager-workspace-"));

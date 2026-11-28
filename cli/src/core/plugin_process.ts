@@ -189,7 +189,14 @@ export class PluginProcessClient {
       return;
     }
     if (message.type === "ready") {
-      if (this.ready || !message.value || typeof message.value.name !== "string" || !message.value.hooks || !Array.isArray(message.value.customTools)) {
+      const hooks = message.value?.hooks;
+      const hookNames = ["onTurnStart", "onToolCall", "onToolResult", "preToolExecution", "postToolExecution", "onTurnEnd"];
+      const validHooks = hooks && typeof hooks === "object" && !Array.isArray(hooks) && hookNames.every((name) => typeof hooks[name] === "boolean");
+      if (
+        this.ready || !message.value || typeof message.value.name !== "string" || !message.value.name.trim() ||
+        message.value.description !== undefined && typeof message.value.description !== "string" ||
+        !validHooks || !Array.isArray(message.value.customTools)
+      ) {
         this.fail(new PluginProcessError("plugin worker sent malformed or duplicate initialization metadata"));
         return;
       }
@@ -204,7 +211,8 @@ export class PluginProcessClient {
     }
     if (message.type === "next") {
       const call = message.callId ? this.pending.get(message.callId) : undefined;
-      if (!message.id || !call || !call.onNext || this.closed || this.continuationIds.has(message.id)) {
+      const validArgs = message.args === undefined || Boolean(message.args && typeof message.args === "object" && !Array.isArray(message.args));
+      if (typeof message.id !== "string" || !message.id || typeof message.callId !== "string" || !validArgs || !call || !call.onNext || this.closed || this.continuationIds.has(message.id)) {
         this.fail(new PluginProcessError("plugin worker sent a late, duplicate, or invalid continuation request"));
         return;
       }
