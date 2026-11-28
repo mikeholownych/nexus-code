@@ -31,6 +31,15 @@ Provider disclosure is explicit for cloud destinations. Local inference keeps ta
 
 Saved sessions and task state live under `~/.nexus/`. Use `/sessions`, `/resume [id]`, and `/export [md|json]` to inspect, resume, or export a session. Exports are written into the current workspace; inspect and protect them as source data. `/compact` summarizes older context to make room, while durable findings and the active plan are retained where supported. `/doctor` checks the current runtime; `nexus doctor --deep` performs a minimal inference probe and can incur model cost.
 
+On Linux, Nexus admits up to 16 concurrent CLI client processes for the same OS user, across its home directories. To set a different limit, export `NEXUS_MAX_ACTIVE_CLIENTS` in the launching shell or service environment before starting Nexus; accepted values are 1 through 64. For example:
+
+```sh
+export NEXUS_MAX_ACTIVE_CLIENTS=8
+nexus
+```
+
+The setting is read before project `.env` files load, so it must be present in the parent environment. This limit counts cooperating Nexus client processes on one Linux host; it does not count sessions hosted inside a process or limit CPU and memory use.
+
 An interrupted or limited run is not a successful result. Read the final execution/outcome fields, run the project's verifier, and resume explicitly when needed. Recovery is bounded by saved session state and the provider's availability; it cannot reconstruct output the provider never returned.
 
 ## Troubleshooting and limits
