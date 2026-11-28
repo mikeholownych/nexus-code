@@ -773,6 +773,16 @@ function persistOperationStart(
   if (!agent.durable || !durableTaskId) return { persisted: false };
   try {
     if (!agent.stateManager) throw new Error("durable state manager is unavailable");
+    if (!agent.stateManager.hasTaskState(durableTaskId)) {
+      // Some entry paths checkpoint the new durable task lazily. Materialize that
+      // state before the mutation journal so a missing record is not mistaken for
+      // an operation-start write failure, while an actual checkpoint failure
+      // still prevents dispatch.
+      agent.checkpointDurableState();
+    }
+    if (!agent.stateManager.hasTaskState(durableTaskId)) {
+      throw new Error("durable task state is still unavailable after checkpoint");
+    }
     agent.stateManager.recordOperationStart(durableTaskId, {
       invocationId: call.id,
       seq: operationSeq,
