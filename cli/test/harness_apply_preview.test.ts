@@ -23,6 +23,14 @@ describe("harness apply preview", () => {
     const preview = buildApplyPreview(store, done.id);
     assert.ok(fs.existsSync(path.join(preview.previewDir, "preview.json")));
     assert.ok(fs.existsSync(path.join(preview.previewDir, "preview.md")));
-    assert.match(fs.readFileSync(path.join(preview.previewDir, "preview.md"), "utf8"), /review-only/i);
+    const md = fs.readFileSync(path.join(preview.previewDir, "preview.md"), "utf8");
+    assert.match(md, /review-only/i);
+    assert.match(md, /Rollback \/ safety/);
+    assert.match(md, /reverting that reviewed commit\/PR/);
+    const json = JSON.parse(fs.readFileSync(path.join(preview.previewDir, "preview.json"), "utf8"));
+    assert.equal(json.liveMutation, false);
+    assert.ok(Array.isArray(json.rollbackPlan));
+    assert.ok(json.rollbackPlan.some((r: string) => /reverting that reviewed commit\/PR/i.test(r)));
+    assert.deepEqual(preview.rollbackPlan, json.rollbackPlan);
   });
 });
