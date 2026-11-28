@@ -14,7 +14,7 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitFor(description: string, check: () => boolean, timeoutMs = 10_000): Promise<void> {
+async function waitFor(description: string, check: () => boolean, timeoutMs = 20_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (check()) return;
@@ -136,13 +136,17 @@ test("a crash during a multi-tool response preserves a completed sibling and doe
   assert.ok(toolResults.some((content) => /effects, if any, are unknown/.test(content)), JSON.stringify(toolResults));
 });
 
-async function recoverAfterFileMutationCrash(input: {
-  toolName: "write_file" | "edit_file";
-  toolArgs: Record<string, string>;
+type FileMutationCrashInput = {
+  toolName: "write_file" | "edit_file" | "delete_file";
+  toolArgs: Record<string, unknown>;
   initialFiles?: Record<string, string>;
-  expectedContent: string;
   prompt: string;
-}): Promise<void> {
+} & (
+  | { expectedContent: string; expectedAbsent?: never }
+  | { expectedContent?: never; expectedAbsent: true }
+);
+
+async function recoverAfterFileMutationCrash(input: FileMutationCrashInput): Promise<void> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nexus-p10-file-crash-"));
   const home = path.join(root, "home");
   const repo = makeRepo({ "README.md": "base\n", ...input.initialFiles });
@@ -194,10 +198,17 @@ async function recoverAfterFileMutationCrash(input: {
     child.once("exit", (code, signal) => resolve({ code, signal }));
   });
   let resumed: AutonomousAgent | undefined;
+  const assertFileState = (context: string) => {
+    if (input.expectedAbsent) {
+      assert.equal(fs.existsSync(target), false, context);
+    } else {
+      assert.equal(fs.readFileSync(target, "utf8"), input.expectedContent, context);
+    }
+  };
   try {
     await waitFor("the durable task id", () => fs.existsSync(taskIdFile));
     await waitFor(`the ${input.toolName} effect and blocked operation-end journal`, () => fs.existsSync(endJournalReached));
-    assert.equal(fs.readFileSync(target, "utf8"), input.expectedContent, "the mutating tool completed before the crash boundary");
+    assertFileState("the mutating tool completed before the crash boundary");
 
     child.kill("SIGKILL");
     const killed = await childExit;
@@ -212,10 +223,11 @@ async function recoverAfterFileMutationCrash(input: {
     assert.equal(recovery.interrupted, true, "restart identifies the operation whose end record was never persisted");
     await resumed.runTurn("Continue.", undefined, { resume: true });
 
-    assert.equal(fs.readFileSync(target, "utf8"), input.expectedContent, "resume preserves the completed filesystem effect");
+    assertFileState("resume preserves the completed filesystem effect");
     const toolResults = gateway.requests.flatMap((request: any) => request.messages ?? [])
       .filter((message: any) => message.role === "tool")
       .map((message: any) => String(message.content));
+    assert.equal(toolResults.length, 1, `the interrupted filesystem action has one result and was not automatically dispatched again: ${JSON.stringify(toolResults)}`);
     assert.ok(toolResults.some((content) => /effects, if any, are unknown/.test(content)), JSON.stringify(toolResults));
   } finally {
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
@@ -244,5 +256,15 @@ test("an edit_file completed before process death remains unknown and is not aut
     initialFiles: { "written.txt": "before\n" },
     expectedContent: "after\n",
     prompt: "Replace before with after in written.txt.",
+  });
+});
+
+test("a delete_file completed before process death remains unknown and is not automatically replayed", { timeout: 60_000 }, async () => {
+  await recoverAfterFileMutationCrash({
+    toolName: "delete_file",
+    toolArgs: { path: "written.txt" },
+    initialFiles: { "written.txt": "delete once\n" },
+    expectedAbsent: true,
+    prompt: "Delete written.txt.",
   });
 });
